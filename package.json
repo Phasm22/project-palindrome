@@ -12,7 +12,10 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/node": "^24.10.1"
+    "@types/node": "^24.10.1",
+    "@vitest/coverage-v8": "^4.0.9",
+    "vitest": "^4.0.9",
+    "yaml": "^2.8.1"
   },
   "peerDependencies": {
     "typescript": "^5.9.3"
