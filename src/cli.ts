@@ -24,7 +24,10 @@ if (args[0] === "ask") {
 if (args[0] === "glances") {
   const tools = loadTools();
   const glances = tools.find(t => t.metadata.name === "glances")!;
-  const res = await glances.execute({ section: "all" });
+  const res = await glances.execute(
+    { section: "all" },
+    { toolName: "glances", startedAt: Date.now() }
+  );
   console.log(JSON.stringify(res, null, 2));
   process.exit(0);
 }

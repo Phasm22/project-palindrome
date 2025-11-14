@@ -1,6 +1,6 @@
 import { BaseTool } from "./BaseTool";
 import { GlancesParams } from "./schemas/glances";
-import type { ExecutionResult } from "../types/execution";
+import type { ExecutionResult, ExecutionContext } from "../types/execution";
 import axios from "axios";
 
 export class GlancesTool extends BaseTool {
@@ -12,12 +12,16 @@ export class GlancesTool extends BaseTool {
     });
   }
 
-  async execute(params: Record<string, any>): Promise<ExecutionResult> {
+  async execute(
+    params: Record<string, any>,
+    context: ExecutionContext
+  ): Promise<ExecutionResult> {
     const parsed = GlancesParams.safeParse(params);
     if (!parsed.success) {
       return { error: parsed.error.message };
     }
 
+    const started = context.startedAt ?? Date.now();
     const section = parsed.data.section;
     
     try {
@@ -26,9 +30,12 @@ export class GlancesTool extends BaseTool {
           ? "http://127.0.0.1:61208/api/3/all"
           : `http://127.0.0.1:61208/api/3/${section}`;
       const res = await axios.get(url);
-      return { data: res.data };
+      return { data: res.data, durationMs: Date.now() - started };
     } catch (err: any) {
-      return { error: err.message ?? "Glances request failed" };
+      return {
+        error: err.message ?? "Glances request failed",
+        durationMs: Date.now() - started,
+      };
     }
   }
 }

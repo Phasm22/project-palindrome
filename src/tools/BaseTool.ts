@@ -1,4 +1,4 @@
-import type { ToolMetadata, ExecutionResult } from "../types";
+import type { ToolMetadata, ExecutionResult, ExecutionContext } from "../types";
 
 export abstract class BaseTool {
   metadata: ToolMetadata;
@@ -8,7 +8,8 @@ export abstract class BaseTool {
   }
 
   abstract execute(
-    params: Record<string, any>
+    params: Record<string, any>,
+    context: ExecutionContext
   ): Promise<ExecutionResult>;
 }
 

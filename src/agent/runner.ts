@@ -1,6 +1,8 @@
 import OpenAI from "openai";
 import type { AgentResponse } from "../types/agent";
 import { logger } from "../utils/logger";
+import { loadTools } from "./tool-loader";
+import { executeToolCall } from "./tool-executor";
 
 let openaiClient: OpenAI | null = null;
 
@@ -54,14 +56,25 @@ export async function runAgent(userInput: string, stream: boolean = false): Prom
 
   const text = response.choices[0]?.message?.content ?? "No response.";
 
-  // Phase 4: we ONLY parse potential tool calls (no execution yet)
+  // Try to parse as tool call
   try {
     const parsed = JSON.parse(text);
     if (parsed.tool && parsed.parameters) {
-      return { toolCall: { toolName: parsed.tool, parameters: parsed.parameters } };
+      const tools = loadTools();
+      const result = await executeToolCall(
+        { toolName: parsed.tool, parameters: parsed.parameters },
+        tools
+      );
+
+      return {
+        text: result.error
+          ? `Tool "${parsed.tool}" failed: ${result.error}`
+          : `Tool "${parsed.tool}" succeeded.`,
+        toolCall: { toolName: parsed.tool, parameters: parsed.parameters },
+      };
     }
   } catch (_) {
-    // Not JSON, continue with text response
+    // fall through to text return
   }
 
   return { text };

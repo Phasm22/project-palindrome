@@ -1,8 +1,8 @@
 import { BaseTool } from "../src/tools/BaseTool";
-import type { ExecutionResult } from "../src/types/execution";
+import type { ExecutionResult, ExecutionContext } from "../src/types/execution";
 
 class DummyTool extends BaseTool {
-  execute(): Promise<ExecutionResult> {
+  execute(_params: Record<string, any>, _context: ExecutionContext): Promise<ExecutionResult> {
     return Promise.resolve({ data: "ok" });
   }
 }
