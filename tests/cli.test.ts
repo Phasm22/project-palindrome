@@ -13,6 +13,8 @@ describe("CLI", () => {
     });
 
     const text = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+    expect(exitCode).toBe(0);
     expect(text.trim()).toBe("Agent online.");
   });
 });
