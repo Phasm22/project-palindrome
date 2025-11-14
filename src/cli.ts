@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { runAgent } from "./agent/runner";
+import { loadTools } from "./agent/tool-loader";
 
 const args = process.argv.slice(2);
 
@@ -20,12 +21,21 @@ if (args[0] === "ask") {
   process.exit(0);
 }
 
+if (args[0] === "glances") {
+  const tools = loadTools();
+  const glances = tools.find(t => t.metadata.name === "glances")!;
+  const res = await glances.execute({ section: "all" });
+  console.log(JSON.stringify(res, null, 2));
+  process.exit(0);
+}
+
 // Default behavior or help
 if (args.length === 0 || args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
   console.log("Usage: agent <command>");
   console.log("Commands:");
-  console.log("  hello  - Check if agent is online");
-  console.log("  ask    - Ask the agent a question");
+  console.log("  hello   - Check if agent is online");
+  console.log("  ask     - Ask the agent a question");
+  console.log("  glances - Test Glances tool directly");
   process.exit(0);
 }
 
