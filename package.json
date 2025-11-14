@@ -1,0 +1,24 @@
+{
+  "name": "project-palindrome",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "agent": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "dev": "bun run src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^24.10.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "ai": "^5.0.93",
+    "zod": "^4.1.12"
+  }
+}
