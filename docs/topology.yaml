@@ -1,0 +1,52 @@
+# Project Palindrome — Topology Seed
+
+networks:
+  home:
+    cidr: "192.168.68.0/22"
+    gateway: "192.168.68.1"
+  
+  lab:
+    cidr: "172.16.0.0/22"
+    vlan: 50
+    gateway: "172.16.0.1"
+
+  mgmt:
+    cidr: "192.168.71.0/24"
+    vlan: 40
+    gateway: "192.168.71.1"
+
+vpn:
+  wireguard:
+    cidr: "10.16.0.0/24"
+    server: "172.16.0.1"
+    dns: "172.16.0.13"
+
+hosts:
+  # Initial Project Palindrome hosts will land in the lab VLAN.
+  # No need to define all existing machines — keep it minimal.
+
+  - name: "level"
+    role: "proxmox"
+    ip: "172.16.0.10"
+
+  - name: "rotor"
+    role: "proxmox"
+    ip: "172.16.0.11"
+
+  - name: "radar"
+    role: "opnsense"
+    ip: "172.16.0.1"
+
+  - name: "civic"
+    role: "pihole"
+    ip: "192.168.71.13"
+
+switch:
+  model: "Cisco 2960G"
+  trunk_ports:
+    - "Gi0/33"
+    - "Gi0/34"
+  vlans:
+    - 1
+    - 40
+    - 50
