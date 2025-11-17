@@ -1,6 +1,8 @@
 import { BaseTool } from "./BaseTool";
 import { OpnsenseParams } from "./schemas/opnsense";
 import type { ExecutionResult, ExecutionContext } from "../types/execution";
+import type { ToolSchema } from "./tool-schema";
+import { createToolSchema } from "./tool-helpers";
 import { logger } from "../utils/logger";
 import axios from "axios";
 import https from "https";
@@ -12,6 +14,33 @@ export class OpnsenseTool extends BaseTool {
       description: "Read-only access to OPNsense system status and firewall aliases in LAB ONLY.",
       categories: ["networking", "firewall"]
     });
+  }
+
+  getSchema(): ToolSchema {
+    return createToolSchema(this, OpnsenseParams, {
+      examples: [
+        {
+          description: "Get system status",
+          parameters: { action: "system_status" }
+        },
+        {
+          description: "List all aliases",
+          parameters: { action: "list_aliases" }
+        },
+        {
+          description: "Search aliases",
+          parameters: { action: "search_aliases", search_term: "example" }
+        }
+      ],
+      notes: [
+        "system_status includes disk usage, system health, and subsystem status information.",
+        "Write operations are disabled in this environment."
+      ]
+    });
+  }
+
+  getParameterSchema() {
+    return OpnsenseParams;
   }
 
   private getApiConfig() {

@@ -1,3 +1,10 @@
+import { loadTools } from "./tool-loader";
+import { generateToolsPrompt } from "../tools/tool-schema";
+
+// Generate tools prompt dynamically from available tools
+const tools = loadTools();
+const toolsPrompt = generateToolsPrompt(tools);
+
 export const SYSTEM_PROMPT = `
 You are the Project Palindrome agent.
 You control tools that access the homelab environment.
@@ -17,26 +24,7 @@ CRITICAL RULES:
 - Example of a GOOD final answer: "The disk is full (84% used) because /var/log is 2.7G and /var/db is 1.2G. The largest space consumers are: /var/log (2.7G), /var/db (1.2G), and /var/tmp (1.5G)."
 - Example of a BAD response: "Tool 'ssh_execute' returned: {...}" - DO NOT do this. Just analyze the data and provide your answer.
 
-Available tools:
-- glances: System metrics from Glances API
-  Parameters: {"section": "all"|"cpu"|"mem"|"load"}
-  Use for: CPU usage, memory usage, system load metrics
-
-- opnsense_manage: Read-only OPNsense operations (LAB ONLY)
-  Parameters: {"action": "system_status"|"list_aliases"|"search_aliases", "search_term"?: "string"}
-  Example: {"tool": "opnsense_manage", "parameters": {"action": "system_status"}}
-  Use for: OPNsense system health, disk usage, firewall aliases
-  Note: system_status includes disk usage, system health, and subsystem status information.
-
-- ssh_execute: Execute pre-approved read-only SSH commands on lab hosts
-  Parameters: {"host": "string", "command": "string", "category"?: "filesystem"|"system"|"custom"}
-  Example: {"tool": "ssh_execute", "parameters": {"host": "opnsense", "command": "du -sh /*"}}
-  Use for: Filesystem analysis, directory sizes, finding large files, system diagnostics
-  Note: 
-  - Hosts can be specified by IP (172.16.0.1) or alias (opnsense, radar, firewall)
-  - Only pre-approved commands can be executed
-  - If a command fails with "not approved", the error will suggest similar approved commands
-  - To add new commands, edit src/config/approved-commands.yaml
+${toolsPrompt}
 
 Reasoning strategy:
 - For "why" questions, gather relevant data first, then analyze

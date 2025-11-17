@@ -1,6 +1,8 @@
 import { BaseTool } from "./BaseTool";
 import { GlancesParams } from "./schemas/glances";
 import type { ExecutionResult, ExecutionContext } from "../types/execution";
+import type { ToolSchema } from "./tool-schema";
+import { createToolSchema } from "./tool-helpers";
 import axios from "axios";
 
 export class GlancesTool extends BaseTool {
@@ -10,6 +12,25 @@ export class GlancesTool extends BaseTool {
       description: "Fetches system metrics from the Glances API",
       categories: ["system"]
     });
+  }
+
+  getSchema(): ToolSchema {
+    return createToolSchema(this, GlancesParams, {
+      examples: [
+        {
+          description: "Get all metrics",
+          parameters: { section: "all" }
+        },
+        {
+          description: "Get CPU metrics only",
+          parameters: { section: "cpu" }
+        }
+      ]
+    });
+  }
+
+  getParameterSchema() {
+    return GlancesParams;
   }
 
   async execute(

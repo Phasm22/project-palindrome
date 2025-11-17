@@ -12,7 +12,55 @@ if (typeof process !== "undefined" && process.env) {
 
 import { runAgent } from "./agent/runner";
 import { loadTools } from "./agent/tool-loader";
+import type { ExecutionResult } from "./types/execution";
 import readline from "readline";
+
+/**
+ * Formats tool execution results for user-friendly CLI output
+ */
+function formatToolOutput(result: ExecutionResult, toolName: string): string {
+  if (result.error) {
+    return `❌ Error: ${result.error}`;
+  }
+
+  // Format based on tool type
+  switch (toolName) {
+    case "ssh_execute":
+      if (result.data?.stdout) {
+        // Clean up SSH output (remove extra noise like SHA256 fingerprints)
+        const stdout = result.data.stdout
+          .split("\n")
+          .filter(line => {
+            const trimmed = line.trim();
+            // Filter out SSH fingerprints and other noise
+            return trimmed && 
+                   !trimmed.match(/^sha256\s+/i) &&
+                   !trimmed.match(/^[A-F0-9]{2}(\s+[A-F0-9]{2}){15}$/) &&
+                   !trimmed.match(/^[a-f0-9]{64}$/);
+          })
+          .join("\n")
+          .trim();
+        return stdout || "(no output)";
+      }
+      return result.data?.stderr || "(no output)";
+
+    case "opnsense_manage":
+      // For OPNsense, show formatted JSON (it's usually structured data)
+      return JSON.stringify(result.data, null, 2);
+
+    case "glances":
+      // For Glances, show formatted JSON (metrics data)
+      return JSON.stringify(result.data, null, 2);
+
+    case "mcp_opnsense":
+      // For MCP OPNsense, show formatted JSON (structured data)
+      return JSON.stringify(result.data, null, 2);
+
+    default:
+      // Default: formatted JSON
+      return JSON.stringify(result.data, null, 2);
+  }
+}
 
 const args = process.argv.slice(2);
 
@@ -35,8 +83,8 @@ if (args[0] === "hello") {
     { section: "all" },
     { toolName: "glances", startedAt: Date.now() }
   );
-  console.log(JSON.stringify(res, null, 2));
-  process.exit(0);
+  console.log(formatToolOutput(res, "glances"));
+  process.exit(res.error ? 1 : 0);
 } else if (args[0] === "opnsense") {
   const tools = loadTools();
   const opnsense = tools.find(t => t.metadata.name === "opnsense_manage")!;
@@ -46,18 +94,19 @@ if (args[0] === "hello") {
       { action: "system_status" },
       { toolName: "opnsense_manage", startedAt: Date.now() }
     );
-    console.log(JSON.stringify(res, null, 2));
+    console.log(formatToolOutput(res, "opnsense_manage"));
+    process.exit(res.error ? 1 : 0);
   } else if (args[1] === "aliases") {
     const res = await opnsense.execute(
       { action: "list_aliases" },
       { toolName: "opnsense_manage", startedAt: Date.now() }
     );
-    console.log(JSON.stringify(res, null, 2));
+    console.log(formatToolOutput(res, "opnsense_manage"));
+    process.exit(res.error ? 1 : 0);
   } else {
     console.log("Usage: agent opnsense <status|aliases>");
     process.exit(1);
   }
-  process.exit(0);
 } else if (args[0] === "ssh") {
   const tools = loadTools();
   const ssh = tools.find(t => t.metadata.name === "ssh_execute")!;
@@ -75,8 +124,71 @@ if (args[0] === "hello") {
     { host, command },
     { toolName: "ssh_execute", startedAt: Date.now() }
   );
-  console.log(JSON.stringify(res, null, 2));
-  process.exit(0);
+  console.log(formatToolOutput(res, "ssh_execute"));
+  process.exit(res.error ? 1 : 0);
+} else if (args[0] === "mcp-opnsense") {
+  const tools = loadTools();
+  const mcpTool = tools.find(t => t.metadata.name === "mcp_opnsense");
+  
+  if (!mcpTool) {
+    console.error("MCP OPNsense tool not available. Check OPNsense environment variables.");
+    process.exit(1);
+  }
+  
+  if (args[1] === "modules") {
+    // List available modules
+    if ("listModules" in mcpTool && typeof mcpTool.listModules === "function") {
+      const modules = await (mcpTool as any).listModules();
+      console.log("Available modules:");
+      for (const [module, count] of Object.entries(modules)) {
+        console.log(`  ${module}: ${count} tools`);
+      }
+    } else {
+      console.log("Module listing not available");
+    }
+    process.exit(0);
+  }
+  
+  if (args.length < 3) {
+    console.log("Usage: agent mcp-opnsense <module> <action> [params]");
+    console.log("Example: agent mcp-opnsense firewall list_rules");
+    console.log("Example: agent mcp-opnsense core system_status");
+    console.log("Run 'agent mcp-opnsense modules' to list available modules");
+    process.exit(1);
+  }
+  
+  const module = args[1];
+  const action = args[2];
+  let params = {};
+  
+  if (args.length > 3) {
+    try {
+      // Try to parse as JSON if it starts with { or [
+      const paramStr = args.slice(3).join(" ");
+      if (paramStr.trim().startsWith("{") || paramStr.trim().startsWith("[")) {
+        params = JSON.parse(paramStr);
+      } else {
+        // Otherwise, treat as key=value pairs
+        const pairs = paramStr.split(/\s+/);
+        for (const pair of pairs) {
+          const [key, value] = pair.split("=");
+          if (key && value) {
+            params[key] = value;
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`Failed to parse parameters: ${e}`);
+      process.exit(1);
+    }
+  }
+  
+  const res = await mcpTool.execute(
+    { module, action, parameters: params },
+    { toolName: "mcp_opnsense", startedAt: Date.now() }
+  );
+  console.log(formatToolOutput(res, "mcp_opnsense"));
+  process.exit(res.error ? 1 : 0);
 } else if (args[0] === "repl") {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -121,6 +233,9 @@ if (args[0] === "hello") {
   console.log("    aliases     - List OPNsense firewall aliases");
   console.log("  ssh           - Test SSH tool directly");
   console.log("    <host> <cmd> - Execute approved SSH command");
+  console.log("  mcp-opnsense  - Test MCP OPNsense tool directly");
+  console.log("    <module> <action> [params] - Call MCP tool");
+  console.log("    modules      - List available modules");
   process.exit(0);
 } else {
   console.log(`Unknown command: ${args[0]}`);

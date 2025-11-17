@@ -1,0 +1,153 @@
+[
+  {
+    "name": "glances",
+    "description": "Fetches system metrics from the Glances API",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "section": {
+          "type": "string",
+          "enum": [
+            "all",
+            "cpu",
+            "mem",
+            "load"
+          ],
+          "description": "Which metrics set to fetch",
+          "default": "all"
+        }
+      },
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Get all metrics",
+        "parameters": {
+          "section": "all"
+        }
+      },
+      {
+        "description": "Get CPU metrics only",
+        "parameters": {
+          "section": "cpu"
+        }
+      }
+    ],
+    "notes": [],
+    "categories": [
+      "system"
+    ]
+  },
+  {
+    "name": "opnsense_manage",
+    "description": "Read-only access to OPNsense system status and firewall aliases in LAB ONLY.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "system_status",
+            "list_aliases",
+            "search_aliases"
+          ],
+          "description": "The OPNsense operation to perform"
+        },
+        "search_term": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Get system status",
+        "parameters": {
+          "action": "system_status"
+        }
+      },
+      {
+        "description": "List all aliases",
+        "parameters": {
+          "action": "list_aliases"
+        }
+      },
+      {
+        "description": "Search aliases",
+        "parameters": {
+          "action": "search_aliases",
+          "search_term": "example"
+        }
+      }
+    ],
+    "notes": [
+      "system_status includes disk usage, system health, and subsystem status information.",
+      "Write operations are disabled in this environment."
+    ],
+    "categories": [
+      "networking",
+      "firewall"
+    ]
+  },
+  {
+    "name": "ssh_execute",
+    "description": "Execute pre-approved read-only SSH commands on lab hosts for filesystem and system analysis",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Hostname or IP address of the target host"
+        },
+        "command": {
+          "type": "string",
+          "description": "The command to execute (must be pre-approved for this host)"
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "filesystem",
+            "system",
+            "custom"
+          ]
+        }
+      },
+      "required": [
+        "host",
+        "command"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Check disk usage on OPNsense",
+        "parameters": {
+          "host": "opnsense",
+          "command": "du -sh /*"
+        }
+      },
+      {
+        "description": "List directory sizes in /var",
+        "parameters": {
+          "host": "172.16.0.1",
+          "command": "du -sh /var/*",
+          "category": "filesystem"
+        }
+      }
+    ],
+    "notes": [
+      "Available hosts: 172.16.0.1, opnsense, radar, firewall",
+      "Hosts can be specified by IP (e.g., 172.16.0.1) or alias (e.g., opnsense, radar, firewall)",
+      "Only pre-approved commands can be executed",
+      "If a command fails with 'not approved', the error will suggest similar approved commands",
+      "To add new commands, edit src/config/approved-commands.yaml"
+    ],
+    "categories": [
+      "system",
+      "filesystem"
+    ]
+  }
+]

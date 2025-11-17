@@ -1,6 +1,8 @@
 import { BaseTool } from "./BaseTool";
 import { SSHToolParams } from "./schemas/ssh";
 import type { ExecutionResult, ExecutionContext } from "../types/execution";
+import type { ToolSchema } from "./tool-schema";
+import { createToolSchema } from "./tool-helpers";
 import { logger } from "../utils/logger";
 import { loadYaml } from "../utils/config";
 import { Client } from "ssh2";
@@ -33,6 +35,43 @@ export class SSHTool extends BaseTool {
       description: "Execute pre-approved read-only SSH commands on lab hosts for filesystem and system analysis",
       categories: ["system", "filesystem"]
     });
+  }
+
+  getSchema(): ToolSchema {
+    // Load approved commands to get available hosts
+    const config = this.loadApprovedCommands();
+    const availableHosts: string[] = [];
+    
+    for (const [hostKey, hostConfig] of Object.entries(config.hosts)) {
+      availableHosts.push(hostKey);
+      if (hostConfig.aliases) {
+        availableHosts.push(...hostConfig.aliases);
+      }
+    }
+
+    return createToolSchema(this, SSHToolParams, {
+      examples: [
+        {
+          description: "Check disk usage on OPNsense",
+          parameters: { host: "opnsense", command: "du -sh /*" }
+        },
+        {
+          description: "List directory sizes in /var",
+          parameters: { host: "172.16.0.1", command: "du -sh /var/*", category: "filesystem" }
+        }
+      ],
+      notes: [
+        `Available hosts: ${availableHosts.join(", ")}`,
+        "Hosts can be specified by IP (e.g., 172.16.0.1) or alias (e.g., opnsense, radar, firewall)",
+        "Only pre-approved commands can be executed",
+        "If a command fails with 'not approved', the error will suggest similar approved commands",
+        "To add new commands, edit src/config/approved-commands.yaml"
+      ]
+    });
+  }
+
+  getParameterSchema() {
+    return SSHToolParams;
   }
 
   private loadApprovedCommands(): ApprovedCommands {

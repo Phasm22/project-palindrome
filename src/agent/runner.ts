@@ -171,7 +171,12 @@ export async function runAgent(userInput: string, stream: boolean = false): Prom
           "connection refused",
           "connection timeout",
           "host not found",
-          "network is unreachable"
+          "network is unreachable",
+          "forbidden",
+          "403",
+          "unauthorized",
+          "401",
+          "permission denied"
         ];
         
         const isPersistentError = persistentErrors.some(err => 
@@ -180,9 +185,16 @@ export async function runAgent(userInput: string, stream: boolean = false): Prom
         
         if (isPersistentError && step > 0) {
           // If we've already tried once and it's a persistent error, add context and let LLM know
+          let note = "This appears to be a persistent connection/authentication issue. Consider using alternative tools or methods.";
+          
+          // Suggest MCP tool if direct API failed
+          if (toolRequest.tool === "opnsense_manage" && result.error.toLowerCase().includes("forbidden")) {
+            note += " Try using the mcp_opnsense tool instead, which may have different permissions.";
+          }
+          
           context.addToolResult(toolRequest.tool, { 
             error: result.error,
-            note: "This appears to be a persistent connection/authentication issue. Consider using alternative tools or methods."
+            note
           });
         } else {
           context.addToolResult(toolRequest.tool, { error: result.error });

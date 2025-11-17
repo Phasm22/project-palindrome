@@ -8,7 +8,8 @@
   },
   "scripts": {
     "test": "bun test",
-    "dev": "bun run src/cli.ts"
+    "dev": "bun run src/cli.ts",
+    "export-tools": "bun run src/utils/export-tool-schemas.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
