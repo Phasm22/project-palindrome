@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ACLGroup, HybridRAGResponse, QueryType } from "../types";
+import type { ACLGroup, FusionConfig, HybridRAGResponse, QueryType } from "../types";
 import { pceLogger } from "../utils/logger";
 import { MetricsCollector, QueryMetrics, ErrorMetrics } from "../metrics";
 import { HybridOrchestrator, QueryAnalyzer, QueryEntityResolver, FusionEngine, RetrievalService, GenerationService } from "../rag";
@@ -339,7 +339,12 @@ export class PceApiServer {
   }
 }
 
-export async function bootstrapPceApiServer(options: PceApiServerOptions = {}) {
+export interface BootstrapPceApiServerOptions extends PceApiServerOptions {
+  fusionConfig?: Partial<FusionConfig>;
+}
+
+export async function bootstrapPceApiServer(options: BootstrapPceApiServerOptions = {}) {
+  const { fusionConfig, ...serverOptions } = options;
   const embeddingService = new EmbeddingService();
   const vectorStore = new QdrantVectorStore();
   await vectorStore.initializeCollection(embeddingService.getDimension());
@@ -353,7 +358,7 @@ export async function bootstrapPceApiServer(options: PceApiServerOptions = {}) {
 
   const entityResolver = new QueryEntityResolver(graphQuery);
   const analyzer = new QueryAnalyzer(entityResolver);
-  const fusionEngine = new FusionEngine();
+  const fusionEngine = new FusionEngine(fusionConfig);
   const generationService = new GenerationService();
 
   const orchestrator = new HybridOrchestrator(
@@ -375,7 +380,7 @@ export async function bootstrapPceApiServer(options: PceApiServerOptions = {}) {
       dependencyChecks,
       cleanupHandlers: [() => graphStore.close()],
     },
-    options
+    serverOptions
   );
 
   return { server };
