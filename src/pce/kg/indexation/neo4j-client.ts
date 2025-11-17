@@ -395,7 +395,10 @@ export class Neo4jGraphStore {
       `);
 
       if (result.records.length > 0) {
-        return result.records[0].get("version") as string;
+        const firstRecord = result.records[0];
+        if (firstRecord) {
+          return firstRecord.get("version") as string;
+        }
       }
       return null;
     } catch (error: any) {
@@ -423,6 +426,21 @@ export class Neo4jGraphStore {
       throw error;
     } finally {
       await session.close();
+    }
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      const session = this.getSession();
+      try {
+        await session.run("RETURN 1 as ok");
+        return true;
+      } finally {
+        await session.close();
+      }
+    } catch (error: any) {
+      pceLogger.warn("Neo4j health check failed", { error: error.message });
+      return false;
     }
   }
 }

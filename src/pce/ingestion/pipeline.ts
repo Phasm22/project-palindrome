@@ -92,7 +92,7 @@ export class IngestionPipeline {
 
       pceLogger.info(`Chunked document into ${chunks.length} chunks`);
 
-      // Step 6: Delete old chunks if reindexing
+      // Step 6: Delete old chunks if reindexing (full reindex)
       if (options.reindex && changeResult.snapshot) {
         await this.vectorStore.deleteByVersionHash(changeResult.snapshot.sha256Hash);
       }
@@ -102,7 +102,23 @@ export class IngestionPipeline {
       const embeddings = await this.embeddingService.embedBatch(texts);
 
       // Step 8: Index chunks
-      await this.vectorStore.indexChunks(chunks, embeddings);
+      // Task 12.3: Use incremental update for MODIFIED documents
+      if (changeResult.status === "MODIFIED" && changeResult.snapshot && !options.reindex) {
+        // Fast-path: only update modified chunks
+        // Use the old hash to find existing chunks, then update with new hash
+        const updateResult = await this.vectorStore.updateChunksIncremental(
+          chunks,
+          embeddings,
+          changeResult.snapshot.sha256Hash // Use old hash to find existing chunks
+        );
+        pceLogger.info(`Incremental update completed`, {
+          updated: updateResult.updated,
+          skipped: updateResult.skipped,
+        });
+      } else {
+        // Full index for NEW documents or when reindexing
+        await this.vectorStore.indexChunks(chunks, embeddings);
+      }
 
       pceLogger.info(`Successfully ingested document`, {
         filePath,

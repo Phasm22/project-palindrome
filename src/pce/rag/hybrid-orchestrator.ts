@@ -12,6 +12,8 @@ import type {
   QueryType,
   HybridContext,
   FusionConfig,
+  RetrievalResult,
+  RAGResponse,
 } from "../types";
 import { QueryAnalyzer } from "./query-analyzer";
 import { RetrievalService } from "./retrieval";
@@ -117,12 +119,15 @@ export class HybridOrchestrator {
     pceLogger.info("Routing to semantic-only retrieval");
 
     const retrievalResult = await this.retrievalService.retrieve(query, aclGroup);
+    const context = this.buildSemanticContext(retrievalResult);
     const response = await this.generationService.generate(query, retrievalResult.chunks);
+    const responseWithProvenance = this.attachProvenance(response, context);
 
     return {
-      ...response,
+      ...responseWithProvenance,
       queryType: "SEMANTIC_ONLY",
       fallbackMode: null,
+      context,
     };
   }
 
@@ -156,6 +161,7 @@ export class HybridOrchestrator {
         ...response,
         queryType: "STRUCTURAL_PRIMARY",
         fallbackMode: null,
+        context: hybridContext,
       };
     } catch (error: any) {
       pceLogger.warn("Graph retrieval failed, falling back to semantic", {
@@ -250,6 +256,7 @@ export class HybridOrchestrator {
         },
         queryType: "HYBRID",
         fallbackMode: "low_score",
+        context: fusionResult.prunedContext,
         fusionMetrics: {
           vectorResults: vectorResult.chunks.length,
           graphResults: graphResult.entities.length,
@@ -272,6 +279,7 @@ export class HybridOrchestrator {
       ...response,
       queryType: "HYBRID",
       fallbackMode: null,
+      context: fusionResult.prunedContext,
       fusionMetrics: {
         vectorResults: vectorResult.chunks.length,
         graphResults: graphResult.entities.length,
@@ -310,7 +318,7 @@ export class HybridOrchestrator {
   private async generateHybridResponse(
     query: string,
     context: HybridContext
-  ): Promise<HybridRAGResponse> {
+  ): Promise<RAGResponse> {
     // Convert hybrid context to format for generation service
     const chunks = context.semanticChunks.map((item) => item.chunk);
     
@@ -361,6 +369,68 @@ export class HybridOrchestrator {
         ...response.metadata,
         chunksRetrieved: chunks.length + context.structuralPaths.length,
       },
+    };
+  }
+
+  private attachProvenance(
+    response: RAGResponse,
+    context: HybridContext
+  ): RAGResponse {
+    if (!context.semanticChunks.length && !context.provenance.length) {
+      return response;
+    }
+
+    const chunkMap = new Map(
+      context.semanticChunks.map((item) => [item.chunk.id, item.chunk])
+    );
+
+    const provenanceByPath = new Map(
+      context.provenance.map((entry) => [entry.sourcePath, entry])
+    );
+
+    const enrichedSources = response.sources.map((source) => {
+      const chunk = chunkMap.get(source.chunkId);
+      if (chunk) {
+        return {
+          ...source,
+          versionHash: chunk.metadata.versionHash,
+        };
+      }
+
+      const provenance = provenanceByPath.get(source.sourcePath);
+      if (provenance) {
+        return {
+          ...source,
+          versionHash: provenance.versionHash,
+        };
+      }
+
+      return source;
+    });
+
+    return {
+      ...response,
+      sources: enrichedSources,
+    };
+  }
+
+  private buildSemanticContext(result: RetrievalResult): HybridContext {
+    const provenanceMap = new Map<string, { versionHash: string; sourcePath: string }>();
+
+    result.chunks.forEach((chunk) => {
+      provenanceMap.set(chunk.metadata.sourcePath, {
+        versionHash: chunk.metadata.versionHash,
+        sourcePath: chunk.metadata.sourcePath,
+      });
+    });
+
+    return {
+      semanticChunks: result.chunks.map((chunk, index) => ({
+        chunk,
+        score: result.scores[index] ?? 0,
+      })),
+      structuralPaths: [],
+      provenance: Array.from(provenanceMap.values()),
     };
   }
 

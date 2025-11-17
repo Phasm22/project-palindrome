@@ -10,7 +10,8 @@
     "test": "bun test",
     "dev": "bun run src/cli.ts",
     "pce:verify-dod": "bun run src/pce/verify-dod.ts",
-    "pce:test-redaction": "bun run src/pce/cli.ts test-redaction"
+    "pce:test-redaction": "bun run src/pce/cli.ts test-redaction",
+    "pce:api": "bun run src/pce/api/main.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

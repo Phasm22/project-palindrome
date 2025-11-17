@@ -123,63 +123,186 @@ export class QdrantVectorStore {
 
   /**
    * Batch index multiple chunks
+   * Task 14.2: Vector DB Batch Update Optimization
+   * Uses native batch/upsert functionality to minimize network calls
    */
-  async indexChunks(chunks: DocumentChunk[], vectors: number[][]): Promise<void> {
+  async indexChunks(
+    chunks: DocumentChunk[],
+    vectors: number[][],
+    batchSize: number = 100
+  ): Promise<void> {
     if (chunks.length !== vectors.length) {
       throw new Error("Chunks and vectors arrays must have the same length");
     }
 
-    let points: any[] = [];
-    try {
-      points = chunks.map((chunk, index) => {
-        // Store original chunk ID in payload for retrieval
-        const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text, chunk.id);
+    // Process in batches to avoid overwhelming the API
+    for (let i = 0; i < chunks.length; i += batchSize) {
+      const batchChunks = chunks.slice(i, i + batchSize);
+      const batchVectors = vectors.slice(i, i + batchSize);
+
+      let points: any[] = [];
+      try {
+        points = batchChunks.map((chunk, index) => {
+          // Store original chunk ID in payload for retrieval
+          const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text, chunk.id);
+          
+          // Validate vector dimension
+          if (!batchVectors[index] || batchVectors[index].length !== 1536) {
+            throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected 1536, got ${batchVectors[index]?.length || 0}`);
+          }
+          
+          // Ensure all payload fields are defined
+          const cleanPayload: any = {
+            text: payload.text || "",
+            version_hash: payload.version_hash || "",
+            acl_group: payload.acl_group || "",
+            source_type: payload.source_type || "",
+            source_path: payload.source_path || "",
+            timestamp: payload.timestamp || new Date().toISOString(),
+            chunk_index: payload.chunk_index ?? 0,
+            total_chunks: payload.total_chunks ?? 0,
+            chunk_id: payload.chunk_id || chunk.id,
+          };
+          
+          // Qdrant only accepts unsigned integers or UUIDs - convert string ID to integer
+          const pointId = this.stringIdToInt(chunk.id);
+          
+          return {
+            id: pointId,
+            vector: batchVectors[index],
+            payload: cleanPayload,
+          };
+        });
+
+        // Use native batch upsert - single network call for entire batch
+        await this.client.upsert(this.collectionName, {
+          wait: true,
+          points,
+        });
+
+        pceLogger.debug(`Indexed batch of ${batchChunks.length} chunks`, {
+          batchIndex: Math.floor(i / batchSize) + 1,
+          totalBatches: Math.ceil(chunks.length / batchSize),
+        });
+      } catch (error: any) {
+        pceLogger.error("Failed to batch index chunks", { 
+          error: error.message,
+          errorDetails: error.data || error.status || error,
+          pointsCount: points.length,
+          batchIndex: Math.floor(i / batchSize) + 1,
+        });
+        throw error;
+      }
+    }
+
+    pceLogger.info(`Indexed ${chunks.length} chunks in ${Math.ceil(chunks.length / batchSize)} batch(es)`);
+  }
+
+  /**
+   * Task 12.3: Fast-Path Index Update Logic
+   * Incrementally update only modified chunks (by comparing chunk hashes)
+   */
+  async updateChunksIncremental(
+    chunks: DocumentChunk[],
+    vectors: number[][],
+    versionHash: string
+  ): Promise<{ updated: number; skipped: number }> {
+    if (chunks.length !== vectors.length) {
+      throw new Error("Chunks and vectors arrays must have the same length");
+    }
+
+    // Get existing chunks for this version hash
+    const existingChunks = await this.getChunksByVersionHash(versionHash);
+    const existingChunkMap = new Map(
+      existingChunks.map((c) => [c.chunk.id, c])
+    );
+
+    // Identify which chunks need updating
+    const chunksToUpdate: Array<{ chunk: DocumentChunk; vector: number[]; index: number }> = [];
+    let skipped = 0;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const existing = existingChunkMap.get(chunk.id);
+
+      // Update if chunk doesn't exist or if content changed (compare hash)
+      if (!existing) {
+        chunksToUpdate.push({ chunk, vector: vectors[i], index: i });
+      } else {
+        // Compare chunk content hash to detect changes
+        const existingText = existing.chunk.text;
+        const newText = chunk.text;
         
-        // Validate vector dimension
-        if (!vectors[index] || vectors[index].length !== 1536) {
-          throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected 1536, got ${vectors[index]?.length || 0}`);
+        // Simple comparison - in production, could use chunk hash from metadata
+        if (existingText !== newText) {
+          chunksToUpdate.push({ chunk, vector: vectors[i], index: i });
+        } else {
+          skipped++;
         }
-        
-        // Ensure all payload fields are defined
-        const cleanPayload: any = {
-          text: payload.text || "",
-          version_hash: payload.version_hash || "",
-          acl_group: payload.acl_group || "",
-          source_type: payload.source_type || "",
-          source_path: payload.source_path || "",
-          timestamp: payload.timestamp || new Date().toISOString(),
-          chunk_index: payload.chunk_index ?? 0,
-          total_chunks: payload.total_chunks ?? 0,
-          chunk_id: payload.chunk_id || chunk.id,
-        };
-        
-        // Qdrant only accepts unsigned integers or UUIDs - convert string ID to integer
-        const pointId = this.stringIdToInt(chunk.id);
-        
+      }
+    }
+
+    if (chunksToUpdate.length === 0) {
+      pceLogger.info(`No chunks need updating (all unchanged)`, {
+        totalChunks: chunks.length,
+        skipped,
+      });
+      return { updated: 0, skipped };
+    }
+
+    // Batch update only modified chunks
+    const updateChunks = chunksToUpdate.map((u) => u.chunk);
+    const updateVectors = chunksToUpdate.map((u) => u.vector);
+    
+    await this.indexChunks(updateChunks, updateVectors);
+
+    pceLogger.info(`Incremental update completed`, {
+      updated: chunksToUpdate.length,
+      skipped,
+      totalChunks: chunks.length,
+    });
+
+    return { updated: chunksToUpdate.length, skipped };
+  }
+
+  /**
+   * Get chunks by version hash (for incremental update comparison)
+   */
+  private async getChunksByVersionHash(versionHash: string): Promise<Array<{ chunk: DocumentChunk; score: number }>> {
+    try {
+      // Search with filter to get all chunks for this version
+      const results = await this.client.scroll(this.collectionName, {
+        filter: {
+          must: [
+            {
+              key: "version_hash",
+              match: { value: versionHash },
+            },
+          ],
+        },
+        limit: 10000, // Adjust based on expected chunk count
+        with_payload: true,
+        with_vector: false,
+      });
+
+      return (results.points || []).map((point: any) => {
+        const payload = point.payload as any as QdrantPayload;
+        const metadata = payloadToMetadata(payload);
+        const chunkId = (payload as any).chunk_id || point.id?.toString() || String(point.id);
+
         return {
-          id: pointId,
-          vector: vectors[index],
-          payload: cleanPayload,
+          chunk: {
+            id: chunkId,
+            text: payload.text,
+            metadata,
+            startIndex: 0,
+            endIndex: payload.text.length,
+          },
+          score: 1.0, // Not relevant for retrieval, just for structure
         };
       });
-
-      await this.client.upsert(this.collectionName, {
-        wait: true,
-        points,
-      });
-
-      pceLogger.info(`Indexed ${chunks.length} chunks in batch`);
     } catch (error: any) {
-      pceLogger.error("Failed to batch index chunks", { 
-        error: error.message,
-        errorDetails: error.data || error.status || error,
-        pointsCount: points.length,
-        samplePoint: points[0] ? {
-          id: points[0].id,
-          vectorLength: points[0].vector?.length,
-          payloadKeys: Object.keys(points[0].payload || {})
-        } : null
-      });
+      pceLogger.error("Failed to get chunks by version hash", { error: error.message });
       throw error;
     }
   }
@@ -310,6 +433,19 @@ export class QdrantVectorStore {
     } catch (error: any) {
       pceLogger.error("Failed to get collection info", { error: error.message });
       throw error;
+    }
+  }
+
+  /**
+   * Simple health check to verify Qdrant connectivity
+   */
+  async healthCheck(): Promise<boolean> {
+    try {
+      await this.client.getCollections();
+      return true;
+    } catch (error: any) {
+      pceLogger.warn("Qdrant health check failed", { error: error.message });
+      return false;
     }
   }
 }

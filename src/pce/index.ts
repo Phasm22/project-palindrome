@@ -33,3 +33,6 @@ export * from "./types";
 // Utils
 export { pceLogger, LogLevel } from "./utils/logger";
 
+// API
+export * from "./api";
+

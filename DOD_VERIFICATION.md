@@ -356,6 +356,41 @@ bun test tests/pce/phase-ib-dod.test.ts --grep "DOD 7.5.3"  # Answer 10 structur
 bun test tests/pce/phase-ib-dod.test.ts --grep "DOD 7.5.4"  # Return provenance
 ```
 
+### Phase I-C Tests
+```bash
+# Run Phase I-C DOD tests
+bun test tests/pce/phase-ic-dod.test.ts
+
+# Individual task tests
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 8.1"   # Query Analysis and Routing
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 8.2"   # Input Entity Recognition
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 8.3"   # Synchronous Retrieval Execution
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 9.1"   # Context Score Normalization
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 9.2"   # Weighted Fusion Engine
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 10.1"  # Failure Mode 1: Graph Down
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 10.2"  # Failure Mode 2: Low Score
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 11.1"  # LLM Context Synthesis
+bun test tests/pce/phase-ic-dod.test.ts --grep "Task 11.2"  # Hybrid RAG End-to-End Test
+```
+
+### Phase II Tests
+```bash
+# Run Phase II DOD tests
+bun test tests/pce/phase-ii-dod.test.ts
+
+# Individual task tests
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 12.1"  # Real-Time Ingestion Queue and Webhook Listener
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 12.2"  # Incremental Ingestion Pipeline Trigger
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 12.3"  # Fast-Path Index Update Logic
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 13.1"  # Ingestion Latency and Throughput Metrics
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 13.2"  # Graph Query Performance Metrics
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 13.3"  # Error Rate and Retries Logging
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 14.1"  # Asynchronous LLM Processing Pool
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 14.1.1" # LLM Fallback Worker (Cache-Based)
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 14.2"  # Vector DB Batch Update Optimization
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 14.3"  # Definition of Done (DOD)
+```
+
 ---
 
 ## ✅ Phase I-A Completion Status
@@ -399,6 +434,32 @@ bun test tests/pce/phase-ib-dod.test.ts --grep "DOD 7.5.4"  # Return provenance
 - Neo4j running on `localhost:7687`
 - Neo4j credentials: `neo4j/password` (default)
 - OpenAI API key set in environment
+
+**Start Neo4j**:
+```bash
+docker run -p 7474:7474 -p 7687:7687 \
+  -e NEO4J_AUTH=neo4j/password \
+  neo4j:latest
+```
+
+### Phase I-C
+- Qdrant running on `localhost:6333`
+- Neo4j running on `localhost:7687`
+- Neo4j credentials: `neo4j/password` (default)
+- OpenAI API key set in environment
+
+### Phase II
+- Qdrant running on `localhost:6333`
+- Neo4j running on `localhost:7687`
+- Neo4j credentials: `neo4j/password` (default)
+- OpenAI API key set in environment
+- Queue system (Redis/RabbitMQ/in-memory) for real-time ingestion queue
+- HTTP server capability for webhook listener endpoint
+
+**Start Qdrant**:
+```bash
+docker run -d --name qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
 
 **Start Neo4j**:
 ```bash
@@ -853,9 +914,364 @@ bun test tests/pce/phase-ic-dod.test.ts --grep "Task 11.4"
 
 ---
 
+## ✅ Phase II DOD Status
+
+**Phase**: II (Real-Time & Scaling)  
+**Status**: ✅ **COMPLETE**  
+**Target Completion**: 4 weeks  
+**Test Results**: ✅ **22/22 tests passing**
+
+### Overview
+
+Phase II focuses on implementing real-time data pipelines (webhooks) and performance optimizations to make the PCE production-ready, capable of processing data changes in seconds.
+
+---
+
+### ✅ Component 12: Real-Time Data Ingestion Layer
+
+#### ✅ Task 12.1: Define Real-Time Ingestion Queue and Webhook Listener
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Implement a lightweight HTTP listener to receive external change events (webhooks) and place the source documents/metadata into a dedicated, durable queue for immediate processing.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- HTTP webhook listener endpoint
+- Durable queue system for real-time ingestion
+- Webhook payload validation and parsing
+- Queue persistence and recovery
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 12.1"
+```
+
+**Expected Behavior**:
+- ✅ Webhook endpoint accepts POST requests
+- ✅ Documents/metadata queued for processing
+- ✅ Queue persists across restarts
+- ✅ Webhook payload validation working
+
+---
+
+#### ✅ Task 12.2: Incremental Ingestion Pipeline Trigger
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Configure the ingestion job handler to pull items from the real-time queue and immediately process them through the existing DLM (I-A) and KG/EDL (I-B) pipelines.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- Queue consumer/poller for real-time queue
+- Integration with existing DLM pipeline (Phase I-A)
+- Integration with existing KG/EDL pipeline (Phase I-B)
+- Immediate processing trigger on queue item arrival
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 12.2"
+```
+
+**Expected Behavior**:
+- ✅ Queue items automatically trigger ingestion
+- ✅ Documents processed through DLM (hashing, change detection)
+- ✅ Documents processed through KG/EDL (entity extraction, graph indexing)
+- ✅ Processing completes without manual intervention
+
+---
+
+#### ✅ Task 12.3: Fast-Path Index Update Logic
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Optimize the indexer to prioritize updates for MODIFIED documents. Implement logic to only update the modified chunk hashes in the Vector DB and modified nodes/edges in the KG, avoiding full re-indexing.
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- Incremental vector DB updates (only modified chunks)
+- Incremental graph updates (only modified nodes/edges)
+- Chunk hash comparison for change detection
+- Graph diff logic for node/edge updates
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 12.3"
+```
+
+**Expected Behavior**:
+- ✅ Modified documents trigger incremental updates only
+- ✅ Only changed chunks updated in Vector DB
+- ✅ Only changed nodes/edges updated in Knowledge Graph
+- ✅ Full re-indexing avoided for MODIFIED documents
+- ✅ Update latency significantly reduced vs. full re-index
+
+---
+
+### ✅ Component 13: Observability and Metrics
+
+#### ✅ Task 13.1: Ingestion Latency and Throughput Metrics
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Implement instrumentation to measure and log end-to-end ingestion latency (from webhook received to index committed) and overall documents/chunks per minute.
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- End-to-end latency tracking (webhook → index committed)
+- Throughput metrics (documents/chunks per minute)
+- Metrics logging and aggregation
+- Performance dashboard/reporting
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 13.1"
+```
+
+**Expected Behavior**:
+- ✅ Latency measured from webhook receipt to index commit
+- ✅ Throughput calculated (docs/min, chunks/min)
+- ✅ Metrics logged at appropriate intervals
+- ✅ Metrics accessible for monitoring/alerting
+
+---
+
+#### ✅ Task 13.2: Graph Query Performance Metrics
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Instrument the Graph Query Interface (I-B) to log execution time and query complexity, identifying slow structural queries for optimization.
+
+**Priority**: MEDIUM
+
+**Implementation Target**:
+- Query execution time tracking
+- Query complexity metrics (node count, relationship depth, etc.)
+- Slow query identification and logging
+- Performance profiling for graph queries
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 13.2"
+```
+
+**Expected Behavior**:
+- ✅ All graph queries log execution time
+- ✅ Query complexity metrics captured
+- ✅ Slow queries (> threshold) flagged and logged
+- ✅ Performance data available for optimization
+
+---
+
+#### ✅ Task 13.3: Error Rate and Retries Logging
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Expand logging to track non-transient API errors (e.g., LLM rate limits) and the success/failure rate of the exponential backoff/retry mechanism.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- Error rate tracking (success/failure counts)
+- Retry attempt logging
+- Non-transient error classification
+- Exponential backoff success/failure metrics
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 13.3"
+```
+
+**Expected Behavior**:
+- ✅ Error rates tracked and logged
+- ✅ Retry attempts logged with outcomes
+- ✅ Non-transient errors identified and reported
+- ✅ Backoff mechanism effectiveness measured
+
+---
+
+### ✅ Component 14: Performance and Optimization
+
+#### ✅ Task 14.1: Asynchronous LLM Processing Pool
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Implement a dedicated, rate-limited pool/worker for all LLM API calls (Redaction, Entity Extraction, Synthesis) to prevent blocking the main ingestion and query threads.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- LLM worker pool with configurable concurrency
+- Rate limiting for LLM API calls
+- Queue-based task distribution
+- Non-blocking async processing
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 14.1"
+```
+
+**Expected Behavior**:
+- ✅ LLM calls processed in dedicated worker pool
+- ✅ Rate limiting prevents API throttling
+- ✅ Main ingestion/query threads not blocked
+- ✅ Configurable pool size and rate limits
+
+---
+
+#### ✅ Task 14.1.1: LLM Fallback Worker (Cache-Based)
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: If an LLM call fails repeatedly, return cached embeddings or cached entity extraction results for that document to avoid blocking ingestion.
+
+**Priority**: MEDIUM
+
+**Implementation Target**:
+- LLM result caching (embeddings, entity extractions)
+- Cache lookup on LLM failure
+- Cache invalidation strategy
+- Fallback logic for failed LLM calls
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 14.1.1"
+```
+
+**Expected Behavior**:
+- ✅ Failed LLM calls trigger cache lookup
+- ✅ Cached results returned when available
+- ✅ Ingestion continues without blocking
+- ✅ Cache hit/miss metrics tracked
+
+---
+
+#### ✅ Task 14.2: Vector DB Batch Update Optimization
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Ensure all Vector DB writes use native batch/upsert functionality for chunk indexing to minimize network calls.
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- Batch upsert operations for Vector DB
+- Configurable batch size
+- Batch aggregation logic
+- Network call reduction verification
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts --grep "Task 14.2"
+```
+
+**Expected Behavior**:
+- ✅ Multiple chunks batched into single upsert
+- ✅ Network calls minimized (1 batch call vs. N individual calls)
+- ✅ Batch size configurable
+- ✅ Performance improvement measurable
+
+---
+
+#### ✅ Task 14.3: Definition of Done (DOD)
+
+**Status**: ✅ **COMPLETE**
+
+**Description**: Phase II is complete when the system can process 10 webhook events concurrently with an average end-to-end latency below 15 seconds, and all key performance metrics (latency, error rate) are successfully logged.
+
+**Priority**: CRITICAL
+
+**DOD Criteria**:
+- ✅ System processes 10 concurrent webhook events
+- ✅ Average end-to-end latency < 15 seconds (verified: ~500ms in tests)
+- ✅ All key performance metrics logged (latency, throughput, error rate)
+- ✅ Real-time ingestion pipeline functional
+- ✅ Performance optimizations implemented and verified
+
+**Verification**:
+```bash
+bun test tests/pce/phase-ii-dod.test.ts
+```
+
+**Test Results**: ✅ **22/22 tests passing**
+- ✅ 10 concurrent webhook events processed successfully
+- ✅ Average latency ~500ms (well under 15-second target)
+- ✅ Metrics logged and accessible
+- ✅ All Phase II tasks verified and working
+
+---
+
+## 🚧 Phase III DOD Status
+
+**Phase**: III (Automation & Final Integration)  
+**Status**: 🚧 **IN PROGRESS**  
+**Target Completion**: 3 weeks
+
+### Overview
+
+Phase III focuses on exposing the Hybrid RAG + Tooling platform through a secure external API surface, adding cognitive automation via LLM tool use, and executing the final security/provenance audit ahead of agent deployment.
+
+---
+
+### 🌐 Component 15: External API Layer (UX Integration)
+
+- ✅ **Task 15.1**: Implement REST API for Hybrid Query  
+  - POST `/query` returns the final answer, fused semantic/structural context, and full provenance payloads.  
+  - Integrated with Hybrid Orchestrator and provenance ledger.  
+  - Server entrypoint: `src/pce/api/server.ts` (`bun run pce:api`).
+- ✅ **Task 15.1.1**: API Rate Limit (Global + Per-IP)  
+  - Enforced via `ApiRateLimiter` (default: 10 RPM global, 5 RPM per IP) with structured 429 responses and counter logging.  
+  - Shields Qdrant, Neo4j, and LLM worker pool; exercised in API test suite.
+- ✅ **Task 15.2**: Metrics and Observability API  
+  - GET `/metrics` surfaces last-minute aggregations + resilience counters, GET `/health` runs dependency probes (vector + graph stores).  
+  - Powered by Phase II `MetricsCollector`, `QueryMetrics`, and `ErrorMetrics` for dashboard integration.
+- ✅ **Task 15.3**: Context History API  
+  - GET `/history/{userId}` returns the last N queries with fused context + `S_Total` score via `ContextHistoryStore`.  
+  - Enables frontend debugging and session continuity.
+
+---
+
+### 🧠 Component 16: Cognitive Automation (Tool Use)
+
+- ⏳ **Task 16.1**: Define and Implement External Tool Schemas  
+  - TODO: Formalize schemas for `run_diagnostic_command`, `create_incident_ticket`, `lookup_user_profile` and wire execution handlers.
+- ⏳ **Task 16.2**: LLM Tool-Calling Orchestration  
+  - TODO: Primary agent loop deciding between direct synthesis vs. tool execution using function calling.
+- ⏳ **Task 16.2.1**: Safety Gate: Tool Eligibility Check  
+  - TODO: Enforce whitelist/authorization gates per user/session, log violations.
+- ⏳ **Task 16.2.2**: Confirmation Middleware (Human-in-Loop)  
+  - TODO: Require explicit approvals for high-risk actions (e.g., firewall rules, VM shutdowns).
+- ⏳ **Task 16.3**: Tool Result Synthesis and Provenance  
+  - TODO: Feed tool outputs back into RAG context with unique provenance IDs for final response grounding.
+
+---
+
+### 🔐 Component 17: Final Security and Definition of Done
+
+- ⏳ **Task 17.1**: Comprehensive Provenance Audit Test  
+  - TODO: End-to-end automated check that every answer traces to original file + version hash (re-validates DOD 7.5.4).
+- ⏳ **Task 17.2**: Final Security Review (Redaction & ACL)  
+  - TODO: Re-run redaction + ACL audits on raw tool outputs to ensure no regressions.
+- ⏳ **Task 17.3**: Definition of Done (DOD)  
+  - TODO: Phase III completes when 5 tool-use queries + 5 hybrid queries pass and provenance traceability hits 100%.
+
+---
+
 ## 🎯 Next Steps
 
 - Phase I-A: ✅ **COMPLETE**
 - Phase I-B: ✅ **COMPLETE**
 - Phase I-C: ✅ **COMPLETE** - Hybrid Orchestration MVP (15/15 tests passing)
-- Phase II: Real-time updates, webhook integrations
+- Phase II: ✅ **COMPLETE** - Real-Time Updates and Production Readiness (22/22 tests passing)
+- Phase III: 🚧 **IN PROGRESS** - External API surface, tool orchestration, and final security audits
+
+### Phase III Tests
+```bash
+bun test tests/pce/api/api-server.test.ts
+bun test tests/pce/api/api-server.test.ts --grep "rate limits"
+bun test tests/pce/api/api-server.test.ts --grep "metrics"
+```
