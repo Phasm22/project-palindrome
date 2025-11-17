@@ -4,6 +4,7 @@ import { RunDiagnosticTool } from "../tools/RunDiagnosticTool";
 import { CreateIncidentTicketTool } from "../tools/CreateIncidentTicketTool";
 import { LookupUserProfileTool } from "../tools/LookupUserProfileTool";
 import { OpnsenseReadOnlyTool } from "../tools/opnsense/readonly";
+import { OpnsenseSafeWriteTool } from "../tools/opnsense/writes";
 
 export function loadTools(): BaseTool[] {
   return [
@@ -12,6 +13,7 @@ export function loadTools(): BaseTool[] {
     new LookupUserProfileTool(),
     new CreateIncidentTicketTool(),
     new OpnsenseReadOnlyTool(),
+    new OpnsenseSafeWriteTool(),
   ];
 }
 

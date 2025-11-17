@@ -1435,6 +1435,254 @@ bun src/cli.ts pce "query that triggers opnsense tool"
 
 ---
 
+## 🔧 Phase TL-1B DOD Status
+
+**Phase**: TL-1B (Tool Layer V1 - OPNsense Safe Write Suite)  
+**Status**: 🚧 **IN PROGRESS**  
+**Target Completion**: 2 weeks  
+**Priority**: CRITICAL
+
+### Overview
+
+Phase TL-1B introduces controlled, low-risk write operations with mandatory human-in-the-loop (HIL) safety. This phase focuses on implementing a restricted set of write actions with dry-run capabilities, confirmation middleware, ACL enforcement, and comprehensive provenance capture for auditability and rollback.
+
+**Goal**: Introduce controlled, low-risk write operations with mandatory human-in-the-loop (HIL) safety.
+
+**Focus**: Controlled Write Operations, HIL, Dry-Run, Provenance Capture
+
+**Target System**: OPNsense
+
+---
+
+### 📦 Deliverables
+
+- 🚧 **Artifact**: `src/tools/opnsense/writes/` - New folder for all dedicated write-action tool implementations
+- 🚧 **Artifact**: `src/agent/tool-policy.ts` - Updated ACL/Risk-Tier definitions to reflect write permissions
+- 🚧 **Artifact**: `tool_definition_opnsense_safewrite.json` - New function definitions for write tools, registered with the PCE
+- 🚧 **Artifact**: `tests/tools/opnsense/writes/` - Dedicated test suite for TL-1B functionality
+
+---
+
+### ✅ Acceptance Criteria
+
+#### ✅ TL-1B.1: Restricted Write Action Implementation
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: Implement 3-5 designated low-risk write actions (e.g., create_disabled_alias, enable_rule_with_confirmation, update_description_field). These are the ONLY write actions permitted in TL-1B.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- 3-5 low-risk write actions implemented
+- Examples: create_disabled_alias, enable_rule_with_confirmation, update_description_field
+- All write tools organized in `src/tools/opnsense/writes/`
+- Tools registered in `tool_definition_opnsense_safewrite.json`
+- No other write actions permitted in TL-1B
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.1"
+# Verify 3-5 write actions implemented
+# Verify all are low-risk operations
+# Verify no unauthorized write actions exist
+```
+
+**Expected Behavior**:
+- ✅ 3-5 designated low-risk write actions implemented
+- ✅ All write tools in `src/tools/opnsense/writes/`
+- ✅ All tools registered in `tool_definition_opnsense_safewrite.json`
+- ✅ No write actions beyond the designated set
+
+---
+
+#### ✅ TL-1B.2: Mandatory Dry-Run and Diff Preview
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: Every write action MUST support a 'dryRun: true' parameter. When dryRun is true, the tool must return a structured 'diff preview' (showing what the change *would* be) without executing the API call.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- All write tools support `dryRun: true` parameter
+- Dry-run mode returns structured diff preview
+- Diff preview shows before/after state
+- No API call executed when dryRun is true
+- Structured JSON format for diff preview
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.2"
+# Verify all write tools support dryRun parameter
+# Verify diff preview returned in structured format
+# Verify no API calls when dryRun is true
+```
+
+**Expected Behavior**:
+- ✅ All write tools accept `dryRun: true` parameter
+- ✅ Structured diff preview returned (before/after state)
+- ✅ No OPNsense API calls executed in dry-run mode
+- ✅ Diff preview in parseable JSON format
+
+---
+
+#### ✅ TL-1B.3: Confirmation Middleware Trigger
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: All implemented write tools MUST be flagged as 'requiresConfirmation: true' in their tool definition schema. An end-to-end test must verify that the Agent Runner (Task 16.2.2) successfully intercepts the tool call and returns a structured payload requesting human approval instead of executing the write immediately.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- All write tools have `requiresConfirmation: true` in schema
+- Agent Runner intercepts write tool calls
+- Structured confirmation request payload returned
+- No write execution without confirmation
+- Integration with existing confirmation middleware (Task 16.2.2)
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.3"
+# Verify requiresConfirmation flag in tool schemas
+# Verify Agent Runner intercepts write calls
+# Verify confirmation request payload structure
+# End-to-end test: Query → LLM proposes write → Confirmation returned
+```
+
+**Expected Behavior**:
+- ✅ All write tools flagged with `requiresConfirmation: true`
+- ✅ Agent Runner intercepts write tool calls
+- ✅ Structured confirmation request returned (not executed)
+- ✅ Write only executes after human approval
+- ✅ Confirmation middleware working end-to-end
+
+---
+
+#### ✅ TL-1B.4: Write ACL Enforcement
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: The tool-policy layer (Task 16.2.1) must block any write attempt if the requesting user (e.g., 'standard-user') lacks the required ACL level defined in the tool's schema. The rejection must occur at the 'tool-policy' gate, not the OPNsense API level.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- Tool-policy layer enforces write ACL requirements
+- ACL check occurs before tool execution
+- Rejection at tool-policy gate (not OPNsense API)
+- Structured error returned for unauthorized attempts
+- ACL requirements defined in tool schemas
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.4"
+# Verify tool-policy blocks unauthorized write attempts
+# Verify rejection occurs at policy layer (not API)
+# Verify structured error returned
+# Test with different user ACL levels
+```
+
+**Expected Behavior**:
+- ✅ Tool-policy layer checks ACL before execution
+- ✅ Unauthorized users blocked at policy gate
+- ✅ Structured error returned (not API error)
+- ✅ ACL requirements enforced per tool schema
+- ✅ No write attempts reach OPNsense API for unauthorized users
+
+---
+
+#### ✅ TL-1B.5: Pre-Write State Provenance Capture
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: For any tool that successfully executes a write operation (dryRun: false, confirmed: true), the system MUST generate a structured provenance snapshot of the relevant target state (e.g., the firewall rule before modification) and tag it with a unique hash BEFORE the write API call is made. This allows for a clean rollback point.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- Pre-write state captured before API call
+- Structured provenance snapshot generated
+- Unique hash assigned to snapshot
+- Snapshot includes target state (e.g., firewall rule before change)
+- Provenance stored for rollback capability
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.5"
+# Verify pre-write state captured before API call
+# Verify provenance snapshot generated with unique hash
+# Verify snapshot contains target state
+# Verify provenance stored for rollback
+```
+
+**Expected Behavior**:
+- ✅ Pre-write state captured before write execution
+- ✅ Structured provenance snapshot generated
+- ✅ Unique hash assigned to each snapshot
+- ✅ Snapshot contains complete target state
+- ✅ Provenance stored and accessible for rollback
+
+---
+
+#### ✅ TL-1B.6: End-to-End Success Path Validation
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: A final test must successfully execute the full confirmed flow: Query → LLM proposes write tool → Confirmation returned → Dry-Run successful → Write executes → Provenance captured → Final answer synthesized.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- End-to-end test covering full write flow
+- Query triggers LLM to propose write tool
+- Confirmation middleware returns approval request
+- Dry-run executed and diff preview returned
+- Write executes after confirmation
+- Provenance captured before write
+- Final answer synthesized with tool results
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.6"
+# End-to-end test: Full confirmed write flow
+# Verify each step in the flow executes correctly
+# Verify provenance in final answer
+# Verify tool provenance tag in response sources
+```
+
+**Expected Behavior**:
+- ✅ Query successfully triggers write tool proposal
+- ✅ Confirmation middleware intercepts and requests approval
+- ✅ Dry-run executes and returns diff preview
+- ✅ Write executes after human confirmation
+- ✅ Pre-write provenance captured
+- ✅ Final answer synthesized with tool results
+- ✅ Provenance tag `tool://opnsense_...` in response sources
+
+---
+
+### 🧪 Running Verification
+
+```bash
+# Run all TL-1B tests
+bun test tests/tools/opnsense/writes/
+
+# Individual acceptance criteria tests
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.1"  # Restricted Write Actions
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.2"  # Dry-Run and Diff Preview
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.3"  # Confirmation Middleware
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.4"  # Write ACL Enforcement
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.5"  # Pre-Write Provenance
+bun test tests/tools/opnsense/writes/ --grep "TL-1B.6"  # End-to-End Validation
+
+# End-to-end validation
+bun src/cli.ts pce "query that triggers opnsense write tool"
+```
+
+---
+
 ## 🎯 Next Steps
 
 - Phase I-A: ✅ **COMPLETE**
@@ -1443,6 +1691,8 @@ bun src/cli.ts pce "query that triggers opnsense tool"
 - Phase II: ✅ **COMPLETE** - Real-Time Updates and Production Readiness (22/22 tests passing)
 - Phase III: 🚧 **IN PROGRESS** - External API surface, tool orchestration, and final security audits
 - Phase TL-1A: 🚧 **IN PROGRESS** - OPNsense Read-Only Suite (Tool Layer V1)
+- Phase TL-1B: 🚧 **IN PROGRESS** - OPNsense Safe Write Suite (Tool Layer V1)
+- Phase TL-1C: 🚧 **IN PROGRESS** - LLM-Integrated Tool Use (OPNsense-aware)
 
 ### Phase III Tests
 ```bash
@@ -1462,4 +1712,193 @@ bun run pce:phase3-dod
 ```bash
 bun test tests/tools/opnsense/readonly/
 bun src/cli.ts pce "query that triggers opnsense tool"
+```
+
+### Phase TL-1B Tests
+```bash
+bun test tests/tools/opnsense/writes/
+bun src/cli.ts pce "query that triggers opnsense write tool"
+```
+
+---
+
+## 🎯 Phase TL-1C: LLM-Integrated Tool Use (OPNsense-aware)
+
+### Overview
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Goal**: Enable the LLM to autonomously select, propose, and execute OPNsense tools.
+
+**Component**: TL-1C
+
+**Target System**: OPNsense
+
+**Priority**: HIGH
+
+**Focus**: LLM Tool Calling, Autonomous Reasoning, Full Flow Validation
+
+---
+
+### ✅ TL-1C.1: Diagnostic Reasoning Flow (Read Tool Use)
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: The Agent, given a high-level diagnostic query ("Why is VLAN 50 dropping traffic?"), MUST successfully trigger and execute at least one read-only tool (e.g., system_logs, interface_statistics) and use the tool output to synthesize the final, grounded answer.
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- LLM receives diagnostic query
+- LLM autonomously selects appropriate read-only tool(s)
+- Tool(s) execute successfully
+- LLM synthesizes answer from tool output
+- Answer is grounded in tool results
+
+**Verification**:
+```bash
+bun test tests/flows/opnsense_diagnostic_reasoning.test.ts
+# Verify LLM selects read tool for diagnostic query
+# Verify tool executes and returns data
+# Verify LLM synthesizes grounded answer
+```
+
+**Expected Behavior**:
+- ✅ LLM autonomously selects read-only tool(s) for diagnostic query
+- ✅ Tool(s) execute successfully
+- ✅ LLM uses tool output to synthesize answer
+- ✅ Answer is grounded in tool results
+- ✅ Full provenance trail captured
+
+---
+
+### ✅ TL-1C.2: Assisted Configuration Flow (Write Tool Proposal)
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: The Agent, given a configuration query ("Create an alias for blocklist-LAN with these IPs."), MUST successfully propose a write tool call (e.g., create_disabled_alias). The Agent Runner MUST correctly intercept this proposal and return the HIL confirmation payload (TL-1B.3), without executing the action.
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- LLM receives configuration query
+- LLM autonomously proposes write tool call
+- Agent Runner intercepts write proposal
+- HIL confirmation payload returned (not executed)
+- Write tool proposal includes all required parameters
+
+**Verification**:
+```bash
+bun test tests/flows/opnsense_assisted_config.test.ts
+# Verify LLM proposes write tool for configuration query
+# Verify Agent Runner intercepts proposal
+# Verify HIL confirmation payload returned
+# Verify write not executed without confirmation
+```
+
+**Expected Behavior**:
+- ✅ LLM autonomously proposes write tool call
+- ✅ Agent Runner intercepts write proposal
+- ✅ HIL confirmation payload returned (TL-1B.3)
+- ✅ Write not executed without confirmation
+- ✅ Proposal includes all required parameters
+
+---
+
+### ✅ TL-1C.3: Unified Tool Definition Generation
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: The final script must generate a single, unified tool definition schema (tool_definition_opnsense_unified.json) containing all 25+ read and write actions, with correct function signatures, descriptions, and the necessary ACL/HIL metadata (TL-1B.3 & TL-1B.4).
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- Single unified tool definition schema generated
+- All 25+ read and write actions included
+- Correct function signatures and descriptions
+- ACL/HIL metadata included (TL-1B.3 & TL-1B.4)
+- Schema validates against tool definition format
+
+**Verification**:
+```bash
+# Verify unified schema exists
+cat tool_definition_opnsense_unified.json
+
+# Verify schema contains all tools
+bun test tests/flows/opnsense_unified_schema.test.ts
+
+# Verify ACL/HIL metadata present
+bun test tests/flows/opnsense_metadata.test.ts
+```
+
+**Expected Behavior**:
+- ✅ Single unified tool definition schema exists
+- ✅ All 25+ read and write actions included
+- ✅ Correct function signatures and descriptions
+- ✅ ACL/HIL metadata present (TL-1B.3 & TL-1B.4)
+- ✅ Schema validates correctly
+
+---
+
+### ✅ TL-1C.4: Full Provenance Trail Validation
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: The five working tool-use flows (as defined by you and TL-1C.1/TL-1C.2) MUST all pass the Phase III safety layer and successfully tag *all* steps—including the initial read steps (TL-1A) and the pre-write states (TL-1B)—with **structured provenance data** that is verifiable by the audit tool.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- All tool-use flows pass Phase III safety layer
+- All steps tagged with structured provenance data
+- Initial read steps (TL-1A) have provenance
+- Pre-write states (TL-1B) have provenance
+- Provenance verifiable by audit tool
+
+**Verification**:
+```bash
+# Run all flow tests
+bun test tests/flows/
+
+# Verify provenance in all flows
+bun run scripts/run-provenance-audit.ts
+
+# Verify Phase III safety layer passes
+bun test tests/pce/api/api-server.test.ts
+```
+
+**Expected Behavior**:
+- ✅ All tool-use flows pass Phase III safety layer
+- ✅ All steps tagged with structured provenance data
+- ✅ Initial read steps have provenance (TL-1A)
+- ✅ Pre-write states have provenance (TL-1B)
+- ✅ Provenance verifiable by audit tool
+
+---
+
+### 🧪 Running Verification
+
+```bash
+# Run all TL-1C tests
+bun test tests/flows/
+
+# Individual acceptance criteria tests
+bun test tests/flows/opnsense_diagnostic_reasoning.test.ts  # TL-1C.1
+bun test tests/flows/opnsense_assisted_config.test.ts       # TL-1C.2
+bun test tests/flows/opnsense_unified_schema.test.ts        # TL-1C.3
+bun test tests/flows/opnsense_provenance.test.ts            # TL-1C.4
+
+# End-to-end validation
+bun src/cli.ts pce "Why is VLAN 50 dropping traffic?"
+bun src/cli.ts pce "Create an alias for blocklist-LAN with these IPs."
+```
+
+---
+
+### Phase TL-1C Tests
+```bash
+bun test tests/flows/
+bun src/cli.ts pce "diagnostic query"
+bun src/cli.ts pce "configuration query"
 ```

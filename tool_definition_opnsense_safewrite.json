@@ -1,0 +1,129 @@
+{
+  "name": "opnsense_safewrite",
+  "description": "Controlled, low-risk write operations for OPNsense with mandatory human-in-the-loop safety. All operations support dry-run mode and require confirmation.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "create_disabled_alias",
+          "enable_rule_with_confirmation",
+          "update_description_field",
+          "toggle_rule_enabled",
+          "update_alias_description"
+        ],
+        "description": "The safe write operation to perform"
+      },
+      "dryRun": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true, return diff preview without executing"
+      },
+      "alias_name": {
+        "type": "string",
+        "description": "Alias name (required for create_disabled_alias)"
+      },
+      "alias_type": {
+        "type": "string",
+        "enum": ["host", "network", "port"],
+        "description": "Alias type (required for create_disabled_alias)"
+      },
+      "alias_content": {
+        "type": "string",
+        "description": "Alias content (required for create_disabled_alias)"
+      },
+      "alias_description": {
+        "type": "string",
+        "description": "Alias description"
+      },
+      "rule_uuid": {
+        "type": "string",
+        "description": "Rule UUID (required for enable_rule_with_confirmation)"
+      },
+      "target_type": {
+        "type": "string",
+        "enum": ["rule", "alias"],
+        "description": "Target type (required for update_description_field)"
+      },
+      "target_uuid": {
+        "type": "string",
+        "description": "Target UUID (required for update_description_field)"
+      },
+      "description": {
+        "type": "string",
+        "description": "New description (required for update_description_field)"
+      },
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable/disable state (required for toggle_rule_enabled)"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "examples": [
+    {
+      "description": "Create a disabled alias (dry-run)",
+      "parameters": {
+        "action": "create_disabled_alias",
+        "alias_name": "test-alias",
+        "alias_type": "host",
+        "alias_content": "192.168.1.100",
+        "alias_description": "Test alias",
+        "dryRun": true
+      }
+    },
+    {
+      "description": "Enable a firewall rule",
+      "parameters": {
+        "action": "enable_rule_with_confirmation",
+        "rule_uuid": "abc-123-def",
+        "dryRun": false
+      }
+    },
+    {
+      "description": "Update rule description",
+      "parameters": {
+        "action": "update_description_field",
+        "target_type": "rule",
+        "target_uuid": "abc-123-def",
+        "description": "Updated description",
+        "dryRun": true
+      }
+    }
+  ],
+  "notes": [
+    "All write operations require human confirmation before execution.",
+    "Use dryRun: true to preview changes without executing.",
+    "Only admin and ops ACL groups can execute write operations.",
+    "Pre-write state is automatically captured for rollback capability."
+  ],
+  "metadata": {
+    "categories": [
+      "opnsense",
+      "networking",
+      "firewall",
+      "write"
+    ],
+    "allowedAcls": [
+      "admin",
+      "ops"
+    ],
+    "risk": "medium",
+    "requiresConfirmation": true
+  },
+  "actions": [
+    "create_disabled_alias",
+    "enable_rule_with_confirmation",
+    "update_description_field",
+    "toggle_rule_enabled",
+    "update_alias_description"
+  ],
+  "actionCount": 5,
+  "version": "1.0.0",
+  "generatedAt": "2025-01-27T00:00:00.000Z"
+}
+
