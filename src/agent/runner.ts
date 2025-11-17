@@ -8,6 +8,7 @@ import { AgentContext } from "./context";
 import { SYSTEM_PROMPT } from "./system-prompt";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
+import { sanitizeToolPayload } from "./tool-sanitizer";
 
 let openaiClient: OpenAI | null = null;
 
@@ -206,10 +207,12 @@ export async function runAgent(
           tools
         );
 
+        const sanitizedData = sanitizeToolPayload(result.data);
+
         context.addToolResult(toolCall.id, toolName, {
           provenanceId,
           success: !result.error,
-          data: result.data,
+          data: sanitizedData,
           error: result.error ?? null,
           durationMs: result.durationMs ?? 0,
         });

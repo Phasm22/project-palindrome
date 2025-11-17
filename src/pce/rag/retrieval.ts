@@ -105,14 +105,41 @@ export class RetrievalService {
         tokensUsed: totalTokens,
       });
 
+      let accessDeniedInfo;
+      if (userACLGroup && userACLGroup !== "admin" && chunks.length === 0) {
+        const matchedCount = await this.countProbeMatches(queryEmbedding);
+        if (matchedCount > 0) {
+          accessDeniedInfo = {
+            reason: "SEMANTIC_ACL_FILTERED",
+            matchedCount,
+            filteredCount: filteredResults.length,
+          };
+          pceLogger.warn("Semantic access denied due to ACL filter", {
+            aclGroup: userACLGroup,
+            matchedCount,
+          });
+        }
+      }
+
       return {
         chunks,
         scores: filteredResults.slice(0, chunks.length).map((r) => r.score),
         queryEmbedding,
+        accessDeniedInfo,
       };
     } catch (error: any) {
       pceLogger.error("Failed to retrieve chunks", { error: error.message });
       throw error;
+    }
+  }
+
+  private async countProbeMatches(queryEmbedding: number[]): Promise<number> {
+    try {
+      const probeGroups = await this.vectorStore.probeAccessGroups(queryEmbedding);
+      return probeGroups.filter((group) => !!group).length;
+    } catch (error: any) {
+      pceLogger.warn("ACL probe failed", { error: error.message });
+      return 0;
     }
   }
 }

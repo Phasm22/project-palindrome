@@ -3,6 +3,8 @@
  * Task 5.1: Define Minimal Ontology Schema
  */
 
+import type { ACLGroup } from "../../types";
+
 /**
  * Core Node Types
  */
@@ -98,6 +100,7 @@ export interface GraphNode<T extends NodeType = NodeType> {
   aliases?: string[]; // Alternative names/identifiers
   versionHash?: string; // Source document version hash
   sourcePath?: string; // Source document path
+  aclGroup?: ACLGroup;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -113,6 +116,7 @@ export interface GraphRelationship {
   properties?: Record<string, any>; // Additional relationship properties
   versionHash?: string; // Source document version hash
   sourcePath?: string; // Source document path
+  aclGroup?: ACLGroup;
   createdAt: Date;
 }
 
@@ -146,57 +150,75 @@ export function validateNodeAttributes<T extends NodeType>(
   const errors: string[] = [];
 
   switch (type) {
-    case NodeType.HOST:
-      if (!attributes.hostname) {
+    case NodeType.HOST: {
+      const hostAttrs = attributes as Partial<EntityAttributes[NodeType.HOST]>;
+      if (!hostAttrs.hostname) {
         errors.push("Host requires 'hostname' attribute");
       }
       break;
-    case NodeType.SERVICE:
-      if (!attributes.name) {
+    }
+    case NodeType.SERVICE: {
+      const serviceAttrs = attributes as Partial<EntityAttributes[NodeType.SERVICE]>;
+      if (!serviceAttrs.name) {
         errors.push("Service requires 'name' attribute");
       }
       break;
-    case NodeType.VLAN:
-      if (!attributes.id && attributes.id !== 0) {
+    }
+    case NodeType.VLAN: {
+      const vlanAttrs = attributes as Partial<EntityAttributes[NodeType.VLAN]>;
+      if (vlanAttrs.id === undefined || vlanAttrs.id === null) {
         errors.push("VLAN requires 'id' attribute");
       }
       break;
-    case NodeType.ALERT:
-      if (!attributes.severity) {
+    }
+    case NodeType.ALERT: {
+      const alertAttrs = attributes as Partial<EntityAttributes[NodeType.ALERT]>;
+      if (!alertAttrs.severity) {
         errors.push("Alert requires 'severity' attribute");
       }
-      if (!attributes.message) {
+      if (!alertAttrs.message) {
         errors.push("Alert requires 'message' attribute");
       }
-      if (!attributes.timestamp) {
+      if (!alertAttrs.timestamp) {
         errors.push("Alert requires 'timestamp' attribute");
       }
       break;
-    case NodeType.USER:
-      if (!attributes.username) {
+    }
+    case NodeType.USER: {
+      const userAttrs = attributes as Partial<EntityAttributes[NodeType.USER]>;
+      if (!userAttrs.username) {
         errors.push("User requires 'username' attribute");
       }
       break;
-    case NodeType.NETWORK:
-      if (!attributes.cidr) {
+    }
+    case NodeType.NETWORK: {
+      const networkAttrs = attributes as Partial<EntityAttributes[NodeType.NETWORK]>;
+      if (!networkAttrs.cidr) {
         errors.push("Network requires 'cidr' attribute");
       }
       break;
-    case NodeType.FIREWALL_RULE:
-      if (!attributes.rule_id) {
+    }
+    case NodeType.FIREWALL_RULE: {
+      const firewallAttrs = attributes as Partial<EntityAttributes[NodeType.FIREWALL_RULE]>;
+      if (!firewallAttrs.rule_id) {
         errors.push("FirewallRule requires 'rule_id' attribute");
       }
-      if (!attributes.action) {
+      if (!firewallAttrs.action) {
         errors.push("FirewallRule requires 'action' attribute");
       }
       break;
-    case NodeType.CONFIG:
-      if (!attributes.config_key) {
+    }
+    case NodeType.CONFIG: {
+      const configAttrs = attributes as Partial<EntityAttributes[NodeType.CONFIG]>;
+      if (!configAttrs.config_key) {
         errors.push("Config requires 'config_key' attribute");
       }
-      if (!attributes.config_value === undefined) {
+      if (configAttrs.config_value === undefined) {
         errors.push("Config requires 'config_value' attribute");
       }
+      break;
+    }
+    default:
       break;
   }
 

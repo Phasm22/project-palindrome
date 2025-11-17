@@ -113,6 +113,7 @@ export class EDLPipeline {
               aliases: aliasMatch ? undefined : [entity.text],
               versionHash: chunk.metadata.versionHash,
               sourcePath: chunk.metadata.sourcePath,
+              aclGroup: chunk.metadata.aclGroup,
               createdAt: new Date(),
               updatedAt: new Date(),
             };
@@ -158,6 +159,7 @@ export class EDLPipeline {
             to: toId,
             versionHash: chunk.metadata.versionHash,
             sourcePath: chunk.metadata.sourcePath,
+            aclGroup: chunk.metadata.aclGroup,
             createdAt: new Date(),
           };
 

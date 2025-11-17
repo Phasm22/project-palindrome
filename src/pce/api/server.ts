@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { ACLGroup, FusionConfig, HybridRAGResponse, QueryType } from "../types";
 import { pceLogger } from "../utils/logger";
+import { Redactor } from "../redaction/redactor";
+import { AccessDeniedError } from "../errors";
 import { MetricsCollector, QueryMetrics, ErrorMetrics } from "../metrics";
 import { HybridOrchestrator, QueryAnalyzer, QueryEntityResolver, FusionEngine, RetrievalService, GenerationService } from "../rag";
 import { GraphRAGRetrieval } from "../graph-retrieval";
@@ -59,6 +61,7 @@ export class PceApiServer {
   private rateLimiter: ApiRateLimiter;
   private ownsMetricsCollector: boolean;
   private startTime = Date.now();
+  private redactor: Redactor;
 
   constructor(deps: PceApiServerDependencies, options: PceApiServerOptions = {}) {
     this.options = {
@@ -80,6 +83,7 @@ export class PceApiServer {
       this.options.globalRateLimit,
       this.options.perIpRateLimit
     );
+    this.redactor = new Redactor();
   }
 
   async start(): Promise<void> {
@@ -200,11 +204,13 @@ export class PceApiServer {
         sTotalScore: ragResponse.sTotalScore ?? ragResponse.fusionMetrics?.avgTotalScore ?? null,
       };
 
+      const safeResponse = this.sanitizeResponse(apiResponse);
+
       this.historyStore.record(
         payload.userId,
         payload.query,
         payload.aclGroup as ACLGroup,
-        apiResponse
+        safeResponse
       );
 
       pceLogger.info("Hybrid query served", {
@@ -216,9 +222,16 @@ export class PceApiServer {
 
       return this.jsonResponse(200, {
         success: true,
-        data: apiResponse,
+        data: safeResponse,
       });
     } catch (error: any) {
+      if (error instanceof AccessDeniedError) {
+        return this.jsonResponse(error.statusCode, {
+          success: false,
+          error: error.code,
+          details: error.details,
+        });
+      }
       const isTransient = this.errorMetrics.isTransientError(error);
       this.errorMetrics.recordError({
         errorType: "api_query_error",
@@ -336,6 +349,33 @@ export class PceApiServer {
         "Content-Type": "application/json",
       },
     });
+  }
+
+  private sanitizeResponse(response: ApiQueryResponse): ApiQueryResponse {
+    const sanitizeText = (value?: string) =>
+      typeof value === "string" ? this.redactor.redact(value).redactedText : value;
+
+    const sanitizedSources = response.sources.map((source) => ({
+      ...source,
+      text: sanitizeText(source.text) ?? "",
+    }));
+
+    const sanitizedContext = response.context
+      ? {
+          ...response.context,
+          semanticChunks: response.context.semanticChunks.map((chunk) => ({
+            ...chunk,
+            text: sanitizeText(chunk.text) ?? "",
+          })),
+        }
+      : response.context;
+
+    return {
+      ...response,
+      answer: sanitizeText(response.answer) ?? "",
+      sources: sanitizedSources,
+      context: sanitizedContext,
+    };
   }
 }
 

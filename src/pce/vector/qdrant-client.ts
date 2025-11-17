@@ -400,6 +400,26 @@ export class QdrantVectorStore {
     }
   }
 
+  async probeAccessGroups(queryVector: number[], topK: number = 5): Promise<(string | null)[]> {
+    try {
+      const results = await this.client.search(this.collectionName, {
+        vector: queryVector,
+        limit: topK,
+        with_payload: {
+          include: ["acl_group"],
+        },
+      });
+
+      return results.map((result: any) => {
+        const payload = result.payload as QdrantPayload;
+        return (payload as any)?.acl_group ?? null;
+      });
+    } catch (error: any) {
+      pceLogger.warn("ACL probe failed", { error: error.message });
+      return [];
+    }
+  }
+
   /**
    * Delete chunks by version hash (for re-indexing)
    */

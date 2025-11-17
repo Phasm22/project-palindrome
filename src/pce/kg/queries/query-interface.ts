@@ -14,6 +14,7 @@ export interface GraphQueryResult {
     attributes: Record<string, any>;
     versionHash?: string;
     sourcePath?: string;
+    aclGroup?: string;
   }>;
   relationships: Array<{
     from: string;
@@ -22,6 +23,7 @@ export interface GraphQueryResult {
     properties?: Record<string, any>;
     versionHash?: string;
     sourcePath?: string;
+    aclGroup?: string;
   }>;
   paths?: Array<{
     nodes: string[];
@@ -84,6 +86,7 @@ export class GraphQueryInterface {
               attributes,
               versionHash: value.properties.versionHash,
               sourcePath: value.properties.sourcePath,
+              aclGroup: value.properties.aclGroup,
             };
 
             nodes.set(nodeId, nodeData);
@@ -196,6 +199,7 @@ export class GraphQueryInterface {
               properties,
               versionHash: recordRel.properties?.versionHash,
               sourcePath: recordRel.properties?.sourcePath,
+              aclGroup: recordRel.properties?.aclGroup,
             });
           }
         }

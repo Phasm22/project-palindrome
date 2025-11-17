@@ -4,6 +4,7 @@ import { PceApiServer, type PceApiServerOptions, type PceApiServerDependencies }
 import type { DependencyHealthCheck } from "../../../src/pce/api/types";
 import { ContextHistoryStore } from "../../../src/pce/api/history-store";
 import { MetricsCollector, QueryMetrics, ErrorMetrics } from "../../../src/pce/metrics";
+import { AccessDeniedError } from "../../../src/pce/errors";
 
 const baseChunk: DocumentChunk = {
   id: "chunk-1",
@@ -195,5 +196,83 @@ describe("PCE API server", () => {
     const graphStatus = healthBody.data.dependencies.find((d: any) => d.name === "graph_store");
     expect(graphStatus.healthy).toBeFalse();
     expect(healthBody.success).toBeFalse();
+  });
+
+  it("returns access denied when the orchestrator blocks ACL violations", async () => {
+    const orchestrator = new MockOrchestrator();
+    orchestrator.query = async () => {
+      throw new AccessDeniedError({
+        reason: "SEMANTIC_ACL_FILTERED",
+        matchedCount: 3,
+        filteredCount: 0,
+      });
+    };
+
+    const { server, baseUrl } = await startTestServer({}, { orchestrator });
+    servers.push(server);
+
+    const res = await fetch(`${baseUrl}/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "Where", aclGroup: "viewer", userId: "blocked" }),
+    });
+
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.success).toBeFalse();
+    expect(body.error).toBe("ACCESS_DENIED");
+    expect(body.details.reason).toBe("SEMANTIC_ACL_FILTERED");
+    expect(body.details.matchedCount).toBe(3);
+  });
+
+  it("redacts answers and context before returning them", async () => {
+    const sensitiveChunk: DocumentChunk = {
+      ...baseChunk,
+      text: "Reach us at user@example.com",
+    };
+
+    const sensitiveContext: HybridContext = {
+      semanticChunks: [
+        {
+          chunk: sensitiveChunk,
+          score: 0.9,
+        },
+      ],
+      structuralPaths: [],
+      provenance: [
+        {
+          versionHash: sensitiveChunk.metadata.versionHash,
+          sourcePath: sensitiveChunk.metadata.sourcePath,
+        },
+      ],
+    };
+
+    const sensitiveResponse: HybridRAGResponse = {
+      ...baseResponse,
+      answer: "password=NeverShareThis",
+      sources: [
+        {
+          ...baseResponse.sources[0],
+          text: "password=NeverShareThis",
+        },
+      ],
+      context: sensitiveContext,
+    };
+
+    const orchestrator = new MockOrchestrator(sensitiveResponse);
+    const { server, baseUrl } = await startTestServer({}, { orchestrator });
+    servers.push(server);
+
+    const res = await fetch(`${baseUrl}/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "Where", aclGroup: "admin", userId: "redact" }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.answer).toContain("[REDACTED_PASSWORD]");
+    expect(body.data.sources[0].text).toContain("[REDACTED_PASSWORD]");
+    expect(body.data.context.semanticChunks[0].text).toContain("[REDACTED_EMAIL]");
   });
 });

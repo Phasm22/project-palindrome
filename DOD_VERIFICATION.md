@@ -1196,8 +1196,9 @@ Phase III focuses on exposing the Hybrid RAG + Tooling platform through a secure
 - ✅ **Task 17.1**: Comprehensive Provenance Audit Test  
   - `scripts/run-provenance-audit.ts` ingests the hybrid fixture, starts a temporary API server (with a lowered fusion threshold for deterministic scoring), runs a hybrid query, and verifies every returned source + fused context entry carries the snapshot `versionHash` + `sourcePath` recorded during ingestion.  
   - Executed via `bun run pce:provenance-audit`, fails fast if any provenance entry is missing or mismatched.  
-- ⏳ **Task 17.2**: Final Security Review (Redaction & ACL)  
-  - TODO: Re-run redaction + ACL audits on raw tool outputs to ensure no regressions.  
+- ✅ **Task 17.2**: Final Security Review (Redaction & ACL)  
+  - Semantic retrieval now surfaces structured `ACCESS_DENIED` errors before the LLM is invoked, with counters for matched vs. filtered chunks, and graph retrieval prunes entire paths when any node/edge fails ACL.  
+  - Tool outputs and final API responses are re-redacted before they are cached, logged, or returned to clients, ensuring PII/API keys never leave the system.  
 - ⏳ **Task 17.3**: Definition of Done (DOD)  
   - TODO: Phase III completes when 5 tool-use queries + 5 hybrid queries pass and provenance traceability hits 100%.  
 - ✅ **Task 17.4**: Gold Path Regression Test  
@@ -1221,6 +1222,10 @@ bun test tests/pce/api/api-server.test.ts
 bun test tests/pce/api/api-server.test.ts --grep "rate limits"
 bun test tests/pce/api/api-server.test.ts --grep "metrics"
 bun test tests/tools/cognitive-tools.test.ts
+bun test tests/pce/rag/retrieval-acl.test.ts
+bun test tests/pce/graph/graph-acl.test.ts
+bun test tests/agent/tool-sanitizer.test.ts
 bun run scripts/run-gold-path.ts
 bun run pce:provenance-audit
+bun run pce:phase3-dod
 ```

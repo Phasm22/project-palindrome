@@ -50,10 +50,17 @@ export interface RetrievalConfig {
   similarityThreshold?: number;
 }
 
+export interface AccessDeniedMetadata {
+  reason: string;
+  matchedCount: number;
+  filteredCount: number;
+}
+
 export interface RetrievalResult {
   chunks: DocumentChunk[];
   scores: number[];
   queryEmbedding?: number[];
+  accessDeniedInfo?: AccessDeniedMetadata;
 }
 
 export interface RAGResponse {
@@ -123,6 +130,7 @@ export interface GraphRetrievalResult {
     versionHash?: string;
     sourcePath?: string;
     confidence?: number;
+    aclGroup?: ACLGroup;
   }>;
   relationships: Array<{
     from: string;
@@ -131,6 +139,7 @@ export interface GraphRetrievalResult {
     versionHash?: string;
     sourcePath?: string;
     confidence?: number;
+    aclGroup?: ACLGroup;
   }>;
   paths?: Array<{
     nodes: string[];

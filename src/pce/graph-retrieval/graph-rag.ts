@@ -4,6 +4,7 @@
  */
 
 import type { GraphQueryInterface, GraphQueryResult } from "../kg/queries/query-interface";
+import type { ACLGroup } from "../types";
 import { pceLogger } from "../utils/logger";
 
 export interface GraphRetrievalResult {
@@ -13,6 +14,7 @@ export interface GraphRetrievalResult {
     attributes: Record<string, any>;
     versionHash?: string;
     sourcePath?: string;
+    aclGroup?: ACLGroup;
   }>;
   relationships: Array<{
     from: string;
@@ -20,6 +22,11 @@ export interface GraphRetrievalResult {
     type: string;
     versionHash?: string;
     sourcePath?: string;
+    aclGroup?: ACLGroup;
+  }>;
+  paths?: Array<{
+    nodes: string[];
+    relationships: string[];
   }>;
   provenance: Array<{
     versionHash: string;
@@ -42,48 +49,46 @@ export class GraphRAGRetrieval {
    * Task 7.3: Graph-only retrieval path
    * Query the graph and return entities with provenance
    */
-  async retrieve(query: string, queryType: "alerts" | "connections" | "path" | "entities" = "entities"): Promise<GraphRetrievalResult> {
+  async retrieve(
+    query: string,
+    queryType: "alerts" | "connections" | "path" | "entities" = "entities",
+    aclGroup?: ACLGroup
+  ): Promise<GraphRetrievalResult> {
     try {
       pceLogger.info("Graph-only retrieval", { query, queryType });
 
       let result: GraphQueryResult;
 
-      // Simple query routing based on query type
-      // In production, this would use NLP to determine query intent
       if (queryType === "alerts" && query.includes("alert")) {
-        // Extract host ID from query (simplified)
-        const hostMatch = query.match(/(?:host|server)\s+([a-z0-9-]+)/i);
-        if (hostMatch) {
-          result = await this.queryInterface.findAlertsAffectingHost(hostMatch[1]);
+        const hostId = query.match(/(?:host|server)\s+([a-z0-9-]+)/i)?.[1];
+        if (hostId) {
+          result = await this.queryInterface.findAlertsAffectingHost(hostId);
         } else {
           result = await this.queryInterface.getEntitiesByType("Alert");
         }
       } else if (queryType === "connections" && query.includes("connect")) {
-        // Extract service ID from query (simplified)
-        const serviceMatch = query.match(/(?:service|port)\s+([a-z0-9-]+)/i);
-        if (serviceMatch) {
-          result = await this.queryInterface.findHostsConnectedToService(serviceMatch[1]);
+        const serviceId = query.match(/(?:service|port)\s+([a-z0-9-]+)/i)?.[1];
+        if (serviceId) {
+          result = await this.queryInterface.findHostsConnectedToService(serviceId);
         } else {
           result = { nodes: [], relationships: [] };
         }
       } else if (queryType === "path") {
-        // Extract from/to IDs from query (simplified)
         const pathMatch = query.match(/(?:from|between)\s+([a-z0-9-]+)\s+(?:to|and)\s+([a-z0-9-]+)/i);
-        if (pathMatch) {
-          result = await this.queryInterface.findPath(pathMatch[1], pathMatch[2]);
+        const fromId = pathMatch?.[1];
+        const toId = pathMatch?.[2];
+        if (fromId && toId) {
+          result = await this.queryInterface.findPath(fromId, toId);
         } else {
           result = { nodes: [], relationships: [] };
         }
       } else {
-        // Default: get all entities
         result = await this.queryInterface.getEntitiesByType("Host");
       }
 
-      // Task 7.2: Extract provenance (version hash + source path)
       const entityIds = result.nodes.map((n) => n.id);
-      const provenanceData = await this.queryInterface.getEntitiesWithProvenance(entityIds);
+      await this.queryInterface.getEntitiesWithProvenance(entityIds);
 
-      // Build unique provenance list
       const provenanceMap = new Map<string, { versionHash: string; sourcePath: string }>();
       for (const node of result.nodes) {
         if (node.versionHash && node.sourcePath) {
@@ -108,11 +113,15 @@ export class GraphRAGRetrieval {
         provenance: provenanceMap.size,
       });
 
-      return {
-        entities: result.nodes,
-        relationships: result.relationships,
-        provenance: Array.from(provenanceMap.values()),
-      };
+      return this.enforceAclGuards(
+        {
+          entities: result.nodes,
+          relationships: result.relationships,
+          paths: result.paths,
+          provenance: Array.from(provenanceMap.values()),
+        },
+        aclGroup
+      );
     } catch (error: any) {
       pceLogger.error("Graph retrieval failed", { error: error.message });
       throw error;
@@ -122,10 +131,13 @@ export class GraphRAGRetrieval {
   /**
    * Custom Cypher query retrieval
    */
-  async retrieveWithCypher(cypher: string, parameters?: Record<string, any>): Promise<GraphRetrievalResult> {
+  async retrieveWithCypher(
+    cypher: string,
+    parameters?: Record<string, any>,
+    aclGroup?: ACLGroup
+  ): Promise<GraphRetrievalResult> {
     const result = await this.queryInterface.executeQuery(cypher, parameters);
 
-    // Extract provenance
     const provenanceMap = new Map<string, { versionHash: string; sourcePath: string }>();
     for (const node of result.nodes) {
       if (node.versionHash && node.sourcePath) {
@@ -135,12 +147,73 @@ export class GraphRAGRetrieval {
         });
       }
     }
+    for (const rel of result.relationships) {
+      if (rel.versionHash && rel.sourcePath) {
+        provenanceMap.set(rel.versionHash, {
+          versionHash: rel.versionHash,
+          sourcePath: rel.sourcePath,
+        });
+      }
+    }
+
+    return this.enforceAclGuards(
+      {
+        entities: result.nodes,
+        relationships: result.relationships,
+        paths: result.paths,
+        provenance: Array.from(provenanceMap.values()),
+      },
+      aclGroup
+    );
+  }
+
+  private enforceAclGuards(result: GraphRetrievalResult, aclGroup?: ACLGroup): GraphRetrievalResult {
+    if (!aclGroup || aclGroup === "admin") {
+      return result;
+    }
+
+    const entities = result.entities.filter((entity) => this.isAclAllowed(entity.aclGroup, aclGroup));
+    const allowedIds = new Set(entities.map((entity) => entity.id));
+    const relationships = result.relationships.filter(
+      (rel) =>
+        this.isAclAllowed(rel.aclGroup, aclGroup) &&
+        allowedIds.has(rel.from) &&
+        allowedIds.has(rel.to)
+    );
+
+    const paths = (result.paths ?? []).filter((path) => path.nodes.every((nodeId) => allowedIds.has(nodeId)));
+
+    const provenanceIds = new Set([
+      ...entities.map((entity) => entity.versionHash).filter(Boolean),
+      ...relationships.map((rel) => rel.versionHash).filter(Boolean),
+    ]);
+
+    const provenance = result.provenance.filter((prov) => provenanceIds.has(prov.versionHash));
+
+    if (entities.length !== result.entities.length || relationships.length !== result.relationships.length) {
+      pceLogger.warn("Graph ACL pruning removed restricted entities", {
+        requestedAcl: aclGroup,
+        originalEntities: result.entities.length,
+        filteredEntities: entities.length,
+      });
+    }
 
     return {
-      entities: result.nodes,
-      relationships: result.relationships,
-      provenance: Array.from(provenanceMap.values()),
+      entities,
+      relationships,
+      paths,
+      provenance,
     };
+  }
+
+  private isAclAllowed(resourceAcl: ACLGroup | undefined, requester: ACLGroup): boolean {
+    if (!resourceAcl) {
+      return true;
+    }
+    if (requester === "admin") {
+      return true;
+    }
+    return resourceAcl === requester;
   }
 }
 

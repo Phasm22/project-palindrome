@@ -90,13 +90,17 @@ async function runApiQuery(baseUrl: string, query: string) {
   if (!response.ok) {
     throw new Error(`Query failed: HTTP ${response.status}`);
   }
-  const payload = await response.json();
+  const payload: any = await response.json();
   return payload.data;
 }
 
-async function runProvenanceAudit() {
+export async function runProvenanceAudit() {
   await prepareWorkDir();
-  const fixture = generateHybridTestData()[0];
+  const fixtures = generateHybridTestData();
+  if (!fixtures.length) {
+    throw new Error("No hybrid fixtures available for provenance audit");
+  }
+  const fixture = fixtures[0]!;
   await mkdir(path.dirname(fixture.sourcePath), { recursive: true });
   await writeFile(fixture.sourcePath, fixture.content, "utf-8");
 
@@ -164,12 +168,12 @@ async function runProvenanceAudit() {
       }
     }
 
-    const semanticChunks = result?.context?.semanticChunks ?? [];
-    semanticChunks.forEach((item) => {
+    const semanticChunks = (result?.context?.semanticChunks ?? []) as Array<any>;
+    for (const item of semanticChunks) {
       if (item.versionHash !== versionHash) {
         provenanceIssues.push(`Chunk ${item.id} version hash mismatch`);
       }
-    });
+    }
 
     if (provenanceIssues.length) {
       provenanceIssues.forEach((issue) => logFail(issue));
@@ -187,8 +191,10 @@ async function runProvenanceAudit() {
   await server.stop();
 }
 
-runProvenanceAudit().catch((error) => {
-  logFail(error.message || "Unknown error");
-  console.error("Provenance audit failed ❌");
-  process.exit(1);
-});
+if (import.meta.main) {
+  runProvenanceAudit().catch((error) => {
+    logFail(error.message || "Unknown error");
+    console.error("Provenance audit failed ❌");
+    process.exit(1);
+  });
+}

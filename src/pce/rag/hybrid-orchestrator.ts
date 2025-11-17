@@ -21,6 +21,7 @@ import { GraphRAGRetrieval } from "../graph-retrieval/graph-rag";
 import { FusionEngine } from "./fusion";
 import { GenerationService } from "./generation";
 import { pceLogger } from "../utils/logger";
+import { AccessDeniedError } from "../errors";
 
 export interface HybridOrchestratorConfig {
   fusionConfig?: Partial<FusionConfig>;
@@ -119,6 +120,7 @@ export class HybridOrchestrator {
     pceLogger.info("Routing to semantic-only retrieval");
 
     const retrievalResult = await this.retrievalService.retrieve(query, aclGroup);
+    this.ensureSemanticAccess(retrievalResult);
     const context = this.buildSemanticContext(retrievalResult);
     const response = await this.generationService.generate(query, retrievalResult.chunks);
     const responseWithProvenance = this.attachProvenance(response, context);
@@ -144,7 +146,7 @@ export class HybridOrchestrator {
     pceLogger.info("Routing to structural-primary retrieval");
 
     try {
-      const graphResult = await this.graphRetrieval.retrieve(query, "entities");
+      const graphResult = await this.graphRetrieval.retrieve(query, "entities", aclGroup);
       const hybridContext: HybridContext = {
         semanticChunks: [],
         structuralPaths: [
@@ -196,7 +198,7 @@ export class HybridOrchestrator {
       const [vectorPromise, graphPromise] = await Promise.allSettled([
         this.retrievalService.retrieve(query, aclGroup),
         this.timeoutPromise(
-          this.graphRetrieval.retrieve(query, "entities"),
+          this.graphRetrieval.retrieve(query, "entities", aclGroup),
           this.config.retrievalTimeout!
         ),
       ]);
@@ -204,6 +206,7 @@ export class HybridOrchestrator {
       // Process vector result
       if (vectorPromise.status === "fulfilled") {
         vectorResult = vectorPromise.value;
+        this.ensureSemanticAccess(vectorResult);
       } else {
         pceLogger.error("Vector retrieval failed", {
           error: vectorPromise.reason?.message,
@@ -309,6 +312,7 @@ export class HybridOrchestrator {
     pceLogger.incrementCounter("fallback_graph_down_count");
 
     const retrievalResult = await this.retrievalService.retrieve(query, aclGroup);
+    this.ensureSemanticAccess(retrievalResult);
     const context = this.buildSemanticContext(retrievalResult);
     const response = await this.generationService.generate(query, retrievalResult.chunks);
     const responseWithProvenance = this.attachProvenance(response, context);
@@ -445,8 +449,17 @@ export class HybridOrchestrator {
     };
   }
 
-  private getMaxVectorScore(result: RetrievalResult): number {
-    return result.scores.length > 0 ? Math.max(...result.scores) : 0;
+  private getMaxVectorScore(result: RetrievalResult): number | null {
+    if (!result.scores.length) {
+      return null;
+    }
+    return Math.max(...result.scores);
+  }
+
+  private ensureSemanticAccess(result: RetrievalResult): void {
+    if (result.accessDeniedInfo) {
+      throw new AccessDeniedError(result.accessDeniedInfo);
+    }
   }
 
   /**

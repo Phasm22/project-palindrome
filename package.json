@@ -13,7 +13,8 @@
     "pce:test-redaction": "bun run src/pce/cli.ts test-redaction",
     "pce:api": "bun run src/pce/api/main.ts",
     "pce:gold-path": "bun run scripts/run-gold-path.ts",
-    "pce:provenance-audit": "bun run scripts/run-provenance-audit.ts"
+    "pce:provenance-audit": "bun run scripts/run-provenance-audit.ts",
+    "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

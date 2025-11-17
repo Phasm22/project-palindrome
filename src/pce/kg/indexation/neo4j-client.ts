@@ -128,12 +128,14 @@ export class Neo4jGraphStore {
                      n.attributes = $attributesJson,
                      n.aliases = $aliases,
                      n.versionHash = $versionHash,
-                     n.sourcePath = $sourcePath
+                     n.sourcePath = $sourcePath,
+                     n.aclGroup = $aclGroup
         ON MATCH SET n.type = $type,
                      n.attributes = $attributesJson,
                      n.aliases = $aliases,
                      n.versionHash = $versionHash,
                      n.sourcePath = $sourcePath,
+                     n.aclGroup = $aclGroup,
                      n.updatedAt = $updatedAt
       `;
 
@@ -144,6 +146,7 @@ export class Neo4jGraphStore {
         aliases: node.aliases || [],
         versionHash: node.versionHash || null,
         sourcePath: node.sourcePath || null,
+        aclGroup: node.aclGroup || null,
         createdAt,
         updatedAt,
       });
@@ -205,6 +208,7 @@ export class Neo4jGraphStore {
         SET r.properties = $propertiesJson,
             r.versionHash = $versionHash,
             r.sourcePath = $sourcePath,
+            r.aclGroup = $aclGroup,
             r.createdAt = $createdAt
       `;
 
@@ -214,6 +218,7 @@ export class Neo4jGraphStore {
         propertiesJson,
         versionHash: rel.versionHash || null,
         sourcePath: rel.sourcePath || null,
+        aclGroup: rel.aclGroup || null,
         createdAt,
       });
 
@@ -255,12 +260,14 @@ export class Neo4jGraphStore {
                        n.attributes = $attributesJson,
                        n.aliases = $aliases,
                        n.versionHash = $versionHash,
-                       n.sourcePath = $sourcePath
+                       n.sourcePath = $sourcePath,
+                       n.aclGroup = $aclGroup
           ON MATCH SET n.type = $type,
                        n.attributes = $attributesJson,
                        n.aliases = $aliases,
                        n.versionHash = $versionHash,
                        n.sourcePath = $sourcePath,
+                       n.aclGroup = $aclGroup,
                        n.updatedAt = $updatedAt
         `;
 
@@ -271,6 +278,7 @@ export class Neo4jGraphStore {
           aliases: node.aliases || [],
           versionHash: node.versionHash || null,
           sourcePath: node.sourcePath || null,
+          aclGroup: node.aclGroup || null,
           createdAt,
           updatedAt,
         });
@@ -339,6 +347,7 @@ export class Neo4jGraphStore {
           SET r.properties = $propertiesJson,
               r.versionHash = $versionHash,
               r.sourcePath = $sourcePath,
+              r.aclGroup = $aclGroup,
               r.createdAt = $createdAt
         `;
 
@@ -348,6 +357,7 @@ export class Neo4jGraphStore {
           propertiesJson,
           versionHash: rel.versionHash || null,
           sourcePath: rel.sourcePath || null,
+          aclGroup: rel.aclGroup || null,
           createdAt,
         });
 
