@@ -12,6 +12,7 @@ export enum LogLevel {
 
 class PCELogger {
   private level: LogLevel;
+  private counters: Map<string, number> = new Map();
 
   constructor(level: LogLevel = LogLevel.INFO) {
     this.level = level;
@@ -65,6 +66,39 @@ class PCELogger {
       oldStatus: oldStatus || "none",
       newStatus,
     });
+  }
+
+  // Task 10.3: Counter tracking for resilience metrics
+  incrementCounter(counterName: string, amount: number = 1) {
+    const current = this.counters.get(counterName) || 0;
+    this.counters.set(counterName, current + amount);
+    this.debug(`Counter incremented: ${counterName}`, {
+      counter: counterName,
+      value: current + amount,
+    });
+  }
+
+  getCounter(counterName: string): number {
+    return this.counters.get(counterName) || 0;
+  }
+
+  getAllCounters(): Record<string, number> {
+    const result: Record<string, number> = {};
+    for (const [key, value] of this.counters.entries()) {
+      result[key] = value;
+    }
+    return result;
+  }
+
+  resetCounters() {
+    this.counters.clear();
+  }
+
+  logCounters() {
+    const counters = this.getAllCounters();
+    if (Object.keys(counters).length > 0) {
+      this.info("Resilience counters", counters);
+    }
   }
 }
 

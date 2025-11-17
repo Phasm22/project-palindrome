@@ -70,3 +70,103 @@ export interface RAGResponse {
   };
 }
 
+// Phase I-C: Hybrid Orchestration Types
+
+export type QueryType = "SEMANTIC_ONLY" | "STRUCTURAL_PRIMARY" | "HYBRID";
+
+export interface QueryAnalysis {
+  queryType: QueryType;
+  entities: ExtractedQueryEntity[];
+  structuralIndicators: string[];
+}
+
+export interface ExtractedQueryEntity {
+  text: string;
+  canonicalId: string | null;
+  type: string | null;
+  resolved: boolean;
+  confidence: number;
+}
+
+export interface FusionWeights {
+  vector: number;
+  graph: number;
+  recency: number;
+}
+
+export interface FusionConfig {
+  weights: FusionWeights;
+  minVectorScore: number;
+  minGraphScore: number;
+  minTotalScore: number;
+  maxTokens: number;
+}
+
+export interface HybridRetrievalResult {
+  vectorResult: RetrievalResult;
+  graphResult: GraphRetrievalResult;
+  fusionScores: Array<{
+    itemId: string;
+    vectorScore: number;
+    graphScore: number;
+    recencyScore: number;
+    totalScore: number;
+  }>;
+  prunedContext: HybridContext;
+}
+
+export interface GraphRetrievalResult {
+  entities: Array<{
+    id: string;
+    type: string;
+    attributes: Record<string, any>;
+    versionHash?: string;
+    sourcePath?: string;
+    confidence?: number;
+  }>;
+  relationships: Array<{
+    from: string;
+    to: string;
+    type: string;
+    versionHash?: string;
+    sourcePath?: string;
+    confidence?: number;
+  }>;
+  paths?: Array<{
+    nodes: string[];
+    relationships: string[];
+  }>;
+  provenance: Array<{
+    versionHash: string;
+    sourcePath: string;
+  }>;
+}
+
+export interface HybridContext {
+  semanticChunks: Array<{
+    chunk: DocumentChunk;
+    score: number;
+  }>;
+  structuralPaths: Array<{
+    entities: GraphRetrievalResult["entities"];
+    relationships: GraphRetrievalResult["relationships"];
+    score: number;
+  }>;
+  provenance: Array<{
+    versionHash: string;
+    sourcePath: string;
+  }>;
+}
+
+export interface HybridRAGResponse extends RAGResponse {
+  queryType: QueryType;
+  fusionMetrics?: {
+    vectorResults: number;
+    graphResults: number;
+    fusedResults: number;
+    prunedResults: number;
+    avgTotalScore: number;
+  };
+  fallbackMode?: "graph_down" | "low_score" | null;
+}
+
