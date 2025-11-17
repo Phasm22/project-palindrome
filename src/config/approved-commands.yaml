@@ -1,0 +1,45 @@
+# Pre-approved SSH commands by host
+# Commands are organized by hostname/IP and categorized by purpose
+
+hosts:
+  # OPNsense firewall (lab)
+  # Note: OPNsense uses an interactive menu system. SSH connections automatically
+  # select option 8 (shell) to access the command line.
+  "172.16.0.1":
+    hostname: "172.16.0.1"
+    aliases:
+      - "opnsense"
+      - "radar"
+      - "firewall"
+    description: "OPNsense firewall in lab network"
+    read_only: true
+    commands:
+      filesystem:
+        - "du -sh /*"
+        - "df -h"
+        - "du -h --max-depth=1 /var/log"
+        - "du -h --max-depth=1 /var"
+        - "du -h --max-depth=2 /var"
+        - "du -h --max-depth=1 /usr"
+        - "du -h --max-depth=2 /usr"
+        - "find /var -type f -size +100M 2>/dev/null"
+        - "find /usr -type f -size +100M 2>/dev/null"
+        - "ls -lh /var/log | head -20"
+        - "du -sh /var/*"
+        - "du -sh /usr/*"
+      system:
+        - "uptime"
+        - "free -h"
+        - "ps aux | head -20"
+
+  # Example: Add more hosts as needed
+  # "192.168.1.100":
+  #   hostname: "192.168.1.100"
+  #   description: "Example server"
+  #   commands:
+  #     filesystem:
+  #       - "du -sh /*"
+  #     system:
+  #       - "uptime"
+  #   read_only: true
+

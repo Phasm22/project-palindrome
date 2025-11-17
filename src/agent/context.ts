@@ -10,10 +10,21 @@ export class AgentContext {
   }
 
   addToolResult(toolName: string, data: any) {
-    const dataStr = typeof data === "string" ? data : JSON.stringify(data);
+    let content = `Tool "${toolName}" returned:\n`;
+    
+    if (data.error) {
+      content += `ERROR: ${data.error}`;
+      if (data.note) {
+        content += `\nNOTE: ${data.note}`;
+      }
+    } else {
+      const dataStr = typeof data === "string" ? data : JSON.stringify(data);
+      content += dataStr.slice(0, 2000); // Increased limit to show more data
+    }
+    
     this.messages.push({
       role: "assistant",
-      content: `Tool "${toolName}" returned:\n${dataStr.slice(0, 500)}`
+      content
     });
   }
 
