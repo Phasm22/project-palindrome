@@ -9,7 +9,14 @@
   "scripts": {
     "test": "bun test",
     "dev": "bun run src/cli.ts",
-    "export-tools": "bun run src/utils/export-tool-schemas.ts"
+    "agent": "bun run src/cli.ts",
+    "export-tools": "bun run src/utils/export-tool-schemas.ts",
+    "pce:verify-dod": "bun run src/pce/verify-dod.ts",
+    "pce:test-redaction": "bun run src/pce/cli.ts test-redaction",
+    "pce:api": "bun run src/pce/api/main.ts",
+    "pce:gold-path": "bun run scripts/run-gold-path.ts",
+    "pce:provenance-audit": "bun run scripts/run-provenance-audit.ts",
+    "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -22,10 +29,12 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@qdrant/js-client-rest": "^1.15.1",
     "@types/ssh2": "^1.15.5",
     "ai": "^5.0.93",
     "axios": "^1.13.2",
     "dotenv": "^17.2.3",
+    "neo4j-driver": "^6.0.1",
     "openai": "^6.9.0",
     "ssh2": "^1.17.0",
     "zod": "^4.1.12"

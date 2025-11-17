@@ -1,7 +1,4 @@
-// Load environment variables
-import { config } from "dotenv";
-config();
-
+import readline from "node:readline";
 import OpenAI from "openai";
 import type { AgentResponse } from "../types/agent";
 import { logger } from "../utils/logger";
@@ -9,6 +6,9 @@ import { loadTools } from "./tool-loader";
 import { executeToolCall } from "./tool-executor";
 import { AgentContext } from "./context";
 import { SYSTEM_PROMPT } from "./system-prompt";
+import { fetchHybridContext, type HybridApiContext } from "./rag-client";
+import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
+import { sanitizeToolPayload } from "./tool-sanitizer";
 
 let openaiClient: OpenAI | null = null;
 
@@ -23,196 +23,211 @@ function getOpenAIClient(): OpenAI {
   return openaiClient;
 }
 
-function isToolRequest(text: string): { tool: string; parameters: any } | null {
-  // Try to extract JSON from the text (in case LLM adds text before/after JSON)
-  const jsonMatch = text.match(/\{[\s\S]*"tool"[\s\S]*"parameters"[\s\S]*\}/);
-  const jsonStr = jsonMatch ? jsonMatch[0] : text;
-  
-  try {
-    const parsed = JSON.parse(jsonStr);
-    if (parsed.tool && parsed.parameters) {
-      let toolName = parsed.tool;
-      let parameters = parsed.parameters;
-      
-      // Handle cases where LLM combines tool name with action (e.g., "opnsense_manage.system_status")
-      if (toolName.includes('.')) {
-        const parts = toolName.split('.');
-        toolName = parts[0]; // Use base tool name
-        // If parameters don't have action, extract it from the tool name
-        if (!parameters.action && parts.length > 1) {
-          parameters = { ...parameters, action: parts[1] };
-        }
-      }
-      
-      return { tool: toolName, parameters };
-    }
-  } catch (_) {
-    // Not JSON or not a tool call
+function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
+  return tools
+    .filter((tool) => !!tool.metadata.parameters)
+    .map((tool) => ({
+      type: "function" as const,
+      function: {
+        name: tool.metadata.name,
+        description: tool.metadata.description,
+        parameters: tool.metadata.parameters as Record<string, any>,
+      },
+    }));
+}
+
+function formatRagSummary(rag: HybridApiContext) {
+  const lines: string[] = [];
+  const fusion = rag.sTotalScore ?? rag.fusionMetrics?.avgTotalScore ?? null;
+  lines.push(`RAG_CONTEXT: queryType=${rag.queryType}`);
+  if (fusion !== null) {
+    lines.push(`FusionScore=${fusion}`);
   }
-  return null;
+  lines.push(`CandidateAnswer=${rag.answer}`);
+  const topChunks = rag.context.semanticChunks.slice(0, 3);
+  if (topChunks.length) {
+    lines.push("TopSemanticChunks:");
+    topChunks.forEach((chunk) => {
+      lines.push(`- ${chunk.sourcePath} (score=${chunk.score.toFixed(2)}): ${chunk.text.slice(0, 140)}...`);
+    });
+  }
+  if (rag.context.structuralPaths.length) {
+    lines.push(`StructuralPaths=${rag.context.structuralPaths.length}`);
+  }
+  return lines.join("\n");
 }
 
-async function callLLM(messages: { role: string; content: string }[]): Promise<string> {
-  const openai = getOpenAIClient();
-  // Use gpt-4o for better reasoning, or gpt-4o-mini for cost savings
-  // gpt-4o-mini: cheaper, faster, but less accurate for complex synthesis
-  // gpt-4o: more expensive, but much better at understanding hierarchies and providing accurate summaries
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-  const response = await openai.chat.completions.create({
-    model,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      ...messages
-    ],
+async function defaultConfirmHighRisk(toolName: string): Promise<boolean> {
+  if (process.env.PCE_AUTO_APPROVE_HIGH_RISK_TOOLS === "true") {
+    return true;
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return false;
+  }
+  return await new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(`Approve high-risk tool "${toolName}"? (y/N) `, (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase().startsWith("y"));
+    });
   });
-  return response.choices[0]?.message?.content ?? "No response.";
 }
 
-export async function runAgent(userInput: string, stream: boolean = false): Promise<AgentResponse> {
+export type AgentRunOptions = {
+  stream?: boolean;
+  userId?: string;
+  aclGroup?: string;
+  confirmHighRisk?: (info: { toolName: string; parameters: Record<string, any>; risk: string }) => Promise<boolean>;
+  ragBaseUrl?: string;
+};
+
+function coerceTextContent(content: any): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (typeof part === "string" ? part : part?.text ?? ""))
+      .join("");
+  }
+  return String(content);
+}
+
+export async function runAgent(
+  userInput: string,
+  optionsOrStream?: boolean | AgentRunOptions
+): Promise<AgentResponse> {
+  const options: AgentRunOptions =
+    typeof optionsOrStream === "boolean" ? { stream: optionsOrStream } : optionsOrStream ?? {};
+
+  if (options.stream) {
+    logger.warn("Streaming mode is not available with tool orchestration; defaulting to non-streaming mode.");
+  }
+
   logger.info(`Agent received input: "${userInput}"`);
+
+  const session: ToolSession = {
+    userId: options.userId ?? "agent-user",
+    aclGroup: options.aclGroup ?? "admin",
+  };
+
+  const confirmHighRisk = options.confirmHighRisk ?? (async ({ toolName }) => defaultConfirmHighRisk(toolName));
 
   const context = new AgentContext();
   context.addUserMessage(userInput);
 
   const tools = loadTools();
-  const MAX_STEPS = 8; // Increased to allow deeper investigation of multiple directories
+  const openaiTools = buildToolDefinitions(tools);
+  const ragPayload = await fetchHybridContext(userInput, {
+    baseUrl: options.ragBaseUrl,
+    userId: session.userId,
+    aclGroup: session.aclGroup,
+  });
 
-  if (stream) {
-    // Streaming mode: simplified single-shot for now
-    const openai = getOpenAIClient();
-    const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-    const response = await openai.chat.completions.create({
-      model,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        ...context.getMessages()
-      ],
-      stream: true,
-    });
+  const ragMessage = ragPayload ? [{ role: "system", content: formatRagSummary(ragPayload) }] : [];
+  const MAX_STEPS = 5;
+  const client = getOpenAIClient();
 
-    let fullText = "";
-
-    for await (const chunk of response) {
-      const delta = chunk.choices[0]?.delta?.content;
-      if (delta) {
-        fullText += delta;
-        process.stdout.write(delta);
-      }
-    }
-    console.log("\n");
-
-    return { text: fullText };
-  }
-
-  // Iterative reasoning loop
   for (let step = 0; step < MAX_STEPS; step++) {
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
 
-    const llmResponse = await callLLM(context.getMessages());
-    logger.info(`LLM response (step ${step + 1}): ${llmResponse.substring(0, 200)}`);
-    
-    // If LLM is just describing tool results, treat it as needing to continue
-    if (llmResponse.trim().startsWith('Tool "') && llmResponse.includes('returned:')) {
-      logger.info("LLM is describing tool results, continuing loop to get final answer");
-      // Add the description as assistant message and continue
-      context.addAssistantMessage(llmResponse);
-      continue;
-    }
-    
-    // If LLM says it will investigate but doesn't make a tool call, prompt it to actually do it
-    const investigationPhrases = [
-      "I need to look",
-      "I'll check",
-      "Let's get",
-      "let's explore",
-      "let's check",
-      "I should investigate",
-      "I will investigate",
-      "I will now investigate",
-      "I will analyze",
-      "I will examine",
-      "I will check",
-      "need to investigate",
-      "should investigate",
-      "will analyze",
-      "will examine",
-      "will check",
-      "to determine",
-      "to find out",
-      "to identify",
-      "to explore",
-      "within the",
-      "what's consuming",
-      "what is consuming"
-    ];
-    const saysWillInvestigate = investigationPhrases.some(phrase => 
-      llmResponse.toLowerCase().includes(phrase.toLowerCase())
-    );
-    const toolRequest = isToolRequest(llmResponse);
-    
-    if (saysWillInvestigate && !toolRequest) {
-      logger.info("LLM says it will investigate but didn't make a tool call, prompting it to actually do it");
-      context.addAssistantMessage(llmResponse);
-      context.addUserMessage("You said you would investigate further. Please make a tool call NOW to gather the information you need. Don't just describe what you'll do - actually call the tool with JSON format: {\"tool\": \"toolName\", \"parameters\": {...}}");
-      continue;
+    const messages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...ragMessage,
+      ...context.getMessages(),
+    ] as any[];
+
+    const request: any = {
+      model: "gpt-4o-mini",
+      messages,
+    };
+
+    if (openaiTools.length > 0) {
+      request.tools = openaiTools;
+      request.tool_choice = "auto";
     }
 
-    if (toolRequest) {
-      logger.info(`Tool call detected: ${toolRequest.tool}`);
-      const result = await executeToolCall(
-        { toolName: toolRequest.tool, parameters: toolRequest.parameters },
-        tools
-      );
+    const response = await client.chat.completions.create(request);
+    const message = response.choices[0]?.message;
 
-      if (result.error) {
-        // Check if it's a persistent error (auth, connection) that won't be fixed by retrying
-        const persistentErrors = [
-          "authentication methods failed",
-          "connection refused",
-          "connection timeout",
-          "host not found",
-          "network is unreachable",
-          "forbidden",
-          "403",
-          "unauthorized",
-          "401",
-          "permission denied"
-        ];
-        
-        const isPersistentError = persistentErrors.some(err => 
-          result.error.toLowerCase().includes(err)
-        );
-        
-        if (isPersistentError && step > 0) {
-          // If we've already tried once and it's a persistent error, add context and let LLM know
-          let note = "This appears to be a persistent connection/authentication issue. Consider using alternative tools or methods.";
-          
-          // Suggest MCP tool if direct API failed
-          if (toolRequest.tool === "opnsense_manage" && result.error.toLowerCase().includes("forbidden")) {
-            note += " Try using the mcp_opnsense tool instead, which may have different permissions.";
-          }
-          
-          context.addToolResult(toolRequest.tool, { 
-            error: result.error,
-            note
-          });
-        } else {
-          context.addToolResult(toolRequest.tool, { error: result.error });
+    const toolCalls = ((message?.tool_calls as any[]) ?? []) as Array<any>;
+    if (toolCalls.length) {
+      for (const toolCall of toolCalls) {
+        const fnCall = toolCall.function ?? {};
+        const toolName = fnCall.name as string | undefined;
+        if (!toolName) continue;
+        const targetTool = tools.find((t) => t.metadata.name === toolName);
+        const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+        let parsedArgs: Record<string, any> = {};
+        try {
+          parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
+        } catch (error) {
+          logger.error(`Failed to parse tool arguments for ${toolName}: ${error}`);
         }
-      } else {
-        context.addToolResult(toolRequest.tool, result.data);
+
+        if (!targetTool) {
+          context.addToolResult(toolCall.id, toolName, {
+            provenanceId,
+            success: false,
+            error: "Tool not registered",
+          });
+          continue;
+        }
+
+        if (!isToolAuthorized(targetTool, session)) {
+          const errorMsg = `ACL group ${session.aclGroup} is not authorized to run ${toolName}`;
+          logger.error(errorMsg);
+          context.addToolResult(toolCall.id, toolName, {
+            provenanceId,
+            success: false,
+            error: errorMsg,
+          });
+          continue;
+        }
+
+        if (requiresConfirmation(targetTool)) {
+          const approved = await confirmHighRisk({
+            toolName,
+            parameters: parsedArgs,
+            risk: getToolRisk(targetTool),
+          });
+
+          if (!approved) {
+            context.addToolResult(toolCall.id, toolName, {
+              provenanceId,
+              success: false,
+              error: "High-risk action was not approved",
+            });
+            continue;
+          }
+        }
+
+        const result = await executeToolCall(
+          { toolName, parameters: parsedArgs },
+          tools
+        );
+
+        const sanitizedData = sanitizeToolPayload(result.data);
+
+        context.addToolResult(toolCall.id, toolName, {
+          provenanceId,
+          success: !result.error,
+          data: sanitizedData,
+          error: result.error ?? null,
+          durationMs: result.durationMs ?? 0,
+        });
       }
 
-      // Continue loop to let LLM reflect on tool result
       continue;
     }
 
-    // Not a tool call - final text response
-    context.addAssistantMessage(llmResponse);
-    return { text: llmResponse };
+    const finalText = coerceTextContent(message?.content).trim();
+    if (finalText) {
+      context.addAssistantMessage(finalText);
+      return { text: finalText };
+    }
   }
 
-  // Max steps reached
   return { text: "Max reasoning depth reached. Please try a simpler query." };
 }
 

@@ -1,5 +1,5 @@
 import { BaseTool } from "./BaseTool";
-import { GlancesParams } from "./schemas/glances";
+import { GlancesParams, GlancesJSONSchema } from "./schemas/glances";
 import type { ExecutionResult, ExecutionContext } from "../types/execution";
 import type { ToolSchema } from "./tool-schema";
 import { createToolSchema } from "./tool-helpers";
@@ -10,7 +10,10 @@ export class GlancesTool extends BaseTool {
     super({
       name: "glances",
       description: "Fetches system metrics from the Glances API",
-      categories: ["system"]
+      categories: ["system"],
+      parameters: GlancesJSONSchema,
+      allowedAcls: ["admin", "ops", "sre"],
+      risk: "low",
     });
   }
 

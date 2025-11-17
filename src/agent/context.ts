@@ -1,7 +1,10 @@
-import { sanitizeToolResult } from "../utils/sanitize";
+type AgentMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string }
+  | { role: "tool"; content: string; tool_call_id: string; name: string };
 
 export class AgentContext {
-  private messages: { role: string; content: string }[] = [];
+  private messages: AgentMessage[] = [];
 
   addUserMessage(msg: string) {
     this.messages.push({ role: "user", content: msg });
@@ -11,25 +14,13 @@ export class AgentContext {
     this.messages.push({ role: "assistant", content: msg });
   }
 
-  addToolResult(toolName: string, data: any) {
-    // Sanitize tool results before sending to LLM to prevent sensitive data leakage
-    const sanitized = sanitizeToolResult(toolName, data);
-    
-    let content = `Tool "${toolName}" returned:\n`;
-    
-    if (sanitized.error) {
-      content += `ERROR: ${sanitized.error}`;
-      if (sanitized.note) {
-        content += `\nNOTE: ${sanitized.note}`;
-      }
-    } else {
-      const dataStr = typeof sanitized === "string" ? sanitized : JSON.stringify(sanitized);
-      content += dataStr.slice(0, 2000); // Increased limit to show more data
-    }
-    
+  addToolResult(toolCallId: string, toolName: string, data: any) {
+    const dataStr = typeof data === "string" ? data : JSON.stringify(data);
     this.messages.push({
-      role: "assistant",
-      content
+      role: "tool",
+      content: dataStr.slice(0, 4000),
+      tool_call_id: toolCallId,
+      name: toolName,
     });
   }
 
