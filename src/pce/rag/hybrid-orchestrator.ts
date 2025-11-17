@@ -122,12 +122,14 @@ export class HybridOrchestrator {
     const context = this.buildSemanticContext(retrievalResult);
     const response = await this.generationService.generate(query, retrievalResult.chunks);
     const responseWithProvenance = this.attachProvenance(response, context);
+    const sTotalScore = this.getMaxVectorScore(retrievalResult);
 
     return {
       ...responseWithProvenance,
       queryType: "SEMANTIC_ONLY",
       fallbackMode: null,
       context,
+      sTotalScore,
     };
   }
 
@@ -156,12 +158,14 @@ export class HybridOrchestrator {
       };
 
       const response = await this.generateHybridResponse(query, hybridContext);
+      const structuralScore = hybridContext.structuralPaths[0]?.score ?? 0;
 
       return {
         ...response,
         queryType: "STRUCTURAL_PRIMARY",
         fallbackMode: null,
         context: hybridContext,
+        sTotalScore: structuralScore,
       };
     } catch (error: any) {
       pceLogger.warn("Graph retrieval failed, falling back to semantic", {
@@ -257,6 +261,7 @@ export class HybridOrchestrator {
         queryType: "HYBRID",
         fallbackMode: "low_score",
         context: fusionResult.prunedContext,
+        sTotalScore: avgTotalScore,
         fusionMetrics: {
           vectorResults: vectorResult.chunks.length,
           graphResults: graphResult.entities.length,
@@ -280,6 +285,7 @@ export class HybridOrchestrator {
       queryType: "HYBRID",
       fallbackMode: null,
       context: fusionResult.prunedContext,
+      sTotalScore: avgTotalScore,
       fusionMetrics: {
         vectorResults: vectorResult.chunks.length,
         graphResults: graphResult.entities.length,
@@ -303,12 +309,17 @@ export class HybridOrchestrator {
     pceLogger.incrementCounter("fallback_graph_down_count");
 
     const retrievalResult = await this.retrievalService.retrieve(query, aclGroup);
+    const context = this.buildSemanticContext(retrievalResult);
     const response = await this.generationService.generate(query, retrievalResult.chunks);
+    const responseWithProvenance = this.attachProvenance(response, context);
+    const sTotalScore = this.getMaxVectorScore(retrievalResult);
 
     return {
-      ...response,
+      ...responseWithProvenance,
       queryType: "SEMANTIC_ONLY",
       fallbackMode: "graph_down",
+      context,
+      sTotalScore,
     };
   }
 
@@ -432,6 +443,10 @@ export class HybridOrchestrator {
       structuralPaths: [],
       provenance: Array.from(provenanceMap.values()),
     };
+  }
+
+  private getMaxVectorScore(result: RetrievalResult): number {
+    return result.scores.length > 0 ? Math.max(...result.scores) : 0;
   }
 
   /**

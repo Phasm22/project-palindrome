@@ -1,0 +1,82 @@
+import { logger } from "../utils/logger";
+
+export interface HybridApiContext {
+  answer: string;
+  queryType: string;
+  fallbackMode: string | null;
+  sources: Array<{ sourcePath: string; score: number; chunkId: string }>;
+  metadata: { tokensUsed: number; chunksRetrieved: number };
+  fusionMetrics?: {
+    vectorResults: number;
+    graphResults: number;
+    fusedResults: number;
+    prunedResults: number;
+    avgTotalScore: number;
+  };
+  context: {
+    semanticChunks: Array<{
+      id: string;
+      text: string;
+      score: number;
+      sourcePath: string;
+      versionHash: string;
+      aclGroup: string;
+      chunkIndex: number;
+      totalChunks: number;
+    }>;
+    structuralPaths: Array<{
+      score: number;
+      entities: Array<Record<string, any>>;
+      relationships: Array<Record<string, any>>;
+    }>;
+    provenance: Array<{ versionHash: string; sourcePath: string }>;
+  };
+  sTotalScore: number | null;
+}
+
+export interface FetchRagOptions {
+  baseUrl?: string;
+  userId?: string;
+  aclGroup?: string;
+  timeoutMs?: number;
+}
+
+export async function fetchHybridContext(
+  query: string,
+  options: FetchRagOptions = {}
+): Promise<HybridApiContext | null> {
+  const baseUrl = (options.baseUrl ?? process.env.PCE_API_URL ?? process.env.PCE_API_BASE_URL)?.replace(/\/$/, "");
+  if (!baseUrl) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        aclGroup: options.aclGroup ?? "admin",
+        userId: options.userId ?? "agent-session",
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      logger.error(`Hybrid context fetch failed: HTTP ${response.status}`);
+      return null;
+    }
+
+    const payload = await response.json();
+    return payload?.data ?? null;
+  } catch (error: any) {
+    logger.error(`Hybrid context fetch error: ${error.message ?? error}`);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}

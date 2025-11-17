@@ -1,5 +1,10 @@
+type AgentMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string }
+  | { role: "tool"; content: string; tool_call_id: string; name: string };
+
 export class AgentContext {
-  private messages: { role: string; content: string }[] = [];
+  private messages: AgentMessage[] = [];
 
   addUserMessage(msg: string) {
     this.messages.push({ role: "user", content: msg });
@@ -9,11 +14,13 @@ export class AgentContext {
     this.messages.push({ role: "assistant", content: msg });
   }
 
-  addToolResult(toolName: string, data: any) {
+  addToolResult(toolCallId: string, toolName: string, data: any) {
     const dataStr = typeof data === "string" ? data : JSON.stringify(data);
     this.messages.push({
-      role: "assistant",
-      content: `Tool "${toolName}" returned:\n${dataStr.slice(0, 500)}`
+      role: "tool",
+      content: dataStr.slice(0, 4000),
+      tool_call_id: toolCallId,
+      name: toolName,
     });
   }
 

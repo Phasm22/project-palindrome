@@ -169,5 +169,6 @@ export interface HybridRAGResponse extends RAGResponse {
   };
   fallbackMode?: "graph_down" | "low_score" | null;
   context?: HybridContext;
+  sTotalScore: number | null;
 }
 

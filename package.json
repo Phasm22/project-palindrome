@@ -11,7 +11,8 @@
     "dev": "bun run src/cli.ts",
     "pce:verify-dod": "bun run src/pce/verify-dod.ts",
     "pce:test-redaction": "bun run src/pce/cli.ts test-redaction",
-    "pce:api": "bun run src/pce/api/main.ts"
+    "pce:api": "bun run src/pce/api/main.ts",
+    "pce:gold-path": "bun run scripts/run-gold-path.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

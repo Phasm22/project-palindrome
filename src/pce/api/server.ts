@@ -197,7 +197,7 @@ export class PceApiServer {
         metadata: ragResponse.metadata,
         fusionMetrics: ragResponse.fusionMetrics,
         context,
-        sTotalScore: ragResponse.fusionMetrics?.avgTotalScore ?? null,
+        sTotalScore: ragResponse.sTotalScore ?? ragResponse.fusionMetrics?.avgTotalScore ?? null,
       };
 
       this.historyStore.record(

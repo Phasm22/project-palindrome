@@ -686,13 +686,13 @@ bun test tests/pce/phase-ic-dod.test.ts --grep "Task 8.3"
 
 ### 🔄 Component 9: Retrieval Fusion Strategy
 
-#### ✅ Task 9.1: Context Score Normalization
+#### ⚠️ Task 9.1: Context Score Normalization and Unification
 
-**Status**: ✅ **IMPLEMENTED**
+**Status**: ⚠️ **TO DO**
 
-**Description**: Standardize and normalize similarity scores from Vector DB and confidence scores from Graph RAG into a unified [0.0, 1.0] metric for fusion.
+**Description**: Standardize and normalize similarity scores from Vector DB and confidence scores from Graph RAG into a unified [0.0, 1.0] metric. **Mandatory**: if the Orchestrator routes a query as `SEMANTIC_ONLY` or `STRUCTURAL_PRIMARY`, use the highest single-path score as the final $S_{Total}$ so downstream consumers always receive a canonical confidence.
 
-**Priority**: HIGH
+**Priority**: CRITICAL
 
 **Implementation Target**:
 - `src/pce/rag/fusion.ts` - Score normalization functions
@@ -706,9 +706,9 @@ bun test tests/pce/phase-ic-dod.test.ts --grep "Task 9.1"
 
 ---
 
-#### ✅ Task 9.1.1: Pre-Fusion Score Floor Enforcement
+#### ⚠️ Task 9.1.1: Pre-Fusion Score Floor Enforcement
 
-**Status**: ✅ **IMPLEMENTED**
+**Status**: ⚠️ **TO DO**
 
 **Description**: Enforce a minimum Vector score (>= 0.30) and minimum Graph confidence (>= 0.40) before computing S_Total. Reject low-confidence inputs.
 
@@ -726,9 +726,9 @@ bun test tests/pce/phase-ic-dod.test.ts --grep "Task 9.1.1"
 
 ---
 
-#### ✅ Task 9.2: Weighted Fusion Engine Implementation
+#### ⚠️ Task 9.2: Weighted Fusion Engine Implementation
 
-**Status**: ✅ **IMPLEMENTED**
+**Status**: ⚠️ **TO DO**
 
 **Description**: Implement the fusion logic using the defined weights ($W_{Vector}$, $W_{Graph}$, $W_{Recency}$) to calculate a single $S_{Total}$ score for the combined context set.
 
@@ -746,9 +746,9 @@ bun test tests/pce/phase-ic-dod.test.ts --grep "Task 9.2"
 
 ---
 
-#### ✅ Task 9.3: Metadata and Relationship Pruning
+#### ⚠️ Task 9.3: Metadata and Relationship Pruning
 
-**Status**: ✅ **IMPLEMENTED**
+**Status**: ⚠️ **TO DO**
 
 **Description**: After fusion, prune redundant semantic chunks and structural paths that exceed the max token budget or fall below the minimum $S_{Total}$ threshold (0.65 from status report).
 
@@ -1237,27 +1237,36 @@ Phase III focuses on exposing the Hybrid RAG + Tooling platform through a secure
 
 ### 🧠 Component 16: Cognitive Automation (Tool Use)
 
-- ⏳ **Task 16.1**: Define and Implement External Tool Schemas  
-  - TODO: Formalize schemas for `run_diagnostic_command`, `create_incident_ticket`, `lookup_user_profile` and wire execution handlers.
-- ⏳ **Task 16.2**: LLM Tool-Calling Orchestration  
-  - TODO: Primary agent loop deciding between direct synthesis vs. tool execution using function calling.
-- ⏳ **Task 16.2.1**: Safety Gate: Tool Eligibility Check  
-  - TODO: Enforce whitelist/authorization gates per user/session, log violations.
-- ⏳ **Task 16.2.2**: Confirmation Middleware (Human-in-Loop)  
-  - TODO: Require explicit approvals for high-risk actions (e.g., firewall rules, VM shutdowns).
-- ⏳ **Task 16.3**: Tool Result Synthesis and Provenance  
-  - TODO: Feed tool outputs back into RAG context with unique provenance IDs for final response grounding.
+- ✅ **Task 16.1**: Define and Implement External Tool Schemas  
+  - Added Zod + JSON schemas plus implementations for `run_diagnostic_command`, `create_incident_ticket`, and `lookup_user_profile` (`src/tools/schemas/*`, `src/tools/*Tool.ts`).  
+  - Tools include ACL metadata, persisted incident logging, synthetic directory responses, and Bun-based diagnostics with provenance-aware payloads.  
+  - Regression tests live in `tests/tools/cognitive-tools.test.ts`.
+- ✅ **Task 16.2**: LLM Tool-Calling Orchestration  
+  - `src/agent/runner.ts` now pulls Hybrid RAG context (`fetchHybridContext`), registers JSON schemas with OpenAI function calling, and loops Query ➜ RAG ➜ Tool decision ➜ synthesis.  
+  - Tool outputs are re-fed as `tool` role messages with provenance IDs so the final answer grounds on diagnostics + RAG context.
+- ✅ **Task 16.2.1**: Safety Gate: Tool Eligibility Check  
+  - Declarative policies (`tool.metadata.allowedAcls`, `src/agent/tool-policy.ts`) prevent unprivileged sessions from executing tools; denials are logged and surfaced to the LLM.  
+  - Runner increments counters/logs on every unauthorized attempt before the Orchestrator continues reasoning.
+- ✅ **Task 16.2.2**: Confirmation Middleware (Human-in-Loop)  
+  - High-risk tools (currently `create_incident_ticket`) set `requiresConfirmation`; the runner prompts via TTY or consults a custom callback/`PCE_AUTO_APPROVE_HIGH_RISK_TOOLS` flag before execution.  
+  - Unapproved requests return structured errors for the LLM to explain back to the user.
+- ✅ **Task 16.3**: Tool Result Synthesis and Provenance  
+  - Every tool execution is wrapped with a unique `tool://` provenance ID and attached as `tool` messages, ensuring the final LLM answer can cite diagnostics/tickets directly.  
+  - Runner merges these outputs with the Hybrid RAG summary so synthesis includes both contextual docs and live tool telemetry.
 
 ---
 
 ### 🔐 Component 17: Final Security and Definition of Done
 
 - ⏳ **Task 17.1**: Comprehensive Provenance Audit Test  
-  - TODO: End-to-end automated check that every answer traces to original file + version hash (re-validates DOD 7.5.4).
+  - TODO: End-to-end automated check that every answer traces to original file + version hash (re-validates DOD 7.5.4).  
 - ⏳ **Task 17.2**: Final Security Review (Redaction & ACL)  
-  - TODO: Re-run redaction + ACL audits on raw tool outputs to ensure no regressions.
+  - TODO: Re-run redaction + ACL audits on raw tool outputs to ensure no regressions.  
 - ⏳ **Task 17.3**: Definition of Done (DOD)  
-  - TODO: Phase III completes when 5 tool-use queries + 5 hybrid queries pass and provenance traceability hits 100%.
+  - TODO: Phase III completes when 5 tool-use queries + 5 hybrid queries pass and provenance traceability hits 100%.  
+- ✅ **Task 17.4**: Gold Path Regression Test  
+  - `scripts/run-gold-path.ts` is a Bun runner (`bun run scripts/run-gold-path.ts`) that ingests a hybrid fixture, starts the Phase III API server, executes a hybrid query, triggers tool calls, validates provenance, and asserts fallback counters/log coverage.  
+  - Output mirrors the ops checklist (Ingestion, Hybrid Retrieval, Tool-Use, Provenance, Counters) and exits non-zero on any regression.
 
 ---
 
@@ -1274,4 +1283,6 @@ Phase III focuses on exposing the Hybrid RAG + Tooling platform through a secure
 bun test tests/pce/api/api-server.test.ts
 bun test tests/pce/api/api-server.test.ts --grep "rate limits"
 bun test tests/pce/api/api-server.test.ts --grep "metrics"
+bun test tests/tools/cognitive-tools.test.ts
+bun run scripts/run-gold-path.ts
 ```

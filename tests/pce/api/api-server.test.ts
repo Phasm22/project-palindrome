@@ -61,6 +61,7 @@ const baseResponse: HybridRAGResponse = {
     avgTotalScore: 0.85,
   },
   context: baseContext,
+  sTotalScore: 0.85,
 };
 
 class MockOrchestrator implements PceApiServerDependencies["orchestrator"] {
