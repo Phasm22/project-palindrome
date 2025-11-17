@@ -25,15 +25,32 @@ function getOpenAIClient(): OpenAI {
 
 function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
   return tools
-    .filter((tool) => !!tool.metadata.parameters)
-    .map((tool) => ({
-      type: "function" as const,
-      function: {
-        name: tool.metadata.name,
-        description: tool.metadata.description,
-        parameters: tool.metadata.parameters as Record<string, any>,
-      },
-    }));
+    .map((tool) => {
+      // Use getSchema() if available (for tools like OPNsense that use getSchema)
+      // Otherwise fall back to metadata.parameters
+      let parameters: Record<string, any> | undefined;
+      
+      if (typeof (tool as any).getSchema === "function") {
+        const schema = (tool as any).getSchema();
+        parameters = schema.parameters;
+      } else if (tool.metadata.parameters) {
+        parameters = tool.metadata.parameters as Record<string, any>;
+      }
+      
+      if (!parameters) {
+        return null;
+      }
+      
+      return {
+        type: "function" as const,
+        function: {
+          name: tool.metadata.name,
+          description: tool.metadata.description,
+          parameters,
+        },
+      };
+    })
+    .filter((def): def is NonNullable<typeof def> => def !== null);
 }
 
 function formatRagSummary(rag: HybridApiContext) {
@@ -151,6 +168,15 @@ export async function runAgent(
 
     const toolCalls = ((message?.tool_calls as any[]) ?? []) as Array<any>;
     if (toolCalls.length) {
+      // Add the assistant message with tool_calls to the context first
+      // This is required by OpenAI API: tool messages must follow an assistant message with tool_calls
+      const assistantMsg = { 
+        role: "assistant" as const, 
+        content: message?.content || "",
+        tool_calls: toolCalls 
+      };
+      context.getMessages().push(assistantMsg);
+      
       for (const toolCall of toolCalls) {
         const fnCall = toolCall.function ?? {};
         const toolName = fnCall.name as string | undefined;

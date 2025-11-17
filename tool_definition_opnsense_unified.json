@@ -1,0 +1,260 @@
+{
+  "name": "opnsense_unified",
+  "description": "Unified OPNsense tool providing comprehensive read-only access and controlled safe write operations. All write operations require human confirmation and support dry-run mode.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "firewall_rules_list",
+          "firewall_aliases_list",
+          "firewall_aliases_get",
+          "firewall_categories_list",
+          "firewall_states_list",
+          "interfaces_list",
+          "interface_status",
+          "interfaces_vlans_list",
+          "interfaces_vips_list",
+          "system_status",
+          "system_health",
+          "system_info",
+          "system_backups_list",
+          "diagnostics_arp_table",
+          "diagnostics_routing_table",
+          "diagnostics_interface_statistics",
+          "diagnostics_system_logs",
+          "dhcp_leases_list",
+          "dhcp_status",
+          "dhcp_static_mappings_list",
+          "create_disabled_alias",
+          "enable_rule_with_confirmation",
+          "update_description_field",
+          "toggle_rule_enabled",
+          "update_alias_description"
+        ],
+        "description": "The OPNsense operation to perform (read-only or safe write)"
+      },
+      "alias_name": {
+        "type": "string",
+        "description": "Alias name (for firewall_aliases_get or create_disabled_alias)"
+      },
+      "interface_name": {
+        "type": "string",
+        "description": "Interface name (for interface_status)"
+      },
+      "limit": {
+        "type": "number",
+        "description": "Limit number of results (for list operations)"
+      },
+      "dryRun": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true, return diff preview without executing (for write operations)"
+      },
+      "alias_type": {
+        "type": "string",
+        "enum": [
+          "host",
+          "network",
+          "port"
+        ],
+        "description": "Alias type (required for create_disabled_alias)"
+      },
+      "alias_content": {
+        "type": "string",
+        "description": "Alias content (required for create_disabled_alias)"
+      },
+      "alias_description": {
+        "type": "string",
+        "description": "Alias description"
+      },
+      "rule_uuid": {
+        "type": "string",
+        "description": "Rule UUID (required for enable_rule_with_confirmation)"
+      },
+      "target_type": {
+        "type": "string",
+        "enum": [
+          "rule",
+          "alias"
+        ],
+        "description": "Target type (required for update_description_field)"
+      },
+      "target_uuid": {
+        "type": "string",
+        "description": "Target UUID (required for update_description_field)"
+      },
+      "description": {
+        "type": "string",
+        "description": "New description (required for update_description_field)"
+      },
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable/disable state (required for toggle_rule_enabled)"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "examples": [
+    {
+      "description": "List all firewall rules",
+      "parameters": {
+        "action": "firewall_rules_list"
+      }
+    },
+    {
+      "description": "Get system status",
+      "parameters": {
+        "action": "system_status"
+      }
+    },
+    {
+      "description": "Get interface status",
+      "parameters": {
+        "action": "interface_status",
+        "interface_name": "wan"
+      }
+    },
+    {
+      "description": "List DHCP leases",
+      "parameters": {
+        "action": "dhcp_leases_list"
+      }
+    },
+    {
+      "description": "Create a disabled alias (dry-run)",
+      "parameters": {
+        "action": "create_disabled_alias",
+        "alias_name": "test-alias",
+        "alias_type": "host",
+        "alias_content": "192.168.1.100",
+        "alias_description": "Test alias",
+        "dryRun": true
+      }
+    },
+    {
+      "description": "Enable a firewall rule",
+      "parameters": {
+        "action": "enable_rule_with_confirmation",
+        "rule_uuid": "abc-123-def",
+        "dryRun": false
+      }
+    },
+    {
+      "description": "Update rule description",
+      "parameters": {
+        "action": "update_description_field",
+        "target_type": "rule",
+        "target_uuid": "abc-123-def",
+        "description": "Updated description",
+        "dryRun": true
+      }
+    }
+  ],
+  "notes": [
+    "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
+    "All responses are structured JSON objects for easy parsing and dashboarding.",
+    "Internal IP addresses and credentials are automatically sanitized from responses.",
+    "All write operations require human confirmation before execution.",
+    "Use dryRun: true to preview changes without executing.",
+    "Only admin and ops ACL groups can execute write operations.",
+    "Pre-write state is automatically captured for rollback capability."
+  ],
+  "metadata": {
+    "categories": [
+      "opnsense",
+      "networking",
+      "firewall",
+      "system",
+      "write"
+    ],
+    "allowedAcls": {
+      "read": [
+        "admin",
+        "ops",
+        "viewer"
+      ],
+      "write": [
+        "admin",
+        "ops"
+      ]
+    },
+    "risk": {
+      "read": "low",
+      "write": "medium"
+    },
+    "requiresConfirmation": {
+      "read": false,
+      "write": true
+    }
+  },
+  "actions": {
+    "read": [
+      "firewall_rules_list",
+      "firewall_aliases_list",
+      "firewall_aliases_get",
+      "firewall_categories_list",
+      "firewall_states_list",
+      "interfaces_list",
+      "interface_status",
+      "interfaces_vlans_list",
+      "interfaces_vips_list",
+      "system_status",
+      "system_health",
+      "system_info",
+      "system_backups_list",
+      "diagnostics_arp_table",
+      "diagnostics_routing_table",
+      "diagnostics_interface_statistics",
+      "diagnostics_system_logs",
+      "dhcp_leases_list",
+      "dhcp_status",
+      "dhcp_static_mappings_list"
+    ],
+    "write": [
+      "create_disabled_alias",
+      "enable_rule_with_confirmation",
+      "update_description_field",
+      "toggle_rule_enabled",
+      "update_alias_description"
+    ],
+    "all": [
+      "firewall_rules_list",
+      "firewall_aliases_list",
+      "firewall_aliases_get",
+      "firewall_categories_list",
+      "firewall_states_list",
+      "interfaces_list",
+      "interface_status",
+      "interfaces_vlans_list",
+      "interfaces_vips_list",
+      "system_status",
+      "system_health",
+      "system_info",
+      "system_backups_list",
+      "diagnostics_arp_table",
+      "diagnostics_routing_table",
+      "diagnostics_interface_statistics",
+      "diagnostics_system_logs",
+      "dhcp_leases_list",
+      "dhcp_status",
+      "dhcp_static_mappings_list",
+      "create_disabled_alias",
+      "enable_rule_with_confirmation",
+      "update_description_field",
+      "toggle_rule_enabled",
+      "update_alias_description"
+    ]
+  },
+  "actionCount": {
+    "read": 20,
+    "write": 5,
+    "total": 25
+  },
+  "version": "1.0.0",
+  "generatedAt": "2025-11-17T21:42:39.583Z"
+}

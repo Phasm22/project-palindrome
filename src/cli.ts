@@ -94,6 +94,33 @@ if (args[0] === "hello") {
   }
 
   try {
+    // Use runAgent directly to enable tool calling (TL-1C)
+    // This allows the LLM to autonomously select and execute OPNsense tools
+    const userId = process.env.PCE_USER_ID || "default-user";
+    const aclGroup = process.env.PCE_ACL_GROUP || "viewer";
+    
+    // Use runAgent which includes tool calling, RAG context, and LLM reasoning
+    const response = await runAgent(prompt, {
+      userId,
+      aclGroup,
+      ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
+    });
+    
+    console.log(response.text);
+    process.exit(0);
+  } catch (error: any) {
+    console.error("Error:", error.message);
+    process.exit(1);
+  }
+} else if (args[0] === "pce-api") {
+  // Legacy API-only mode (RAG only, no tool calling)
+  const prompt = args.slice(1).join(" ");
+  if (!prompt) {
+    console.log("Usage: agent pce-api \"your question\"");
+    process.exit(1);
+  }
+
+  try {
     // Use a default userId if not provided via env var
     const userId = process.env.PCE_USER_ID || "default-user";
     const response = await queryPCE(userId, prompt);

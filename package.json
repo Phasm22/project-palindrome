@@ -16,7 +16,8 @@
     "pce:api": "bun run src/pce/api/main.ts",
     "pce:gold-path": "bun run scripts/run-gold-path.ts",
     "pce:provenance-audit": "bun run scripts/run-provenance-audit.ts",
-    "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts"
+    "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts",
+    "opnsense:generate-unified-schema": "bun run src/tools/opnsense/generate-unified-schema.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

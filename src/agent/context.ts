@@ -1,6 +1,6 @@
 type AgentMessage =
   | { role: "user"; content: string }
-  | { role: "assistant"; content: string }
+  | { role: "assistant"; content: string; tool_calls?: any[] }
   | { role: "tool"; content: string; tool_call_id: string; name: string };
 
 export class AgentContext {
