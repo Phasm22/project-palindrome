@@ -32,12 +32,13 @@ export interface QdrantPayload {
   timestamp: string; // ISO string
   chunk_index: number;
   total_chunks: number;
+  chunk_id?: string; // Store original chunk ID for retrieval
 }
 
 /**
  * Convert ChunkMetadata to Qdrant payload format
  */
-export function metadataToPayload(metadata: ChunkMetadata, text: string): QdrantPayload {
+export function metadataToPayload(metadata: ChunkMetadata, text: string, chunkId?: string): QdrantPayload {
   return {
     text,
     version_hash: metadata.versionHash,
@@ -47,6 +48,7 @@ export function metadataToPayload(metadata: ChunkMetadata, text: string): Qdrant
     timestamp: metadata.timestamp.toISOString(),
     chunk_index: metadata.chunkIndex,
     total_chunks: metadata.totalChunks,
+    chunk_id: chunkId, // Store original chunk ID
   };
 }
 

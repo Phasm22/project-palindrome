@@ -61,15 +61,37 @@ export class QdrantVectorStore {
    */
   async indexChunk(chunk: DocumentChunk, vector: number[]): Promise<void> {
     try {
-      const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text);
+      // Store original chunk ID in payload for retrieval
+      const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text, chunk.id);
+      
+      // Validate vector dimension
+      if (!vector || vector.length !== 1536) {
+        throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected 1536, got ${vector?.length || 0}`);
+      }
+      
+      // Ensure all payload fields are defined
+      const cleanPayload: any = {
+        text: payload.text || "",
+        version_hash: payload.version_hash || "",
+        acl_group: payload.acl_group || "",
+        source_type: payload.source_type || "",
+        source_path: payload.source_path || "",
+        timestamp: payload.timestamp || new Date().toISOString(),
+        chunk_index: payload.chunk_index ?? 0,
+        total_chunks: payload.total_chunks ?? 0,
+        chunk_id: payload.chunk_id || chunk.id,
+      };
+
+      // Qdrant only accepts unsigned integers or UUIDs - convert string ID to integer
+      const pointId = this.stringIdToInt(chunk.id);
 
       await this.client.upsert(this.collectionName, {
         wait: true,
         points: [
           {
-            id: chunk.id,
+            id: pointId,
             vector,
-            payload: payload as any,
+            payload: cleanPayload,
           },
         ],
       });
@@ -85,6 +107,21 @@ export class QdrantVectorStore {
   }
 
   /**
+   * Convert string ID to integer hash for Qdrant compatibility
+   * Qdrant only accepts unsigned integers or UUIDs as point IDs
+   */
+  private stringIdToInt(id: string): number {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) {
+      const char = id.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    // Ensure positive integer (Qdrant requires unsigned)
+    return Math.abs(hash) >>> 0; // >>> 0 converts to unsigned 32-bit integer
+  }
+
+  /**
    * Batch index multiple chunks
    */
   async indexChunks(chunks: DocumentChunk[], vectors: number[][]): Promise<void> {
@@ -92,13 +129,37 @@ export class QdrantVectorStore {
       throw new Error("Chunks and vectors arrays must have the same length");
     }
 
+    let points: any[] = [];
     try {
-      const points = chunks.map((chunk, index) => {
-        const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text);
+      points = chunks.map((chunk, index) => {
+        // Store original chunk ID in payload for retrieval
+        const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text, chunk.id);
+        
+        // Validate vector dimension
+        if (!vectors[index] || vectors[index].length !== 1536) {
+          throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected 1536, got ${vectors[index]?.length || 0}`);
+        }
+        
+        // Ensure all payload fields are defined
+        const cleanPayload: any = {
+          text: payload.text || "",
+          version_hash: payload.version_hash || "",
+          acl_group: payload.acl_group || "",
+          source_type: payload.source_type || "",
+          source_path: payload.source_path || "",
+          timestamp: payload.timestamp || new Date().toISOString(),
+          chunk_index: payload.chunk_index ?? 0,
+          total_chunks: payload.total_chunks ?? 0,
+          chunk_id: payload.chunk_id || chunk.id,
+        };
+        
+        // Qdrant only accepts unsigned integers or UUIDs - convert string ID to integer
+        const pointId = this.stringIdToInt(chunk.id);
+        
         return {
-          id: chunk.id,
+          id: pointId,
           vector: vectors[index],
-          payload: payload as any,
+          payload: cleanPayload,
         };
       });
 
@@ -109,7 +170,16 @@ export class QdrantVectorStore {
 
       pceLogger.info(`Indexed ${chunks.length} chunks in batch`);
     } catch (error: any) {
-      pceLogger.error("Failed to batch index chunks", { error: error.message });
+      pceLogger.error("Failed to batch index chunks", { 
+        error: error.message,
+        errorDetails: error.data || error.status || error,
+        pointsCount: points.length,
+        samplePoint: points[0] ? {
+          id: points[0].id,
+          vectorLength: points[0].vector?.length,
+          payloadKeys: Object.keys(points[0].payload || {})
+        } : null
+      });
       throw error;
     }
   }
@@ -125,22 +195,32 @@ export class QdrantVectorStore {
     filter?: Record<string, any>
   ): Promise<Array<{ chunk: DocumentChunk; score: number }>> {
     try {
-      // Build filter
-      const searchFilter: any = {};
-      if (aclGroup) {
-        searchFilter.must = [
-          {
+      // Build filter - Qdrant filter format
+      // Admin group bypasses ACL filtering (can see all chunks)
+      let searchFilter: any = null;
+      if ((aclGroup && aclGroup !== "admin") || filter) {
+        const mustConditions: any[] = [];
+        
+        // Only apply ACL filter if not admin
+        if (aclGroup && aclGroup !== "admin") {
+          mustConditions.push({
             key: "acl_group",
             match: { value: aclGroup },
-          },
-        ];
-      }
-      if (filter) {
-        if (!searchFilter.must) searchFilter.must = [];
-        searchFilter.must.push(...Object.entries(filter).map(([key, value]) => ({
-          key,
-          match: { value },
-        })));
+          });
+        }
+        
+        if (filter) {
+          mustConditions.push(...Object.entries(filter).map(([key, value]) => ({
+            key,
+            match: { value },
+          })));
+        }
+        
+        if (mustConditions.length > 0) {
+          searchFilter = {
+            must: mustConditions,
+          };
+        }
       }
 
       const searchParams: any = {
@@ -149,19 +229,33 @@ export class QdrantVectorStore {
         with_payload: true,
       };
 
-      if (Object.keys(searchFilter).length > 0) {
+      if (searchFilter) {
         searchParams.filter = searchFilter;
       }
+      
+      pceLogger.debug("Qdrant search params", {
+        hasFilter: !!searchFilter,
+        filter: searchFilter,
+        limit: topK,
+        aclGroup: aclGroup || "none",
+      });
 
       const results = await this.client.search(this.collectionName, searchParams);
+      
+      pceLogger.debug("Qdrant search results", {
+        resultCount: results.length,
+        scores: results.map((r: any) => r.score),
+      });
 
       const chunks: Array<{ chunk: DocumentChunk; score: number }> = results.map((result: any) => {
         const payload = result.payload as any as QdrantPayload;
         const metadata = payloadToMetadata(payload);
+        // If we stored the original chunk ID in payload, use it; otherwise use the result ID
+        const chunkId = (payload as any).chunk_id || result.id?.toString() || String(result.id);
 
         return {
           chunk: {
-            id: result.id as string,
+            id: chunkId,
             text: payload.text,
             metadata,
             startIndex: 0, // Not stored in vector DB

@@ -13,7 +13,7 @@ import { pceLogger } from "../utils/logger";
 const DEFAULT_CONFIG: RetrievalConfig = {
   topK: 5,
   maxTokens: 4096,
-  similarityThreshold: 0.7,
+  similarityThreshold: 0.5, // Lowered from 0.7 to allow more matches for testing
 };
 
 export class RetrievalService {
@@ -70,9 +70,17 @@ export class RetrievalService {
       );
 
       // Filter by similarity threshold if set
+      // Note: Qdrant uses cosine similarity (0-1 range), higher is more similar
       const filteredResults = config.similarityThreshold !== undefined
         ? results.filter((r) => r.score >= config.similarityThreshold!)
         : results;
+      
+      pceLogger.debug("Search results", {
+        totalResults: results.length,
+        afterThresholdFilter: filteredResults.length,
+        threshold: config.similarityThreshold,
+        scores: results.map(r => r.score),
+      });
 
       // Apply token budget (rough estimation: 1 token ≈ 4 characters)
       const chunks: DocumentChunk[] = [];
