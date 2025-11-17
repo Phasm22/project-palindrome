@@ -8,7 +8,9 @@
   },
   "scripts": {
     "test": "bun test",
-    "dev": "bun run src/cli.ts"
+    "dev": "bun run src/cli.ts",
+    "pce:verify-dod": "bun run src/pce/verify-dod.ts",
+    "pce:test-redaction": "bun run src/pce/cli.ts test-redaction"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -21,6 +23,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@qdrant/js-client-rest": "^1.15.1",
     "ai": "^5.0.93",
     "axios": "^1.13.2",
     "openai": "^6.9.0",
