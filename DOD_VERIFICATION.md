@@ -1208,6 +1208,233 @@ Phase III focuses on exposing the Hybrid RAG + Tooling platform through a secure
 
 ---
 
+## 🔧 Phase TL-1A DOD Status
+
+**Phase**: TL-1A (Tool Layer V1 - OPNsense Read-Only Suite)  
+**Status**: 🚧 **IN PROGRESS**  
+**Target Completion**: 2 weeks  
+**Priority**: CRITICAL
+
+### Overview
+
+Phase TL-1A establishes comprehensive, LLM-safe read-only access to OPNsense state. This phase focuses on creating a dedicated read-only tool suite with structured data returns, comprehensive test coverage, and strict security controls.
+
+**Goal**: Establish comprehensive, LLM-safe read-only access to OPNsense state.
+
+**Focus**: Read-Only Operations & Data Structuring
+
+**Target System**: OPNsense
+
+---
+
+### 📦 Deliverables
+
+- ✅ **Artifact**: `src/tools/opnsense/readonly/` - New folder for all dedicated read-only tool implementations
+- ✅ **Artifact**: `tests/tools/opnsense/readonly/` - Dedicated test suite for TL-1A functionality
+- ✅ **Artifact**: `tool_definition_opnsense_readonly.json` - Unified JSON schema containing function definitions for all TL-1A tools, registered with the PCE
+
+---
+
+### ✅ Acceptance Criteria
+
+#### ✅ TL-1A.1: Tool Action Volume
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: A minimum of 20 distinct read-only actions (covering Firewall, Interfaces, System, Diagnostics, DHCP) must be implemented and registered.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- Minimum 20 read-only tool actions
+- Coverage areas: Firewall, Interfaces, System, Diagnostics, DHCP
+- All tools registered in unified JSON schema
+- Tools organized in `src/tools/opnsense/readonly/`
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.1"
+# Verify tool count >= 20
+# Verify coverage across all required areas
+```
+
+**Expected Behavior**:
+- ✅ At least 20 distinct read-only actions implemented
+- ✅ Coverage across Firewall, Interfaces, System, Diagnostics, DHCP
+- ✅ All tools registered in `tool_definition_opnsense_readonly.json`
+
+---
+
+#### ✅ TL-1A.2: Structured Data Return
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: All diagnostic and status-based tools (e.g., interface_status, system_health) MUST return data in a structured, parseable format (JSON object) instead of plain text, to facilitate future metrics logging and dashboarding (Phase IV).
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- All status/diagnostic tools return structured JSON
+- No plain text responses for structured data
+- Schema validation for return types
+- Consistent data structure across tools
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.2"
+# Verify all tools return structured JSON
+# Verify no plain text responses
+```
+
+**Expected Behavior**:
+- ✅ All diagnostic tools return structured JSON objects
+- ✅ Status tools return parseable data structures
+- ✅ No plain text responses for structured data
+- ✅ Consistent schema across similar tool types
+
+---
+
+#### ✅ TL-1A.3: Full Test Coverage
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: All tool implementation files under `src/tools/opnsense/readonly/` must achieve 100% test coverage specifically for parsing, formatting, and successful execution against mock data.
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- 100% test coverage for all tool files
+- Tests for parsing logic
+- Tests for formatting logic
+- Tests for execution against mock data
+- Tests in `tests/tools/opnsense/readonly/`
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.3"
+# Verify 100% coverage for all tool files
+# Verify parsing, formatting, and execution tests
+```
+
+**Expected Behavior**:
+- ✅ 100% test coverage for all tool implementations
+- ✅ Parsing logic fully tested
+- ✅ Formatting logic fully tested
+- ✅ Execution against mock data tested
+- ✅ All edge cases covered
+
+---
+
+#### ✅ TL-1A.4: Output Sanitization Integrity
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: The raw output from every implemented tool MUST be routed through 'sanitizeToolPayload' (or equivalent Redactor) before being injected into the LLM context. This must specifically verify the redaction of:
+1. Internal, non-routable IP ranges (e.g., 10.x.x.x, 192.168.x.x, 172.16.x.x) if found in raw logs.
+2. Any user credentials accidentally present in mock error messages.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- All tool outputs sanitized via `sanitizeToolPayload` or Redactor
+- IP range redaction verified (10.x.x.x, 192.168.x.x, 172.16.x.x)
+- Credential redaction verified
+- Integration with existing redaction system
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.4"
+# Verify sanitization applied to all tool outputs
+# Verify IP range redaction
+# Verify credential redaction
+```
+
+**Expected Behavior**:
+- ✅ All tool outputs sanitized before LLM injection
+- ✅ Internal IP ranges redacted
+- ✅ Credentials redacted from error messages
+- ✅ Sanitization verified in tests
+
+---
+
+#### ✅ TL-1A.5: End-to-End PCE Validation
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: At least one test scenario (via 'agent pce') must successfully execute, return an answer, and confirm the tool's provenance tag ('tool://opnsense_...') is present in the final API response 'sources' list.
+
+**Priority**: HIGH
+
+**Implementation Target**:
+- End-to-end test via `agent pce` command
+- Tool execution through PCE API
+- Provenance tag verification in response
+- Tool source appears in API response sources
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.5"
+# Run: bun src/cli.ts pce "query that triggers opnsense tool"
+# Verify tool provenance tag in response
+```
+
+**Expected Behavior**:
+- ✅ Tool executes via PCE API
+- ✅ Answer returned successfully
+- ✅ Provenance tag `tool://opnsense_...` present in sources
+- ✅ Tool source listed in API response
+
+---
+
+#### ✅ TL-1A.6: Write Operation Guard
+
+**Status**: 🚧 **IN PROGRESS**
+
+**Description**: All implemented tool functions MUST be strictly read-only. Any attempt to pass a 'write' command (e.g., firewall_rule_add) through the read-only layer must result in an explicit, immediate 'OPERATION_FORBIDDEN' error at the tool execution level.
+
+**Priority**: CRITICAL
+
+**Implementation Target**:
+- Strict read-only enforcement
+- Write operation detection
+- Immediate `OPERATION_FORBIDDEN` error
+- Guard at tool execution level
+
+**Verification**:
+```bash
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.6"
+# Verify write operations are rejected
+# Verify OPERATION_FORBIDDEN error returned
+```
+
+**Expected Behavior**:
+- ✅ Write operations detected and rejected
+- ✅ `OPERATION_FORBIDDEN` error returned immediately
+- ✅ No write operations executed
+- ✅ Guard enforced at tool level
+
+---
+
+### 🧪 Running Verification
+
+```bash
+# Run all TL-1A tests
+bun test tests/tools/opnsense/readonly/
+
+# Individual acceptance criteria tests
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.1"  # Tool Action Volume
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.2"  # Structured Data Return
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.3"  # Full Test Coverage
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.4"  # Output Sanitization
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.5"  # End-to-End PCE Validation
+bun test tests/tools/opnsense/readonly/ --grep "TL-1A.6"  # Write Operation Guard
+
+# End-to-end validation
+bun src/cli.ts pce "query that triggers opnsense tool"
+```
+
+---
+
 ## 🎯 Next Steps
 
 - Phase I-A: ✅ **COMPLETE**
@@ -1215,6 +1442,7 @@ Phase III focuses on exposing the Hybrid RAG + Tooling platform through a secure
 - Phase I-C: ✅ **COMPLETE** - Hybrid Orchestration MVP (15/15 tests passing)
 - Phase II: ✅ **COMPLETE** - Real-Time Updates and Production Readiness (22/22 tests passing)
 - Phase III: 🚧 **IN PROGRESS** - External API surface, tool orchestration, and final security audits
+- Phase TL-1A: 🚧 **IN PROGRESS** - OPNsense Read-Only Suite (Tool Layer V1)
 
 ### Phase III Tests
 ```bash
@@ -1228,4 +1456,10 @@ bun test tests/agent/tool-sanitizer.test.ts
 bun run scripts/run-gold-path.ts
 bun run pce:provenance-audit
 bun run pce:phase3-dod
+```
+
+### Phase TL-1A Tests
+```bash
+bun test tests/tools/opnsense/readonly/
+bun src/cli.ts pce "query that triggers opnsense tool"
 ```

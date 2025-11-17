@@ -3,6 +3,7 @@ import { GlancesTool } from "../tools/GlancesTool";
 import { RunDiagnosticTool } from "../tools/RunDiagnosticTool";
 import { CreateIncidentTicketTool } from "../tools/CreateIncidentTicketTool";
 import { LookupUserProfileTool } from "../tools/LookupUserProfileTool";
+import { OpnsenseReadOnlyTool } from "../tools/opnsense/readonly";
 
 export function loadTools(): BaseTool[] {
   return [
@@ -10,6 +11,7 @@ export function loadTools(): BaseTool[] {
     new RunDiagnosticTool(),
     new LookupUserProfileTool(),
     new CreateIncidentTicketTool(),
+    new OpnsenseReadOnlyTool(),
   ];
 }
 

@@ -1,0 +1,119 @@
+{
+  "name": "opnsense_readonly",
+  "description": "Comprehensive read-only access to OPNsense state (Firewall, Interfaces, System, Diagnostics, DHCP). All operations return structured JSON data.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "firewall_rules_list",
+          "firewall_aliases_list",
+          "firewall_aliases_get",
+          "firewall_categories_list",
+          "firewall_states_list",
+          "interfaces_list",
+          "interface_status",
+          "interfaces_vlans_list",
+          "interfaces_vips_list",
+          "system_status",
+          "system_health",
+          "system_info",
+          "system_backups_list",
+          "diagnostics_arp_table",
+          "diagnostics_routing_table",
+          "diagnostics_interface_statistics",
+          "diagnostics_system_logs",
+          "dhcp_leases_list",
+          "dhcp_status",
+          "dhcp_static_mappings_list"
+        ],
+        "description": "The read-only OPNsense operation to perform"
+      },
+      "alias_name": {
+        "type": "string"
+      },
+      "interface_name": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "examples": [
+    {
+      "description": "List all firewall rules",
+      "parameters": {
+        "action": "firewall_rules_list"
+      }
+    },
+    {
+      "description": "Get system status",
+      "parameters": {
+        "action": "system_status"
+      }
+    },
+    {
+      "description": "Get interface status",
+      "parameters": {
+        "action": "interface_status",
+        "interface_name": "wan"
+      }
+    },
+    {
+      "description": "List DHCP leases",
+      "parameters": {
+        "action": "dhcp_leases_list"
+      }
+    }
+  ],
+  "notes": [
+    "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
+    "All responses are structured JSON objects for easy parsing and dashboarding.",
+    "Internal IP addresses and credentials are automatically sanitized from responses."
+  ],
+  "metadata": {
+    "categories": [
+      "opnsense",
+      "networking",
+      "firewall",
+      "system"
+    ],
+    "allowedAcls": [
+      "admin",
+      "ops",
+      "viewer"
+    ],
+    "risk": "low"
+  },
+  "actions": [
+    "firewall_rules_list",
+    "firewall_aliases_list",
+    "firewall_aliases_get",
+    "firewall_categories_list",
+    "firewall_states_list",
+    "interfaces_list",
+    "interface_status",
+    "interfaces_vlans_list",
+    "interfaces_vips_list",
+    "system_status",
+    "system_health",
+    "system_info",
+    "system_backups_list",
+    "diagnostics_arp_table",
+    "diagnostics_routing_table",
+    "diagnostics_interface_statistics",
+    "diagnostics_system_logs",
+    "dhcp_leases_list",
+    "dhcp_status",
+    "dhcp_static_mappings_list"
+  ],
+  "actionCount": 20,
+  "version": "1.0.0",
+  "generatedAt": "2025-11-17T21:22:24.065Z"
+}

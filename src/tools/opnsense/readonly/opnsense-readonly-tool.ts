@@ -1,0 +1,519 @@
+import { OpnsenseReadOnlyBase } from "./base";
+import { z } from "zod";
+import type { ToolSchema } from "../../tool-schema";
+import { createToolSchema } from "../../tool-helpers";
+import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
+
+/**
+ * Schema for OPNsense read-only tool parameters
+ * Supports 20+ distinct read-only actions across Firewall, Interfaces, System, Diagnostics, DHCP
+ */
+export const OpnsenseReadOnlyParams = z.object({
+  action: z.enum([
+    // Firewall (5 actions)
+    "firewall_rules_list",
+    "firewall_aliases_list",
+    "firewall_aliases_get",
+    "firewall_categories_list",
+    "firewall_states_list",
+    
+    // Interfaces (4 actions)
+    "interfaces_list",
+    "interface_status",
+    "interfaces_vlans_list",
+    "interfaces_vips_list",
+    
+    // System (4 actions)
+    "system_status",
+    "system_health",
+    "system_info",
+    "system_backups_list",
+    
+    // Diagnostics (4 actions)
+    "diagnostics_arp_table",
+    "diagnostics_routing_table",
+    "diagnostics_interface_statistics",
+    "diagnostics_system_logs",
+    
+    // DHCP (3 actions)
+    "dhcp_leases_list",
+    "dhcp_status",
+    "dhcp_static_mappings_list",
+  ]).describe("The read-only OPNsense operation to perform"),
+  
+  // Optional parameters for specific actions
+  alias_name: z.string().optional().describe("Alias name for firewall_aliases_get"),
+  interface_name: z.string().optional().describe("Interface name for interface_status"),
+  limit: z.number().optional().describe("Limit number of results (for list operations)"),
+});
+
+export type OpnsenseReadOnlyParams = z.infer<typeof OpnsenseReadOnlyParams>;
+
+/**
+ * Unified OPNsense Read-Only Tool
+ * Provides comprehensive read-only access to OPNsense state
+ */
+export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
+  constructor() {
+    super({
+      name: "opnsense_readonly",
+      description: "Comprehensive read-only access to OPNsense state (Firewall, Interfaces, System, Diagnostics, DHCP). All operations return structured JSON data.",
+      categories: ["opnsense", "networking", "firewall", "system"],
+      allowedAcls: ["admin", "ops", "viewer"],
+      risk: "low",
+    });
+  }
+
+  getSchema(): ToolSchema {
+    return createToolSchema(this, OpnsenseReadOnlyParams, {
+      examples: [
+        {
+          description: "List all firewall rules",
+          parameters: { action: "firewall_rules_list" },
+        },
+        {
+          description: "Get system status",
+          parameters: { action: "system_status" },
+        },
+        {
+          description: "Get interface status",
+          parameters: { action: "interface_status", interface_name: "wan" },
+        },
+        {
+          description: "List DHCP leases",
+          parameters: { action: "dhcp_leases_list" },
+        },
+      ],
+      notes: [
+        "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
+        "All responses are structured JSON objects for easy parsing and dashboarding.",
+        "Internal IP addresses and credentials are automatically sanitized from responses.",
+      ],
+    });
+  }
+
+  getParameterSchema() {
+    return OpnsenseReadOnlyParams;
+  }
+
+  async execute(
+    params: Record<string, any>,
+    context: ExecutionContext
+  ): Promise<ExecutionResult> {
+    const parsed = OpnsenseReadOnlyParams.safeParse(params);
+    if (!parsed.success) {
+      return { error: `Invalid parameters: ${parsed.error.message}` };
+    }
+
+    // Validate read-only
+    const readOnlyCheck = this.validateReadOnly(parsed.data.action);
+    if (readOnlyCheck) {
+      return readOnlyCheck;
+    }
+
+    const client = this.getApiClient();
+    const { action, ...actionParams } = parsed.data;
+
+    // Route to appropriate handler based on action
+    return this.executeApiCall(
+      () => this.handleAction(action, actionParams, client),
+      context
+    );
+  }
+
+  /**
+   * Route action to appropriate handler
+   */
+  private async handleAction(
+    action: string,
+    params: Record<string, any>,
+    client: any
+  ): Promise<any> {
+    // Firewall actions
+    if (action.startsWith("firewall_")) {
+      return this.handleFirewallAction(action, params, client);
+    }
+
+    // Interface actions
+    if (action.startsWith("interface") || action.startsWith("interfaces_")) {
+      return this.handleInterfaceAction(action, params, client);
+    }
+
+    // System actions
+    if (action.startsWith("system_")) {
+      return this.handleSystemAction(action, params, client);
+    }
+
+    // Diagnostics actions
+    if (action.startsWith("diagnostics_")) {
+      return this.handleDiagnosticsAction(action, params, client);
+    }
+
+    // DHCP actions
+    if (action.startsWith("dhcp_")) {
+      return this.handleDhcpAction(action, params, client);
+    }
+
+    throw new Error(`Unknown action: ${action}`);
+  }
+
+  /**
+   * Handle firewall-related actions
+   */
+  private async handleFirewallAction(
+    action: string,
+    params: Record<string, any>,
+    client: any
+  ): Promise<any> {
+    switch (action) {
+      case "firewall_rules_list":
+        return this.getFirewallRules(client, params.limit);
+
+      case "firewall_aliases_list":
+        return this.getFirewallAliases(client, params.limit);
+
+      case "firewall_aliases_get":
+        if (!params.alias_name) {
+          throw new Error("alias_name parameter required for firewall_aliases_get");
+        }
+        return this.getFirewallAlias(client, params.alias_name);
+
+      case "firewall_categories_list":
+        return this.getFirewallCategories(client);
+
+      case "firewall_states_list":
+        return this.getFirewallStates(client, params.limit);
+
+      default:
+        throw new Error(`Unknown firewall action: ${action}`);
+    }
+  }
+
+  /**
+   * Handle interface-related actions
+   */
+  private async handleInterfaceAction(
+    action: string,
+    params: Record<string, any>,
+    client: any
+  ): Promise<any> {
+    switch (action) {
+      case "interfaces_list":
+        return this.getInterfaces(client);
+
+      case "interface_status":
+        return this.getInterfaceStatus(client, params.interface_name);
+
+      case "interfaces_vlans_list":
+        return this.getVlans(client);
+
+      case "interfaces_vips_list":
+        return this.getVips(client);
+
+      default:
+        throw new Error(`Unknown interface action: ${action}`);
+    }
+  }
+
+  /**
+   * Handle system-related actions
+   */
+  private async handleSystemAction(
+    action: string,
+    params: Record<string, any>,
+    client: any
+  ): Promise<any> {
+    switch (action) {
+      case "system_status":
+        return this.getSystemStatus(client);
+
+      case "system_health":
+        return this.getSystemHealth(client);
+
+      case "system_info":
+        return this.getSystemInfo(client);
+
+      case "system_backups_list":
+        return this.getSystemBackups(client);
+
+      default:
+        throw new Error(`Unknown system action: ${action}`);
+    }
+  }
+
+  /**
+   * Handle diagnostics-related actions
+   */
+  private async handleDiagnosticsAction(
+    action: string,
+    params: Record<string, any>,
+    client: any
+  ): Promise<any> {
+    switch (action) {
+      case "diagnostics_arp_table":
+        return this.getArpTable(client);
+
+      case "diagnostics_routing_table":
+        return this.getRoutingTable(client);
+
+      case "diagnostics_interface_statistics":
+        return this.getInterfaceStatistics(client, params.interface_name);
+
+      case "diagnostics_system_logs":
+        return this.getSystemLogs(client, params.limit);
+
+      default:
+        throw new Error(`Unknown diagnostics action: ${action}`);
+    }
+  }
+
+  /**
+   * Handle DHCP-related actions
+   */
+  private async handleDhcpAction(
+    action: string,
+    params: Record<string, any>,
+    client: any
+  ): Promise<any> {
+    switch (action) {
+      case "dhcp_leases_list":
+        return this.getDhcpLeases(client);
+
+      case "dhcp_status":
+        return this.getDhcpStatus(client);
+
+      case "dhcp_static_mappings_list":
+        return this.getDhcpStaticMappings(client);
+
+      default:
+        throw new Error(`Unknown DHCP action: ${action}`);
+    }
+  }
+
+  // ========== Firewall API Methods ==========
+
+  private async getFirewallRules(client: any, limit?: number): Promise<any> {
+    const response = await client.get("/api/firewall/rule/searchRule");
+    const rules = response.data?.rows || [];
+    return {
+      action: "firewall_rules_list",
+      count: limit ? Math.min(rules.length, limit) : rules.length,
+      total: rules.length,
+      rules: limit ? rules.slice(0, limit) : rules,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getFirewallAliases(client: any, limit?: number): Promise<any> {
+    const response = await client.get("/api/firewall/alias/searchItem");
+    const aliases = response.data?.rows || [];
+    return {
+      action: "firewall_aliases_list",
+      count: limit ? Math.min(aliases.length, limit) : aliases.length,
+      total: aliases.length,
+      aliases: limit ? aliases.slice(0, limit) : aliases,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getFirewallAlias(client: any, aliasName: string): Promise<any> {
+    const response = await client.get(`/api/firewall/alias/getItem/${aliasName}`);
+    return {
+      action: "firewall_aliases_get",
+      alias_name: aliasName,
+      data: response.data || {},
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getFirewallCategories(client: any): Promise<any> {
+    const response = await client.get("/api/firewall/category/searchItem");
+    return {
+      action: "firewall_categories_list",
+      categories: response.data?.rows || [],
+      count: response.data?.rows?.length || 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getFirewallStates(client: any, limit?: number): Promise<any> {
+    const response = await client.get("/api/diagnostics/firewall/states");
+    const states = response.data || [];
+    return {
+      action: "firewall_states_list",
+      count: limit ? Math.min(states.length, limit) : states.length,
+      total: states.length,
+      states: limit ? states.slice(0, limit) : states,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ========== Interface API Methods ==========
+
+  private async getInterfaces(client: any): Promise<any> {
+    const response = await client.get("/api/interfaces/interface/getInterface");
+    return {
+      action: "interfaces_list",
+      interfaces: response.data || {},
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getInterfaceStatus(client: any, interfaceName?: string): Promise<any> {
+    if (interfaceName) {
+      const response = await client.get(`/api/interfaces/interface/getInterface/${interfaceName}`);
+      return {
+        action: "interface_status",
+        interface: interfaceName,
+        status: response.data || {},
+        timestamp: new Date().toISOString(),
+      };
+    } else {
+      // Get all interface statuses
+      const response = await client.get("/api/interfaces/interface/getInterface");
+      return {
+        action: "interface_status",
+        interfaces: response.data || {},
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  private async getVlans(client: any): Promise<any> {
+    const response = await client.get("/api/interfaces/vlan/searchVlan");
+    return {
+      action: "interfaces_vlans_list",
+      vlans: response.data?.rows || [],
+      count: response.data?.rows?.length || 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getVips(client: any): Promise<any> {
+    const response = await client.get("/api/firewall/vip/searchVip");
+    return {
+      action: "interfaces_vips_list",
+      vips: response.data?.rows || [],
+      count: response.data?.rows?.length || 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ========== System API Methods ==========
+
+  private async getSystemStatus(client: any): Promise<any> {
+    const response = await client.get("/api/core/system/status");
+    return {
+      action: "system_status",
+      status: response.data || {},
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getSystemHealth(client: any): Promise<any> {
+    const response = await client.get("/api/core/system/health");
+    return {
+      action: "system_health",
+      health: response.data || {},
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getSystemInfo(client: any): Promise<any> {
+    const response = await client.get("/api/core/system/info");
+    return {
+      action: "system_info",
+      info: response.data || {},
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getSystemBackups(client: any): Promise<any> {
+    const response = await client.get("/api/core/backup/list");
+    return {
+      action: "system_backups_list",
+      backups: response.data || [],
+      count: Array.isArray(response.data) ? response.data.length : 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ========== Diagnostics API Methods ==========
+
+  private async getArpTable(client: any): Promise<any> {
+    const response = await client.get("/api/diagnostics/interface/getArp");
+    return {
+      action: "diagnostics_arp_table",
+      arp_entries: response.data || [],
+      count: Array.isArray(response.data) ? response.data.length : 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getRoutingTable(client: any): Promise<any> {
+    const response = await client.get("/api/diagnostics/interface/getRoutes");
+    return {
+      action: "diagnostics_routing_table",
+      routes: response.data || [],
+      count: Array.isArray(response.data) ? response.data.length : 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getInterfaceStatistics(client: any, interfaceName?: string): Promise<any> {
+    const endpoint = interfaceName
+      ? `/api/diagnostics/interface/getInterfaceStatistics/${interfaceName}`
+      : "/api/diagnostics/interface/getInterfaceStatistics";
+    const response = await client.get(endpoint);
+    return {
+      action: "diagnostics_interface_statistics",
+      interface: interfaceName || "all",
+      statistics: response.data || {},
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getSystemLogs(client: any, limit?: number): Promise<any> {
+    const response = await client.get("/api/diagnostics/system/getLogs");
+    const logs = response.data || [];
+    return {
+      action: "diagnostics_system_logs",
+      count: limit ? Math.min(logs.length, limit) : logs.length,
+      total: logs.length,
+      logs: limit ? logs.slice(0, limit) : logs,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ========== DHCP API Methods ==========
+
+  private async getDhcpLeases(client: any): Promise<any> {
+    const response = await client.get("/api/dhcp/lease/list");
+    return {
+      action: "dhcp_leases_list",
+      leases: response.data || [],
+      count: Array.isArray(response.data) ? response.data.length : 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getDhcpStatus(client: any): Promise<any> {
+    const response = await client.get("/api/dhcp/status");
+    return {
+      action: "dhcp_status",
+      status: response.data || {},
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private async getDhcpStaticMappings(client: any): Promise<any> {
+    const response = await client.get("/api/dhcp/static_mapping/searchItem");
+    return {
+      action: "dhcp_static_mappings_list",
+      mappings: response.data?.rows || [],
+      count: response.data?.rows?.length || 0,
+      timestamp: new Date().toISOString(),
+    };
+  }
+}
+
