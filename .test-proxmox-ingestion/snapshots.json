@@ -1,0 +1,18 @@
+[
+  {
+    "filePath": "/var/folders/6r/_htmvfn17y3dvkzwblt2tbxr0000gn/T/pce-proxmox-ingestion/proxmox-cluster_status-0-1763501748374.txt",
+    "sha256Hash": "bfcd4a9d89618b529952818bc5ae5b9d4c8980a2aa5972623a8d79b2e6cde23e",
+    "timestamp": "2025-11-18T21:35:48.374Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 182
+  },
+  {
+    "filePath": "/var/folders/6r/_htmvfn17y3dvkzwblt2tbxr0000gn/T/pce-proxmox-ingestion/proxmox-node_profile-1-1763501748374.txt",
+    "sha256Hash": "b8b082b2c08fc825ea50dd77bb892866415174482d2f73a078a6a23843fe728a",
+    "timestamp": "2025-11-18T21:35:48.565Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 277
+  }
+]

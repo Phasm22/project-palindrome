@@ -1,0 +1,9 @@
+# VM Inventory for Node: YANG
+Generated: 2025-11-18T06:25:30.064Z
+Total VMs: 1
+
+## VM 211: opsbox
+- Status: stopped
+- Type: qemu
+- Memory: 0 MB / 7.81 GB
+- CPU Usage: 0.0%

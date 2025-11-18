@@ -1,0 +1,10 @@
+# VM Inventory for Node: yin
+Generated: 2025-11-18T06:25:29.936Z
+Total VMs: 1
+
+## VM 200: sentinelZero
+- Status: running
+- Type: qemu
+- Memory: 4.66 GB / 7.81 GB
+- CPU Usage: 0.9%
+- Uptime: 1970-02-27T07:19:02.000Z

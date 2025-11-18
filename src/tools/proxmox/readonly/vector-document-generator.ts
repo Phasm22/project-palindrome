@@ -31,21 +31,29 @@ export async function generateVmInventoryDocument(
   node: string
 ): Promise<ProxmoxDocument> {
   const tool = new ProxmoxReadOnlyTool();
-  const result = await tool.execute(
-    { action: "list_vms", node },
-    { toolName: "proxmox_readonly", startedAt: Date.now() }
-  );
+  
+  // Fetch both QEMU and LXC VMs
+  const [qemuResult, lxcResult] = await Promise.all([
+    tool.execute(
+      { action: "list_vms", node, type: "qemu" },
+      { toolName: "proxmox_readonly", startedAt: Date.now() }
+    ).catch(() => ({ error: null, data: { vms: [] } })),
+    tool.execute(
+      { action: "list_vms", node, type: "lxc" },
+      { toolName: "proxmox_readonly", startedAt: Date.now() }
+    ).catch(() => ({ error: null, data: { vms: [] } })),
+  ]);
 
-  if (result.error || !result.data) {
-    throw new Error(`Failed to generate VM inventory: ${result.error}`);
-  }
+  // Combine QEMU and LXC VMs
+  const qemuVms = qemuResult.data?.vms || [];
+  const lxcVms = lxcResult.data?.vms || [];
+  const vms = [...qemuVms, ...lxcVms];
 
-  const vms = result.data.vms || [];
   const lines: string[] = [];
 
   lines.push(`# VM Inventory for Node: ${node}`);
   lines.push(`Generated: ${new Date().toISOString()}`);
-  lines.push(`Total VMs: ${vms.length}`);
+  lines.push(`Total VMs: ${vms.length} (${qemuVms.length} QEMU, ${lxcVms.length} LXC)`);
   lines.push("");
 
   for (const vm of vms) {

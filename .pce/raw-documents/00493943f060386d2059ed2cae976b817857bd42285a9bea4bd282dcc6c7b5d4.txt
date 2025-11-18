@@ -1,0 +1,12 @@
+# Cluster Status Summary
+Generated: 2025-11-18T06:25:29.808Z
+
+## Nodes
+Total Nodes: 2
+- YANG: online
+- yin: online
+
+## Resources
+Total Resources: 9
+- Running VMs: 6
+- Stopped VMs: 3

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Check what chunks are actually being retrieved for a query
 
-import { EmbeddingService } from "../src/pce/vector/embedding-service";
+import { EmbeddingService } from "../src/pce/vector/embeddings";
 import { QdrantVectorStore } from "../src/pce/vector/qdrant-client";
 
 const embeddingService = new EmbeddingService();
@@ -13,7 +13,7 @@ async function checkChunks() {
   const query = "what is aiMarketBot?";
   console.log(`Query: "${query}"\n`);
   
-  const queryEmbedding = await embeddingService.embedText(query);
+  const queryEmbedding = await embeddingService.embed(query);
   
   const results = await vectorStore.search(
     queryEmbedding,

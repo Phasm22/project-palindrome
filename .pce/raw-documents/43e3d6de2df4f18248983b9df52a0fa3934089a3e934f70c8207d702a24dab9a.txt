@@ -1,0 +1,3 @@
+# VM Inventory for Node: yin
+Generated: 2025-11-18T05:39:15.477Z
+Total VMs: 0

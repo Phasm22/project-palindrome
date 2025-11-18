@@ -1,0 +1,10 @@
+# Node Resource Profile: yin
+Generated: 2025-11-18T21:26:08.358Z
+
+## Status
+- Status: unknown
+- Uptime: 1970-02-28T01:23:13.000Z
+
+## System
+- Kernel: Linux 6.8.12-11-pve #1 SMP PREEMPT_DYNAMIC PMX 6.8.12-11 (2025-05-22T09:39Z)
+- PVE Version: pve-manager/8.4.1/2a5fa54a8503f96d
