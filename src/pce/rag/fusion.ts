@@ -25,7 +25,7 @@ const DEFAULT_FUSION_WEIGHTS: FusionWeights = {
 
 const DEFAULT_FUSION_CONFIG: FusionConfig = {
   weights: DEFAULT_FUSION_WEIGHTS,
-  minVectorScore: 0.15, // Lowered from 0.30 for short structural documents (Proxmox inventory)
+  minVectorScore: 0.1, // Lowered from 0.30 for short structural documents (Proxmox inventory)
   minGraphScore: 0.40,
   minTotalScore: 0.25, // Lowered from 0.65 for short structural documents (Proxmox inventory) - vector scores ~0.35 are good matches
   maxTokens: 4096,
@@ -311,9 +311,11 @@ export class FusionEngine {
       totalScore: number;
     }>
   ): HybridContext {
-    // Filter by minimum total score threshold
+    // Filter by minimum total score threshold, but use a lower threshold for pruning
+    // to ensure we don't lose good context (pruning threshold is separate from response threshold)
+    const pruningThreshold = Math.min(this.config.minTotalScore, 0.15); // Lower threshold for pruning
     const aboveThreshold = fusionScores.filter(
-      (score) => score.totalScore >= this.config.minTotalScore
+      (score) => score.totalScore >= pruningThreshold
     );
 
     // Build semantic chunks

@@ -247,20 +247,23 @@ export class HybridOrchestrator {
     const fusionConfig = (this.fusionEngine as any).config as FusionConfig;
     const minTotalScore = fusionConfig?.minTotalScore || 0.65;
 
+    // Even if score is below threshold, still generate response if we have context
+    // The LLM can use partial context to provide a better answer
     if (avgTotalScore < minTotalScore && fusionResult.fusionScores.length > 0) {
-      pceLogger.warn("Fusion score below threshold, returning insufficient context", {
+      pceLogger.warn("Fusion score below threshold, but proceeding with available context", {
         avgTotalScore,
         threshold: minTotalScore,
+        contextItems: fusionResult.prunedContext.semanticChunks.length + fusionResult.prunedContext.structuralPaths.length,
       });
-      pceLogger.incrementCounter("no_answer_count");
+      
+      // Still generate response with available context - don't block on threshold
+      const response = await this.generateHybridResponse(
+        query,
+        fusionResult.prunedContext
+      );
 
       return {
-        answer: "Insufficient Context: I couldn't find enough relevant information to provide a reliable answer.",
-        sources: [],
-        metadata: {
-          tokensUsed: 0,
-          chunksRetrieved: 0,
-        },
+        ...response,
         queryType: "HYBRID",
         fallbackMode: "low_score",
         context: fusionResult.prunedContext,
