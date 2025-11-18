@@ -587,8 +587,12 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   private async getClusterResources(
     client: ProxmoxClient
   ): Promise<{ data: any; metadata: any }> {
-    const result = await client.get("/cluster/resources", { type: "vm" });
-    const resources = result.data.data || [];
+    // Get both VMs (qemu) and containers (lxc) - don't filter by type to get everything
+    const result = await client.get("/cluster/resources");
+    const allResources = result.data.data || [];
+    
+    // Filter to only VMs and containers (exclude nodes, storage, etc.)
+    const resources = allResources.filter((r: any) => r.type === "qemu" || r.type === "lxc");
 
     const normalized = resources.map((resource: any) =>
       normalizeProxmoxResponse({
