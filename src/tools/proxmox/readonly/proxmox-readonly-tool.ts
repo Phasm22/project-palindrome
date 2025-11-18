@@ -28,7 +28,7 @@ export const ProxmoxReadOnlyParams = z.object({
       "get_vm_snapshots",
 
       // Cluster-Level (5 actions)
-      "cluster_resources",
+      "cluster_resources", // Use this to find VMID, node, and type when given a VM/container NAME
       "cluster_status",
       "cluster_ceph_status",
       "ha_groups",
@@ -85,6 +85,10 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         {
           description: "Get cluster status",
           parameters: { action: "cluster_status" },
+        },
+        {
+          description: "Find VM/container by name (e.g., find 'aiMarketBot' to get its VMID, node, and type)",
+          parameters: { action: "cluster_resources" },
         },
       ],
       notes: [
