@@ -126,5 +126,37 @@
     "aclGroup": "admin",
     "documentType": "markdown_runbook",
     "size": 207
+  },
+  {
+    "filePath": ".pce-ib-dod-test/doc17.md",
+    "sha256Hash": "0e7a42b6c29775d2177c174ac7970826b00991eb2dea6771bfd98b7abe9b0817",
+    "timestamp": "2025-11-18T04:30:14.783Z",
+    "aclGroup": "admin",
+    "documentType": "markdown_runbook",
+    "size": 132
+  },
+  {
+    "filePath": ".pce-ib-dod-test/doc18.md",
+    "sha256Hash": "3aa5491c1df878a65b77977b522789f6e85dd0c2cede26b9d53b99b063a3ef52",
+    "timestamp": "2025-11-18T04:30:22.049Z",
+    "aclGroup": "admin",
+    "documentType": "markdown_runbook",
+    "size": 194
+  },
+  {
+    "filePath": ".pce-ib-dod-test/doc19.md",
+    "sha256Hash": "4ee76a2595d5aae417db5efd498643a502b273a65f0a8648bbd18d676cae6e50",
+    "timestamp": "2025-11-18T04:30:30.582Z",
+    "aclGroup": "admin",
+    "documentType": "markdown_runbook",
+    "size": 212
+  },
+  {
+    "filePath": ".pce-ib-dod-test/doc20.md",
+    "sha256Hash": "c7a12301efd2ab2770ca9987250a14853e21a7af3f9f58ed189088ec1cbd95ba",
+    "timestamp": "2025-11-18T04:30:40.258Z",
+    "aclGroup": "admin",
+    "documentType": "markdown_runbook",
+    "size": 204
   }
 ]
