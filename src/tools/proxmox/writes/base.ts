@@ -51,12 +51,14 @@ export abstract class ProxmoxWriteBase extends BaseTool {
   protected async capturePreWriteState(
     client: ProxmoxClient,
     node: string,
-    vmid: number
+    vmid: number,
+    type: string = "qemu"
   ): Promise<{ snapshot: any; hash: string }> {
     try {
+      const vmType = type === "lxc" ? "lxc" : "qemu";
       // Get current VM config/status before write
-      const statusResult = await client.get(`/nodes/${node}/qemu/${vmid}/status/current`);
-      const configResult = await client.get(`/nodes/${node}/qemu/${vmid}/config`);
+      const statusResult = await client.get(`/nodes/${node}/${vmType}/${vmid}/status/current`);
+      const configResult = await client.get(`/nodes/${node}/${vmType}/${vmid}/config`);
 
       const preWriteState = {
         timestamp: new Date().toISOString(),

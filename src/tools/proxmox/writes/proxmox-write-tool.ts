@@ -23,6 +23,7 @@ const ProxmoxWriteParams = z.object({
   ]),
   node: z.string().min(1, "Node name is required for all VM operations"),
   vmid: z.number().int().positive("VMID must be a positive integer"),
+  type: z.enum(["qemu", "lxc"]).optional().default("qemu").describe("VM type (qemu or lxc, default: qemu)"),
   targetNode: z.string().optional(), // For migrate_vm
   snapshotName: z.string().optional(), // For create_snapshot, rollback_snapshot
   newVmid: z.number().optional(), // For clone_vm
@@ -67,6 +68,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           vmid: {
             type: "number",
             description: "VM ID (required for VM operations)",
+          },
+          type: {
+            type: "string",
+            enum: ["qemu", "lxc"],
+            description: "VM type: 'qemu' for VMs, 'lxc' for containers (default: qemu). Use proxmox_readonly to check the VM type if unsure.",
+            default: "qemu",
           },
           targetNode: {
             type: "string",
@@ -175,16 +182,20 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
   ): Promise<{ data: any; metadata: any }> {
     switch (action) {
       case "start_vm":
-        return this.startVm(client, params.node!, params.vmid!, dryRun);
+        return this.startVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "stop_vm":
-        return this.stopVm(client, params.node!, params.vmid!, params.timeout, dryRun);
+        return this.stopVm(client, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
       case "shutdown_vm":
-        return this.shutdownVm(client, params.node!, params.vmid!, params.timeout, dryRun);
+        return this.shutdownVm(client, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
       case "reboot_vm":
-        return this.rebootVm(client, params.node!, params.vmid!, dryRun);
+        return this.rebootVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "reset_vm":
-        return this.resetVm(client, params.node!, params.vmid!, dryRun);
+        return this.resetVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "create_snapshot":
+        // Snapshots only available for QEMU VMs
+        if (params.type === "lxc") {
+          throw new Error("Snapshot operations are not available for LXC containers");
+        }
         return this.createSnapshot(
           client,
           params.node!,
@@ -193,6 +204,10 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           dryRun
         );
       case "rollback_snapshot":
+        // Snapshots only available for QEMU VMs
+        if (params.type === "lxc") {
+          throw new Error("Snapshot operations are not available for LXC containers");
+        }
         return this.rollbackSnapshot(
           client,
           params.node!,
@@ -201,6 +216,10 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           dryRun
         );
       case "clone_vm":
+        // Clone only available for QEMU VMs
+        if (params.type === "lxc") {
+          throw new Error("Clone operation is not available for LXC containers");
+        }
         return this.cloneVm(
           client,
           params.node!,
@@ -209,6 +228,10 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           dryRun
         );
       case "migrate_vm":
+        // Migration only available for QEMU VMs
+        if (params.type === "lxc") {
+          throw new Error("Migration is not available for LXC containers");
+        }
         return this.migrateVm(
           client,
           params.node!,
@@ -221,15 +244,22 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
   }
 
+  // Helper to get VM type endpoint path
+  private getVmPath(type: string, node: string, vmid: number, endpoint: string): string {
+    const vmType = type === "lxc" ? "lxc" : "qemu";
+    return `/nodes/${node}/${vmType}/${vmid}${endpoint}`;
+  }
+
   // Basic VM control actions
   private async startVm(
     client: ProxmoxClient,
     node: string,
     vmid: number,
+    type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("start_vm", currentState, {
           status: "running",
@@ -239,8 +269,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/status/start`);
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/start"));
 
     return {
       data: {
@@ -259,11 +289,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     node: string,
     vmid: number,
+    type: string,
     timeout: number | undefined,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("stop_vm", currentState, {
           status: "stopped",
@@ -274,9 +305,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     const params = timeout ? { timeout } : {};
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/status/stop`, params);
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/stop"), params);
 
     return {
       data: {
@@ -295,11 +326,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     node: string,
     vmid: number,
+    type: string,
     timeout: number | undefined,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("shutdown_vm", currentState, {
           status: "stopped",
@@ -310,9 +342,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     const params = timeout ? { timeout } : {};
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/status/shutdown`, params);
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/shutdown"), params);
 
     return {
       data: {
@@ -331,10 +363,11 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     node: string,
     vmid: number,
+    type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("reboot_vm", currentState, {
           status: "rebooting",
@@ -344,8 +377,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/status/reboot`);
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/reboot"));
 
     return {
       data: {
@@ -364,10 +397,11 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     node: string,
     vmid: number,
+    type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("reset_vm", currentState, {
           status: "resetting",
@@ -377,8 +411,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/status/reset`);
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
+    // Note: reset is only available for QEMU VMs, not LXC
+    if (type === "lxc") {
+      throw new Error("Reset operation is not available for LXC containers");
+    }
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/reset"));
 
     return {
       data: {
@@ -402,7 +440,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, "qemu");
       return {
         data: this.generateDiffPreview("create_snapshot", currentState, {
           snapshot: snapshotName,
@@ -412,8 +450,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/snapshot`, {
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, "qemu");
+    const result = await client.post(this.getVmPath("qemu", node, vmid, "/snapshot"), {
       snapname: snapshotName,
     });
 
@@ -438,7 +476,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, "qemu");
       return {
         data: this.generateDiffPreview("rollback_snapshot", currentState, {
           snapshot: snapshotName,
@@ -448,8 +486,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/snapshot/${snapshotName}/rollback`);
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, "qemu");
+    const result = await client.post(this.getVmPath("qemu", node, vmid, `/snapshot/${snapshotName}/rollback`));
 
     return {
       data: {
@@ -473,7 +511,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, "qemu");
       return {
         data: this.generateDiffPreview("clone_vm", currentState, {
           newVmid,
@@ -483,8 +521,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/clone`, {
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, "qemu");
+    const result = await client.post(this.getVmPath("qemu", node, vmid, "/clone"), {
       newid: newVmid,
     });
 
@@ -538,7 +576,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid);
+      const currentState = await this.getVmStatus(client, node, vmid, "qemu");
       return {
         data: {
           ...this.generateDiffPreview("migrate_vm", currentState, {
@@ -551,8 +589,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid);
-    const result = await client.post(`/nodes/${node}/qemu/${vmid}/migrate`, {
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, "qemu");
+    const result = await client.post(this.getVmPath("qemu", node, vmid, "/migrate"), {
       target: targetNode,
     });
 
@@ -608,7 +646,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       });
 
       // Check 3: VM status on source
-      const vmStatus = await this.getVmStatus(client, sourceNode, vmid);
+      const vmStatus = await this.getVmStatus(client, sourceNode, vmid, "qemu");
       checks.push({
         name: "vm_exists_on_source",
         passed: !!vmStatus,
@@ -686,10 +724,11 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
   private async getVmStatus(
     client: ProxmoxClient,
     node: string,
-    vmid: number
+    vmid: number,
+    type: string = "qemu"
   ): Promise<any> {
     try {
-      const result = await client.get(`/nodes/${node}/qemu/${vmid}/status/current`);
+      const result = await client.get(this.getVmPath(type, node, vmid, "/status/current"));
       return result.data.data;
     } catch {
       return null;
