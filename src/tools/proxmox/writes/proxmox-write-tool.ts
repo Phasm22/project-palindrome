@@ -3,6 +3,8 @@ import { ProxmoxWriteBase } from "./base";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { ProxmoxClient } from "../client";
 import { pceLogger as logger } from "../../../pce/utils/logger";
+import { createToolSchema } from "../../tool-helpers";
+import type { ToolSchema } from "../../tool-schema";
 
 /**
  * Proxmox Write Tool Parameters Schema
@@ -94,6 +96,53 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       requiresConfirmation: true, // All write operations require HIL
       risk: "medium", // Controlled write operations
     });
+  }
+
+  getSchema(): ToolSchema {
+    return createToolSchema(this, ProxmoxWriteParams, {
+      examples: [
+        {
+          description: "Start a VM (dry-run)",
+          parameters: {
+            action: "start_vm",
+            node: "pve1",
+            vmid: 101,
+            dryRun: true,
+          },
+        },
+        {
+          description: "Migrate a VM with pre-flight checks",
+          parameters: {
+            action: "migrate_vm",
+            node: "pve1",
+            vmid: 101,
+            targetNode: "pve2",
+            dryRun: false,
+          },
+        },
+        {
+          description: "Create a snapshot",
+          parameters: {
+            action: "create_snapshot",
+            node: "pve1",
+            vmid: 101,
+            snapshotName: "pre-update-snapshot",
+            dryRun: true,
+          },
+        },
+      ],
+      notes: [
+        "All write operations require human confirmation before execution.",
+        "Use dryRun: true to preview changes without executing.",
+        "Only admin and ops ACL groups can execute write operations.",
+        "Pre-write state is automatically captured for rollback capability.",
+        "Migration operations include mandatory pre-flight safety checks.",
+      ],
+    });
+  }
+
+  getParameterSchema(): z.ZodTypeAny {
+    return ProxmoxWriteParams;
   }
 
   async execute(

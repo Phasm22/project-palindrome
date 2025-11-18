@@ -1,0 +1,72 @@
+{
+  "name": "proxmox_write",
+  "description": "Execute safe write operations on Proxmox VMs: start, stop, shutdown, reboot, reset, snapshot, rollback, clone, and migrate. All operations support dry-run mode and require confirmation.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "start_vm",
+          "stop_vm",
+          "shutdown_vm",
+          "reboot_vm",
+          "reset_vm",
+          "create_snapshot",
+          "rollback_snapshot",
+          "clone_vm",
+          "migrate_vm"
+        ]
+      },
+      "node": {
+        "type": "string"
+      },
+      "vmid": {
+        "type": "number"
+      },
+      "targetNode": {
+        "type": "string"
+      },
+      "snapshotName": {
+        "type": "string"
+      },
+      "newVmid": {
+        "type": "number"
+      },
+      "dryRun": {
+        "type": "boolean",
+        "default": false
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "additionalProperties": false
+  },
+  "metadata": {
+    "categories": [],
+    "allowedAcls": [
+      "admin",
+      "ops"
+    ],
+    "risk": "medium",
+    "requiresConfirmation": true
+  },
+  "actions": [
+    "start_vm",
+    "stop_vm",
+    "shutdown_vm",
+    "reboot_vm",
+    "reset_vm",
+    "create_snapshot",
+    "rollback_snapshot",
+    "clone_vm",
+    "migrate_vm"
+  ],
+  "actionCount": 9,
+  "version": "1.0.0",
+  "generatedAt": "2025-11-18T04:33:18.683Z"
+}
