@@ -90,11 +90,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         },
         required: ["action"],
       },
-      metadata: {
-        allowedAcls: ["admin", "ops"], // Write operations restricted to admin/ops
-        requiresConfirmation: true, // All write operations require HIL
-        riskTier: "medium", // Controlled write operations
-      },
+      allowedAcls: ["admin", "ops"], // Write operations restricted to admin/ops
+      requiresConfirmation: true, // All write operations require HIL
+      risk: "medium", // Controlled write operations
     });
   }
 

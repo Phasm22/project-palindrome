@@ -6,6 +6,7 @@ import { LookupUserProfileTool } from "../tools/LookupUserProfileTool";
 import { OpnsenseReadOnlyTool } from "../tools/opnsense/readonly";
 import { OpnsenseSafeWriteTool } from "../tools/opnsense/writes";
 import { ProxmoxReadOnlyTool } from "../tools/proxmox/readonly";
+import { ProxmoxWriteTool } from "../tools/proxmox/writes";
 
 export function loadTools(): BaseTool[] {
   return [
@@ -16,6 +17,7 @@ export function loadTools(): BaseTool[] {
     new OpnsenseReadOnlyTool(),
     new OpnsenseSafeWriteTool(),
     new ProxmoxReadOnlyTool(),
+    new ProxmoxWriteTool(),
   ];
 }
 
