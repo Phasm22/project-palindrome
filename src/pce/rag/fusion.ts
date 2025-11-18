@@ -27,7 +27,7 @@ const DEFAULT_FUSION_CONFIG: FusionConfig = {
   weights: DEFAULT_FUSION_WEIGHTS,
   minVectorScore: 0.15, // Lowered from 0.30 for short structural documents (Proxmox inventory)
   minGraphScore: 0.40,
-  minTotalScore: 0.65,
+  minTotalScore: 0.25, // Lowered from 0.65 for short structural documents (Proxmox inventory) - vector scores ~0.35 are good matches
   maxTokens: 4096,
 };
 
