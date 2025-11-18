@@ -21,8 +21,8 @@ const ProxmoxWriteParams = z.object({
     "clone_vm",
     "migrate_vm",
   ]),
-  node: z.string().optional(),
-  vmid: z.number().optional(),
+  node: z.string().min(1, "Node name is required for all VM operations"),
+  vmid: z.number().int().positive("VMID must be a positive integer"),
   targetNode: z.string().optional(), // For migrate_vm
   snapshotName: z.string().optional(), // For create_snapshot, rollback_snapshot
   newVmid: z.number().optional(), // For clone_vm
