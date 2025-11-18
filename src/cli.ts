@@ -57,6 +57,11 @@ function formatToolOutput(result: ExecutionResult, toolName: string): string {
       // For MCP OPNsense, show formatted JSON (structured data)
       return JSON.stringify(result.data, null, 2);
 
+    case "proxmox_readonly":
+      // For Proxmox, use the CLI formatter
+      // This will be handled in the proxmox command handler
+      return JSON.stringify(result.data, null, 2);
+
     default:
       // Default: formatted JSON
       return JSON.stringify(result.data, null, 2);
@@ -251,6 +256,135 @@ if (args[0] === "hello") {
   );
   console.log(formatToolOutput(res, "mcp_opnsense"));
   process.exit(res.error ? 1 : 0);
+} else if (args[0] === "proxmox") {
+  const tools = loadTools();
+  const proxmox = tools.find(t => t.metadata.name === "proxmox_readonly");
+  
+  if (!proxmox) {
+    console.error("Error: proxmox_readonly tool not found");
+    process.exit(1);
+  }
+
+  // Parse flags
+  const flags: Record<string, any> = {};
+  const actionArgs: string[] = [];
+  
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("--")) {
+      const [key, value] = arg.substring(2).split("=");
+      if (key === "json") {
+        flags.json = true;
+      } else if (key === "node") {
+        flags.node = value || args[++i];
+      } else if (key === "vmid") {
+        flags.vmid = parseInt(value || args[++i], 10);
+      } else if (key === "type") {
+        flags.type = value || args[++i];
+      }
+    } else {
+      actionArgs.push(arg);
+    }
+  }
+
+  // Map CLI subcommands to tool actions
+  const actionMap: Record<string, string> = {
+    "list-nodes": "list_nodes",
+    "node-status": "node_status",
+    "node-resources": "node_resources",
+    "node-disks": "node_disks",
+    "node-network": "node_network_interfaces",
+    "list-vms": "list_vms",
+    "vm-status": "get_vm_status",
+    "vm-config": "get_vm_config",
+    "vm-network": "get_vm_network",
+    "vm-snapshots": "get_vm_snapshots",
+    "cluster-resources": "cluster_resources",
+    "cluster-status": "cluster_status",
+    "cluster-ceph": "cluster_ceph_status",
+    "ha-groups": "ha_groups",
+    "ha-resources": "ha_resources",
+  };
+
+  if (actionArgs.length === 0 || actionArgs[0] === "help") {
+    console.log("Usage: agent proxmox <action> [--node=<node>] [--vmid=<vmid>] [--type=<qemu|lxc>] [--json]");
+    console.log("\nActions:");
+    console.log("  Node-Level:");
+    console.log("    list-nodes              - List all nodes in the cluster");
+    console.log("    node-status             - Get node status (requires --node)");
+    console.log("    node-resources          - Get node resources (requires --node)");
+    console.log("    node-disks              - List node disks (requires --node)");
+    console.log("    node-network            - List node network interfaces (requires --node)");
+    console.log("  VM-Level:");
+    console.log("    list-vms                - List all VMs on a node (requires --node)");
+    console.log("    vm-status               - Get VM status (requires --node, --vmid)");
+    console.log("    vm-config               - Get VM configuration (requires --node, --vmid)");
+    console.log("    vm-network              - Get VM network info (requires --node, --vmid)");
+    console.log("    vm-snapshots            - List VM snapshots (requires --node, --vmid)");
+    console.log("  Cluster-Level:");
+    console.log("    cluster-resources       - Get cluster resources");
+    console.log("    cluster-status          - Get cluster status");
+    console.log("    cluster-ceph            - Get Ceph status (if configured)");
+    console.log("    ha-groups               - List HA groups (if configured)");
+    console.log("    ha-resources            - List HA resources (if configured)");
+    console.log("\nFlags:");
+    console.log("  --node=<node>             - Node name (required for node/VM actions)");
+    console.log("  --vmid=<vmid>             - VM ID (required for VM actions)");
+    console.log("  --type=<qemu|lxc>         - VM type (default: qemu)");
+    console.log("  --json                    - Output raw JSON instead of formatted text");
+    console.log("\nExamples:");
+    console.log("  agent proxmox list-nodes");
+    console.log("  agent proxmox node-status --node=pve1");
+    console.log("  agent proxmox list-vms --node=pve1");
+    console.log("  agent proxmox vm-status --node=pve1 --vmid=101");
+    console.log("  agent proxmox cluster-status");
+    process.exit(0);
+  }
+
+  const actionName = actionArgs[0];
+  const toolAction = actionMap[actionName];
+
+  if (!toolAction) {
+    console.error(`Unknown action: ${actionName}`);
+    console.log("Run 'agent proxmox help' for usage information");
+    process.exit(1);
+  }
+
+  // Build parameters
+  const params: Record<string, any> = {
+    action: toolAction,
+  };
+
+  if (flags.node) {
+    params.node = flags.node;
+  }
+  if (flags.vmid) {
+    params.vmid = flags.vmid;
+  }
+  if (flags.type) {
+    params.type = flags.type;
+  }
+
+  // Execute tool
+  const res = await proxmox.execute(
+    params,
+    { toolName: "proxmox_readonly", startedAt: Date.now() }
+  );
+
+  if (res.error) {
+    console.error(`❌ Error: ${res.error}`);
+    process.exit(1);
+  }
+
+  // Format output
+  if (flags.json) {
+    console.log(JSON.stringify(res.data, null, 2));
+  } else {
+    const { formatProxmoxOutput } = await import("./tools/proxmox/readonly/cli-formatter");
+    console.log(formatProxmoxOutput(res.data, toolAction, { json: false }));
+  }
+
+  process.exit(0);
 } else if (args[0] === "repl") {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -294,6 +428,9 @@ if (args[0] === "hello") {
   console.log("  opnsense      - Test OPNsense tool directly");
   console.log("    status      - Get OPNsense system status");
   console.log("    aliases     - List OPNsense firewall aliases");
+  console.log("  proxmox       - Test Proxmox tool directly");
+  console.log("    <action> [--node=<node>] [--vmid=<vmid>] [--type=<qemu|lxc>] [--json]");
+  console.log("    help         - Show Proxmox command help");
   console.log("  ssh           - Test SSH tool directly");
   console.log("    <host> <cmd> - Execute approved SSH command");
   console.log("  mcp-opnsense  - Test MCP OPNsense tool directly");

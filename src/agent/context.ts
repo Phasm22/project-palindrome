@@ -15,7 +15,7 @@ export class AgentContext {
   }
 
   addToolResult(toolCallId: string, toolName: string, data: any) {
-    const dataStr = typeof data === "string" ? data : JSON.stringify(data);
+    const dataStr = typeof data === "string" ? data : (data ? JSON.stringify(data) : "");
     this.messages.push({
       role: "tool",
       content: dataStr.slice(0, 4000),

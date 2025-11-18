@@ -1,6 +1,8 @@
 import { Redactor } from "../pce/redaction/redactor";
+import { ALL_REDACTION_PATTERNS } from "../pce/redaction/patterns";
 
-const toolRedactor = new Redactor();
+// Use all redaction patterns including Proxmox-specific patterns
+const toolRedactor = new Redactor(ALL_REDACTION_PATTERNS);
 
 export function sanitizeToolPayload<T>(payload: T): T {
   if (payload === null || payload === undefined) {

@@ -17,6 +17,10 @@ export enum NodeType {
   NETWORK = "Network",
   FIREWALL_RULE = "FirewallRule",
   CONFIG = "Config",
+  // Proxmox-specific node types (TL-2A.6.B)
+  PVE_NODE = "PVE_NODE",
+  VM_INSTANCE = "VM_INSTANCE",
+  PVE_STORAGE = "PVE_STORAGE",
 }
 
 /**
@@ -32,6 +36,9 @@ export enum RelationshipType {
   BELONGS_TO = "BELONGS_TO",
   TRIGGERS = "TRIGGERS",
   ACCESSES = "ACCESSES",
+  // Proxmox-specific relationship types (TL-2A.6.B)
+  USES = "USES", // VM USES Storage
+  CONNECTED_TO = "CONNECTED_TO", // Storage CONNECTED_TO Node
 }
 
 /**
@@ -87,6 +94,33 @@ export interface EntityAttributes {
     config_key: string;
     config_value: string;
     config_type?: string;
+  };
+  // Proxmox-specific entity attributes (TL-2A.6.B)
+  [NodeType.PVE_NODE]: {
+    node: string; // Node name (e.g., "pve1")
+    status?: string;
+    cpu?: number;
+    maxcpu?: number;
+    memory?: number;
+    maxmem?: number;
+    uptime?: number;
+  };
+  [NodeType.VM_INSTANCE]: {
+    vmid: number;
+    name?: string;
+    node: string; // Node where VM runs
+    type?: "qemu" | "lxc";
+    status?: string;
+    cpu?: number;
+    memory?: number;
+    maxmem?: number;
+    uptime?: number;
+  };
+  [NodeType.PVE_STORAGE]: {
+    storage: string; // Storage name
+    type?: string; // Storage type (dir, lvm, ceph, etc.)
+    content?: string; // Content types (images, iso, etc.)
+    nodes?: string[]; // Nodes where storage is available
   };
 }
 

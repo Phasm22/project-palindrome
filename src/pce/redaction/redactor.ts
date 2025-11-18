@@ -41,8 +41,18 @@ export class Redactor {
       const matches = text.match(pattern.pattern);
       if (matches) {
         const originalLength = matches.reduce((sum, m) => sum + m.length, 0);
-        redactedText = redactedText.replace(pattern.pattern, pattern.replacement);
-        const replacementLength = matches.length * pattern.replacement.length;
+        
+        // Support both string and function replacements
+        const replacement = typeof pattern.replacement === "function"
+          ? pattern.replacement
+          : pattern.replacement;
+        
+        redactedText = redactedText.replace(pattern.pattern, replacement);
+        
+        // Calculate replacement length (approximate for function replacements)
+        const replacementLength = typeof pattern.replacement === "function"
+          ? matches.length * "[REDACTED]".length // Approximate
+          : matches.length * pattern.replacement.length;
         
         redactions.push({
           pattern: pattern.name,
