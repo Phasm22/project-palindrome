@@ -92,9 +92,23 @@ if (args[0] === "hello") {
   console.log(formatToolOutput(res, "glances"));
   process.exit(res.error ? 1 : 0);
 } else if (args[0] === "pce") {
-  const prompt = args.slice(1).join(" ");
+  // Parse flags
+  const flags: { [key: string]: boolean } = {};
+  const nonFlagArgs: string[] = [];
+  
+  for (const arg of args.slice(1)) {
+    if (arg.startsWith("--")) {
+      flags[arg.slice(2)] = true;
+    } else {
+      nonFlagArgs.push(arg);
+    }
+  }
+  
+  const prompt = nonFlagArgs.join(" ");
   if (!prompt) {
-    console.log("Usage: agent pce \"your question\"");
+    console.log("Usage: agent pce [--yes|--auto-approve] \"your question\"");
+    console.log("\nFlags:");
+    console.log("  --yes, --auto-approve    Auto-approve high-risk operations (write actions)");
     process.exit(1);
   }
 
@@ -104,11 +118,49 @@ if (args[0] === "hello") {
     const userId = process.env.PCE_USER_ID || "default-user";
     const aclGroup = process.env.PCE_ACL_GROUP || "viewer";
     
+    // Handle confirmation for write operations
+    const autoApprove = flags.yes || flags["auto-approve"] || process.env.PCE_AUTO_APPROVE_HIGH_RISK_TOOLS === "true";
+    
+    const confirmHighRisk = async (info: { toolName: string; parameters: Record<string, any>; risk: string }): Promise<boolean> => {
+      if (autoApprove) {
+        console.log(`\n⚠️  Auto-approving ${info.risk}-risk operation: ${info.toolName}`);
+        console.log(`   Parameters: ${JSON.stringify(info.parameters, null, 2)}\n`);
+        return true;
+      }
+      
+      // Interactive confirmation
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.error(`\n❌ Cannot prompt for confirmation in non-interactive mode.`);
+        console.error(`   Use --yes flag or set PCE_AUTO_APPROVE_HIGH_RISK_TOOLS=true to auto-approve.\n`);
+        return false;
+      }
+      
+      return await new Promise((resolve) => {
+        const readline = require("readline");
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        console.log(`\n⚠️  High-risk operation requires confirmation:`);
+        console.log(`   Tool: ${info.toolName}`);
+        console.log(`   Risk: ${info.risk}`);
+        console.log(`   Parameters: ${JSON.stringify(info.parameters, null, 2)}`);
+        rl.question(`\nApprove this operation? (y/N): `, (answer: string) => {
+          rl.close();
+          const approved = answer.trim().toLowerCase().startsWith("y");
+          if (approved) {
+            console.log("✅ Operation approved.\n");
+          } else {
+            console.log("❌ Operation cancelled.\n");
+          }
+          resolve(approved);
+        });
+      });
+    };
+    
     // Use runAgent which includes tool calling, RAG context, and LLM reasoning
     const response = await runAgent(prompt, {
       userId,
       aclGroup,
       ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
+      confirmHighRisk,
     });
     
     console.log(response.text);
