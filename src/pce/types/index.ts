@@ -4,7 +4,7 @@
 
 export type DocumentStatus = "NEW" | "MODIFIED" | "UNCHANGED";
 
-export type DocumentType = "markdown_runbook" | "generic_text" | "yaml_config" | "log_file";
+export type DocumentType = "markdown_runbook" | "generic_text" | "yaml_config" | "log_file" | "proxmox_inventory";
 
 export type ACLGroup = string; // e.g., "admin", "operator", "viewer"
 

@@ -83,7 +83,31 @@ export class GraphRAGRetrieval {
           result = { nodes: [], relationships: [] };
         }
       } else {
+        // Try to find entities by ID or name first
+        // Extract potential entity identifiers from query
+        const entityMatch = query.match(/(?:is|are|find|show|where|what)\s+([a-zA-Z0-9_-]+)/i);
+        if (entityMatch && entityMatch[1]) {
+          const searchTerm = entityMatch[1];
+          result = await this.queryInterface.findEntitiesByIdOrName(searchTerm);
+        }
+        
+        // If no results, try searching for Proxmox entities
+        if (!result || result.nodes.length === 0) {
+          // Try Proxmox node types
+          const proxmoxResult = await this.queryInterface.getEntitiesByType("PVE_NODE");
+          if (proxmoxResult.nodes.length > 0) {
+            result = proxmoxResult;
+          } else {
+            // Try VM instances
+            const vmResult = await this.queryInterface.getEntitiesByType("VM_INSTANCE");
+            if (vmResult.nodes.length > 0) {
+              result = vmResult;
+            } else {
+              // Fallback to Host type
         result = await this.queryInterface.getEntitiesByType("Host");
+            }
+          }
+        }
       }
 
       const entityIds = result.nodes.map((n) => n.id);

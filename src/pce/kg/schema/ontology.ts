@@ -39,6 +39,7 @@ export enum RelationshipType {
   // Proxmox-specific relationship types (TL-2A.6.B)
   USES = "USES", // VM USES Storage
   CONNECTED_TO = "CONNECTED_TO", // Storage CONNECTED_TO Node
+  HOSTS_ON = "HOSTS_ON", // VM HOSTS_ON Node (VM is hosted on Node)
 }
 
 /**

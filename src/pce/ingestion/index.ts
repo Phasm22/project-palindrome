@@ -4,3 +4,4 @@
 
 export { IngestionPipeline, type IngestionOptions } from "./pipeline";
 export { GraphIngestionPipeline, type GraphIngestionOptions, type GraphIngestionResult } from "./graph-pipeline";
+export { ProxmoxIngestionOrchestrator, computeVersionHash, type ProxmoxIngestionOptions, type ProxmoxIngestionResult } from "./proxmox-ingestion";

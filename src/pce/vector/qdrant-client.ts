@@ -356,16 +356,32 @@ export class QdrantVectorStore {
         searchParams.filter = searchFilter;
       }
       
-      pceLogger.debug("Qdrant search params", {
+      pceLogger.info("Qdrant search params", {
         hasFilter: !!searchFilter,
-        filter: searchFilter,
+        filter: JSON.stringify(searchFilter),
         limit: topK,
         aclGroup: aclGroup || "none",
       });
 
       const results = await this.client.search(this.collectionName, searchParams);
       
-      pceLogger.debug("Qdrant search results", {
+      // Debug: Log sample payloads to verify structure
+      if (results.length > 0) {
+        const samplePayload = (results[0] as any)?.payload;
+        pceLogger.info("Qdrant search sample payload", {
+          acl_group: samplePayload?.acl_group,
+          acl_group_type: typeof samplePayload?.acl_group,
+          allKeys: Object.keys(samplePayload || {}),
+        });
+      } else if (aclGroup && aclGroup !== "admin") {
+        // If no results with filter, try without filter to see what's there
+        pceLogger.warn("Qdrant search returned 0 results with filter", {
+          aclGroup,
+          filter: JSON.stringify(searchFilter),
+        });
+      }
+      
+      pceLogger.info("Qdrant search results", {
         resultCount: results.length,
         scores: results.map((r: any) => r.score),
       });

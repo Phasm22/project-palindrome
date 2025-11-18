@@ -265,6 +265,23 @@ export class GraphQueryInterface {
   }
 
   /**
+   * Find entities by ID or name (case-insensitive partial match)
+   */
+  async findEntitiesByIdOrName(searchTerm: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (n:Entity)
+      WHERE n.id =~ $pattern OR 
+            ANY(alias IN n.aliases WHERE alias =~ $pattern) OR
+            (n.attributes IS NOT NULL AND n.attributes CONTAINS $searchTerm)
+      RETURN n
+      LIMIT 50
+    `;
+    // Case-insensitive pattern: (?i) for case-insensitive, .* for wildcard
+    const pattern = `(?i).*${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*`;
+    return this.executeQuery(cypher, { pattern, searchTerm });
+  }
+
+  /**
    * Task 7.2: Get entities with provenance (version hash and source path)
    */
   async getEntitiesWithProvenance(entityIds: string[]): Promise<Array<{

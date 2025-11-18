@@ -145,8 +145,22 @@ export class QueryAnalyzer {
     structuralIndicators: string[],
     resolutionResult: EntityResolutionResult
   ): QueryType {
+    // For queries asking "what is X?" or "where is X?", try HYBRID to use both vector and graph
+    const entityQueryPatterns = [
+      /what\s+is\s+([a-zA-Z0-9_-]+)/i,
+      /where\s+is\s+([a-zA-Z0-9_-]+)/i,
+      /show\s+me\s+([a-zA-Z0-9_-]+)/i,
+      /tell\s+me\s+about\s+([a-zA-Z0-9_-]+)/i,
+    ];
+    
+    const hasEntityQuery = entityQueryPatterns.some(pattern => pattern.test(query));
+    
     // Task 8.2.1: If no entities resolve, downgrade to SEMANTIC_ONLY
+    // BUT: If query looks like an entity lookup, use HYBRID to try both vector and graph
     if (resolutionResult.noneResolved && structuralIndicators.length === 0) {
+      if (hasEntityQuery) {
+        return "HYBRID"; // Try both vector and graph for entity queries
+      }
       return "SEMANTIC_ONLY";
     }
 

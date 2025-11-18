@@ -1686,7 +1686,7 @@ bun src/cli.ts pce "query that triggers opnsense write tool"
 ## 🔧 Phase TL-2A DOD Status
 
 **Phase**: TL-2A (Tool Layer V2 - Proxmox Read-Only Foundation)  
-**Status**: ✅ **COMPLETE** (8/8 tasks complete, 75/79 tests passing - 94.9%)  
+**Status**: ⚠️ **IN REVIEW** (post-ingestion regressions under investigation)  
 **Target Completion**: 2 weeks  
 **Priority**: CRITICAL
 
@@ -1699,6 +1699,8 @@ bun src/cli.ts pce "query that triggers opnsense write tool"
 - ⚠️ TL-2A.6.A: Vector Store Ingestion Validation - COMPLETE (7/8 tests passing, 1 failure - mock setup)
 - ✅ TL-2A.6.B: Graph Store Ingestion Validation - COMPLETE
 - ✅ TL-2A.7: Hybrid Reasoning Gold Path Validation - COMPLETE (5/5 tests passing)
+
+> **Regression (2025-11-18):** Tool-less hybrid queries such as "what is aiMarketBot?" still return "no context" even after re-ingesting with the `lab-admin` ACL. Vector chunks currently lack the literal VM name and the graph lookup cannot resolve the associated `VM_INSTANCE`, so TL-2A.6 remains open until the gold-path validation passes on indexed context alone.
 
 **Overall Test Status**:
 - ✅ Individual test files: 75/79 passing (94.9%)
