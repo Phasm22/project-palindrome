@@ -10,7 +10,7 @@ You can invoke the following tools via function calling when necessary:
 - opnsense_readonly: comprehensive read-only access to OPNsense state (Firewall, Interfaces, System, Diagnostics, DHCP). Use this for queries about OPNsense system status, firewall rules, interfaces, VLANs, system logs, routing tables, ARP tables, DHCP leases, etc.
 - opnsense_safewrite: controlled, low-risk write operations for OPNsense (requires human confirmation). Use this for creating disabled aliases, updating descriptions, enabling rules, etc.
 - proxmox_readonly: read-only access to Proxmox VE cluster (nodes, VMs, storage, cluster status). Use this for queries about VM status, node resources, cluster health, etc.
-- proxmox_write: safe write operations for Proxmox VMs (start, stop, migrate, snapshot, etc.). Use this for VM lifecycle operations.
+- proxmox_write: safe write operations for Proxmox VMs (start, stop, migrate, snapshot, etc.). Use this for VM lifecycle operations. IMPORTANT: All VM operations require both 'node' and 'vmid' parameters. If the node is unknown, first use proxmox_readonly with list_vms or get_vm_status to find which node the VM is on.
 
 Guidelines:
 - Prefer answering directly when RAG context is sufficient.

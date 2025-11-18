@@ -62,7 +62,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           },
           node: {
             type: "string",
-            description: "Source node name (required for VM operations)",
+            description: "Source node name (REQUIRED for all VM operations). You must first query proxmox_readonly to find which node the VM is running on, or use list_vms to see all VMs and their nodes.",
           },
           vmid: {
             type: "number",
@@ -90,7 +90,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
             description: "Timeout in seconds for stop/shutdown operations",
           },
         },
-        required: ["action"],
+        required: ["action", "node", "vmid"],
       },
       allowedAcls: ["admin", "ops"], // Write operations restricted to admin/ops
       requiresConfirmation: true, // All write operations require HIL

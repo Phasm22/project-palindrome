@@ -129,15 +129,28 @@ if (args[0] === "hello") {
       }
       
       // Interactive confirmation
-      if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        console.error(`\n❌ Cannot prompt for confirmation in non-interactive mode.`);
-        console.error(`   Use --yes flag or set PCE_AUTO_APPROVE_HIGH_RISK_TOOLS=true to auto-approve.\n`);
-        return false;
+      // Check if we're in an interactive terminal (try both isTTY checks)
+      const isInteractive = process.stdin.isTTY && process.stdout.isTTY;
+      
+      if (!isInteractive) {
+        // Try to detect if we're in a shell that supports prompts
+        // Bun sometimes doesn't set isTTY correctly, so we'll try anyway
+        const canPrompt = typeof process.stdin.read === "function" && typeof process.stdout.write === "function";
+        
+        if (!canPrompt) {
+          console.error(`\n❌ Cannot prompt for confirmation in non-interactive mode.`);
+          console.error(`   Use --yes flag or set PCE_AUTO_APPROVE_HIGH_RISK_TOOLS=true to auto-approve.\n`);
+          return false;
+        }
       }
       
       return await new Promise((resolve) => {
         const readline = require("readline");
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const rl = readline.createInterface({ 
+          input: process.stdin, 
+          output: process.stdout,
+          terminal: true,
+        });
         console.log(`\n⚠️  High-risk operation requires confirmation:`);
         console.log(`   Tool: ${info.toolName}`);
         console.log(`   Risk: ${info.risk}`);
