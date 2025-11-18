@@ -131,7 +131,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
     }
 
     const options: ProxmoxIngestionOptions = {
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       redact: true,
       reindex: false,
     };
@@ -174,7 +174,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
     proxmoxToolCalls = [];
 
     await orchestrator.ingestProxmoxInventory({
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       redact: true,
       reindex: false,
     });
@@ -203,7 +203,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     const response = await runAgent(query, {
       userId: "test-user",
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
     });
 
@@ -244,7 +244,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     // Ingest data first
     await orchestrator.ingestProxmoxInventory({
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       redact: true,
       reindex: false,
     });
@@ -268,7 +268,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     const response = await runAgent(query, {
       userId: "test-user",
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
     });
 
@@ -304,7 +304,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     // Ingest data first
     await orchestrator.ingestProxmoxInventory({
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       redact: true,
       reindex: false,
     });
@@ -328,7 +328,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     const response = await runAgent(query, {
       userId: "test-user",
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
     });
 
@@ -364,7 +364,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     // Ingest data
     const ingestionResult = await orchestrator.ingestProxmoxInventory({
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       redact: true,
       reindex: false,
     });
@@ -386,7 +386,7 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     const response = await runAgent(query, {
       userId: "test-user",
-      aclGroup: "lab-admin",
+      aclGroup: "ops",
       ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
     });
 

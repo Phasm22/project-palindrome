@@ -74,7 +74,12 @@ export async function fetchHybridContext(
     const payload = await response.json();
     return payload?.data ?? null;
   } catch (error: any) {
-    logger.error(`Hybrid context fetch error: ${error.message ?? error}`);
+    // Don't log connection errors as errors if API server isn't running - this is expected in some scenarios
+    if (error.name === 'AbortError' || error.message?.includes('ECONNREFUSED') || error.message?.includes('fetch failed')) {
+      logger.debug(`Hybrid context fetch skipped: API server not available at ${baseUrl}`);
+    } else {
+      logger.error(`Hybrid context fetch error: ${error.message ?? error}`);
+    }
     return null;
   } finally {
     clearTimeout(timer);
