@@ -63,16 +63,16 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           },
           node: {
             type: "string",
-            description: "Source node name (REQUIRED for all VM operations). You must first query proxmox_readonly to find which node the VM is running on, or use list_vms to see all VMs and their nodes.",
+            description: "Proxmox node name (REQUIRED) - this is the physical node name like 'pve1', 'yin', etc. NOT the VM/container name. You MUST first query proxmox_readonly with 'list_vms' or 'cluster_resources' to find which node the VM/container is on.",
           },
           vmid: {
             type: "number",
-            description: "VM ID (required for VM operations)",
+            description: "VM/Container ID (REQUIRED) - the numeric ID like 105, 101, etc.",
           },
           type: {
             type: "string",
             enum: ["qemu", "lxc"],
-            description: "VM type: 'qemu' for VMs, 'lxc' for containers (default: qemu). Use proxmox_readonly to check the VM type if unsure.",
+            description: "VM type (REQUIRED): 'qemu' for virtual machines, 'lxc' for containers. You MUST query proxmox_readonly first to determine the type. Default is 'qemu' but this will fail if the VM is actually an LXC container.",
             default: "qemu",
           },
           targetNode: {
