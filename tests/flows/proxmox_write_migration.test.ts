@@ -84,7 +84,8 @@ describe("TL-2B.7: End-to-End Success Path Validation", () => {
 
     // Step 5: Verify provenance structure (would be in real execution)
     // In dry-run, we verify the structure is correct
-    expect(result.data._provenance || result.metadata).toBeDefined();
+    // Metadata is always present, _provenance may be in data or metadata
+    expect(result.metadata).toBeDefined();
   }, 30000);
 
   it("should verify pre-flight checks are executed before migration", async () => {
