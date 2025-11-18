@@ -59,6 +59,17 @@ describe("TL-2B.7: End-to-End Success Path Validation", () => {
 
     // Step 3: Verify tool supports migrate_vm action with pre-flight checks
     const writeToolInstance = writeTool as ProxmoxWriteTool;
+    
+    // Mock the API client to avoid connection errors
+    const mockClient = {
+      get: vi.fn().mockResolvedValue({
+        data: { data: { status: "online" } },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      }),
+      post: vi.fn(),
+    };
+    (writeToolInstance as any).getApiClient = vi.fn().mockReturnValue(mockClient);
+    
     const result = await writeToolInstance.execute(
       {
         action: "migrate_vm",
