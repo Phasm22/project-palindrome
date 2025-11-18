@@ -216,7 +216,29 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       throw new Error("vmid parameter required for VM actions");
     }
 
-    const vmType = params.type || "qemu";
+    // Auto-detect VM type if not specified by trying qemu first, then lxc
+    let vmType = params.type;
+    if (!vmType) {
+      try {
+        // Try qemu first (most common)
+        await client.get(`/nodes/${params.node}/qemu/${params.vmid}/status/current`);
+        vmType = "qemu";
+      } catch (error: any) {
+        // If qemu fails with 404/403, try lxc
+        if (error?.response?.status === 404 || error?.response?.status === 403) {
+          try {
+            await client.get(`/nodes/${params.node}/lxc/${params.vmid}/status/current`);
+            vmType = "lxc";
+          } catch {
+            // If both fail, default to qemu and let the error propagate
+            vmType = "qemu";
+          }
+        } else {
+          // For other errors, default to qemu
+          vmType = "qemu";
+        }
+      }
+    }
 
     switch (action) {
       case "get_vm_status":
