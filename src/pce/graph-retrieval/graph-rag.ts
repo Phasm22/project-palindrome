@@ -51,7 +51,7 @@ export class GraphRAGRetrieval {
    */
   async retrieve(
     query: string,
-    queryType: "alerts" | "connections" | "path" | "entities" = "entities",
+    queryType: "alerts" | "connections" | "path" | "entities" | "dependencies" | "dependents" = "entities",
     aclGroup?: ACLGroup
   ): Promise<GraphRetrievalResult> {
     try {
@@ -81,6 +81,31 @@ export class GraphRAGRetrieval {
           result = await this.queryInterface.findPath(fromId, toId);
         } else {
           result = { nodes: [], relationships: [] };
+        }
+      } else if (queryType === "dependencies" && (query.includes("depends") || query.includes("dependency"))) {
+        const entityMatch = query.match(/(?:what|which|show|find).*?(?:depends|dependencies).*?(?:on|of)\s+([a-z0-9-]+)/i) ||
+                           query.match(/([a-z0-9-]+).*?(?:depends|dependencies)/i);
+        const entityId = entityMatch?.[1];
+        if (entityId) {
+          result = await this.queryInterface.findDependencies(entityId);
+        } else {
+          result = { nodes: [], relationships: [] };
+        }
+      } else if (queryType === "dependents" && (query.includes("depends") || query.includes("break"))) {
+        const entityMatch = query.match(/(?:what|which|show|find).*?(?:depends|breaks).*?(?:on|if)\s+([a-z0-9-]+)/i) ||
+                           query.match(/([a-z0-9-]+).*?(?:goes down|breaks)/i);
+        const entityId = entityMatch?.[1];
+        if (entityId) {
+          result = await this.queryInterface.findDependents(entityId);
+        } else {
+          // Try dependency chain for "what breaks if X goes down"
+          const chainMatch = query.match(/(?:what|which).*?(?:breaks|affected).*?(?:if|when)\s+([a-z0-9-]+)/i);
+          const chainEntityId = chainMatch?.[1];
+          if (chainEntityId) {
+            result = await this.queryInterface.findDependencyChain(chainEntityId);
+          } else {
+            result = { nodes: [], relationships: [] };
+          }
         }
       } else {
         // Try to find entities by ID or name first

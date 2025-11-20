@@ -31,7 +31,7 @@ function formatToolOutput(result: ExecutionResult, toolName: string): string {
         // Clean up SSH output (remove extra noise like SHA256 fingerprints)
         const stdout = result.data.stdout
           .split("\n")
-          .filter(line => {
+          .filter((line: string) => {
             const trimmed = line.trim();
             // Filter out SSH fingerprints and other noise
             return trimmed && 
@@ -291,7 +291,7 @@ if (args[0] === "hello") {
   
   const module = args[1];
   const action = args[2];
-  let params = {};
+  let params: Record<string, any> = {};
   
   if (args.length > 3) {
     try {
@@ -323,37 +323,80 @@ if (args[0] === "hello") {
   process.exit(res.error ? 1 : 0);
 } else if (args[0] === "proxmox") {
   const tools = loadTools();
-  const proxmox = tools.find(t => t.metadata.name === "proxmox_readonly");
-  
-  if (!proxmox) {
+  const proxmoxReadonly = tools.find((t) => t.metadata.name === "proxmox_readonly");
+  const proxmoxWrite = tools.find((t) => t.metadata.name === "proxmox_write");
+
+  if (!proxmoxReadonly) {
     console.error("Error: proxmox_readonly tool not found");
     process.exit(1);
   }
+  if (!proxmoxWrite) {
+    console.error("Error: proxmox_write tool not found");
+    process.exit(1);
+  }
 
-  // Parse flags
-  const flags: Record<string, any> = {};
+  type ProxmoxFlags = { json?: boolean; node?: string; vmid?: number; type?: string };
+  const flags: ProxmoxFlags = {};
   const actionArgs: string[] = [];
-  
+
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
+    if (typeof arg !== "string") {
+      continue;
+    }
     if (arg.startsWith("--")) {
-      const [key, value] = arg.substring(2).split("=");
+      const [key, rawValue] = arg.substring(2).split("=");
       if (key === "json") {
         flags.json = true;
       } else if (key === "node") {
-        flags.node = value || args[++i];
+        if (rawValue) {
+          flags.node = rawValue;
+        } else if (i + 1 < args.length && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--")) {
+          flags.node = args[++i];
+        } else {
+          console.error("--node flag requires a value");
+          process.exit(1);
+        }
       } else if (key === "vmid") {
-        flags.vmid = parseInt(value || args[++i], 10);
+        let vmidValue: string;
+        if (rawValue) {
+          vmidValue = rawValue;
+        } else if (i + 1 < args.length && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--")) {
+          vmidValue = args[++i];
+        } else {
+          console.error("--vmid flag requires a value");
+          process.exit(1);
+        }
+        const parsed = Number(vmidValue);
+        if (Number.isNaN(parsed)) {
+          console.error(`Invalid vmid '${vmidValue}'`);
+          process.exit(1);
+        }
+        flags.vmid = parsed;
       } else if (key === "type") {
-        flags.type = value || args[++i];
+        if (rawValue) {
+          flags.type = rawValue;
+        } else if (i + 1 < args.length && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--")) {
+          flags.type = args[++i];
+        } else {
+          console.error("--type flag requires a value");
+          process.exit(1);
+        }
       }
     } else {
       actionArgs.push(arg);
     }
   }
 
-  // Map CLI subcommands to tool actions
-  const actionMap: Record<string, string> = {
+  const writeActions: Record<string, { action: string; defaultType?: "qemu" | "lxc" }> = {
+    "start-vm": { action: "start_vm", defaultType: "qemu" },
+    "stop-vm": { action: "stop_vm", defaultType: "qemu" },
+    "reset-vm": { action: "reset_vm", defaultType: "qemu" },
+    "shutdown-vm": { action: "shutdown_vm", defaultType: "qemu" },
+    "migrate-vm": { action: "migrate_vm", defaultType: "qemu" },
+  };
+
+  const readonlyActions: Record<string, string> = {
     "list-nodes": "list_nodes",
     "node-status": "node_status",
     "node-resources": "node_resources",
@@ -371,7 +414,7 @@ if (args[0] === "hello") {
     "ha-resources": "ha_resources",
   };
 
-  if (actionArgs.length === 0 || actionArgs[0] === "help") {
+  const printProxmoxHelp = (): void => {
     console.log("Usage: agent proxmox <action> [--node=<node>] [--vmid=<vmid>] [--type=<qemu|lxc>] [--json]");
     console.log("\nActions:");
     console.log("  Node-Level:");
@@ -380,12 +423,18 @@ if (args[0] === "hello") {
     console.log("    node-resources          - Get node resources (requires --node)");
     console.log("    node-disks              - List node disks (requires --node)");
     console.log("    node-network            - List node network interfaces (requires --node)");
-    console.log("  VM-Level:");
+    console.log("  VM-Level (read-only):");
     console.log("    list-vms                - List all VMs on a node (requires --node)");
     console.log("    vm-status               - Get VM status (requires --node, --vmid)");
     console.log("    vm-config               - Get VM configuration (requires --node, --vmid)");
     console.log("    vm-network              - Get VM network info (requires --node, --vmid)");
     console.log("    vm-snapshots            - List VM snapshots (requires --node, --vmid)");
+    console.log("  VM-Level (write actions):");
+    console.log("    start-vm                - Start a VM (requires --node, --vmid, optional --type)");
+    console.log("    stop-vm                 - Stop a VM (requires --node, --vmid, optional --type)");
+    console.log("    reset-vm                - Reset a VM (requires --node, --vmid, optional --type)");
+    console.log("    shutdown-vm             - Shutdown a VM (requires --node, --vmid, optional --type)");
+    console.log("    migrate-vm              - Migrate a VM (requires --node, --vmid, optional --type)");
     console.log("  Cluster-Level:");
     console.log("    cluster-resources       - Get cluster resources");
     console.log("    cluster-status          - Get cluster status");
@@ -398,55 +447,83 @@ if (args[0] === "hello") {
     console.log("  --type=<qemu|lxc>         - VM type (default: qemu)");
     console.log("  --json                    - Output raw JSON instead of formatted text");
     console.log("\nExamples:");
-    console.log("  agent proxmox list-nodes");
-    console.log("  agent proxmox node-status --node=pve1");
-    console.log("  agent proxmox list-vms --node=pve1");
-    console.log("  agent proxmox vm-status --node=pve1 --vmid=101");
+    console.log("  agent proxmox list-vms --node=yin");
+    console.log("  agent proxmox start-vm --node=yang --vmid=105 --type=lxc");
+    console.log("  agent proxmox vm-status --node=yin --vmid=200");
     console.log("  agent proxmox cluster-status");
+  };
+
+  if (actionArgs.length === 0 || actionArgs[0] === "help") {
+    printProxmoxHelp();
     process.exit(0);
   }
 
   const actionName = actionArgs[0];
-  const toolAction = actionMap[actionName];
+  if (!actionName) {
+    console.error("No action specified");
+    printProxmoxHelp();
+    process.exit(1);
+  }
 
-  if (!toolAction) {
+  const writeAction = writeActions[actionName];
+
+  if (writeAction) {
+    if (!flags.node) {
+      console.error(`${actionName} requires --node=<node>`);
+      process.exit(1);
+    }
+    if (typeof flags.vmid !== "number" || Number.isNaN(flags.vmid)) {
+      console.error(`${actionName} requires --vmid=<vmid>`);
+      process.exit(1);
+    }
+
+    const writeParams: Record<string, any> = {
+      action: writeAction.action,
+      node: flags.node,
+      vmid: flags.vmid,
+      type: flags.type || writeAction.defaultType || "qemu",
+    };
+
+    const writeResult = await proxmoxWrite.execute(writeParams, { toolName: "proxmox_write", startedAt: Date.now() });
+    if (writeResult.error) {
+      console.error(`❌ Error: ${writeResult.error}`);
+      process.exit(1);
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify(writeResult.data ?? { success: true }, null, 2));
+    } else {
+      console.log("✅ Proxmox action completed successfully");
+    }
+
+    process.exit(0);
+  }
+
+  const readonlyAction = readonlyActions[actionName];
+  if (!readonlyAction) {
     console.error(`Unknown action: ${actionName}`);
-    console.log("Run 'agent proxmox help' for usage information");
+    printProxmoxHelp();
     process.exit(1);
   }
 
-  // Build parameters
-  const params: Record<string, any> = {
-    action: toolAction,
-  };
-
-  if (flags.node) {
-    params.node = flags.node;
+  const readonlyParams: Record<string, any> = { action: readonlyAction };
+  if (flags.node) readonlyParams.node = flags.node;
+  if (typeof flags.vmid === "number" && !Number.isNaN(flags.vmid)) {
+    readonlyParams.vmid = flags.vmid;
   }
-  if (flags.vmid) {
-    params.vmid = flags.vmid;
-  }
-  if (flags.type) {
-    params.type = flags.type;
-  }
+  if (flags.type) readonlyParams.type = flags.type;
 
-  // Execute tool
-  const res = await proxmox.execute(
-    params,
-    { toolName: "proxmox_readonly", startedAt: Date.now() }
-  );
-
-  if (res.error) {
-    console.error(`❌ Error: ${res.error}`);
+  const readonlyResult = await proxmoxReadonly.execute(readonlyParams, { toolName: "proxmox_readonly", startedAt: Date.now() });
+  if (readonlyResult.error) {
+    console.error(`❌ Error: ${readonlyResult.error}`);
     process.exit(1);
   }
 
-  // Format output
   if (flags.json) {
-    console.log(JSON.stringify(res.data, null, 2));
+    console.log(JSON.stringify(readonlyResult.data, null, 2));
   } else {
     const { formatProxmoxOutput } = await import("./tools/proxmox/readonly/cli-formatter");
-    console.log(formatProxmoxOutput(res.data, toolAction, { json: false }));
+    console.log(formatProxmoxOutput(readonlyResult.data, readonlyAction, { json: false }));
   }
 
   process.exit(0);

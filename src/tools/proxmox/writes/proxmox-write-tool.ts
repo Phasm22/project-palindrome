@@ -270,7 +270,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
-    const result = await client.post(this.getVmPath(type, node, vmid, "/status/start"));
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/start"), {});
 
     return {
       data: {
@@ -378,7 +378,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
-    const result = await client.post(this.getVmPath(type, node, vmid, "/status/reboot"));
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/reboot"), {});
 
     return {
       data: {
@@ -416,7 +416,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     if (type === "lxc") {
       throw new Error("Reset operation is not available for LXC containers");
     }
-    const result = await client.post(this.getVmPath(type, node, vmid, "/status/reset"));
+    const result = await client.post(this.getVmPath(type, node, vmid, "/status/reset"), {});
 
     return {
       data: {
@@ -487,7 +487,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     const preWriteState = await this.capturePreWriteState(client, node, vmid, "qemu");
-    const result = await client.post(this.getVmPath("qemu", node, vmid, `/snapshot/${snapshotName}/rollback`));
+    const result = await client.post(this.getVmPath("qemu", node, vmid, `/snapshot/${snapshotName}/rollback`), {});
 
     return {
       data: {

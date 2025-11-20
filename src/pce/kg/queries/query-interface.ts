@@ -310,5 +310,51 @@ export class GraphQueryInterface {
       await session.close();
     }
   }
+
+  /**
+   * Phase I-B: Find all entities that depend on a given entity
+   */
+  async findDependents(entityId: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (dependent:Entity)-[r:DEPENDS_ON]->(target:Entity {id: $entityId})
+      RETURN dependent, r, target, startNode(r).id as fromId, endNode(r).id as toId
+    `;
+    return this.executeQuery(cypher, { entityId });
+  }
+
+  /**
+   * Phase I-B: Find all dependencies of a given entity
+   */
+  async findDependencies(entityId: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (entity:Entity {id: $entityId})-[r:DEPENDS_ON]->(dependency:Entity)
+      RETURN entity, r, dependency, startNode(r).id as fromId, endNode(r).id as toId
+    `;
+    return this.executeQuery(cypher, { entityId });
+  }
+
+  /**
+   * Phase I-B: Find all entities hosted by a given host
+   */
+  async findHostedEntities(hostId: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (host:Entity {id: $hostId})-[r:HOSTS]->(entity:Entity)
+      RETURN host, r, entity, startNode(r).id as fromId, endNode(r).id as toId
+    `;
+    return this.executeQuery(cypher, { hostId });
+  }
+
+  /**
+   * Phase I-B: Find dependency chain (what breaks if entity goes down)
+   */
+  async findDependencyChain(entityId: string, maxDepth: number = 10): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH path = (entity:Entity {id: $entityId})<-[:DEPENDS_ON*1..${maxDepth}]-(dependent:Entity)
+      RETURN path
+      ORDER BY length(path) DESC
+      LIMIT 100
+    `;
+    return this.executeQuery(cypher, { entityId });
+  }
 }
 

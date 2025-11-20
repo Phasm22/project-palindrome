@@ -10,11 +10,14 @@ import type { ACLGroup } from "../../types";
  */
 export enum NodeType {
   HOST = "Host",
+  VM = "VM",
+  CONTAINER = "Container",
   SERVICE = "Service",
   VLAN = "VLAN",
   ALERT = "Alert",
   USER = "User",
   NETWORK = "Network",
+  DEPENDENCY = "Dependency",
   FIREWALL_RULE = "FirewallRule",
   CONFIG = "Config",
   // Proxmox-specific node types (TL-2A.6.B)
@@ -33,9 +36,11 @@ export enum RelationshipType {
   OWNS = "OWNS",
   LOGGED_BY = "LOGGED_BY",
   RUNS_ON = "RUNS_ON",
+  DEPENDS_ON = "DEPENDS_ON",
   BELONGS_TO = "BELONGS_TO",
   TRIGGERS = "TRIGGERS",
   ACCESSES = "ACCESSES",
+  HOSTS = "HOSTS", // Node HOSTS VM/Container (host provides resources)
   // Proxmox-specific relationship types (TL-2A.6.B)
   USES = "USES", // VM USES Storage
   CONNECTED_TO = "CONNECTED_TO", // Storage CONNECTED_TO Node
@@ -122,6 +127,25 @@ export interface EntityAttributes {
     type?: string; // Storage type (dir, lvm, ceph, etc.)
     content?: string; // Content types (images, iso, etc.)
     nodes?: string[]; // Nodes where storage is available
+  };
+  [NodeType.CONTAINER]: {
+    name: string;
+    type?: string; // Container type (docker, lxc, podman, etc.)
+    host?: string; // Host where container runs
+    image?: string; // Container image
+    status?: string;
+  };
+  [NodeType.DEPENDENCY]: {
+    name: string;
+    depends_on?: string; // What this depends on
+    type?: string; // Dependency type (service, resource, network, etc.)
+    critical?: boolean; // Whether this is a critical dependency
+  };
+  [NodeType.VM]: {
+    name: string;
+    host?: string; // Host where VM runs
+    type?: string; // VM type (qemu, kvm, etc.)
+    status?: string;
   };
 }
 
@@ -250,6 +274,27 @@ export function validateNodeAttributes<T extends NodeType>(
       }
       if (configAttrs.config_value === undefined) {
         errors.push("Config requires 'config_value' attribute");
+      }
+      break;
+    }
+    case NodeType.CONTAINER: {
+      const containerAttrs = attributes as Partial<EntityAttributes[NodeType.CONTAINER]>;
+      if (!containerAttrs.name) {
+        errors.push("Container requires 'name' attribute");
+      }
+      break;
+    }
+    case NodeType.DEPENDENCY: {
+      const dependencyAttrs = attributes as Partial<EntityAttributes[NodeType.DEPENDENCY]>;
+      if (!dependencyAttrs.name) {
+        errors.push("Dependency requires 'name' attribute");
+      }
+      break;
+    }
+    case NodeType.VM: {
+      const vmAttrs = attributes as Partial<EntityAttributes[NodeType.VM]>;
+      if (!vmAttrs.name) {
+        errors.push("VM requires 'name' attribute");
       }
       break;
     }

@@ -1,0 +1,106 @@
+# Project Palindrome — Topology Template
+# Fill in your actual infrastructure data below
+
+networks:
+  # Network definitions with CIDR and optional VLAN
+  home:
+    cidr: "192.168.68.0/22"
+    gateway: "192.168.68.1"
+    vlan: null  # Optional VLAN ID
+  
+  lab:
+    cidr: "172.16.0.0/22"
+    vlan: 50
+    gateway: "172.16.0.1"
+
+  mgmt:
+    cidr: "192.168.71.0/24"
+    vlan: 40
+    gateway: "192.168.71.1"
+
+vpn:
+  # VPN configuration
+  wireguard:
+    cidr: "10.16.0.0/24"
+    server: "172.16.0.1"
+    dns: "172.16.0.13"
+
+hosts:
+  # Physical or virtual hosts
+  - name: "level"
+    role: "proxmox"
+    ip: "172.16.0.10"
+    network: "lab"  # Network name from networks section
+    os: "debian"  # Optional
+    status: "running"  # Optional
+  
+  - name: "rotor"
+    role: "proxmox"
+    ip: "172.16.0.11"
+    network: "lab"
+  
+  - name: "radar"
+    role: "opnsense"
+    ip: "172.16.0.1"
+    network: "lab"
+  
+  - name: "civic"
+    role: "pihole"
+    ip: "192.168.71.13"
+    network: "mgmt"
+
+containers:
+  # Container instances (Docker, LXC, Podman, etc.)
+  - name: "sentinelZero"
+    type: "docker"  # docker, lxc, podman, etc.
+    host: "level"  # Host name from hosts section
+    image: "sentinelzero:latest"  # Optional
+    status: "running"  # Optional
+    depends_on:  # List of dependencies
+      - "pihole"
+      - "wireguard"
+  
+  - name: "pihole"
+    type: "docker"
+    host: "civic"
+    image: "pihole/pihole:latest"
+    status: "running"
+
+services:
+  # Network services
+  - name: "dns"
+    port: 53
+    protocol: "udp"
+    host: "civic"  # Host providing the service
+    status: "running"
+  
+  - name: "wireguard"
+    port: 51820
+    protocol: "udp"
+    host: "radar"
+    status: "running"
+
+dependencies:
+  # Explicit dependency relationships
+  # Use this section to define dependencies that aren't captured in containers/services
+  - name: "sentinelZero-dns"
+    depends_on: "dns"  # Service or container name
+    type: "service"
+    critical: true  # Whether this is a critical dependency
+  
+  - name: "all-services-vpn"
+    depends_on: "wireguard"
+    type: "network"
+    critical: true
+
+# Optional: Switch/network hardware
+switch:
+  model: "Cisco 2960G"
+  trunk_ports:
+    - "Gi0/33"
+    - "Gi0/34"
+  vlans:
+    - 1
+    - 40
+    - 50
+
