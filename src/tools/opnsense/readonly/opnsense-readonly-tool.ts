@@ -531,6 +531,7 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
           count: Array.isArray(leases) ? leases.length : 0,
           timestamp: new Date().toISOString(),
           endpoint: path,
+          note: "DHCP leases show the last known IP address assigned to each MAC address. If a host is offline, the IP shown is historical (from when it was last online).",
         };
       } catch (error: any) {
         lastError = error;

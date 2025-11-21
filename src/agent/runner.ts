@@ -142,6 +142,8 @@ export async function runAgent(
 
   const ragMessage = ragPayload ? [{ role: "system", content: formatRagSummary(ragPayload) }] : [];
   const MAX_STEPS = 5;
+  const MAX_TOOL_CALLS_PER_STEP = 5; // Prevent tool call flooding (reduced from 10)
+  const seenToolCalls = new Set<string>(); // Track tool calls to prevent infinite loops
   const client = getOpenAIClient();
 
   for (let step = 0; step < MAX_STEPS; step++) {
@@ -168,6 +170,12 @@ export async function runAgent(
 
     const toolCalls = ((message?.tool_calls as any[]) ?? []) as Array<any>;
     if (toolCalls.length) {
+      // Limit tool calls per step to prevent flooding
+      if (toolCalls.length > MAX_TOOL_CALLS_PER_STEP) {
+        logger.warn(`Too many tool calls in step ${step + 1} (${toolCalls.length}), limiting to ${MAX_TOOL_CALLS_PER_STEP}`);
+        toolCalls.splice(MAX_TOOL_CALLS_PER_STEP);
+      }
+
       // Add the assistant message with tool_calls to the context first
       // This is required by OpenAI API: tool messages must follow an assistant message with tool_calls
       const assistantMsg = { 
@@ -178,24 +186,53 @@ export async function runAgent(
       context.getMessages().push(assistantMsg);
       
       for (const toolCall of toolCalls) {
+        // Create a signature for this tool call to detect duplicates
         const fnCall = toolCall.function ?? {};
         const toolName = fnCall.name as string | undefined;
         if (!toolName) continue;
-        const targetTool = tools.find((t) => t.metadata.name === toolName);
-        const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-
+        
         let parsedArgs: Record<string, any> = {};
         try {
           parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-          logger.debug(`Tool call parsed: ${toolName}`, {
-            parsedArgs,
-            argKeys: Object.keys(parsedArgs),
-          });
-        } catch (error) {
-          logger.error(`Failed to parse tool arguments for ${toolName}: ${error}`, {
-            rawArguments: fnCall.arguments,
-          });
+        } catch {
+          // Continue even if parsing fails
         }
+        
+        // Create a signature: toolName + sorted stringified args
+        const callSignature = `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
+        if (seenToolCalls.has(callSignature)) {
+          logger.warn(`Duplicate tool call detected, skipping: ${callSignature}`);
+          context.addToolResult(toolCall.id, toolName, {
+            provenanceId: `tool://${toolName}/duplicate-${Date.now()}`,
+            success: false,
+            error: "Duplicate tool call detected - this exact call was already made in this session",
+          });
+          continue;
+        }
+        seenToolCalls.add(callSignature);
+        
+        // For proxmox_write, also check for similar calls (same action + vmid + node, even if other params differ)
+        if (toolName === "proxmox_write" && parsedArgs.action && parsedArgs.vmid && parsedArgs.node) {
+          const similarSignature = `${toolName}:${parsedArgs.action}:${parsedArgs.vmid}:${parsedArgs.node}`;
+          if (seenToolCalls.has(similarSignature)) {
+            logger.warn(`Similar proxmox_write call detected, skipping: ${similarSignature}`);
+            context.addToolResult(toolCall.id, toolName, {
+              provenanceId: `tool://${toolName}/similar-duplicate-${Date.now()}`,
+              success: false,
+              error: `A similar operation (${parsedArgs.action}) was already attempted for VMID ${parsedArgs.vmid} on node ${parsedArgs.node} in this session`,
+            });
+            continue;
+          }
+          seenToolCalls.add(similarSignature);
+        }
+        const targetTool = tools.find((t) => t.metadata.name === toolName);
+        const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+        // parsedArgs already parsed above for duplicate detection
+        logger.debug(`Tool call parsed: ${toolName}`, {
+          parsedArgs,
+          argKeys: Object.keys(parsedArgs),
+        });
 
         if (!targetTool) {
           context.addToolResult(toolCall.id, toolName, {
@@ -217,27 +254,73 @@ export async function runAgent(
           continue;
         }
 
-        if (requiresConfirmation(targetTool)) {
-          const approved = await confirmHighRisk({
-            toolName,
-            parameters: parsedArgs,
-            risk: getToolRisk(targetTool),
-          });
+        // For proxmox_write operations, do a dry-run first to check if action is needed
+        // This avoids prompting for confirmation when the VM is already in the desired state
+        let result: ExecutionResult;
+        if (toolName === "proxmox_write" && parsedArgs.action) {
+          const dryRunResult = await executeToolCall(
+            { toolName, parameters: { ...parsedArgs, dryRun: true } },
+            tools
+          );
+          
+          // Check if the dry-run indicates no action is needed
+          const noActionNeeded = 
+            dryRunResult.data?.status === "already_running" ||
+            dryRunResult.data?.status === "already_stopped" ||
+            dryRunResult.data?.message?.includes("already") ||
+            dryRunResult.data?.message?.includes("No action needed");
+          
+          if (noActionNeeded) {
+            // No action needed, return the dry-run result without prompting
+            result = dryRunResult;
+          } else {
+            // Action is needed, prompt for confirmation
+            if (requiresConfirmation(targetTool)) {
+              const approved = await confirmHighRisk({
+                toolName,
+                parameters: parsedArgs,
+                risk: getToolRisk(targetTool),
+              });
 
-          if (!approved) {
-            context.addToolResult(toolCall.id, toolName, {
-              provenanceId,
-              success: false,
-              error: "High-risk action was not approved",
-            });
-            continue;
+              if (!approved) {
+                context.addToolResult(toolCall.id, toolName, {
+                  provenanceId,
+                  success: false,
+                  error: "High-risk action was not approved",
+                });
+                continue;
+              }
+            }
+            // Execute the actual operation
+            result = await executeToolCall(
+              { toolName, parameters: parsedArgs },
+              tools
+            );
           }
-        }
+        } else {
+          // For other tools, prompt for confirmation if needed
+          if (requiresConfirmation(targetTool)) {
+            const approved = await confirmHighRisk({
+              toolName,
+              parameters: parsedArgs,
+              risk: getToolRisk(targetTool),
+            });
 
-        const result = await executeToolCall(
-          { toolName, parameters: parsedArgs },
-          tools
-        );
+            if (!approved) {
+              context.addToolResult(toolCall.id, toolName, {
+                provenanceId,
+                success: false,
+                error: "High-risk action was not approved",
+              });
+              continue;
+            }
+          }
+
+          result = await executeToolCall(
+            { toolName, parameters: parsedArgs },
+            tools
+          );
+        }
 
         if (result.error) {
           logger.error(`Tool execution failed: ${toolName}`, {

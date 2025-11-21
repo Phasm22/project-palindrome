@@ -4,8 +4,9 @@ import type { ToolSchema } from "../../tool-schema";
 import { createToolSchema } from "../../tool-helpers";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { ProxmoxClient } from "../client";
-import { normalizeProxmoxResponse } from "./normalization";
+import { normalizeProxmoxResponse, normalizeMemory } from "./normalization";
 import { pceLogger } from "../../../pce/utils/logger";
+import { promises as dns } from "dns";
 
 /**
  * Schema for Proxmox read-only tool parameters
@@ -206,8 +207,9 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         return this.getNodeNetworkInterfaces(client, params.node);
 
       case "list_vms":
+        // If node is not provided, use cluster_resources to list all VMs across the cluster
         if (!params.node) {
-          throw new Error("node parameter required for list_vms");
+          return this.listVmsFromCluster(client, params.type);
         }
         return this.listVms(client, params.node, params.type || "qemu");
 
@@ -379,20 +381,29 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     const result = await client.get(`/nodes/${node}/status`);
     const status = result.data.data || {};
 
+    // Normalize with memory fields at top level so normalization works correctly
     const normalized = normalizeProxmoxResponse({
       node,
-      cpu: {
-        usage: status.cpu,
-        cores: status.maxcpu,
-      },
-      memory: {
-        used: status.mem,
-        total: status.maxmem,
-        free: status.maxmem - status.mem,
-      },
+      status: status.status,
+      cpu: status.cpu,
+      maxcpu: status.maxcpu,
+      mem: status.mem,
+      maxmem: status.maxmem,
       uptime: status.uptime,
       kversion: status.kversion,
       pveversion: status.pveversion,
+      // Also include structured format for convenience
+      cpu_info: {
+        usage: status.cpu,
+        cores: status.maxcpu,
+      },
+      memory_info: {
+        used: status.mem,
+        total: status.maxmem,
+        free: status.maxmem - (status.mem || 0),
+        used_normalized: normalizeMemory(status.mem),
+        total_normalized: normalizeMemory(status.maxmem),
+      },
     });
 
     return {
@@ -463,6 +474,32 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   /**
    * List all VMs on a node
    */
+  /**
+   * List VMs from cluster resources (when node is not specified)
+   */
+  private async listVmsFromCluster(
+    client: ProxmoxClient,
+    type?: "qemu" | "lxc"
+  ): Promise<{ data: any; metadata: any }> {
+    const clusterResult = await this.getClusterResources(client);
+    let vms = clusterResult.data.resources || [];
+
+    // Filter by type if specified
+    if (type) {
+      vms = vms.filter((vm: any) => vm.type === type);
+    }
+
+    return {
+      data: { 
+        vms, 
+        count: vms.length,
+        ...(type && { type }),
+        note: "Listed from cluster resources (all nodes)"
+      },
+      metadata: clusterResult.metadata,
+    };
+  }
+
   private async listVms(
     client: ProxmoxClient,
     node: string,
@@ -640,70 +677,159 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
    * Get VM IP addresses via guest agent
    * Falls back to config-based methods if guest agent unavailable
    */
+  /**
+   * Extract static IP addresses from network config
+   */
+  private extractStaticIPs(config: Record<string, any>): string[] {
+    const staticIPs: string[] = [];
+    for (const [key, value] of Object.entries(config)) {
+      if ((key.startsWith("net") || key.startsWith("ip")) && typeof value === "string") {
+        // Match patterns like: ip=192.168.1.1/24, ip=10.0.0.1/8, etc.
+        const staticIPMatch = value.match(/ip=([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:\/[0-9]{1,2})?)/);
+        if (staticIPMatch && !value.includes("ip=dhcp")) {
+          staticIPs.push(staticIPMatch[1].split("/")[0]); // Extract IP without CIDR
+        }
+      }
+    }
+    return staticIPs;
+  }
+
+  /**
+   * Extract hostname from config
+   */
+  private extractHostname(config: Record<string, any>): string | null {
+    // Check common hostname fields
+    if (config.hostname && typeof config.hostname === "string") {
+      return config.hostname;
+    }
+    if (config.name && typeof config.name === "string") {
+      return config.name;
+    }
+    // For LXC, hostname might be in searchdomain or other fields
+    if (config.searchdomain && typeof config.searchdomain === "string") {
+      // Sometimes hostname is combined with searchdomain
+      const parts = config.searchdomain.split(".");
+      if (parts.length > 0) {
+        return parts[0];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Resolve hostname via DNS
+   */
+  private async resolveDNS(hostname: string, domains: string[] = [".prox", ".local", ""]): Promise<string[]> {
+    const resolvedIPs: string[] = [];
+    
+    for (const domain of domains) {
+      const fqdn = domain ? `${hostname}${domain}` : hostname;
+      try {
+        const addresses = await dns.resolve4(fqdn);
+        resolvedIPs.push(...addresses);
+        pceLogger.debug("DNS resolution successful", { fqdn, addresses });
+      } catch (error: any) {
+        // DNS resolution failed, try next domain
+        pceLogger.debug("DNS resolution failed", { fqdn, error: error.message });
+      }
+    }
+    
+    return [...new Set(resolvedIPs)]; // Remove duplicates
+  }
+
   private async getVmIP(
     client: ProxmoxClient,
     node: string,
     vmid: number,
     type: "qemu" | "lxc"
   ): Promise<{ data: any; metadata: any }> {
+    // Check VM status first to determine if IP is current or historical
+    let vmStatus: string | null = null;
+    try {
+      const statusResult = await this.getVmStatus(client, node, vmid, type);
+      vmStatus = statusResult.data?.status || null;
+    } catch (statusError: any) {
+      // Status check failed, continue anyway
+      pceLogger.debug("Failed to get VM status for IP lookup", { node, vmid, error: statusError.message });
+    }
+
+    const isOffline = vmStatus === "stopped" || vmStatus === null;
+
+    // Get config for static IP detection and DNS resolution (works for both qemu and lxc)
+    let config: Record<string, any> = {};
+    let configResult: any = null;
+    try {
+      configResult = await client.get(`/nodes/${node}/${type}/${vmid}/config`);
+      config = configResult.data.data || {};
+    } catch (configError: any) {
+      pceLogger.debug("Failed to get config for IP discovery", { node, vmid, type, error: configError.message });
+    }
+
+    // Extract static IPs from config
+    const staticIPs = this.extractStaticIPs(config);
+    
+    // Extract hostname and try DNS resolution
+    const hostname = this.extractHostname(config);
+    let dnsIPs: string[] = [];
+    if (hostname) {
+      try {
+        dnsIPs = await this.resolveDNS(hostname, [".prox", ".local", ""]);
+      } catch (dnsError: any) {
+        pceLogger.debug("DNS resolution failed", { hostname, error: dnsError.message });
+      }
+    }
+
+    // Extract MAC addresses for DHCP fallback
+    const macs: string[] = [];
+    for (const [key, value] of Object.entries(config)) {
+      if ((key.startsWith("net") || key.startsWith("bridge")) && typeof value === "string") {
+        const macMatch = value.match(
+          /(?:hwaddr=|virtio=|model=)([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
+        );
+        if (macMatch) {
+          macs.push(macMatch[1].toLowerCase());
+        }
+      }
+    }
+
+    // Combine all discovered IPs
+    const allIPs = [...new Set([...staticIPs, ...dnsIPs])];
+    const sources: string[] = [];
+    if (staticIPs.length > 0) sources.push("static_config");
+    if (dnsIPs.length > 0) sources.push("dns_resolution");
+
     // Only qemu VMs support guest agent
     if (type !== "qemu") {
-      // For LXC containers, try to get MAC from config and suggest DHCP lookup
-      try {
-        const configResult = await client.get(`/nodes/${node}/lxc/${vmid}/config`);
-        const config = configResult.data.data || {};
-        
-        // Extract MAC from network config
-        const macs: string[] = [];
-        for (const [key, value] of Object.entries(config)) {
-          if (key.startsWith("net") && typeof value === "string") {
-            const macMatch = value.match(
-              /(?:hwaddr=)?([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
-            );
-            if (macMatch) {
-              macs.push(macMatch[1].toLowerCase());
-            }
-          }
-        }
-        
-        return {
-          data: {
-            node,
-            vmid,
-            type,
-            ips: [],
-            macs,
-            source: "lxc_config",
-            message: "LXC containers don't support guest agent. MAC addresses extracted from config. Use opnsense_readonly with action 'dhcp_leases_list' to find IP by MAC address or hostname.",
+      // For LXC containers, return what we found from config/DNS
+      return {
+        data: {
+          node,
+          vmid,
+          type,
+          status: vmStatus,
+          ips: allIPs,
+          staticIPs: staticIPs.length > 0 ? staticIPs : undefined,
+          dnsIPs: dnsIPs.length > 0 ? dnsIPs : undefined,
+          hostname: hostname || undefined,
+          macs: macs.length > 0 ? macs : undefined,
+          source: sources.length > 0 ? sources.join("+") : "lxc_config",
+          ...(allIPs.length === 0 && {
+            message: "LXC containers don't support guest agent. No static IPs found in config and DNS resolution failed. Use opnsense_readonly with action 'dhcp_leases_list' to find IP by MAC address or hostname.",
             suggestion: "Query DHCP leases using opnsense_readonly tool with action 'dhcp_leases_list' to find the IP address",
             nextAction: {
               tool: "opnsense_readonly",
               action: "dhcp_leases_list",
               reason: "LXC containers use DHCP. Query DHCP leases to find IP address by MAC address or hostname.",
-              macAddresses: macs,
+              macAddresses: macs.length > 0 ? macs : undefined,
+              hostname: hostname || undefined,
             },
-          },
-          metadata: configResult.metadata,
-        };
-      } catch (configError: any) {
-        return {
-          data: {
-            node,
-            vmid,
-            type,
-            ips: [],
-            source: "unsupported",
-            message: "Guest agent is only supported for qemu VMs. For LXC containers, use opnsense_readonly with action 'dhcp_leases_list' to find IP by MAC address or hostname.",
-            suggestion: "Query DHCP leases using opnsense_readonly tool with action 'dhcp_leases_list'",
-            nextAction: {
-              tool: "opnsense_readonly",
-              action: "dhcp_leases_list",
-              reason: "LXC containers use DHCP. Query DHCP leases to find IP address by MAC address or hostname.",
-            },
-          },
-          metadata: { timestamp: Date.now(), durationMs: 0 },
-        };
-      }
+          }),
+          ...(isOffline && allIPs.length === 0 && { 
+            note: "VM is currently offline. Any IP address found via DHCP will be historical (last known IP from DHCP lease)." 
+          }),
+        },
+        metadata: configResult?.metadata || { timestamp: Date.now(), durationMs: 0 },
+      };
     }
 
     try {
@@ -742,14 +868,45 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         }
       }
 
+      // Also check for static IPs and DNS IPs as additional info
+      // (Config was already fetched above)
+      const staticIPs = this.extractStaticIPs(config);
+      const hostname = this.extractHostname(config);
+      let dnsIPs: string[] = [];
+      if (hostname) {
+        try {
+          dnsIPs = await this.resolveDNS(hostname, [".prox", ".local", ""]);
+        } catch (dnsError: any) {
+          // DNS resolution failed, ignore
+        }
+      }
+
+      // Combine guest agent IPs with any additional IPs from config/DNS
+      const allIPs = [...new Set([...ips, ...staticIPs, ...dnsIPs])];
+      const additionalSources: string[] = [];
+      if (staticIPs.length > 0 && !ips.some(ip => staticIPs.includes(ip))) {
+        additionalSources.push("static_config");
+      }
+      if (dnsIPs.length > 0 && !ips.some(ip => dnsIPs.includes(ip))) {
+        additionalSources.push("dns_resolution");
+      }
+
       return {
         data: {
           node,
           vmid,
           type,
-          ips,
+          status: vmStatus,
+          ips: allIPs,
+          guestAgentIPs: ips,
+          ...(staticIPs.length > 0 && { staticIPs }),
+          ...(dnsIPs.length > 0 && { dnsIPs }),
+          ...(hostname && { hostname }),
           interfaces: interfacesData,
-          source: "guest_agent",
+          source: additionalSources.length > 0 ? `guest_agent+${additionalSources.join("+")}` : "guest_agent",
+          ...(isOffline && { 
+            note: "VM is currently offline. IP addresses shown are from the last time the guest agent was accessible." 
+          }),
         },
         metadata: agentResult.metadata,
       };
@@ -761,52 +918,38 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         error: error.message,
       });
 
-      // Fallback 1: Get MAC from config, could query DHCP later
-      try {
-        const configResult = await client.get(
-          `/nodes/${node}/qemu/${vmid}/config`
-        );
-        const config = configResult.data.data || {};
-
-        // Extract MAC from network config
-        const macs: string[] = [];
-        for (const [key, value] of Object.entries(config)) {
-          if (key.startsWith("net") && typeof value === "string") {
-            const macMatch = value.match(
-              /(?:virtio|model)=([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
-            );
-            if (macMatch) {
-              macs.push(macMatch[1].toLowerCase());
-            }
-          }
-        }
-
-        return {
-          data: {
-            node,
-            vmid,
-            type,
-            ips: [],
-            macs,
-            source: "config_fallback",
+      // Fallback: Use config-based methods (static IPs, DNS, MACs for DHCP)
+      // Config was already fetched above, so use it
+      return {
+        data: {
+          node,
+          vmid,
+          type,
+          status: vmStatus,
+          ips: allIPs,
+          staticIPs: staticIPs.length > 0 ? staticIPs : undefined,
+          dnsIPs: dnsIPs.length > 0 ? dnsIPs : undefined,
+          hostname: hostname || undefined,
+          macs: macs.length > 0 ? macs : undefined,
+          source: sources.length > 0 ? sources.join("+") : "config_fallback",
+          ...(allIPs.length === 0 && {
             message:
-              "Guest agent unavailable. MAC addresses extracted from config. IP resolution requires DHCP query or guest agent.",
-          },
-          metadata: configResult.metadata,
-        };
-      } catch (configError: any) {
-        return {
-          data: {
-            node,
-            vmid,
-            type,
-            ips: [],
-            source: "error",
-            message: `Failed to get IP: Guest agent unavailable and config access failed: ${configError.message}`,
-          },
-          metadata: { timestamp: Date.now(), durationMs: 0 },
-        };
-      }
+              "Guest agent unavailable. No static IPs found in config and DNS resolution failed. IP resolution requires DHCP query or guest agent.",
+            suggestion: "Query DHCP leases using opnsense_readonly tool with action 'dhcp_leases_list' to find IP by MAC address or hostname",
+            nextAction: {
+              tool: "opnsense_readonly",
+              action: "dhcp_leases_list",
+              reason: "Guest agent unavailable. Query DHCP leases to find IP address by MAC address or hostname.",
+              macAddresses: macs.length > 0 ? macs : undefined,
+              hostname: hostname || undefined,
+            },
+          }),
+          ...(isOffline && allIPs.length === 0 && { 
+            note: "VM is currently offline. Any IP address found via DHCP will be historical (last known IP from DHCP lease)." 
+          }),
+        },
+        metadata: configResult?.metadata || { timestamp: Date.now(), durationMs: 0 },
+      };
     }
   }
 

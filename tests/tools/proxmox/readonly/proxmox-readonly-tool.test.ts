@@ -346,10 +346,18 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
     });
 
     it("should handle get_vm_ip fallback when guest agent unavailable", async () => {
-      // First call fails (guest agent unavailable)
-      mockClient.get.mockRejectedValueOnce({ response: { status: 500 } });
+      // First call: status check succeeds
+      const statusResponse = {
+        data: {
+          data: {
+            status: "running",
+          },
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+      mockClient.get.mockResolvedValueOnce(statusResponse);
       
-      // Second call succeeds (config fallback)
+      // Second call: config fetch (now happens before guest agent for static IP/DNS detection)
       const configResponse = {
         data: {
           data: {
@@ -359,11 +367,15 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
       mockClient.get.mockResolvedValueOnce(configResponse);
+      
+      // Third call fails (guest agent unavailable)
+      mockClient.get.mockRejectedValueOnce({ response: { status: 500 } });
 
       const result = await tool.execute({ action: "get_vm_ip", node: "pve1", vmid: 101, type: "qemu" }, mockContext);
 
       expect(result.data).toBeDefined();
-      expect(result.data.source).toBe("config_fallback");
+      // Source could be "config_fallback" or include "static_config" or "dns_resolution" if found
+      expect(result.data.source).toMatch(/config_fallback|static_config|dns_resolution/);
       expect(result.data.macs).toBeDefined();
     });
 

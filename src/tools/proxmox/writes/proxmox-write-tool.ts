@@ -77,7 +77,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           },
           targetNode: {
             type: "string",
-            description: "Target node for migration (required for migrate_vm)",
+            description: "Target node for migration (required for migrate_vm). Note: Migration with local storage (LVM, ZFS local) may require stopping the VM/container first. Shared storage (NFS, Ceph) enables live migration.",
           },
           snapshotName: {
             type: "string",
@@ -144,6 +144,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         "Only admin and ops ACL groups can execute write operations.",
         "Pre-write state is automatically captured for rollback capability.",
         "Migration operations include mandatory pre-flight safety checks.",
+        "Migration with local storage (LVM, ZFS local) is complex and may require manual steps or stopping the VM/container first. Shared storage (NFS, Ceph) enables seamless live migration.",
       ],
     });
   }
@@ -228,19 +229,41 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           dryRun
         );
       case "migrate_vm":
-        // Migration only available for QEMU VMs
-        if (params.type === "lxc") {
-          throw new Error("Migration is not available for LXC containers");
+        if (!params.targetNode) {
+          throw new Error("targetNode parameter is required for migrate_vm action");
+        }
+        // Auto-detect type if not provided
+        let migrateType = params.type;
+        if (!migrateType) {
+          try {
+            // Try qemu first
+            await this.getVmStatus(client, params.node!, params.vmid!, "qemu");
+            migrateType = "qemu";
+          } catch {
+            // Try lxc if qemu fails
+            try {
+              await this.getVmStatus(client, params.node!, params.vmid!, "lxc");
+              migrateType = "lxc";
+            } catch {
+              throw new Error(`Could not determine VM type for VMID ${params.vmid} on node ${params.node}. Please specify type parameter.`);
+            }
+          }
         }
         return this.migrateVm(
           client,
           params.node!,
           params.vmid!,
+          migrateType,
           params.targetNode!,
           dryRun
         );
       default:
-        throw new Error(`Unknown action: ${action}`);
+        throw new Error(
+          `Unknown action: ${action}. ` +
+          `Supported actions: start_vm, stop_vm, shutdown_vm, reboot_vm, reset_vm, create_snapshot, rollback_snapshot, clone_vm, migrate_vm. ` +
+          `Actions like 'delete_vm', 'destroy_vm', 'remove_vm' are not supported for safety reasons. ` +
+          `Please use the Proxmox web UI for destructive operations.`
+        );
     }
   }
 
@@ -258,8 +281,26 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Check current state first
+    const currentState = await this.getVmStatus(client, node, vmid, type);
+    const currentStatus = currentState?.status;
+
+    // Check if VM is already running (before dry-run check)
+    if (currentStatus === "running") {
+      return {
+        data: {
+          action: "start_vm",
+          node,
+          vmid,
+          status: "already_running",
+          message: `VM ${vmid} is already running. No action needed.`,
+          currentStatus: "running",
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/skip-already-running" },
+      };
+    }
+
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("start_vm", currentState, {
           status: "running",
@@ -270,19 +311,38 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
-    const result = await client.post(this.getVmPath(type, node, vmid, "/status/start"), {});
-
-    return {
-      data: {
-        action: "start_vm",
-        node,
-        vmid,
-        status: "started",
-        preWriteState: preWriteState.hash,
-        ...result.data,
-      },
-      metadata: result.metadata,
-    };
+    
+    try {
+      const result = await client.post(this.getVmPath(type, node, vmid, "/status/start"), {});
+      return {
+        data: {
+          action: "start_vm",
+          node,
+          vmid,
+          status: "started",
+          preWriteState: preWriteState.hash,
+          ...result.data,
+        },
+        metadata: result.metadata,
+      };
+    } catch (error: any) {
+      // Handle "already running" error from Proxmox
+      if (error.response?.data?.message?.includes("already running") || 
+          error.message?.includes("already running")) {
+        return {
+          data: {
+            action: "start_vm",
+            node,
+            vmid,
+            status: "already_running",
+            message: `VM ${vmid} is already running. No action needed.`,
+            currentStatus: "running",
+          },
+          metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/already-running" },
+        };
+      }
+      throw error;
+    }
   }
 
   private async stopVm(
@@ -293,8 +353,26 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     timeout: number | undefined,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Check current state first
+    const currentState = await this.getVmStatus(client, node, vmid, type);
+    const currentStatus = currentState?.status;
+
+    // Check if VM is already stopped (before dry-run check)
+    if (currentStatus === "stopped") {
+      return {
+        data: {
+          action: "stop_vm",
+          node,
+          vmid,
+          status: "already_stopped",
+          message: `VM ${vmid} is already stopped. No action needed.`,
+          currentStatus: "stopped",
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/skip-already-stopped" },
+      };
+    }
+
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("stop_vm", currentState, {
           status: "stopped",
@@ -307,19 +385,39 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
 
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     const params = timeout ? { timeout } : {};
-    const result = await client.post(this.getVmPath(type, node, vmid, "/status/stop"), params);
-
-    return {
-      data: {
-        action: "stop_vm",
-        node,
-        vmid,
-        status: "stopped",
-        preWriteState: preWriteState.hash,
-        ...result.data,
-      },
-      metadata: result.metadata,
-    };
+    
+    try {
+      const result = await client.post(this.getVmPath(type, node, vmid, "/status/stop"), params);
+      return {
+        data: {
+          action: "stop_vm",
+          node,
+          vmid,
+          status: "stopped",
+          preWriteState: preWriteState.hash,
+          ...result.data,
+        },
+        metadata: result.metadata,
+      };
+    } catch (error: any) {
+      // Handle "already stopped" error from Proxmox
+      if (error.response?.data?.message?.includes("already stopped") || 
+          error.message?.includes("already stopped") ||
+          error.response?.data?.message?.includes("not running")) {
+        return {
+          data: {
+            action: "stop_vm",
+            node,
+            vmid,
+            status: "already_stopped",
+            message: `VM ${vmid} is already stopped. No action needed.`,
+            currentStatus: "stopped",
+          },
+          metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/already-stopped" },
+        };
+      }
+      throw error;
+    }
   }
 
   private async shutdownVm(
@@ -330,8 +428,26 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     timeout: number | undefined,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Check current state first
+    const currentState = await this.getVmStatus(client, node, vmid, type);
+    const currentStatus = currentState?.status;
+
+    // Check if VM is already stopped (before dry-run check)
+    if (currentStatus === "stopped") {
+      return {
+        data: {
+          action: "shutdown_vm",
+          node,
+          vmid,
+          status: "already_stopped",
+          message: `VM ${vmid} is already stopped. No action needed.`,
+          currentStatus: "stopped",
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/skip-already-stopped" },
+      };
+    }
+
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("shutdown_vm", currentState, {
           status: "stopped",
@@ -366,8 +482,10 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Check current state first (for dry-run preview)
+    const currentState = await this.getVmStatus(client, node, vmid, type);
+
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: this.generateDiffPreview("reboot_vm", currentState, {
           status: "rebooting",
@@ -544,6 +662,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     node: string,
     vmid: number,
+    type: "qemu" | "lxc",
     targetNode: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
@@ -552,6 +671,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       client,
       node,
       vmid,
+      type,
       targetNode
     );
 
@@ -561,10 +681,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           action: "migrate_vm",
           node,
           vmid,
+          type,
           targetNode,
           status: "migration_unsafe",
           preFlightChecks: preFlightResult,
           blocked: true,
+          note: "Migration with local storage (LVM, ZFS local) requires manual steps or shared storage (NFS, Ceph). Live migration may not be possible - consider stopping the VM/container first, or use shared storage for seamless migration.",
         },
         metadata: {
           status: 400,
@@ -576,7 +698,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
-      const currentState = await this.getVmStatus(client, node, vmid, "qemu");
+      const currentState = await this.getVmStatus(client, node, vmid, type);
       return {
         data: {
           ...this.generateDiffPreview("migrate_vm", currentState, {
@@ -584,13 +706,14 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
             action: "migrate",
           }),
           preFlightChecks: preFlightResult,
+          note: "Migration with local storage may require stopping the VM/container first. Shared storage (NFS, Ceph) enables live migration.",
         },
         metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/dry-run/migrate" },
       };
     }
 
-    const preWriteState = await this.capturePreWriteState(client, node, vmid, "qemu");
-    const result = await client.post(this.getVmPath("qemu", node, vmid, "/migrate"), {
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
+    const result = await client.post(this.getVmPath(type, node, vmid, "/migrate"), {
       target: targetNode,
     });
 
@@ -617,6 +740,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     sourceNode: string,
     vmid: number,
+    type: "qemu" | "lxc",
     targetNode: string
   ): Promise<{
     safe: boolean;
@@ -645,13 +769,22 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         message: targetData.status === "online" ? "Target node is online" : "Target node is not online",
       });
 
-      // Check 3: VM status on source
-      const vmStatus = await this.getVmStatus(client, sourceNode, vmid, "qemu");
-      checks.push({
-        name: "vm_exists_on_source",
-        passed: !!vmStatus,
-        message: vmStatus ? "VM exists on source node" : "VM not found on source node",
-      });
+      // Check 3: VM/Container status on source
+      try {
+        const vmStatus = await this.getVmStatus(client, sourceNode, vmid, type);
+        checks.push({
+          name: "vm_exists_on_source",
+          passed: !!vmStatus,
+          message: vmStatus ? "VM/container exists on source node" : "VM/container not found on source node",
+        });
+      } catch (error: any) {
+        // If getVmStatus fails, the VM/container doesn't exist or wrong type
+        checks.push({
+          name: "vm_exists_on_source",
+          passed: false,
+          message: `VM/container not found on source node or incorrect type (tried ${type}): ${error.message}`,
+        });
+      }
 
       // Check 4: Target node CPU/RAM margin
       const targetNodeResources = await client.get(`/nodes/${targetNode}/status`);

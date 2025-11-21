@@ -126,8 +126,22 @@ export class HybridOrchestrator {
     const responseWithProvenance = this.attachProvenance(response, context);
     const sTotalScore = this.getMaxVectorScore(retrievalResult);
 
+    // Detect real-time queries that may need tool execution for accurate results
+    const realTimeQueryPatterns = [
+      /\b(turn on|turn off|start|stop|shutdown|reboot|status|state|running|stopped)\b/i,
+      /\b(current|now|currently|real.?time|live)\b/i,
+    ];
+    const isRealTimeQuery = realTimeQueryPatterns.some((pattern) => pattern.test(query));
+    
+    // Append note for real-time queries about potential stale data
+    let answer = responseWithProvenance.answer;
+    if (isRealTimeQuery) {
+      answer += "\n\n⚠️ **Note:** This response is based on ingested data and may be stale. For real-time VM/container status or control operations, use the REPL (`bun src/cli.ts repl`) which executes tools to get current state.";
+    }
+
     return {
       ...responseWithProvenance,
+      answer,
       queryType: "SEMANTIC_ONLY",
       fallbackMode: null,
       context,
@@ -321,8 +335,22 @@ export class HybridOrchestrator {
     const responseWithProvenance = this.attachProvenance(response, context);
     const sTotalScore = this.getMaxVectorScore(retrievalResult);
 
+    // Detect real-time queries that may need tool execution for accurate results
+    const realTimeQueryPatterns = [
+      /\b(turn on|turn off|start|stop|shutdown|reboot|status|state|running|stopped)\b/i,
+      /\b(current|now|currently|real.?time|live)\b/i,
+    ];
+    const isRealTimeQuery = realTimeQueryPatterns.some((pattern) => pattern.test(query));
+    
+    // Append note for real-time queries about potential stale data
+    let answer = responseWithProvenance.answer;
+    if (isRealTimeQuery) {
+      answer += "\n\n⚠️ **Note:** This response is based on ingested data and may be stale. For real-time VM/container status or control operations, use the REPL (`bun src/cli.ts repl`) which executes tools to get current state.";
+    }
+
     return {
       ...responseWithProvenance,
+      answer,
       queryType: "SEMANTIC_ONLY",
       fallbackMode: "graph_down",
       context,
@@ -380,8 +408,22 @@ export class HybridOrchestrator {
       };
     });
 
+    // Detect real-time queries that may need tool execution for accurate results
+    const realTimeQueryPatterns = [
+      /\b(turn on|turn off|start|stop|shutdown|reboot|status|state|running|stopped)\b/i,
+      /\b(current|now|currently|real.?time|live)\b/i,
+    ];
+    const isRealTimeQuery = realTimeQueryPatterns.some((pattern) => pattern.test(query));
+    
+    // Append note for real-time queries about potential stale data
+    let answer = response.answer;
+    if (isRealTimeQuery) {
+      answer += "\n\n⚠️ **Note:** This response is based on ingested data and may be stale. For real-time VM/container status or control operations, use the REPL (`bun src/cli.ts repl`) which executes tools to get current state.";
+    }
+
     return {
       ...response,
+      answer,
       sources: sourcesWithProvenance,
       metadata: {
         ...response.metadata,

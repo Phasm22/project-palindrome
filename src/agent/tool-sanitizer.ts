@@ -13,11 +13,11 @@ export function sanitizeToolPayload<T>(payload: T): T {
     return payload;
   }
 
-  // Special handling for DHCP lease responses - allow IP addresses
+  // Special handling for responses where MAC addresses or IP addresses are the primary data
   if (typeof payload === "object" && payload !== null) {
     const payloadAny = payload as any;
     
-    // Check if this is a DHCP lease response
+    // Check if this is a DHCP lease response - allow IP addresses
     if (
       payloadAny.action === "dhcp_leases_list" ||
       (Array.isArray(payloadAny.leases) && payloadAny.leases.length > 0)
@@ -32,6 +32,42 @@ export function sanitizeToolPayload<T>(payload: T): T {
         );
         const dhcpRedactor = new Redactor(ipPatterns);
         const sanitized = dhcpRedactor.redact(serialized).redactedText;
+        return JSON.parse(sanitized);
+      } catch {
+        // If parsing fails, fall through to normal sanitization
+      }
+    }
+    
+    // Check if this is a response that includes MAC addresses as primary data
+    // (e.g., get_vm_ip, get_lxc_config, get_vm_network responses with macs field)
+    // Also check action names that typically return MAC addresses
+    const macAddressActions = ["get_vm_ip", "get_lxc_config", "get_vm_network"];
+    const isMacAddressAction = payloadAny.action && macAddressActions.includes(payloadAny.action);
+    
+    // Check both top-level and nested data structures
+    const hasMacsField = 
+      payloadAny.macs ||
+      payloadAny.macAddresses ||
+      payloadAny.data?.macs ||
+      payloadAny.data?.macAddresses ||
+      (Array.isArray(payloadAny) && payloadAny.some((item: any) => 
+        item.macs || item.macAddresses || item.data?.macs || item.data?.macAddresses
+      )) ||
+      (Array.isArray(payloadAny.data) && payloadAny.data.some((item: any) => 
+        item.macs || item.macAddresses
+      ));
+    
+    if (isMacAddressAction || hasMacsField) {
+      // For MAC address queries, allow MAC addresses to pass through
+      // They are the primary data being queried
+      try {
+        const serialized = JSON.stringify(payload);
+        // Create a temporary redactor that excludes MAC patterns
+        const macPatterns = ALL_REDACTION_PATTERNS.filter(
+          (p) => !p.name.toLowerCase().includes("mac") && !p.name.toLowerCase().includes("hardware")
+        );
+        const macRedactor = new Redactor(macPatterns);
+        const sanitized = macRedactor.redact(serialized).redactedText;
         return JSON.parse(sanitized);
       } catch {
         // If parsing fails, fall through to normal sanitization
