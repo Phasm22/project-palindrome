@@ -44,6 +44,7 @@ docs/
 - [Tool Map](tools/tool-map.md)
 - [OPNsense Integration](tools/mcp-opnsense-integration.md)
 - [SSH Setup](tools/ssh-tool-setup.md)
+- [Proxmox Tool Capabilities](tools/proxmox-capabilities.md)
 
 ## Machine-Readable Index
 

@@ -172,6 +172,10 @@ categories:
   tools:
     description: "Tool-specific documentation, integration guides, and tool setup"
     files:
+      - path: "tools/proxmox-capabilities.md"
+        title: "Proxmox Tool Capabilities and API Routes"
+        type: "reference"
+        tool: "proxmox"
       - path: "tools/mcp-opnsense-integration.md"
         title: "MCP OPNsense Integration"
         type: "integration"
