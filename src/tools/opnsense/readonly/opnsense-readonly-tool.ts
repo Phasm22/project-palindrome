@@ -441,13 +441,29 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
   // ========== Diagnostics API Methods ==========
 
   private async getArpTable(client: any): Promise<any> {
-    const response = await client.get("/api/diagnostics/interface/getArp");
-    return {
-      action: "diagnostics_arp_table",
-      arp_entries: response.data || [],
-      count: Array.isArray(response.data) ? response.data.length : 0,
-      timestamp: new Date().toISOString(),
-    };
+    // OPNsense getArp endpoint may require POST with JSON body
+    try {
+      // Try POST first (many OPNsense diagnostic endpoints require POST)
+      const response = await client.post("/api/diagnostics/interface/getArp", {});
+      return {
+        action: "diagnostics_arp_table",
+        arp_entries: response.data || [],
+        count: Array.isArray(response.data) ? response.data.length : 0,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (postError: any) {
+      // If POST fails, try GET as fallback
+      if (postError.response?.status === 405 || postError.response?.status === 400) {
+        const response = await client.get("/api/diagnostics/interface/getArp");
+        return {
+          action: "diagnostics_arp_table",
+          arp_entries: response.data || [],
+          count: Array.isArray(response.data) ? response.data.length : 0,
+          timestamp: new Date().toISOString(),
+        };
+      }
+      throw postError;
+    }
   }
 
   private async getRoutingTable(client: any): Promise<any> {
@@ -488,13 +504,51 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
   // ========== DHCP API Methods ==========
 
   private async getDhcpLeases(client: any): Promise<any> {
-    const response = await client.get("/api/dhcp/lease/list");
-    return {
-      action: "dhcp_leases_list",
-      leases: response.data || [],
-      count: Array.isArray(response.data) ? response.data.length : 0,
-      timestamp: new Date().toISOString(),
-    };
+    // OPNsense searchLease endpoint requires POST with JSON body (even for read operations)
+    // Empty body {} should return all leases
+    const endpoints = [
+      { path: "/api/dhcpv4/leases/searchLease", method: "POST" }, // Correct endpoint per OPNsense docs
+      { path: "/api/dhcpv4/lease/list", method: "GET" }, // Fallback
+      { path: "/api/dhcp/lease/list", method: "GET" }, // Legacy fallback
+    ];
+
+    let lastError: any = null;
+    for (const { path, method } of endpoints) {
+      try {
+        let response;
+        if (method === "POST") {
+          // POST with empty JSON body to get all leases
+          response = await client.post(path, {});
+        } else {
+          response = await client.get(path);
+        }
+
+        // Check if response has data - OPNsense API typically returns {rows: [...]} or {data: [...]}
+        const leases = response.data?.rows || response.data?.data || response.data || [];
+        return {
+          action: "dhcp_leases_list",
+          leases: Array.isArray(leases) ? leases : [],
+          count: Array.isArray(leases) ? leases.length : 0,
+          timestamp: new Date().toISOString(),
+          endpoint: path,
+        };
+      } catch (error: any) {
+        lastError = error;
+        // If it's not a 404, it might be a different error (auth, etc.) - don't try other endpoints
+        if (error.response?.status !== 404 && error.response?.status !== 405 && error.response?.status !== 400) {
+          throw error;
+        }
+        // Continue to next endpoint if 404, 405, or 400
+      }
+    }
+
+    // If all endpoints failed, return helpful error
+    throw new Error(
+      `DHCP leases endpoint not found. Tried: ${endpoints.map(e => `${e.method} ${e.path}`).join(", ")}. ` +
+      `This may indicate DHCP is not configured or the OPNsense version uses a different API. ` +
+      `Alternative: Use action "diagnostics_arp_table" to find IP addresses by MAC address. ` +
+      `Error: ${lastError?.message || "Unknown error"}`
+    );
   }
 
   private async getDhcpStatus(client: any): Promise<any> {

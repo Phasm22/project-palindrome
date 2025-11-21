@@ -19,6 +19,15 @@ export async function executeToolCall(
   };
 
   logger.info(`Executing tool: ${call.toolName}`);
-  return tool.execute(call.parameters ?? {}, context);
+  
+  const result = await tool.execute(call.parameters ?? {}, context);
+  
+  if (result.error) {
+    logger.error(`Tool execution failed: ${call.toolName}`, {
+      error: result.error,
+    });
+  }
+  
+  return result;
 }
 

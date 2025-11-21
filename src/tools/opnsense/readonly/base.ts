@@ -90,6 +90,11 @@ export abstract class OpnsenseReadOnlyBase extends BaseTool {
         tool: this.metadata.name,
         error: error.message,
         status: error.response?.status,
+        statusText: error.response?.statusText,
+        url: error.config?.url || error.request?.url,
+        method: error.config?.method,
+        responseData: error.response?.data,
+        stack: error.stack,
       });
 
       // Sanitize error messages too

@@ -157,7 +157,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     }
 
     // VM-level actions
-    if (action.startsWith("get_vm_")) {
+    if (action.startsWith("get_vm_") || action === "get_lxc_config") {
       return this.handleVmAction(action, params, client);
     }
 
@@ -225,10 +225,19 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     client: ProxmoxClient
   ): Promise<{ data: any; metadata: any }> {
     if (!params.node) {
-      throw new Error("node parameter required for VM actions");
+      throw new Error(
+        `node parameter required for VM actions. ` +
+        `Use action "cluster_resources" first to find the node name for a VM/container, ` +
+        `or use action "list_nodes" to see available nodes. ` +
+        `Example: {"action": "${action}", "node": "YANG", "vmid": ${params.vmid || "XXX"}}`
+      );
     }
     if (!params.vmid) {
-      throw new Error("vmid parameter required for VM actions");
+      throw new Error(
+        `vmid parameter required for VM actions. ` +
+        `Use action "cluster_resources" first to find the VMID for a VM/container by name. ` +
+        `Example: {"action": "${action}", "node": "${params.node || "XXX"}", "vmid": 108}`
+      );
     }
 
     // Auto-detect VM type if not specified by trying qemu first, then lxc
@@ -239,12 +248,13 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         await client.get(`/nodes/${params.node}/qemu/${params.vmid}/status/current`);
         vmType = "qemu";
       } catch (error: any) {
-        // If qemu fails with 404/403, try lxc
-        if (error?.response?.status === 404 || error?.response?.status === 403) {
+        // If qemu fails with 404/403/500, try lxc (500 can indicate wrong type)
+        const status = error?.response?.status;
+        if (status === 404 || status === 403 || status === 500) {
           try {
             await client.get(`/nodes/${params.node}/lxc/${params.vmid}/status/current`);
             vmType = "lxc";
-          } catch {
+          } catch (lxcError: any) {
             // If both fail, default to qemu and let the error propagate
             vmType = "qemu";
           }
@@ -549,9 +559,27 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
     // Extract network-related config
     const networkConfig: Record<string, any> = {};
+    let usesDhcp = false;
+    const macs: string[] = [];
+    
     for (const [key, value] of Object.entries(config)) {
       if (key.startsWith("net") || key.startsWith("bridge")) {
         networkConfig[key] = value;
+        
+        // Check if DHCP is being used
+        if (typeof value === "string") {
+          if (value.includes("ip=dhcp") || value.includes("ip=dhcp,")) {
+            usesDhcp = true;
+          }
+          
+          // Extract MAC addresses
+          const macMatch = value.match(
+            /(?:hwaddr=|virtio=|model=)([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
+          );
+          if (macMatch) {
+            macs.push(macMatch[1].toLowerCase());
+          }
+        }
       }
     }
 
@@ -561,6 +589,18 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       type,
       network: networkConfig,
     });
+
+    // If DHCP is detected, add guidance to query DHCP leases
+    if (usesDhcp) {
+      (normalized as any).usesDhcp = true;
+      (normalized as any).message = "This VM/container uses DHCP for IP assignment. Query DHCP leases to find the current IP address.";
+      (normalized as any).nextAction = {
+        tool: "opnsense_readonly",
+        action: "dhcp_leases_list",
+        reason: "VM/container uses DHCP. Query DHCP leases to find IP address by MAC address or hostname.",
+        macAddresses: macs.length > 0 ? macs : undefined,
+      };
+    }
 
     return {
       data: normalized,
@@ -608,17 +648,62 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   ): Promise<{ data: any; metadata: any }> {
     // Only qemu VMs support guest agent
     if (type !== "qemu") {
-      return {
-        data: {
-          node,
-          vmid,
-          type,
-          ips: [],
-          source: "unsupported",
-          message: "Guest agent is only supported for qemu VMs",
-        },
-        metadata: { timestamp: Date.now(), durationMs: 0 },
-      };
+      // For LXC containers, try to get MAC from config and suggest DHCP lookup
+      try {
+        const configResult = await client.get(`/nodes/${node}/lxc/${vmid}/config`);
+        const config = configResult.data.data || {};
+        
+        // Extract MAC from network config
+        const macs: string[] = [];
+        for (const [key, value] of Object.entries(config)) {
+          if (key.startsWith("net") && typeof value === "string") {
+            const macMatch = value.match(
+              /(?:hwaddr=)?([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
+            );
+            if (macMatch) {
+              macs.push(macMatch[1].toLowerCase());
+            }
+          }
+        }
+        
+        return {
+          data: {
+            node,
+            vmid,
+            type,
+            ips: [],
+            macs,
+            source: "lxc_config",
+            message: "LXC containers don't support guest agent. MAC addresses extracted from config. Use opnsense_readonly with action 'dhcp_leases_list' to find IP by MAC address or hostname.",
+            suggestion: "Query DHCP leases using opnsense_readonly tool with action 'dhcp_leases_list' to find the IP address",
+            nextAction: {
+              tool: "opnsense_readonly",
+              action: "dhcp_leases_list",
+              reason: "LXC containers use DHCP. Query DHCP leases to find IP address by MAC address or hostname.",
+              macAddresses: macs,
+            },
+          },
+          metadata: configResult.metadata,
+        };
+      } catch (configError: any) {
+        return {
+          data: {
+            node,
+            vmid,
+            type,
+            ips: [],
+            source: "unsupported",
+            message: "Guest agent is only supported for qemu VMs. For LXC containers, use opnsense_readonly with action 'dhcp_leases_list' to find IP by MAC address or hostname.",
+            suggestion: "Query DHCP leases using opnsense_readonly tool with action 'dhcp_leases_list'",
+            nextAction: {
+              tool: "opnsense_readonly",
+              action: "dhcp_leases_list",
+              reason: "LXC containers use DHCP. Query DHCP leases to find IP address by MAC address or hostname.",
+            },
+          },
+          metadata: { timestamp: Date.now(), durationMs: 0 },
+        };
+      }
     }
 
     try {

@@ -66,7 +66,7 @@ export class Redactor {
     }
 
     if (redactions.length > 0) {
-      pceLogger.info(`Redacted ${redactions.length} pattern types`, {
+      pceLogger.debug(`Redacted ${redactions.length} pattern types`, {
         totalRedactions: redactions.reduce((sum, r) => sum + r.count, 0),
       });
     }

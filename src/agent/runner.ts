@@ -187,8 +187,14 @@ export async function runAgent(
         let parsedArgs: Record<string, any> = {};
         try {
           parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
+          logger.debug(`Tool call parsed: ${toolName}`, {
+            parsedArgs,
+            argKeys: Object.keys(parsedArgs),
+          });
         } catch (error) {
-          logger.error(`Failed to parse tool arguments for ${toolName}: ${error}`);
+          logger.error(`Failed to parse tool arguments for ${toolName}: ${error}`, {
+            rawArguments: fnCall.arguments,
+          });
         }
 
         if (!targetTool) {
@@ -232,6 +238,17 @@ export async function runAgent(
           { toolName, parameters: parsedArgs },
           tools
         );
+
+        if (result.error) {
+          logger.error(`Tool execution failed: ${toolName}`, {
+            error: result.error,
+            parameters: parsedArgs,
+          });
+        } else {
+          logger.debug(`Tool execution succeeded: ${toolName}`, {
+            dataKeys: result.data && typeof result.data === 'object' ? Object.keys(result.data) : [],
+          });
+        }
 
         const sanitizedData = sanitizeToolPayload(result.data);
 

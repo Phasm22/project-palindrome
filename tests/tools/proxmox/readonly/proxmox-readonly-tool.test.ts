@@ -316,6 +316,78 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(result.data.snapshots).toBeDefined();
       expect(result.data.count).toBe(1);
     });
+
+    it("should implement get_vm_ip action", async () => {
+      const mockResponse = {
+        data: {
+          data: {
+            result: [
+              {
+                name: "eth0",
+                "ip-addresses": [
+                  { "ip-address-type": "ipv4", "ip-address": "192.168.1.100" },
+                ],
+                "hardware-address": "aa:bb:cc:dd:ee:ff",
+              },
+            ],
+          },
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      mockClient.get.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute({ action: "get_vm_ip", node: "pve1", vmid: 101, type: "qemu" }, mockContext);
+
+      expect(result.data).toBeDefined();
+      expect(result.data.ips).toBeDefined();
+      expect(Array.isArray(result.data.ips)).toBe(true);
+      expect(result.data.source).toBe("guest_agent");
+    });
+
+    it("should handle get_vm_ip fallback when guest agent unavailable", async () => {
+      // First call fails (guest agent unavailable)
+      mockClient.get.mockRejectedValueOnce({ response: { status: 500 } });
+      
+      // Second call succeeds (config fallback)
+      const configResponse = {
+        data: {
+          data: {
+            net0: "virtio=aa:bb:cc:dd:ee:ff,bridge=vmbr0",
+          },
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+      mockClient.get.mockResolvedValueOnce(configResponse);
+
+      const result = await tool.execute({ action: "get_vm_ip", node: "pve1", vmid: 101, type: "qemu" }, mockContext);
+
+      expect(result.data).toBeDefined();
+      expect(result.data.source).toBe("config_fallback");
+      expect(result.data.macs).toBeDefined();
+    });
+
+    it("should implement get_lxc_config action", async () => {
+      const mockResponse = {
+        data: {
+          data: {
+            hostname: "container1",
+            memory: 1024,
+            cores: 2,
+          },
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      // When type is provided, auto-detection is skipped, so only the config call is made
+      mockClient.get.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute({ action: "get_lxc_config", node: "pve1", vmid: 100, type: "lxc" }, mockContext);
+
+      expect(result.data).toBeDefined();
+      expect(result.data.type).toBe("lxc");
+      expect(result.data.vmid).toBe(100);
+    });
   });
 
   describe("Cluster-Level Actions", () => {

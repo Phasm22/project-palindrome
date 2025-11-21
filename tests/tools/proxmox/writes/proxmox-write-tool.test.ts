@@ -127,6 +127,165 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
       expect(result.data).toBeDefined();
       expect(result.data.action).toBe("migrate_vm");
     });
+
+    it("should implement shutdown_vm action", async () => {
+      const mockResponse = {
+        data: { data: "OK" },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: { status: "running" } },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: {} },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.post.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute(
+        { action: "shutdown_vm", node: "pve1", vmid: 101 },
+        mockContext
+      );
+
+      expect(result.data).toBeDefined();
+      expect(result.data.action).toBe("shutdown_vm");
+      expect(mockClient.post).toHaveBeenCalled();
+    });
+
+    it("should implement reboot_vm action", async () => {
+      const mockResponse = {
+        data: { data: "OK" },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: { status: "running" } },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: {} },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.post.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute(
+        { action: "reboot_vm", node: "pve1", vmid: 101 },
+        mockContext
+      );
+
+      expect(result.data).toBeDefined();
+      expect(result.data.action).toBe("reboot_vm");
+      expect(mockClient.post).toHaveBeenCalled();
+    });
+
+    it("should implement reset_vm action", async () => {
+      const mockResponse = {
+        data: { data: "OK" },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: { status: "running" } },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: {} },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.post.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute(
+        { action: "reset_vm", node: "pve1", vmid: 101 },
+        mockContext
+      );
+
+      expect(result.data).toBeDefined();
+      expect(result.data.action).toBe("reset_vm");
+      expect(mockClient.post).toHaveBeenCalled();
+    });
+
+    it("should implement create_snapshot action", async () => {
+      const mockResponse = {
+        data: { data: "OK" },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: { status: "running" } },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: {} },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.post.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute(
+        { action: "create_snapshot", node: "pve1", vmid: 101, snapshotName: "test-snapshot" },
+        mockContext
+      );
+
+      expect(result.data).toBeDefined();
+      expect(result.data.action).toBe("create_snapshot");
+      expect(result.data.snapshotName).toBe("test-snapshot");
+      expect(mockClient.post).toHaveBeenCalled();
+    });
+
+    it("should implement rollback_snapshot action", async () => {
+      const mockResponse = {
+        data: { data: "OK" },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: { status: "running" } },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: {} },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.post.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute(
+        { action: "rollback_snapshot", node: "pve1", vmid: 101, snapshotName: "test-snapshot" },
+        mockContext
+      );
+
+      expect(result.data).toBeDefined();
+      expect(result.data.action).toBe("rollback_snapshot");
+      expect(result.data.snapshotName).toBe("test-snapshot");
+      expect(mockClient.post).toHaveBeenCalled();
+    });
+
+    it("should implement clone_vm action", async () => {
+      const mockResponse = {
+        data: { data: "OK" },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
+
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: { status: "stopped" } },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.get.mockResolvedValueOnce({
+        data: { data: {} },
+        metadata: mockResponse.metadata,
+      });
+      mockClient.post.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute(
+        { action: "clone_vm", node: "pve1", vmid: 101, newVmid: 102 },
+        mockContext
+      );
+
+      expect(result.data).toBeDefined();
+      expect(result.data.action).toBe("clone_vm");
+      expect(result.data.newVmid).toBe(102);
+      expect(mockClient.post).toHaveBeenCalled();
+    });
   });
 
   describe("TL-2B.2: Migration Pre-Flight Check Implementation", () => {
