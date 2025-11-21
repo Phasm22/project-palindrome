@@ -293,15 +293,40 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
   // ========== Firewall API Methods ==========
 
   private async getFirewallRules(client: any, limit?: number): Promise<any> {
-    const response = await client.get("/api/firewall/rule/searchRule");
-    const rules = response.data?.rows || [];
-    return {
-      action: "firewall_rules_list",
-      count: limit ? Math.min(rules.length, limit) : rules.length,
-      total: rules.length,
-      rules: limit ? rules.slice(0, limit) : rules,
-      timestamp: new Date().toISOString(),
-    };
+    try {
+      // Try POST first (OPNsense API often requires POST for search endpoints)
+      const response = await client.post("/api/firewall/rule/searchRule", {});
+      const rules = response.data?.rows || [];
+      return {
+        action: "firewall_rules_list",
+        count: limit ? Math.min(rules.length, limit) : rules.length,
+        total: rules.length,
+        rules: limit ? rules.slice(0, limit) : rules,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      // Fallback to GET if POST fails
+      if (error.response?.status === 404 || error.response?.status === 405) {
+        try {
+          const response = await client.get("/api/firewall/rule/searchRule");
+          const rules = response.data?.rows || [];
+          return {
+            action: "firewall_rules_list",
+            count: limit ? Math.min(rules.length, limit) : rules.length,
+            total: rules.length,
+            rules: limit ? rules.slice(0, limit) : rules,
+            timestamp: new Date().toISOString(),
+          };
+        } catch (getError: any) {
+          throw new Error(
+            `OPNsense API endpoint /api/firewall/rule/searchRule is not available. ` +
+            `For firewall rules, you may need to use SSH to query the configuration directly. ` +
+            `Error: ${getError.response?.data?.message || getError.message}`
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   private async getFirewallAliases(client: any, limit?: number): Promise<any> {

@@ -186,32 +186,74 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         if (!params.node) {
           throw new Error("node parameter required for node_status");
         }
-        return this.getNodeStatus(client, params.node);
+        // Normalize node name and add hint if changed
+        const originalNodeStatus = params.node;
+        const normalizedNodeStatus = await this.normalizeNodeName(client, params.node);
+        const statusResult = await this.getNodeStatus(client, normalizedNodeStatus);
+        if (originalNodeStatus !== normalizedNodeStatus) {
+          statusResult.data._hint = `Note: Node name "${originalNodeStatus}" was normalized to "${normalizedNodeStatus}". For future queries, use the exact node name "${normalizedNodeStatus}" or call "list_nodes" first to see available nodes.`;
+        }
+        return statusResult;
 
       case "node_resources":
         if (!params.node) {
           throw new Error("node parameter required for node_resources");
         }
-        return this.getNodeResources(client, params.node);
+        const originalNodeResources = params.node;
+        const normalizedNodeResources = await this.normalizeNodeName(client, params.node);
+        const resourcesResult = await this.getNodeResources(client, normalizedNodeResources);
+        if (originalNodeResources !== normalizedNodeResources) {
+          resourcesResult.data._hint = `Note: Node name "${originalNodeResources}" was normalized to "${normalizedNodeResources}". For future queries, use the exact node name "${normalizedNodeResources}" or call "list_nodes" first to see available nodes.`;
+        }
+        return resourcesResult;
 
       case "node_disks":
         if (!params.node) {
           throw new Error("node parameter required for node_disks");
         }
-        return this.getNodeDisks(client, params.node);
+        const originalNodeDisks = params.node;
+        const normalizedNodeDisks = await this.normalizeNodeName(client, params.node);
+        const disksResult = await this.getNodeDisks(client, normalizedNodeDisks);
+        if (originalNodeDisks !== normalizedNodeDisks) {
+          disksResult.data._hint = `Note: Node name "${originalNodeDisks}" was normalized to "${normalizedNodeDisks}". For future queries, use the exact node name "${normalizedNodeDisks}" or call "list_nodes" first to see available nodes.`;
+        }
+        return disksResult;
 
       case "node_network_interfaces":
         if (!params.node) {
           throw new Error("node parameter required for node_network_interfaces");
         }
-        return this.getNodeNetworkInterfaces(client, params.node);
+        const originalNodeNetwork = params.node;
+        const normalizedNodeNetwork = await this.normalizeNodeName(client, params.node);
+        const networkResult = await this.getNodeNetworkInterfaces(client, normalizedNodeNetwork);
+        if (originalNodeNetwork !== normalizedNodeNetwork) {
+          networkResult.data._hint = `Note: Node name "${originalNodeNetwork}" was normalized to "${normalizedNodeNetwork}". For future queries, use the exact node name "${normalizedNodeNetwork}" or call "list_nodes" first to see available nodes.`;
+        }
+        return networkResult;
 
       case "list_vms":
         // If node is not provided, use cluster_resources to list all VMs across the cluster
         if (!params.node) {
           return this.listVmsFromCluster(client, params.type);
         }
-        return this.listVms(client, params.node, params.type || "qemu");
+        // Normalize node name and capture original for hint
+        const originalNodeName = params.node;
+        const normalizedNode = await this.normalizeNodeName(client, params.node);
+        // If no type specified, query both qemu and lxc
+        if (!params.type) {
+          const result = await this.listVmsBothTypes(client, normalizedNode);
+          // Add hint if node name was normalized
+          if (originalNodeName !== normalizedNode) {
+            result.data._hint = `Note: Node name "${originalNodeName}" was normalized to "${normalizedNode}". For future queries, use the exact node name "${normalizedNode}" or call "list_nodes" first to see available nodes.`;
+          }
+          return result;
+        }
+        const result = await this.listVms(client, normalizedNode, params.type);
+        // Add hint if node name was normalized
+        if (originalNodeName !== normalizedNode) {
+          result.data._hint = `Note: Node name "${originalNodeName}" was normalized to "${normalizedNode}". For future queries, use the exact node name "${normalizedNode}" or call "list_nodes" first to see available nodes.`;
+        }
+        return result;
 
       default:
         throw new Error(`Unknown node action: ${action}`);
@@ -234,6 +276,8 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         `Example: {"action": "${action}", "node": "YANG", "vmid": ${params.vmid || "XXX"}}`
       );
     }
+    // Normalize node name for VM actions too
+    params.node = await this.normalizeNodeName(client, params.node);
     if (!params.vmid) {
       throw new Error(
         `vmid parameter required for VM actions. ` +
@@ -321,6 +365,147 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   }
 
   // ==================== Node-Level Actions ====================
+
+  /**
+   * Deterministic node name alias map for common variations
+   * Maps common name variations to actual node names
+   */
+  private static readonly NODE_ALIASES: Record<string, string> = {
+    // proxBig variations
+    proxbig: "proxBig",
+    prox_big: "proxBig",
+    "prox-big": "proxBig",
+    // Add more aliases as needed
+  };
+
+  /**
+   * Normalize node name by validating FIRST, then using fuzzy matching
+   * This prevents 403 errors from trying non-existent node names
+   * 
+   * Strategy:
+   * 1. Check deterministic alias map
+   * 2. List all nodes from cluster to get actual node names
+   * 3. Try exact case-insensitive match
+   * 4. Try fuzzy match (ignoring underscores/hyphens/case)
+   * 5. Check if it matches PROXMOX_URL hostname (for standalone nodes)
+   * 6. Return normalized name or throw helpful error
+   */
+  private async normalizeNodeName(
+    client: ProxmoxClient,
+    nodeName: string
+  ): Promise<string> {
+    // Step 1: Check deterministic alias map first
+    const aliasKey = nodeName.toLowerCase().replace(/[_-]/g, '');
+    if (ProxmoxReadOnlyTool.NODE_ALIASES[aliasKey]) {
+      const aliased = ProxmoxReadOnlyTool.NODE_ALIASES[aliasKey];
+      pceLogger.debug(`Node name alias resolved: "${nodeName}" -> "${aliased}"`);
+      nodeName = aliased;
+    }
+
+    // Step 2: Always validate FIRST by listing nodes (prevents 403s from wrong names)
+    try {
+      const result = await client.get("/nodes");
+      // Handle various response structures defensively
+      let nodes: any[] = [];
+      if (result?.data?.data) {
+        nodes = Array.isArray(result.data.data) ? result.data.data : [];
+      } else if (Array.isArray(result?.data)) {
+        nodes = result.data;
+      }
+      
+      if (nodes.length === 0) {
+        pceLogger.warn("No nodes found in cluster - may be standalone node");
+        // Fall through to standalone node check
+      } else {
+        // Step 3: Try exact case-insensitive match
+        let normalized = nodes.find(
+          (n: any) => n?.node && n.node.toLowerCase() === nodeName.toLowerCase()
+        );
+        
+        // Step 4: If no exact match, try fuzzy match (ignoring underscores/hyphens)
+        if (!normalized) {
+          const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
+          const searchNormalized = normalizeForMatch(nodeName);
+          
+          normalized = nodes.find(
+            (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
+          );
+        }
+        
+        if (normalized?.node) {
+          pceLogger.debug(`Normalized node name: "${nodeName}" -> "${normalized.node}"`);
+          return normalized.node; // Return the actual node name with correct case
+        }
+      }
+    } catch (listError: any) {
+      pceLogger.error(`Failed to list nodes for normalization: ${listError.message}`);
+      // Fall through to standalone node check
+    }
+
+    // Step 5: Check if this might be a standalone/local node by comparing with PROXMOX_URL
+    const proxmoxUrl = process.env.PROXMOX_URL;
+    if (proxmoxUrl) {
+      try {
+        const url = new URL(proxmoxUrl);
+        const urlHostname = url.hostname.toLowerCase().replace(/\.(prox|local)$/, '');
+        const nodeNameLower = nodeName.toLowerCase().replace(/[_-]/g, '');
+        const urlNormalized = urlHostname.replace(/[_-]/g, '');
+        
+        if (urlNormalized === nodeNameLower || 
+            urlHostname.includes(nodeNameLower) || 
+            nodeNameLower.includes(urlHostname)) {
+          pceLogger.debug(`Node "${nodeName}" appears to be the local/standalone node (matches PROXMOX_URL hostname: ${urlHostname})`);
+          // Try to get the actual local node name
+          try {
+            const localResult = await client.get("/nodes");
+            // Handle various response structures defensively
+            let localNodes: any[] = [];
+            if (localResult?.data?.data) {
+              localNodes = Array.isArray(localResult.data.data) ? localResult.data.data : [];
+            } else if (Array.isArray(localResult?.data)) {
+              localNodes = localResult.data;
+            }
+            if (localNodes.length > 0 && localNodes[0]?.node) {
+              const localNode = localNodes[0].node;
+              pceLogger.debug(`Using local node name: "${localNode}" for query "${nodeName}"`);
+              return localNode;
+            }
+          } catch (localError: any) {
+            pceLogger.debug(`Could not get local nodes list (${localError?.response?.status || localError?.message}), treating "${nodeName}" as standalone node`);
+          }
+          // If it's the local/standalone node, return it
+          pceLogger.debug(`Allowing "${nodeName}" as local/standalone node`);
+          return nodeName;
+        }
+      } catch {
+        // URL parsing failed, continue to error
+      }
+    }
+
+    // Step 6: Node not found - throw helpful error with available nodes
+    try {
+      const result = await client.get("/nodes");
+      // Handle various response structures defensively
+      let nodes: any[] = [];
+      if (result?.data?.data) {
+        nodes = Array.isArray(result.data.data) ? result.data.data : [];
+      } else if (Array.isArray(result?.data)) {
+        nodes = result.data;
+      }
+      const availableNodes = nodes.filter((n: any) => n?.node).map((n: any) => n.node).join(", ");
+      const errorMsg = `Node "${nodeName}" not found in cluster. Available nodes: ${availableNodes || "none"}. ` +
+        `If "${nodeName}" is a standalone node, ensure PROXMOX_URL points to that node. ` +
+        `Current PROXMOX_URL: ${proxmoxUrl || "not set"}`;
+      pceLogger.warn(errorMsg);
+      throw new Error(errorMsg);
+    } catch (error: any) {
+      // If we can't even list nodes, throw a simpler error
+      if (error.message.includes("not found in cluster")) {
+        throw error;
+      }
+      throw new Error(`Node "${nodeName}" not found and could not validate against cluster. ${error.message}`);
+    }
+  }
 
   /**
    * List all nodes in the cluster
@@ -497,6 +682,62 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         note: "Listed from cluster resources (all nodes)"
       },
       metadata: clusterResult.metadata,
+    };
+  }
+
+  /**
+   * List both QEMU VMs and LXC containers on a node
+   */
+  private async listVmsBothTypes(
+    client: ProxmoxClient,
+    node: string
+  ): Promise<{ data: any; metadata: any }> {
+    const [qemuResult, lxcResult] = await Promise.allSettled([
+      this.listVms(client, node, "qemu").catch((error: any) => {
+        // Log but don't fail - might be permission issue but other endpoint might work
+        if (error?.response?.status === 403) {
+          pceLogger.warn(`403 error querying QEMU VMs on ${node} - may be permission issue`);
+        }
+        return { data: { vms: [], count: 0 }, metadata: {}, error: error?.message };
+      }),
+      this.listVms(client, node, "lxc").catch((error: any) => {
+        if (error?.response?.status === 403) {
+          pceLogger.warn(`403 error querying LXC containers on ${node} - may be permission issue`);
+        }
+        return { data: { vms: [], count: 0 }, metadata: {}, error: error?.message };
+      }),
+    ]);
+
+    const qemuData = qemuResult.status === "fulfilled" ? qemuResult.value.data : { vms: [], count: 0 };
+    const lxcData = lxcResult.status === "fulfilled" ? lxcResult.value.data : { vms: [], count: 0 };
+
+    const allVms = [...(qemuData.vms || []), ...(lxcData.vms || [])];
+    
+    // Check if both failed with 403
+    const qemuError = qemuResult.status === "rejected" ? qemuResult.reason : (qemuResult.status === "fulfilled" && qemuResult.value.error ? qemuResult.value.error : null);
+    const lxcError = lxcResult.status === "rejected" ? lxcResult.reason : (lxcResult.status === "fulfilled" && lxcResult.value.error ? lxcResult.value.error : null);
+    
+    const has403Error = (qemuError?.response?.status === 403 || lxcError?.response?.status === 403) && allVms.length === 0;
+    const both403 = qemuError?.response?.status === 403 && lxcError?.response?.status === 403;
+
+    return {
+      data: {
+        node,
+        vms: allVms,
+        qemu: qemuData.vms || [],
+        lxc: lxcData.vms || [],
+        count: allVms.length,
+        qemuCount: qemuData.count || 0,
+        lxcCount: lxcData.count || 0,
+        ...(has403Error && { 
+          error: both403 
+            ? `Permission denied (403) when querying ${node}. The API token does not have sufficient permissions to list VMs/containers on this node. Please verify the token has PVEVMAdmin or PVEAdmin role on /nodes/${node}.`
+            : `Partial permission denied (403) when querying ${node}. Some endpoints may not be accessible.`,
+          qemuError: qemuError?.response?.status === 403 ? "403 Forbidden - insufficient permissions" : undefined,
+          lxcError: lxcError?.response?.status === 403 ? "403 Forbidden - insufficient permissions" : undefined,
+        }),
+      },
+      metadata: qemuResult.status === "fulfilled" ? qemuResult.value.metadata : {},
     };
   }
 
@@ -1010,7 +1251,11 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     );
 
     return {
-      data: { resources: normalized, count: normalized.length },
+      data: { 
+        resources: normalized, 
+        count: normalized.length,
+        note: "Search is case-sensitive. When searching for a VM/container by name, match the 'name' field exactly. If no exact match is found, check for case variations or partial matches."
+      },
       metadata: result.metadata,
     };
   }

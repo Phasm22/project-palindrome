@@ -31,7 +31,7 @@ hosts:
     ip: "172.16.0.13"
     network: "lab"
 
-  - name: "prox_big"
+  - name: "proxBig"
     role: "proxmox_node"
     ip: "172.16.0.10"
     network: "lab"
@@ -109,24 +109,39 @@ services:
     host: "opnsense_gw"
     status: "running"
 
-  - name: "proxmox_web_10"
+  - name: "proxBig"
     port: 8006
     protocol: "tcp"
-    host: "prox_big"
+    host: "proxBig"
     status: "running"
 
 dependencies:
   # Dependencies between services or hosts
   # Format: source depends on target
+  # 
+  # NOTE: Most dependencies can be auto-inferred from 'host' fields:
+  #   - Containers automatically depend on their host (e.g., lab_pihole -> yin from containers[].host)
+  #   - Services automatically depend on their host (e.g., wireguard -> opnsense_gw from services[].host)
+  #   - VMs/containers that host other services depend on their hypervisor (e.g., opnsense_gw VM -> proxBig)
+  # 
+  # Only explicit dependencies that can't be inferred from the structure should be listed here.
+  # For example, if opnsense_gw is a VM on proxBig, that dependency should be listed.
+  
+  # OPNsense is a VM running on proxBig
+  opnsense_on_proxbig:
+    source: "opnsense_gw"
+    target: "proxBig"
+    type: "host_dependency"
+  
+  # WireGuard service runs on OPNsense (auto-inferred from services[].host, but listed for clarity)
   wireguard_on_opnsense:
     source: "wireguard"
     target: "opnsense_gw"
     type: "service_on_host"
-
-  lab_dns_depends:
-    source: "lab_pihole"
-    target: "prox_big"
-    type: "host_dependency"
+  
+  # lab_pihole container runs on yin node (auto-inferred from containers[].host)
+  # home_pihole container runs on ubuntu_srv (auto-inferred from containers[].host)
+  # Services depend on their hosts (auto-inferred from services[].host)
 
 # Optional: Switch/network hardware
 switch:

@@ -66,6 +66,17 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
     startedAt: Date.now(),
   };
 
+  // Standard mock nodes response for node name validation
+  const mockNodesResponse = {
+    data: {
+      data: [
+        { node: "pve1", status: "online", cpu: 0.5, maxcpu: 8, maxmem: 17179869184, mem: 8589934592, uptime: 86400 },
+        { node: "pve2", status: "online", cpu: 0.3, maxcpu: 8, maxmem: 17179869184, mem: 6442450944, uptime: 86400 },
+      ],
+    },
+    metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+  };
+
   let tool: ProxmoxReadOnlyTool;
   let mockClient: any;
 
@@ -128,7 +139,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "node_status", node: "pve1" }, mockContext);
 
@@ -136,6 +152,7 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(result.data.node).toBe("pve1");
       expect(mockClient.get).toHaveBeenCalled();
       const calls = (mockClient.get as any).mock.calls;
+      expect(calls.some((call: any[]) => call[0] === "/nodes")).toBe(true);
       expect(calls.some((call: any[]) => call[0] === "/nodes/pve1/status")).toBe(true);
     });
 
@@ -154,7 +171,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "node_resources", node: "pve1" }, mockContext);
 
@@ -180,7 +202,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "node_disks", node: "pve1" }, mockContext);
 
@@ -199,7 +226,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "node_network_interfaces", node: "pve1" }, mockContext);
 
@@ -220,8 +252,26 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         },
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
+      const mockEmptyResponse = {
+        data: {
+          data: [],
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        if (endpoint === "/nodes/pve1/qemu" || endpoint === "/nodes/pve1/lxc") {
+          // Return VMs for qemu, empty for lxc to get total count of 2
+          if (endpoint === "/nodes/pve1/qemu") {
+            return Promise.resolve(mockResponse);
+          }
+          return Promise.resolve(mockEmptyResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "list_vms", node: "pve1" }, mockContext);
 
@@ -231,6 +281,7 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(mockClient.get).toHaveBeenCalled();
       const calls = (mockClient.get as any).mock.calls;
       expect(calls.some((call: any[]) => call[0] === "/nodes/pve1/qemu")).toBe(true);
+      expect(calls.some((call: any[]) => call[0] === "/nodes/pve1/lxc")).toBe(true);
     });
 
     it("should implement get_vm_status action", async () => {
@@ -248,7 +299,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "get_vm_status", node: "pve1", vmid: 101 }, mockContext);
 
@@ -270,7 +326,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "get_vm_config", node: "pve1", vmid: 101 }, mockContext);
 
@@ -289,7 +350,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "get_vm_network", node: "pve1", vmid: 101 }, mockContext);
 
@@ -308,7 +374,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "get_vm_snapshots", node: "pve1", vmid: 101 }, mockContext);
 
@@ -335,7 +406,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "get_vm_ip", node: "pve1", vmid: 101, type: "qemu" }, mockContext);
 
@@ -346,7 +422,10 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
     });
 
     it("should handle get_vm_ip fallback when guest agent unavailable", async () => {
-      // First call: status check succeeds
+      // First call: /nodes for node validation
+      mockClient.get.mockResolvedValueOnce(mockNodesResponse);
+      
+      // Second call: status check succeeds
       const statusResponse = {
         data: {
           data: {
@@ -357,7 +436,7 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       };
       mockClient.get.mockResolvedValueOnce(statusResponse);
       
-      // Second call: config fetch (now happens before guest agent for static IP/DNS detection)
+      // Third call: config fetch (now happens before guest agent for static IP/DNS detection)
       const configResponse = {
         data: {
           data: {
@@ -368,7 +447,7 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       };
       mockClient.get.mockResolvedValueOnce(configResponse);
       
-      // Third call fails (guest agent unavailable)
+      // Fourth call fails (guest agent unavailable)
       mockClient.get.mockRejectedValueOnce({ response: { status: 500 } });
 
       const result = await tool.execute({ action: "get_vm_ip", node: "pve1", vmid: 101, type: "qemu" }, mockContext);
@@ -392,7 +471,12 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       };
 
       // When type is provided, auto-detection is skipped, so only the config call is made
-      mockClient.get.mockResolvedValue(mockResponse);
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute({ action: "get_lxc_config", node: "pve1", vmid: 100, type: "lxc" }, mockContext);
 
@@ -532,6 +616,14 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
     it("should require node and vmid for VM-level actions", async () => {
       const result = await tool.execute({ action: "get_vm_status" }, mockContext);
       expect(result.error).toContain("node parameter required");
+
+      // Mock /nodes so node validation passes, allowing vmid validation to be tested
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.reject(new Error("Unexpected endpoint"));
+      });
 
       const result2 = await tool.execute({ action: "get_vm_status", node: "pve1" }, mockContext);
       expect(result2.error).toContain("vmid parameter required");

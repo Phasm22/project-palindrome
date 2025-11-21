@@ -173,6 +173,147 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
   }
 
   /**
+   * Deterministic node name alias map for common variations
+   * Maps common name variations to actual node names
+   */
+  private static readonly NODE_ALIASES: Record<string, string> = {
+    // proxBig variations
+    proxbig: "proxBig",
+    prox_big: "proxBig",
+    "prox-big": "proxBig",
+    // Add more aliases as needed
+  };
+
+  /**
+   * Normalize node name by validating FIRST, then using fuzzy matching
+   * This prevents 403 errors from trying non-existent node names
+   * 
+   * Strategy:
+   * 1. Check deterministic alias map
+   * 2. List all nodes from cluster to get actual node names
+   * 3. Try exact case-insensitive match
+   * 4. Try fuzzy match (ignoring underscores/hyphens/case)
+   * 5. Check if it matches PROXMOX_URL hostname (for standalone nodes)
+   * 6. Return normalized name or throw helpful error
+   */
+  private async normalizeNodeName(
+    client: ProxmoxClient,
+    nodeName: string
+  ): Promise<string> {
+    // Step 1: Check deterministic alias map first
+    const aliasKey = nodeName.toLowerCase().replace(/[_-]/g, '');
+    if (ProxmoxWriteTool.NODE_ALIASES[aliasKey]) {
+      const aliased = ProxmoxWriteTool.NODE_ALIASES[aliasKey];
+      logger.debug(`Node name alias resolved: "${nodeName}" -> "${aliased}"`);
+      nodeName = aliased;
+    }
+
+    // Step 2: Always validate FIRST by listing nodes (prevents 403s from wrong names)
+    try {
+      const result = await client.get("/nodes");
+      // Handle various response structures defensively
+      let nodes: any[] = [];
+      if (result?.data?.data) {
+        nodes = Array.isArray(result.data.data) ? result.data.data : [];
+      } else if (Array.isArray(result?.data)) {
+        nodes = result.data;
+      }
+      
+      if (nodes.length === 0) {
+        logger.warn("No nodes found in cluster - may be standalone node");
+        // Fall through to standalone node check
+      } else {
+        // Step 3: Try exact case-insensitive match
+        let normalized = nodes.find(
+          (n: any) => n?.node && n.node.toLowerCase() === nodeName.toLowerCase()
+        );
+        
+        // Step 4: If no exact match, try fuzzy match (ignoring underscores/hyphens)
+        if (!normalized) {
+          const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
+          const searchNormalized = normalizeForMatch(nodeName);
+          
+          normalized = nodes.find(
+            (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
+          );
+        }
+        
+        if (normalized?.node) {
+          logger.debug(`Normalized node name: "${nodeName}" -> "${normalized.node}"`);
+          return normalized.node; // Return the actual node name with correct case
+        }
+      }
+    } catch (listError: any) {
+      logger.error(`Failed to list nodes for normalization: ${listError.message}`);
+      // Fall through to standalone node check
+    }
+
+    // Step 5: Check if this might be a standalone/local node by comparing with PROXMOX_URL
+    const proxmoxUrl = process.env.PROXMOX_URL;
+    if (proxmoxUrl) {
+      try {
+        const url = new URL(proxmoxUrl);
+        const urlHostname = url.hostname.toLowerCase().replace(/\.(prox|local)$/, '');
+        const nodeNameLower = nodeName.toLowerCase().replace(/[_-]/g, '');
+        const urlNormalized = urlHostname.replace(/[_-]/g, '');
+        
+        if (urlNormalized === nodeNameLower || 
+            urlHostname.includes(nodeNameLower) || 
+            nodeNameLower.includes(urlHostname)) {
+          logger.debug(`Node "${nodeName}" appears to be the local/standalone node (matches PROXMOX_URL hostname: ${urlHostname})`);
+          // Try to get the actual local node name
+          try {
+            const localResult = await client.get("/nodes");
+            // Handle various response structures defensively
+            let localNodes: any[] = [];
+            if (localResult?.data?.data) {
+              localNodes = Array.isArray(localResult.data.data) ? localResult.data.data : [];
+            } else if (Array.isArray(localResult?.data)) {
+              localNodes = localResult.data;
+            }
+            if (localNodes.length > 0 && localNodes[0]?.node) {
+              const localNode = localNodes[0].node;
+              logger.debug(`Using local node name: "${localNode}" for query "${nodeName}"`);
+              return localNode;
+            }
+          } catch (localError: any) {
+            logger.debug(`Could not get local nodes list (${localError?.response?.status || localError?.message}), treating "${nodeName}" as standalone node`);
+          }
+          // If it's the local/standalone node, return it
+          logger.debug(`Allowing "${nodeName}" as local/standalone node`);
+          return nodeName;
+        }
+      } catch {
+        // URL parsing failed, continue to error
+      }
+    }
+
+    // Step 6: Node not found - throw helpful error with available nodes
+    try {
+      const result = await client.get("/nodes");
+      // Handle various response structures defensively
+      let nodes: any[] = [];
+      if (result?.data?.data) {
+        nodes = Array.isArray(result.data.data) ? result.data.data : [];
+      } else if (Array.isArray(result?.data)) {
+        nodes = result.data;
+      }
+      const availableNodes = nodes.filter((n: any) => n?.node).map((n: any) => n.node).join(", ");
+      const errorMsg = `Node "${nodeName}" not found in cluster. Available nodes: ${availableNodes || "none"}. ` +
+        `If "${nodeName}" is a standalone node, ensure PROXMOX_URL points to that node. ` +
+        `Current PROXMOX_URL: ${proxmoxUrl || "not set"}`;
+      logger.warn(errorMsg);
+      throw new Error(errorMsg);
+    } catch (error: any) {
+      // If we can't even list nodes, throw a simpler error
+      if (error.message.includes("not found in cluster")) {
+        throw error;
+      }
+      throw new Error(`Node "${nodeName}" not found and could not validate against cluster. ${error.message}`);
+    }
+  }
+
+  /**
    * Route action to appropriate handler
    */
   private async handleAction(
@@ -181,6 +322,14 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Normalize node name for all actions
+    if (params.node) {
+      params.node = await this.normalizeNodeName(client, params.node);
+    }
+    if (params.targetNode) {
+      params.targetNode = await this.normalizeNodeName(client, params.targetNode);
+    }
+    
     switch (action) {
       case "start_vm":
         return this.startVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
@@ -281,6 +430,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Get VM name for verification
+    const vmName = await this.getVmName(client, node, vmid, type);
+    
     // Check current state first
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
@@ -292,9 +444,11 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           action: "start_vm",
           node,
           vmid,
+          vmName: vmName || "unknown",
           status: "already_running",
-          message: `VM ${vmid} is already running. No action needed.`,
+          message: `VM ${vmid}${vmName ? ` (${vmName})` : ""} is already running. No action needed.`,
           currentStatus: "running",
+          warning: vmName ? `Verified VM name: "${vmName}"` : "Could not retrieve VM name for verification",
         },
         metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/skip-already-running" },
       };
@@ -302,10 +456,14 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
 
     if (dryRun) {
       return {
-        data: this.generateDiffPreview("start_vm", currentState, {
-          status: "running",
-          action: "start",
-        }),
+        data: {
+          ...this.generateDiffPreview("start_vm", currentState, {
+            status: "running",
+            action: "start",
+          }),
+          vmName: vmName || "unknown",
+          warning: vmName ? `Will start VM: "${vmName}" (VMID ${vmid} on node ${node})` : "Could not retrieve VM name for verification",
+        },
         metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/dry-run/start" },
       };
     }
@@ -319,8 +477,11 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           action: "start_vm",
           node,
           vmid,
+          vmName: vmName || "unknown",
           status: "started",
+          message: `VM ${vmid}${vmName ? ` (${vmName})` : ""} has been started on node ${node}`,
           preWriteState: preWriteState.hash,
+          warning: vmName ? `Started VM: "${vmName}"` : "Could not retrieve VM name for verification",
           ...result.data,
         },
         metadata: result.metadata,
@@ -334,9 +495,11 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
             action: "start_vm",
             node,
             vmid,
+            vmName: vmName || "unknown",
             status: "already_running",
-            message: `VM ${vmid} is already running. No action needed.`,
+            message: `VM ${vmid}${vmName ? ` (${vmName})` : ""} is already running. No action needed.`,
             currentStatus: "running",
+            warning: vmName ? `Verified VM name: "${vmName}"` : "Could not retrieve VM name for verification",
           },
           metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/already-running" },
         };
@@ -863,6 +1026,25 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     try {
       const result = await client.get(this.getVmPath(type, node, vmid, "/status/current"));
       return result.data.data;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Helper to get VM name from config
+   */
+  private async getVmName(
+    client: ProxmoxClient,
+    node: string,
+    vmid: number,
+    type: string = "qemu"
+  ): Promise<string | null> {
+    try {
+      const result = await client.get(this.getVmPath(type, node, vmid, "/config"));
+      const config = result.data.data || {};
+      // VM name is in the 'name' field for qemu, or 'hostname' for lxc
+      return config.name || config.hostname || null;
     } catch {
       return null;
     }

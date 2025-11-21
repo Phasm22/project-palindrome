@@ -17,12 +17,33 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
   protected getApiConfig(): ProxmoxApiConfig {
     const url = process.env.PROXMOX_URL;
     const tokenId = process.env.PROXMOX_TOKEN_ID;
-    const tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
+    // Support node-specific token secrets (e.g., PROXBIG_TOKEN_SECRET) as fallback
+    // Extract node name from URL if possible, or use default
+    let tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
+    
+    // Try to find node-specific token secret based on URL hostname
+    if (url) {
+      try {
+        const urlObj = new URL(url);
+        const hostname = urlObj.hostname.toLowerCase();
+        // Check for node-specific secrets (e.g., proxbig -> PROXBIG_TOKEN_SECRET)
+        const nodeName = hostname.split('.')[0].toUpperCase();
+        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
+        if (nodeSpecificSecret) {
+          tokenSecret = nodeSpecificSecret;
+        }
+      } catch {
+        // If URL parsing fails, use default
+      }
+    }
+    
     const verifySsl = process.env.PROXMOX_VERIFY_SSL !== "false";
 
+    // Check after trying to find node-specific secret
     if (!url || !tokenId || !tokenSecret) {
+      const nodeHint = url ? ` (or ${new URL(url).hostname.split('.')[0].toUpperCase()}_TOKEN_SECRET for node-specific secret)` : '';
       throw new Error(
-        "PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET must be set"
+        `PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET${nodeHint} must be set`
       );
     }
 
