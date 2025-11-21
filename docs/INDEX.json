@@ -1,0 +1,287 @@
+{
+  "categories": {
+    "status": {
+      "description": "Project status, progress tracking, and phase completion reports",
+      "files": [
+        {
+          "path": "status/DOD_VERIFICATION.md",
+          "title": "Definition of Done Verification",
+          "type": "verification",
+          "phases": [
+            "I-A",
+            "I-B"
+          ]
+        },
+        {
+          "path": "status/PCE_PHASE_IA_DOD_COMPLETE.md",
+          "title": "Phase I-A DOD Complete",
+          "type": "completion",
+          "phase": "I-A"
+        },
+        {
+          "path": "status/PCE_PHASE_IA_STATUS.md",
+          "title": "Phase I-A Implementation Status",
+          "type": "status",
+          "phase": "I-A"
+        },
+        {
+          "path": "status/PCE_PHASE_IB_COMPLETE.md",
+          "title": "Phase I-B Complete",
+          "type": "completion",
+          "phase": "I-B"
+        },
+        {
+          "path": "status/PCE_PHASE_IB_STATUS.md",
+          "title": "Phase I-B Status",
+          "type": "status",
+          "phase": "I-B"
+        },
+        {
+          "path": "status/PCE_PHASE_IC_STATUS.md",
+          "title": "Phase I-C Status",
+          "type": "status",
+          "phase": "I-C"
+        },
+        {
+          "path": "status/PCE_PHASE_II_STATUS.md",
+          "title": "Phase II Status",
+          "type": "status",
+          "phase": "II"
+        },
+        {
+          "path": "status/PCE_PHASE_III_STATUS.md",
+          "title": "Phase III Status",
+          "type": "status",
+          "phase": "III"
+        },
+        {
+          "path": "status/PHASE_IB_AUDIT.md",
+          "title": "Phase I-B Audit",
+          "type": "audit",
+          "phase": "I-B"
+        },
+        {
+          "path": "status/PHASE_IB_COMPLETE.md",
+          "title": "Phase I-B Complete",
+          "type": "completion",
+          "phase": "I-B"
+        },
+        {
+          "path": "status/PHASE_IB_IMPLEMENTATION.md",
+          "title": "Phase I-B Implementation",
+          "type": "implementation",
+          "phase": "I-B"
+        },
+        {
+          "path": "status/TL_1A_STATUS.md",
+          "title": "Test Level 1A Status",
+          "type": "test-status",
+          "test_level": "1A"
+        },
+        {
+          "path": "status/TL_1B_STATUS.md",
+          "title": "Test Level 1B Status",
+          "type": "test-status",
+          "test_level": "1B"
+        },
+        {
+          "path": "status/TL_1C_STATUS.md",
+          "title": "Test Level 1C Status",
+          "type": "test-status",
+          "test_level": "1C"
+        },
+        {
+          "path": "status/TL_2A_6_PREREQUISITES.md",
+          "title": "Test Level 2A.6 Prerequisites",
+          "type": "prerequisites",
+          "test_level": "2A.6"
+        },
+        {
+          "path": "status/TL_2A_STATUS.md",
+          "title": "Test Level 2A Status",
+          "type": "test-status",
+          "test_level": "2A"
+        }
+      ]
+    },
+    "guides": {
+      "description": "Quick start guides and how-to documentation",
+      "files": [
+        {
+          "path": "guides/QUICK_START_TOPOLOGY.md",
+          "title": "Quick Start: Topology Ingestion",
+          "type": "quick-start",
+          "topic": "topology"
+        }
+      ]
+    },
+    "technical": {
+      "description": "Technical implementation details, architecture, and system documentation",
+      "files": [
+        {
+          "path": "technical/BUG_FIXES.md",
+          "title": "Bug Fixes - Neo4j Integration",
+          "type": "bug-fixes",
+          "component": "neo4j"
+        },
+        {
+          "path": "technical/agent-notes.md",
+          "title": "Agent Environment Notes",
+          "type": "environment",
+          "component": "agent"
+        },
+        {
+          "path": "technical/filesystem-analysis-options.md",
+          "title": "Filesystem Analysis Options for OPNsense",
+          "type": "analysis",
+          "component": "opnsense"
+        },
+        {
+          "path": "technical/management.md",
+          "title": "Project Management Guide",
+          "type": "management"
+        },
+        {
+          "path": "technical/security-openai-api.md",
+          "title": "Security: OpenAI API",
+          "type": "security",
+          "component": "openai"
+        }
+      ]
+    },
+    "features": {
+      "description": "Feature-specific documentation and implementation guides",
+      "files": [
+        {
+          "path": "features/IP_RESOLUTION_IMPLEMENTED.md",
+          "title": "IP Resolution Implementation - Complete",
+          "type": "implementation",
+          "feature": "ip-resolution",
+          "status": "complete"
+        },
+        {
+          "path": "features/IP_RESOLUTION_SETUP.md",
+          "title": "IP Resolution Setup - Quick Guide",
+          "type": "setup",
+          "feature": "ip-resolution"
+        },
+        {
+          "path": "features/IP_RESOLUTION_STRATEGY.md",
+          "title": "IP Address Resolution Strategy",
+          "type": "strategy",
+          "feature": "ip-resolution"
+        }
+      ]
+    },
+    "tests": {
+      "description": "Test documentation, debugging guides, and test-related status",
+      "files": [
+        {
+          "path": "tests/proxmox-fixes-applied.md",
+          "title": "Proxmox Test Fixes Applied",
+          "type": "fixes",
+          "component": "proxmox"
+        },
+        {
+          "path": "tests/proxmox-live-usage.md",
+          "title": "Using the Agent with Live Proxmox",
+          "type": "usage",
+          "component": "proxmox"
+        },
+        {
+          "path": "tests/proxmox-mock-fix-summary.md",
+          "title": "Proxmox Mock Fix Summary",
+          "type": "fixes",
+          "component": "proxmox"
+        },
+        {
+          "path": "tests/proxmox-test-debugging-status.md",
+          "title": "Proxmox Test Debugging Status",
+          "type": "debugging",
+          "component": "proxmox"
+        },
+        {
+          "path": "tests/proxmox-test-fix-plan.md",
+          "title": "Proxmox Test Fix Plan",
+          "type": "plan",
+          "component": "proxmox"
+        },
+        {
+          "path": "tests/proxmox-test-prerequisites.md",
+          "title": "Proxmox Test Prerequisites",
+          "type": "prerequisites",
+          "component": "proxmox"
+        },
+        {
+          "path": "tests/proxmox-test-status.md",
+          "title": "Proxmox Test Status & Remaining Issues",
+          "type": "status",
+          "component": "proxmox"
+        },
+        {
+          "path": "tests/test-execution-plan.md",
+          "title": "Test Execution Plan",
+          "type": "plan"
+        },
+        {
+          "path": "tests/test-failure-analysis.md",
+          "title": "Test Failure Analysis",
+          "type": "analysis"
+        },
+        {
+          "path": "tests/test-failures-debug-list.md",
+          "title": "Test Failures Debug List",
+          "type": "debugging"
+        },
+        {
+          "path": "tests/test-fixes-applied.md",
+          "title": "Test Fixes Applied",
+          "type": "fixes"
+        },
+        {
+          "path": "tests/test-fixes-complete.md",
+          "title": "Test Fixes Complete",
+          "type": "completion"
+        },
+        {
+          "path": "tests/test-fixes-summary.md",
+          "title": "Test Fixes Summary",
+          "type": "summary"
+        }
+      ]
+    },
+    "tools": {
+      "description": "Tool-specific documentation, integration guides, and tool setup",
+      "files": [
+        {
+          "path": "tools/mcp-opnsense-integration.md",
+          "title": "MCP OPNsense Integration",
+          "type": "integration",
+          "tool": "opnsense"
+        },
+        {
+          "path": "tools/opnsense-ssh-setup.md",
+          "title": "OPNsense SSH Setup Guide",
+          "type": "setup",
+          "tool": "opnsense"
+        },
+        {
+          "path": "tools/self-describing-tools.md",
+          "title": "Self-Describing Tools",
+          "type": "architecture"
+        },
+        {
+          "path": "tools/ssh-tool-setup.md",
+          "title": "SSH Tool Setup",
+          "type": "setup",
+          "tool": "ssh"
+        },
+        {
+          "path": "tools/tool-map.md",
+          "title": "Tool Map",
+          "type": "reference"
+        }
+      ]
+    }
+  }
+}

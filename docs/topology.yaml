@@ -1,46 +1,134 @@
-# Project Palindrome — Topology Seed
+# Project Palindrome — Topology
+# Infrastructure topology definition
 
 networks:
   home:
     cidr: "192.168.68.0/22"
     gateway: "192.168.68.1"
-  
+    vlan: 1
+
   lab:
     cidr: "172.16.0.0/22"
     vlan: 50
     gateway: "172.16.0.1"
 
-  mgmt:
-    cidr: "192.168.71.0/24"
-    vlan: 40
-    gateway: "192.168.71.1"
-
 vpn:
+  # WireGuard VPN configuration
   wireguard:
     cidr: "10.16.0.0/24"
-    server: "172.16.0.1"
-    dns: "172.16.0.13"
+    server: "172.16.0.1" # OPNsense IP (wg0)
+    dns: "172.16.0.13" # Lab Pi-hole IP
 
 hosts:
-  # Initial Project Palindrome hosts will land in the lab VLAN.
-  # No need to define all existing machines — keep it minimal.
-
-  - name: "level"
-    role: "proxmox"
-    ip: "172.16.0.10"
-
-  - name: "rotor"
-    role: "proxmox"
-    ip: "172.16.0.11"
-
-  - name: "radar"
-    role: "opnsense"
+  - name: "opnsense_gw"
+    role: "firewall/router"
     ip: "172.16.0.1"
+    network: "lab"
+    os: "opnsense"
 
-  - name: "civic"
-    role: "pihole"
-    ip: "192.168.71.13"
+  - name: "piholelab"
+    role: "dns/pihole"
+    ip: "172.16.0.13"
+    network: "lab"
 
+  - name: "prox_big"
+    role: "proxmox_node"
+    ip: "172.16.0.10"
+    network: "lab"
+    os: "proxmox_ve"
+
+  - name: "yin"
+    role: "proxmox_node"
+    ip: "172.16.0.11"
+    network: "lab"
+    os: "proxmox_ve"
+
+  - name: "yang"
+    role: "proxmox_node"
+    ip: "172.16.0.12"
+    network: "lab"
+    os: "proxmox_ve"
+
+  - name: "code-server"
+    role: "lxc"
+    ip: "172.16.0.106"
+    network: "lab"
+    status: "running"
+
+  - name: "homebridge"
+    role: "lxc"
+    ip: "192.168.68.79"
+    network: "home"
+    os: "debian"
+
+  - name: "home_dns"
+    role: "dns/pihole"
+    ip: "192.168.71.25"
+    network: "home"
+
+  - name: "ubuntu_srv"
+    role: "server/dns_backup"
+    ip: "192.168.71.30"
+    network: "home"
+    os: "ubuntu"
+
+  - name: "vpn"
+    role: "vpn"
+    ip: "192.168.71.40"
+    network: "home"
+
+containers:
+  - name: "lab_pihole"
+    type: "lxc"
+    host: "yin"
+    image: "pihole/pihole:latest"
+    status: "running"
+
+  - name: "home_pihole"
+    type: "docker"
+    host: "ubuntu_srv"
+    image: "pihole/pihole:latest"
+    status: "running"
+
+services:
+  - name: "dns_lab"
+    port: 53
+    protocol: "udp"
+    host: "lab_pihole"
+    status: "running"
+
+  - name: "dns_home"
+    port: 53
+    protocol: "udp"
+    host: "home_dns"
+    status: "running"
+
+  - name: "wireguard"
+    port: 51820
+    protocol: "udp"
+    host: "opnsense_gw"
+    status: "running"
+
+  - name: "proxmox_web_10"
+    port: 8006
+    protocol: "tcp"
+    host: "prox_big"
+    status: "running"
+
+dependencies:
+  # Dependencies between services or hosts
+  # Format: source depends on target
+  wireguard_on_opnsense:
+    source: "wireguard"
+    target: "opnsense_gw"
+    type: "service_on_host"
+
+  lab_dns_depends:
+    source: "lab_pihole"
+    target: "prox_big"
+    type: "host_dependency"
+
+# Optional: Switch/network hardware
 switch:
   model: "Cisco 2960G"
   trunk_ports:
@@ -50,3 +138,6 @@ switch:
     - 1
     - 40
     - 50
+  ip:
+    - "172.16.0.9"
+    - "192.168.71.6"

@@ -2,105 +2,137 @@
 # Fill in your actual infrastructure data below
 
 networks:
-  # Network definitions with CIDR and optional VLAN
   home:
     cidr: "192.168.68.0/22"
     gateway: "192.168.68.1"
-    vlan: null  # Optional VLAN ID
-  
+    vlan: 1
+
   lab:
     cidr: "172.16.0.0/22"
     vlan: 50
     gateway: "172.16.0.1"
 
-  mgmt:
-    cidr: "192.168.71.0/24"
-    vlan: 40
-    gateway: "192.168.71.1"
 
 vpn:
-  # VPN configuration
+  # WireGuard VPN configuration
   wireguard:
     cidr: "10.16.0.0/24"
-    server: "172.16.0.1"
-    dns: "172.16.0.13"
+    server: "172.16.0.1" # OPNsense IP (wg0)
+    dns: "172.16.0.13" # Lab Pi-hole IP
 
 hosts:
-  # Physical or virtual hosts
-  - name: "level"
-    role: "proxmox"
-    ip: "172.16.0.10"
-    network: "lab"  # Network name from networks section
-    os: "debian"  # Optional
-    status: "running"  # Optional
-  
-  - name: "rotor"
-    role: "proxmox"
-    ip: "172.16.0.11"
-    network: "lab"
-  
-  - name: "radar"
-    role: "opnsense"
+  - name: "opnsense_gw"
+    role: "firewall/router"
     ip: "172.16.0.1"
     network: "lab"
-  
-  - name: "civic"
-    role: "pihole"
-    ip: "192.168.71.13"
-    network: "mgmt"
+    os: "opnsense"
+
+  - name: "piholelab"
+    role: "dns/pihole"
+    ip: "172.16.0.13"
+    network: "lab"
+
+  - name: "prox_big"
+    role: "proxmox_node"
+    ip: "172.16.0.10"
+    network: "lab"
+    os: "proxmox_ve"
+
+  - name: "yin"
+    role: "proxmox_node"
+    ip: "172.16.0.11"
+    network: "lab"
+    os: "proxmox_ve"
+
+  - name: "yang"
+    role: "proxmox_node"
+    ip: "172.16.0.12"
+    network: "lab"
+    os: "proxmox_ve"
+
+  - name: "code-server"
+    role: "lxc"
+    ip: "172.16.0.106"
+    network: "lab"
+    status: "running"
+
+  - name: "winvm"
+    role: "vm"
+    ip: "172.16.0.100"
+    network: "lab"
+    os: "windows"
+    status: "stopped"
+
+  - name: "homebridge"
+    role: "lxc"
+    ip: "192.168.68.79"
+    network: "home"
+    os: "debian"
+
+  - name: "home_dns"
+    role: "dns/pihole"
+    ip: "192.168.71.25"
+    network: "home"
+
+  - name: "ubuntu_srv"
+    role: "server/dns_backup"
+    ip: "192.168.71.30"
+    network: "home"
+    os: "ubuntu"
+
+  - name: "vpn"
+    role: "vpn"
+    ip: "192.168.71.40"
+    network: "home"
 
 containers:
-  # Container instances (Docker, LXC, Podman, etc.)
-  - name: "sentinelZero"
-    type: "docker"  # docker, lxc, podman, etc.
-    host: "level"  # Host name from hosts section
-    image: "sentinelzero:latest"  # Optional
-    status: "running"  # Optional
-    depends_on:  # List of dependencies
-      - "pihole"
-      - "wireguard"
-  
-  - name: "pihole"
+  - name: "lab_pihole"
+    type: "lxc"
+    host: "yin"
+    image: "pihole/pihole:latest"
+    status: "running"
+
+  - name: "home_pihole"
     type: "docker"
-    host: "civic"
+    host: "ubuntu_srv"
     image: "pihole/pihole:latest"
     status: "running"
 
 services:
   # Network services
-  - name: "dns"
+  - name: "dns_lab"
     port: 53
     protocol: "udp"
-    host: "civic"  # Host providing the service
+    host: "lab_pihole"  
     status: "running"
   
+  - name: "dns_home"
+    port: 53
+    protocol: "udp"
+    host: "home_dns"
+    status: "running"
+
   - name: "wireguard"
     port: 51820
     protocol: "udp"
-    host: "radar"
+    host: "opnsense_gw"
+    status: "running"
+
+  - name: "proxmox_web_10"
+    port: 8006
+    protocol: "tcp"
+    host: "prox_big"
     status: "running"
 
 dependencies:
-  # Explicit dependency relationships
-  # Use this section to define dependencies that aren't captured in containers/services
-  - name: "sentinelZero-dns"
-    depends_on: "dns"  # Service or container name
-    type: "service"
-    critical: true  # Whether this is a critical dependency
+  # Add dependencies between services or hosts here.
+  # Example: WireGuard depends on OPNsense being up
+  - name: "wireguard_on_opnsense"
+    source: "wireguard"
+    target: "opnsense_gw"
+    type: "service_on_host" 
   
-  - name: "all-services-vpn"
-    depends_on: "wireguard"
-    type: "network"
-    critical: true
-
-# Optional: Switch/network hardware
-switch:
-  model: "Cisco 2960G"
-  trunk_ports:
-    - "Gi0/33"
-    - "Gi0/34"
-  vlans:
-    - 1
-    - 40
-    - 50
-
+  - name: "lab_dns_depends"
+    source: "lab_pihole"
+    target: "prox_big"
+    type: "host_dependency"

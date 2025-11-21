@@ -65,6 +65,14 @@ export interface TopologyYaml {
   dependencies?: Array<{
     name: string;
     depends_on?: string;
+    source?: string;
+    target?: string;
+    type?: string;
+    critical?: boolean;
+  }> | Record<string, {
+    source?: string;
+    target?: string;
+    depends_on?: string;
     type?: string;
     critical?: boolean;
   }>;
@@ -348,47 +356,53 @@ export async function extractTopologyEntities(
 
     // Extract Dependencies
     if (topology.dependencies) {
-      for (const dependency of topology.dependencies) {
-        const normalizedName = normalizeEntityText(dependency.name);
-        const dependencyId = generateCanonicalId(normalizedName, NodeType.DEPENDENCY);
-        nodeIdMap.set(dependency.name, dependencyId);
+      // Handle both array and object formats
+      const dependenciesArray = Array.isArray(topology.dependencies)
+        ? topology.dependencies
+        : Object.entries(topology.dependencies).map(([name, dep]) => ({
+            name,
+            ...dep,
+          }));
 
-        const dependencyNode: GraphNode = {
-          id: dependencyId,
-          type: NodeType.DEPENDENCY,
-          attributes: {
-            name: dependency.name,
-            depends_on: dependency.depends_on,
-            type: dependency.type,
-            critical: dependency.critical,
-          },
-          versionHash,
-          sourcePath,
-          aclGroup,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        };
-        nodes.push(dependencyNode);
+      for (const dependency of dependenciesArray) {
+        // Determine source and target
+        // Support both formats: depends_on (single target) or source/target (explicit)
+        const sourceName = dependency.source || dependency.name;
+        const targetName = dependency.target || dependency.depends_on;
 
-        // Dependency DEPENDS_ON target
-        if (dependency.depends_on) {
-          const targetId = nodeIdMap.get(dependency.depends_on);
-          if (targetId) {
-            relationships.push({
-              id: `${dependencyId}-depends_on-${targetId}`,
-              type: RelationshipType.DEPENDS_ON,
-              from: dependencyId,
-              to: targetId,
-              properties: {
-                critical: dependency.critical,
-                type: dependency.type,
-              },
-              versionHash,
-              sourcePath,
-              aclGroup,
-              createdAt: timestamp,
-            });
-          }
+        if (!sourceName || !targetName) {
+          pceLogger.warn("Skipping dependency with missing source or target", { dependency });
+          continue;
+        }
+
+        // Look up source and target entity IDs
+        const sourceId = nodeIdMap.get(sourceName);
+        const targetId = nodeIdMap.get(targetName);
+
+        if (sourceId && targetId) {
+          // Direct relationship: source DEPENDS_ON target
+          relationships.push({
+            id: `${sourceId}-depends_on-${targetId}`,
+            type: RelationshipType.DEPENDS_ON,
+            from: sourceId,
+            to: targetId,
+            properties: {
+              critical: dependency.critical,
+              type: dependency.type,
+            },
+            versionHash,
+            sourcePath,
+            aclGroup,
+            createdAt: timestamp,
+          });
+        } else {
+          // If entities not found, log warning
+          pceLogger.warn("Could not find source or target entity for dependency", {
+            sourceName,
+            targetName,
+            sourceId: !!sourceId,
+            targetId: !!targetId,
+          });
         }
       }
     }

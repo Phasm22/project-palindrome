@@ -31,6 +31,58 @@ hosts:
         - "uptime"
         - "free -h"
         - "ps aux | head -20"
+        
+  "172.16.0.10":  # prox_big
+    hostname: "172.16.0.10"
+    aliases:
+      - "prox_big"
+      - "proxbig"
+    description: "Proxmox node - prox_big"
+    username: "opsadmin"
+    read_only: true
+    commands:
+      network:
+        - "qm guest cmd {vmid} network-get-interfaces"
+        - "qm guest cmd {vmid} network-get-interfaces 2>/dev/null"
+        - "qm status {vmid}"
+      system:
+        - "uptime"
+        - "free -h"
+        - "pvesh get /nodes/$(hostname)/qemu/{vmid}/agent/network-get-interfaces 2>/dev/null"
+        
+  "172.16.0.11":  # yin
+    hostname: "172.16.0.11"
+    aliases:
+      - "yin"
+    description: "Proxmox node - yin"
+    username: "opsadmin"
+    read_only: true
+    commands:
+      network:
+        - "qm guest cmd {vmid} network-get-interfaces"
+        - "qm guest cmd {vmid} network-get-interfaces 2>/dev/null"
+        - "qm status {vmid}"
+      system:
+        - "uptime"
+        - "free -h"
+        - "pvesh get /nodes/$(hostname)/qemu/{vmid}/agent/network-get-interfaces 2>/dev/null"
+        
+  "172.16.0.12":  # yang
+    hostname: "172.16.0.12"
+    aliases:
+      - "yang"
+    description: "Proxmox node - yang"
+    username: "opsadmin"
+    read_only: true
+    commands:
+      network:
+        - "qm guest cmd {vmid} network-get-interfaces"
+        - "qm guest cmd {vmid} network-get-interfaces 2>/dev/null"
+        - "qm status {vmid}"
+      system:
+        - "uptime"
+        - "free -h"
+        - "pvesh get /nodes/$(hostname)/qemu/{vmid}/agent/network-get-interfaces 2>/dev/null"
 
   # Example: Add more hosts as needed
   # "192.168.1.100":

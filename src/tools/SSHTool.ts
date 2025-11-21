@@ -18,6 +18,7 @@ interface ApprovedCommands {
       hostname: string;
       aliases?: string[];
       description: string;
+      username?: string;
       commands: {
         [category: string]: string[];
       };
@@ -393,9 +394,11 @@ export class SSHTool extends BaseTool {
     try {
       logger.info(`Executing approved SSH command on ${resolvedHost} (requested as ${host}): ${command}`);
 
-      // Get SSH credentials from environment (use resolved host for env vars)
+      // Get SSH credentials from config first, then environment (use resolved host for env vars)
+      const config = this.loadApprovedCommands();
+      const hostConfig = config.hosts[resolvedHost];
       const envHostKey = resolvedHost.replace(/\./g, "_");
-      let username = process.env[`SSH_USER_${envHostKey}`] || process.env.SSH_USER || "root";
+      let username = hostConfig?.username || process.env[`SSH_USER_${envHostKey}`] || process.env.SSH_USER || "root";
       let password = process.env[`SSH_PASSWORD_${envHostKey}`] || process.env.SSH_PASSWORD;
       const privateKey = process.env[`SSH_KEY_${envHostKey}`];
 
