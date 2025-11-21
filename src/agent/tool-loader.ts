@@ -7,6 +7,7 @@ import { OpnsenseReadOnlyTool } from "../tools/opnsense/readonly";
 import { OpnsenseSafeWriteTool } from "../tools/opnsense/writes";
 import { ProxmoxReadOnlyTool } from "../tools/proxmox/readonly";
 import { ProxmoxWriteTool } from "../tools/proxmox/writes";
+import { SSHTool } from "../tools/SSHTool";
 
 export function loadTools(): BaseTool[] {
   return [
@@ -18,6 +19,7 @@ export function loadTools(): BaseTool[] {
     new OpnsenseSafeWriteTool(),
     new ProxmoxReadOnlyTool(),
     new ProxmoxWriteTool(),
+    new SSHTool(),
   ];
 }
 

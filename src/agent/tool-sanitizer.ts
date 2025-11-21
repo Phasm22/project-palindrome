@@ -17,6 +17,30 @@ export function sanitizeToolPayload<T>(payload: T): T {
   if (typeof payload === "object" && payload !== null) {
     const payloadAny = payload as any;
     
+    // Check if this is a diagnostic command response (ping, traceroute, http_check)
+    // IP addresses are the primary data being queried in these commands
+    const diagnosticCommands = ["ping", "traceroute", "http_check"];
+    const isDiagnosticCommand = 
+      payloadAny.command && diagnosticCommands.includes(payloadAny.command) ||
+      payloadAny.data?.command && diagnosticCommands.includes(payloadAny.data?.command);
+    
+    if (isDiagnosticCommand) {
+      // For diagnostic commands, allow IP addresses to pass through
+      // They are the primary data being queried (target IPs, hop IPs, etc.)
+      try {
+        const serialized = JSON.stringify(payload);
+        // Create a temporary redactor that excludes IP patterns
+        const ipPatterns = ALL_REDACTION_PATTERNS.filter(
+          (p) => !p.name.toLowerCase().includes("ip") && !p.name.toLowerCase().includes("address")
+        );
+        const diagnosticRedactor = new Redactor(ipPatterns);
+        const sanitized = diagnosticRedactor.redact(serialized).redactedText;
+        return JSON.parse(sanitized);
+      } catch {
+        // If parsing fails, fall through to normal sanitization
+      }
+    }
+    
     // Check if this is a DHCP lease response - allow IP addresses
     if (
       payloadAny.action === "dhcp_leases_list" ||

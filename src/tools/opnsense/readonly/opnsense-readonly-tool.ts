@@ -402,21 +402,45 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
   // ========== System API Methods ==========
 
   private async getSystemStatus(client: any): Promise<any> {
-    const response = await client.get("/api/core/system/status");
-    return {
-      action: "system_status",
-      status: response.data || {},
-      timestamp: new Date().toISOString(),
-    };
+    try {
+      const response = await client.get("/api/core/system/status");
+      return {
+        action: "system_status",
+        status: response.data || {},
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      // OPNsense API may not support this endpoint or require different method
+      if (error.response?.status === 400 || error.response?.status === 404) {
+        throw new Error(
+          `OPNsense API endpoint /api/core/system/status is not available or not supported. ` +
+          `For system-level information like uptime, memory, and disk usage on OPNsense, use ssh_execute tool instead. ` +
+          `Example: ssh_execute with host "opnsense" and command "uptime" or "free -h".`
+        );
+      }
+      throw error;
+    }
   }
 
   private async getSystemHealth(client: any): Promise<any> {
-    const response = await client.get("/api/core/system/health");
-    return {
-      action: "system_health",
-      health: response.data || {},
-      timestamp: new Date().toISOString(),
-    };
+    try {
+      const response = await client.get("/api/core/system/health");
+      return {
+        action: "system_health",
+        health: response.data || {},
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      // OPNsense API may not support this endpoint
+      if (error.response?.status === 400 || error.response?.status === 404) {
+        throw new Error(
+          `OPNsense API endpoint /api/core/system/health is not available or not supported. ` +
+          `For system health information on OPNsense, use ssh_execute tool instead. ` +
+          `Example: ssh_execute with host "opnsense" and command "uptime" or "free -h".`
+        );
+      }
+      throw error;
+    }
   }
 
   private async getSystemInfo(client: any): Promise<any> {

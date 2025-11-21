@@ -130,13 +130,41 @@ export class RunDiagnosticTool extends BaseTool {
         headers[key] = value;
       });
 
+      // Determine if site is "up" - 2xx and 3xx are considered up
+      const isUp = response.status >= 200 && response.status < 400;
+      const location = response.headers.get("location");
+      
+      let summary: string;
+      if (isUp) {
+        if (response.status >= 300 && response.status < 400 && location) {
+          summary = `Site is UP and responding (HTTP ${response.status} redirect to ${location}) in ${elapsed}ms`;
+        } else {
+          summary = `Site is UP and responding (HTTP ${response.status}) in ${elapsed}ms`;
+        }
+      } else {
+        summary = `Site returned HTTP ${response.status} (${response.statusText}) in ${elapsed}ms - may be down or experiencing issues`;
+      }
+
       return {
-        summary: `HTTP ${response.status} in ${elapsed}ms`,
+        summary,
+        isUp,
         http: {
           statusCode: response.status,
           statusText: response.statusText,
           latencyMs: elapsed,
+          location: location || undefined,
           headers,
+        },
+      };
+    } catch (error: any) {
+      // Network errors, timeouts, etc. mean the site is down
+      const elapsed = Date.now() - started;
+      return {
+        summary: `Site is DOWN - ${error.name === "AbortError" ? "Request timed out" : error.message} (after ${elapsed}ms)`,
+        isUp: false,
+        http: {
+          error: error.name === "AbortError" ? "Timeout" : error.message,
+          latencyMs: elapsed,
         },
       };
     } finally {

@@ -138,7 +138,31 @@ export class SSHTool extends BaseTool {
     return commands;
   }
 
-  private isCommandApproved(host: string, command: string): { approved: boolean; reason?: string; suggestions?: string[] } {
+  /**
+   * Expand common command aliases to their full forms
+   * e.g., "ip addr" -> "ip addr show", "ip link" -> "ip link show"
+   */
+  private expandCommandAlias(command: string): string[] {
+    const expansions: string[] = [command]; // Always include original
+    
+    // Common ip command aliases
+    const ipAliases: Record<string, string> = {
+      "ip addr": "ip addr show",
+      "ip link": "ip link show",
+      "ip route": "ip route show",
+      "ip a": "ip addr show",
+      "ip l": "ip link show",
+      "ip r": "ip route show",
+    };
+    
+    if (ipAliases[command]) {
+      expansions.push(ipAliases[command]);
+    }
+    
+    return expansions;
+  }
+
+  private isCommandApproved(host: string, command: string): { approved: boolean; reason?: string; suggestions?: string[]; expandedCommand?: string } {
     const config = this.loadApprovedCommands();
     const resolvedHost = this.resolveHost(host);
 
@@ -153,17 +177,25 @@ export class SSHTool extends BaseTool {
     
     const hostConfig = config.hosts[resolvedHost];
 
-    // Check all command categories
-    for (const category of Object.keys(hostConfig.commands)) {
-      // Skip non-command properties
-      if (category === "read_only" || typeof hostConfig.commands[category] !== "object") {
-        continue;
-      }
-      const commands = hostConfig.commands[category];
-      // Handle both array and object formats from YAML
-      const commandList = Array.isArray(commands) ? commands : Object.values(commands);
-      if (commandList.includes(command)) {
-        return { approved: true };
+    // Try command aliases/expansions first
+    const commandExpansions = this.expandCommandAlias(command);
+    for (const expandedCmd of commandExpansions) {
+      // Check all command categories
+      for (const category of Object.keys(hostConfig.commands)) {
+        // Skip non-command properties
+        if (category === "read_only" || typeof hostConfig.commands[category] !== "object") {
+          continue;
+        }
+        const commands = hostConfig.commands[category];
+        // Handle both array and object formats from YAML
+        const commandList = Array.isArray(commands) ? commands : Object.values(commands);
+        if (commandList.includes(expandedCmd)) {
+          // If we used an expansion, return the expanded command
+          if (expandedCmd !== command) {
+            return { approved: true, expandedCommand: expandedCmd };
+          }
+          return { approved: true };
+        }
       }
     }
 
@@ -533,7 +565,7 @@ export class SSHTool extends BaseTool {
     const started = context.startedAt ?? Date.now();
     const { host, command } = parsed.data;
 
-    // Validate command is approved
+    // Validate command is approved (may expand aliases)
     const approval = this.isCommandApproved(host, command);
     if (!approval.approved) {
       let errorMessage = approval.reason || "Command not approved";
@@ -552,6 +584,9 @@ export class SSHTool extends BaseTool {
       };
     }
     
+    // Use expanded command if alias was expanded
+    const commandToExecute = approval.expandedCommand || command;
+    
     // Resolve host alias to actual hostname
     const resolvedHost = this.resolveHost(host);
     if (!resolvedHost) {
@@ -564,7 +599,7 @@ export class SSHTool extends BaseTool {
     try {
       // Support placeholder substitution in commands (e.g., {vmid} -> actual vmid)
       // This allows commands like "qm guest cmd {vmid} network-get-interfaces"
-      let finalCommand = command;
+      let finalCommand = commandToExecute;
       if (params.vmid && command.includes("{vmid}")) {
         finalCommand = finalCommand.replace(/{vmid}/g, String(params.vmid));
       }
@@ -577,7 +612,8 @@ export class SSHTool extends BaseTool {
         finalCommand = finalCommand.replace(/{hostname}/g, resolvedHost);
       }
       
-      logger.info(`Executing approved SSH command on ${resolvedHost} (requested as ${host}): ${finalCommand}`);
+      const logCommand = approval.expandedCommand ? `${command} (expanded to: ${approval.expandedCommand})` : finalCommand;
+      logger.info(`Executing approved SSH command on ${resolvedHost} (requested as ${host}): ${logCommand}`);
 
       // Get SSH credentials from config first, then environment (use resolved host for env vars)
       const config = this.loadApprovedCommands();
