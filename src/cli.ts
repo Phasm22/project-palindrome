@@ -15,6 +15,95 @@ import { loadTools } from "./agent/tool-loader";
 import type { ExecutionResult } from "./types/execution";
 import { queryPCE } from "./agent/pce-client";
 import readline from "readline";
+import { executeToolCall } from "./agent/tool-executor";
+import {
+  getToolRisk,
+  isToolAuthorized,
+  requiresConfirmation,
+  type ToolSession,
+} from "./agent/tool-policy";
+import { sanitizeToolPayload } from "./agent/tool-sanitizer";
+import type { BaseTool } from "./tools/BaseTool";
+
+type ConfirmHighRiskFn = (info: { toolName: string; parameters: Record<string, any>; risk: string }) => Promise<boolean>;
+
+function getCliSession(): ToolSession {
+  return {
+    userId: process.env.PCE_USER_ID || "cli-user",
+    aclGroup: process.env.PCE_ACL_GROUP || "admin",
+  };
+}
+
+async function confirmHighRiskPrompt(
+  info: { toolName: string; parameters: Record<string, any>; risk: string },
+  { autoApprove }: { autoApprove?: boolean } = {}
+): Promise<boolean> {
+  if (autoApprove || process.env.PCE_AUTO_APPROVE_HIGH_RISK_TOOLS === "true") {
+    return true;
+  }
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error("\n❌ Cannot prompt for confirmation in non-interactive mode.");
+    console.error("   Use --yes flag or set PCE_AUTO_APPROVE_HIGH_RISK_TOOLS=true to auto-approve.\n");
+    return false;
+  }
+
+  return await new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: true,
+    });
+
+    console.log(`\n⚠️  High-risk operation requires confirmation:`);
+    console.log(`   Tool: ${info.toolName}`);
+    console.log(`   Risk: ${info.risk}`);
+    console.log(`   Parameters: ${JSON.stringify(info.parameters, null, 2)}`);
+    rl.question(`\nApprove this operation? (y/N): `, (answer: string) => {
+      rl.close();
+      const approved = answer.trim().toLowerCase().startsWith("y");
+      if (approved) {
+        console.log("✅ Operation approved.\n");
+      } else {
+        console.log("❌ Operation cancelled.\n");
+      }
+      resolve(approved);
+    });
+  });
+}
+
+async function executeWithPolicies(
+  toolName: string,
+  parameters: Record<string, any>,
+  tools: BaseTool[],
+  options: { confirmHighRisk?: ConfirmHighRiskFn; session?: ToolSession } = {}
+): Promise<ExecutionResult> {
+  const tool = tools.find((t) => t.metadata.name === toolName);
+
+  if (!tool) {
+    return { error: `Tool not registered: ${toolName}` };
+  }
+
+  const session = options.session ?? getCliSession();
+  if (!isToolAuthorized(tool, session)) {
+    return { error: `ACL group ${session.aclGroup} is not authorized to run ${toolName}` };
+  }
+
+  if (requiresConfirmation(tool)) {
+    const approved = await (options.confirmHighRisk ?? confirmHighRiskPrompt)({
+      toolName,
+      parameters,
+      risk: getToolRisk(tool),
+    });
+
+    if (!approved) {
+      return { error: "High-risk action was not approved" };
+    }
+  }
+
+  const result = await executeToolCall({ toolName, parameters }, tools);
+  return { ...result, data: sanitizeToolPayload(result.data) };
+}
 
 /**
  * Formats tool execution results for user-friendly CLI output
@@ -46,6 +135,8 @@ function formatToolOutput(result: ExecutionResult, toolName: string): string {
       return result.data?.stderr || "(no output)";
 
     case "opnsense_manage":
+    case "opnsense_readonly":
+    case "opnsense_safewrite":
       // For OPNsense, show formatted JSON (it's usually structured data)
       return JSON.stringify(result.data, null, 2);
 
@@ -84,11 +175,7 @@ if (args[0] === "hello") {
   process.exit(0);
 } else if (args[0] === "glances") {
   const tools = loadTools();
-  const glances = tools.find(t => t.metadata.name === "glances")!;
-  const res = await glances.execute(
-    { section: "all" },
-    { toolName: "glances", startedAt: Date.now() }
-  );
+  const res = await executeWithPolicies("glances", { section: "all" }, tools);
   console.log(formatToolOutput(res, "glances"));
   process.exit(res.error ? 1 : 0);
 } else if (args[0] === "pce") {
@@ -127,45 +214,8 @@ if (args[0] === "hello") {
         console.log(`   Parameters: ${JSON.stringify(info.parameters, null, 2)}\n`);
         return true;
       }
-      
-      // Interactive confirmation
-      // Check if we're in an interactive terminal (try both isTTY checks)
-      const isInteractive = process.stdin.isTTY && process.stdout.isTTY;
-      
-      if (!isInteractive) {
-        // Try to detect if we're in a shell that supports prompts
-        // Bun sometimes doesn't set isTTY correctly, so we'll try anyway
-        const canPrompt = typeof process.stdin.read === "function" && typeof process.stdout.write === "function";
-        
-        if (!canPrompt) {
-          console.error(`\n❌ Cannot prompt for confirmation in non-interactive mode.`);
-          console.error(`   Use --yes flag or set PCE_AUTO_APPROVE_HIGH_RISK_TOOLS=true to auto-approve.\n`);
-          return false;
-        }
-      }
-      
-      return await new Promise((resolve) => {
-        const readline = require("readline");
-        const rl = readline.createInterface({ 
-          input: process.stdin, 
-          output: process.stdout,
-          terminal: true,
-        });
-        console.log(`\n⚠️  High-risk operation requires confirmation:`);
-        console.log(`   Tool: ${info.toolName}`);
-        console.log(`   Risk: ${info.risk}`);
-        console.log(`   Parameters: ${JSON.stringify(info.parameters, null, 2)}`);
-        rl.question(`\nApprove this operation? (y/N): `, (answer: string) => {
-          rl.close();
-          const approved = answer.trim().toLowerCase().startsWith("y");
-          if (approved) {
-            console.log("✅ Operation approved.\n");
-          } else {
-            console.log("❌ Operation cancelled.\n");
-          }
-          resolve(approved);
-        });
-      });
+
+      return confirmHighRiskPrompt(info);
     };
     
     // Use runAgent which includes tool calling, RAG context, and LLM reasoning
@@ -219,21 +269,22 @@ if (args[0] === "hello") {
   }
 } else if (args[0] === "opnsense") {
   const tools = loadTools();
-  const opnsense = tools.find(t => t.metadata.name === "opnsense_manage")!;
-  
+
   if (args[1] === "status") {
-    const res = await opnsense.execute(
+    const res = await executeWithPolicies(
+      "opnsense_readonly",
       { action: "system_status" },
-      { toolName: "opnsense_manage", startedAt: Date.now() }
+      tools
     );
-    console.log(formatToolOutput(res, "opnsense_manage"));
+    console.log(formatToolOutput(res, "opnsense_readonly"));
     process.exit(res.error ? 1 : 0);
   } else if (args[1] === "aliases") {
-    const res = await opnsense.execute(
-      { action: "list_aliases" },
-      { toolName: "opnsense_manage", startedAt: Date.now() }
+    const res = await executeWithPolicies(
+      "opnsense_readonly",
+      { action: "firewall_aliases_list" },
+      tools
     );
-    console.log(formatToolOutput(res, "opnsense_manage"));
+    console.log(formatToolOutput(res, "opnsense_readonly"));
     process.exit(res.error ? 1 : 0);
   } else {
     console.log("Usage: agent opnsense <status|aliases>");
@@ -251,10 +302,11 @@ if (args[0] === "hello") {
   
   const host = args[1];
   const command = args.slice(2).join(" ");
-  
-  const res = await ssh.execute(
+
+  const res = await executeWithPolicies(
+    "ssh_execute",
     { host, command },
-    { toolName: "ssh_execute", startedAt: Date.now() }
+    tools
   );
   console.log(formatToolOutput(res, "ssh_execute"));
   process.exit(res.error ? 1 : 0);
@@ -315,9 +367,10 @@ if (args[0] === "hello") {
     }
   }
   
-  const res = await mcpTool.execute(
+  const res = await executeWithPolicies(
+    "mcp_opnsense",
     { module, action, parameters: params },
-    { toolName: "mcp_opnsense", startedAt: Date.now() }
+    tools
   );
   console.log(formatToolOutput(res, "mcp_opnsense"));
   process.exit(res.error ? 1 : 0);
@@ -484,7 +537,7 @@ if (args[0] === "hello") {
       type: flags.type || writeAction.defaultType || "qemu",
     };
 
-    const writeResult = await proxmoxWrite.execute(writeParams, { toolName: "proxmox_write", startedAt: Date.now() });
+    const writeResult = await executeWithPolicies("proxmox_write", writeParams, tools);
     if (writeResult.error) {
       console.error(`❌ Error: ${writeResult.error}`);
       process.exit(1);
@@ -513,7 +566,7 @@ if (args[0] === "hello") {
   }
   if (flags.type) readonlyParams.type = flags.type;
 
-  const readonlyResult = await proxmoxReadonly.execute(readonlyParams, { toolName: "proxmox_readonly", startedAt: Date.now() });
+  const readonlyResult = await executeWithPolicies("proxmox_readonly", readonlyParams, tools);
   if (readonlyResult.error) {
     console.error(`❌ Error: ${readonlyResult.error}`);
     process.exit(1);
