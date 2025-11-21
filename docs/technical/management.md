@@ -54,6 +54,8 @@ bun run src/cli.ts ssh opnsense "du -sh /*"
 bun run src/cli.ts ssh 172.16.0.1 "uptime"
 ```
 
+> Direct CLI calls now run through the same ACL + confirmation guardrails as the agent runtime. Set `PCE_ACL_GROUP`/`PCE_USER_ID` to match the desired role, and expect a confirmation prompt for any tool that declares `requiresConfirmation` (e.g., `proxmox_write`, `opnsense_safewrite`) unless `PCE_AUTO_APPROVE_HIGH_RISK_TOOLS=true` is provided.
+
 ## Tool Management
 
 ### Export Tool Schemas
