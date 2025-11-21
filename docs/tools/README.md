@@ -9,6 +9,7 @@ Tool-specific documentation, integration guides, and setup instructions.
 - `mcp-opnsense-integration.md` - MCP OPNsense integration guide
 - `opnsense-ssh-setup.md` - OPNsense SSH setup guide
 - `ssh-tool-setup.md` - SSH tool setup guide
+- `proxmox-capabilities.md` - Proxmox tool capabilities and API routes
 
 ## Purpose
 
