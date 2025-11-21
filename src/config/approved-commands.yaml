@@ -37,52 +37,122 @@ hosts:
     aliases:
       - "prox_big"
       - "proxbig"
-    description: "Proxmox node - prox_big"
+      - "prox_big.prox"
+      - "proxbig.prox"
+    description: "Proxmox node - prox_big (OS-level operations only, use Proxmox tool for VM operations)"
     username: "opsadmin"
     read_only: true
     commands:
       network:
-        - "qm guest cmd {vmid} network-get-interfaces"
-        - "qm guest cmd {vmid} network-get-interfaces 2>/dev/null"
-        - "qm status {vmid}"
+        # OS-level network diagnostics (not VM-level)
+        - "ip addr show"
+        - "ip route show"
+        - "netstat -tuln"
+        - "ss -tuln"
+        - "ip link show"
+        - "bridge link show"
       system:
         - "uptime"
         - "free -h"
-        - "pvesh get /nodes/$(hostname)/qemu/{vmid}/agent/network-get-interfaces 2>/dev/null"
+        - "hostname"
+        - "uname -a"
+        - "df -h"
+        - "systemctl status {service}"
+        - "systemctl list-units --type=service"
+        - "journalctl -u {service} -n 50"
+        - "tail -n 100 /var/log/{logfile}"
+        - "ps aux | head -20"
+      maintenance:
+        - "apt update"
+        - "apt list --upgradable"
+        - "systemctl restart {service}"
+        - "systemctl stop {service}"
+        - "systemctl start {service}"
+      filesystem:
+        - "du -sh /*"
+        - "df -h"
+        - "du -h --max-depth=1 /var/log"
+        - "ls -lh /var/log | head -20"
         
   "172.16.0.11":  # yin
     hostname: "172.16.0.11"
     aliases:
       - "yin"
-    description: "Proxmox node - yin"
+      - "yin.prox"
+    description: "Proxmox node - yin (OS-level operations only, use Proxmox tool for VM operations)"
     username: "opsadmin"
     read_only: true
     commands:
       network:
-        - "qm guest cmd {vmid} network-get-interfaces"
-        - "qm guest cmd {vmid} network-get-interfaces 2>/dev/null"
-        - "qm status {vmid}"
+        # OS-level network diagnostics (not VM-level)
+        - "ip addr show"
+        - "ip route show"
+        - "netstat -tuln"
+        - "ss -tuln"
+        - "ip link show"
+        - "bridge link show"
       system:
         - "uptime"
         - "free -h"
-        - "pvesh get /nodes/$(hostname)/qemu/{vmid}/agent/network-get-interfaces 2>/dev/null"
+        - "hostname"
+        - "uname -a"
+        - "df -h"
+        - "systemctl status {service}"
+        - "systemctl list-units --type=service"
+        - "journalctl -u {service} -n 50"
+        - "tail -n 100 /var/log/{logfile}"
+        - "ps aux | head -20"
+      maintenance:
+        - "apt update"
+        - "apt list --upgradable"
+        - "systemctl restart {service}"
+        - "systemctl stop {service}"
+        - "systemctl start {service}"
+      filesystem:
+        - "du -sh /*"
+        - "df -h"
+        - "du -h --max-depth=1 /var/log"
+        - "ls -lh /var/log | head -20"
         
   "172.16.0.12":  # yang
     hostname: "172.16.0.12"
     aliases:
       - "yang"
-    description: "Proxmox node - yang"
+      - "yang.prox"
+    description: "Proxmox node - yang (OS-level operations only, use Proxmox tool for VM operations)"
     username: "opsadmin"
     read_only: true
     commands:
       network:
-        - "qm guest cmd {vmid} network-get-interfaces"
-        - "qm guest cmd {vmid} network-get-interfaces 2>/dev/null"
-        - "qm status {vmid}"
+        # OS-level network diagnostics (not VM-level)
+        - "ip addr show"
+        - "ip route show"
+        - "netstat -tuln"
+        - "ss -tuln"
+        - "ip link show"
+        - "bridge link show"
       system:
         - "uptime"
         - "free -h"
-        - "pvesh get /nodes/$(hostname)/qemu/{vmid}/agent/network-get-interfaces 2>/dev/null"
+        - "hostname"
+        - "uname -a"
+        - "df -h"
+        - "systemctl status {service}"
+        - "systemctl list-units --type=service"
+        - "journalctl -u {service} -n 50"
+        - "tail -n 100 /var/log/{logfile}"
+        - "ps aux | head -20"
+      maintenance:
+        - "apt update"
+        - "apt list --upgradable"
+        - "systemctl restart {service}"
+        - "systemctl stop {service}"
+        - "systemctl start {service}"
+      filesystem:
+        - "du -sh /*"
+        - "df -h"
+        - "du -h --max-depth=1 /var/log"
+        - "ls -lh /var/log | head -20"
 
   # Example: Add more hosts as needed
   # "192.168.1.100":

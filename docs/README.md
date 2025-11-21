@@ -25,12 +25,16 @@ docs/
 - [Quick Start: Topology Ingestion](guides/QUICK_START_TOPOLOGY.md)
 
 ### Technical Documentation
+- [Architecture: Tool Separation](technical/architecture-tool-separation.md)
+- [Architecture: Implementation Complete](technical/architecture-implementation-complete.md)
 - [Bug Fixes](technical/BUG_FIXES.md)
 - [Management Guide](technical/management.md)
 - [Agent Environment Notes](technical/agent-notes.md)
+- [Documentation Structure](technical/structure.md)
+- [Documentation Migration](technical/migration.md)
 
 ### Features
-- [IP Resolution](features/) - Strategy, setup, and implementation
+- [IP Resolution](features/) - Strategy, setup, implementation, and recommendations
 
 ### Testing
 - [Proxmox Tests](tests/proxmox-test-status.md)

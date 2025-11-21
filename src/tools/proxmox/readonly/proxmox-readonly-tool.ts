@@ -5,6 +5,7 @@ import { createToolSchema } from "../../tool-helpers";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { ProxmoxClient } from "../client";
 import { normalizeProxmoxResponse } from "./normalization";
+import { pceLogger } from "../../../pce/utils/logger";
 
 /**
  * Schema for Proxmox read-only tool parameters
@@ -20,12 +21,14 @@ export const ProxmoxReadOnlyParams = z.object({
       "node_disks",
       "node_network_interfaces",
 
-      // VM-Level (5 actions)
+      // VM-Level (7 actions)
       "list_vms",
       "get_vm_status",
       "get_vm_config",
       "get_vm_network",
       "get_vm_snapshots",
+      "get_vm_ip", // Get VM IP via guest agent
+      "get_lxc_config", // Get LXC container config
 
       // Cluster-Level (5 actions)
       "cluster_resources", // Use this to find VMID, node, and type when given a VM/container NAME
@@ -89,6 +92,14 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         {
           description: "Find VM/container by name (e.g., find 'aiMarketBot' to get its VMID, node, and type)",
           parameters: { action: "cluster_resources" },
+        },
+        {
+          description: "Get VM IP address via guest agent",
+          parameters: { action: "get_vm_ip", node: "yang", vmid: 211, type: "qemu" },
+        },
+        {
+          description: "Get LXC container configuration",
+          parameters: { action: "get_lxc_config", node: "yang", vmid: 100 },
         },
       ],
       notes: [
@@ -256,6 +267,12 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
       case "get_vm_snapshots":
         return this.getVmSnapshots(client, params.node, params.vmid, vmType);
+
+      case "get_vm_ip":
+        return this.getVmIP(client, params.node, params.vmid, vmType);
+
+      case "get_lxc_config":
+        return this.getLxcConfig(client, params.node, params.vmid);
 
       default:
         throw new Error(`Unknown VM action: ${action}`);
@@ -575,6 +592,159 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
     return {
       data: { node, vmid, type, snapshots: normalized, count: normalized.length },
+      metadata: result.metadata,
+    };
+  }
+
+  /**
+   * Get VM IP addresses via guest agent
+   * Falls back to config-based methods if guest agent unavailable
+   */
+  private async getVmIP(
+    client: ProxmoxClient,
+    node: string,
+    vmid: number,
+    type: "qemu" | "lxc"
+  ): Promise<{ data: any; metadata: any }> {
+    // Only qemu VMs support guest agent
+    if (type !== "qemu") {
+      return {
+        data: {
+          node,
+          vmid,
+          type,
+          ips: [],
+          source: "unsupported",
+          message: "Guest agent is only supported for qemu VMs",
+        },
+        metadata: { timestamp: Date.now(), durationMs: 0 },
+      };
+    }
+
+    try {
+      // Try guest agent first
+      const agentResult = await client.get(
+        `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
+      );
+      const interfaces = agentResult.data.data?.result || [];
+
+      const ips: string[] = [];
+      const interfacesData: Array<{
+        name: string;
+        ips: string[];
+        mac?: string;
+      }> = [];
+
+      for (const iface of interfaces) {
+        const ifaceIPs: string[] = [];
+        if (iface["ip-addresses"] && Array.isArray(iface["ip-addresses"])) {
+          for (const ip of iface["ip-addresses"]) {
+            if (
+              ip["ip-address-type"] === "ipv4" &&
+              !ip["ip-address"].startsWith("127.")
+            ) {
+              ips.push(ip["ip-address"]);
+              ifaceIPs.push(ip["ip-address"]);
+            }
+          }
+        }
+        if (ifaceIPs.length > 0 || iface.name) {
+          interfacesData.push({
+            name: iface.name || "unknown",
+            ips: ifaceIPs,
+            mac: iface["hardware-address"],
+          });
+        }
+      }
+
+      return {
+        data: {
+          node,
+          vmid,
+          type,
+          ips,
+          interfaces: interfacesData,
+          source: "guest_agent",
+        },
+        metadata: agentResult.metadata,
+      };
+    } catch (error: any) {
+      // Guest agent not available, try fallback methods
+      pceLogger.debug("Guest agent not available, trying fallback methods", {
+        node,
+        vmid,
+        error: error.message,
+      });
+
+      // Fallback 1: Get MAC from config, could query DHCP later
+      try {
+        const configResult = await client.get(
+          `/nodes/${node}/qemu/${vmid}/config`
+        );
+        const config = configResult.data.data || {};
+
+        // Extract MAC from network config
+        const macs: string[] = [];
+        for (const [key, value] of Object.entries(config)) {
+          if (key.startsWith("net") && typeof value === "string") {
+            const macMatch = value.match(
+              /(?:virtio|model)=([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
+            );
+            if (macMatch) {
+              macs.push(macMatch[1].toLowerCase());
+            }
+          }
+        }
+
+        return {
+          data: {
+            node,
+            vmid,
+            type,
+            ips: [],
+            macs,
+            source: "config_fallback",
+            message:
+              "Guest agent unavailable. MAC addresses extracted from config. IP resolution requires DHCP query or guest agent.",
+          },
+          metadata: configResult.metadata,
+        };
+      } catch (configError: any) {
+        return {
+          data: {
+            node,
+            vmid,
+            type,
+            ips: [],
+            source: "error",
+            message: `Failed to get IP: Guest agent unavailable and config access failed: ${configError.message}`,
+          },
+          metadata: { timestamp: Date.now(), durationMs: 0 },
+        };
+      }
+    }
+  }
+
+  /**
+   * Get LXC container configuration
+   */
+  private async getLxcConfig(
+    client: ProxmoxClient,
+    node: string,
+    vmid: number
+  ): Promise<{ data: any; metadata: any }> {
+    const result = await client.get(`/nodes/${node}/lxc/${vmid}/config`);
+    const config = result.data.data || {};
+
+    const normalized = normalizeProxmoxResponse({
+      node,
+      vmid,
+      type: "lxc",
+      ...config,
+    });
+
+    return {
+      data: normalized,
       metadata: result.metadata,
     };
   }

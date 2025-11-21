@@ -8,6 +8,7 @@ Feature-specific documentation, implementation guides, and strategies.
 - `IP_RESOLUTION_STRATEGY.md` - IP address resolution strategy and problem analysis
 - `IP_RESOLUTION_SETUP.md` - Quick setup guide for IP resolution
 - `IP_RESOLUTION_IMPLEMENTED.md` - Implementation details and completion status
+- `ip-resolution-recommendations.md` - Recommendations and current status for IP resolution
 
 ## Purpose
 

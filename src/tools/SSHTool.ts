@@ -189,7 +189,8 @@ export class SSHTool extends BaseTool {
     command: string,
     username?: string,
     privateKey?: string,
-    password?: string
+    password?: string,
+    resolvedHost?: string
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return new Promise((resolve, reject) => {
       const conn = new Client();
@@ -199,9 +200,18 @@ export class SSHTool extends BaseTool {
       let commandExecuted = false;
 
       conn.on("ready", () => {
-        // OPNsense uses an interactive shell with a menu
-        // We need to start a shell session and select option 8 (shell)
-        conn.shell((err, stream) => {
+        // For Proxmox nodes, use exec for cleaner output
+        // For OPNsense, we need shell to navigate the menu
+        const targetHost = resolvedHost || host;
+        const useShell = targetHost.includes("172.16.0.1") || 
+                        targetHost.includes("opnsense") ||
+                        targetHost.includes("radar") ||
+                        targetHost.includes("firewall");
+        
+        if (useShell) {
+          // OPNsense uses an interactive shell with a menu
+          // We need to start a shell session and select option 8 (shell)
+          conn.shell((err, stream) => {
           if (err) {
             conn.end();
             reject(err);
@@ -211,9 +221,14 @@ export class SSHTool extends BaseTool {
           shellStream = stream;
           let menuBuffer = "";
           let shellReady = false;
+          let promptDetected = false;
+          let rawOutput = ""; // Collect ALL raw output for debugging
+          let lastDataTime = Date.now();
 
           stream.on("data", (data: Buffer) => {
             const text = data.toString();
+            rawOutput += text; // Keep raw output for debugging
+            lastDataTime = Date.now();
             menuBuffer += text;
 
             // Check if we're at the OPNsense menu (look for menu indicators)
@@ -225,48 +240,71 @@ export class SSHTool extends BaseTool {
               return;
             }
 
+            // Detect shell prompt (for both OPNsense and regular Linux shells)
+            // Look for common prompt patterns: username@hostname, $, #, etc.
+            if (!promptDetected && (
+              text.match(/[a-zA-Z0-9_-]+@[a-zA-Z0-9_.-]+[:\s]+[~#\$]/) ||
+              text.match(/[~#\$]\s*$/) ||
+              text.match(/root@.*[#>$]\s*$/m) ||
+              text.includes("~ #") ||
+              text.includes("~ $") ||
+              text.match(/\[.*@.*\].*[#\$]\s*$/)
+            )) {
+              promptDetected = true;
+              shellReady = true;
+            }
+
             // Once in shell, wait for prompt then execute command
             if (shellReady && !commandExecuted) {
-              // Look for shell prompt (root@OPNsense:~ # or similar)
-              if (text.match(/root@.*[#>$]\s*$/m) || text.includes("~ #") || text.includes("~ $")) {
+              // For regular Linux shells, execute immediately after detecting prompt
+              // For OPNsense, we already handled it above
+              if (promptDetected || text.match(/[~#\$]\s*$/m)) {
                 commandExecuted = true;
                 logger.info(`Executing command in shell: ${command}`);
+                // Execute command directly (no bash -c wrapper for cleaner output)
                 stream.write(`${command}\n`);
                 // Set a timeout to exit if no more output
+                // For commands that might take time (like guest agent), wait longer
+                const outputTimeout = command.includes("guest") || command.includes("pvesh") || command.includes("qm") ? 10000 : 5000;
+                
+                // Track if we've seen any useful output (not just errors)
+                let hasUsefulOutput = false;
+                const checkOutput = setInterval(() => {
+                  if (stdout.length > 0 && !stdout.match(/^ipcc_send_rec|^Unable to load/)) {
+                    hasUsefulOutput = true;
+                  }
+                }, 500);
+                
                 setTimeout(() => {
-                  stream.write("exit\n");
-                  setTimeout(() => {
-                    stream.end();
-                  }, 500);
-                }, 2000); // Wait 2 seconds for command output
+                  clearInterval(checkOutput);
+                  // Check if we got output recently
+                  const timeSinceLastData = Date.now() - lastDataTime;
+                  // Wait longer if we haven't seen useful output yet
+                  const waitTime = hasUsefulOutput ? 1000 : 3000;
+                  
+                  if (timeSinceLastData > waitTime) {
+                    // No output for waitTime, safe to exit
+                    stream.write("exit\n");
+                    setTimeout(() => {
+                      stream.end();
+                    }, 500);
+                  } else {
+                    // Still getting output, wait a bit more
+                    setTimeout(() => {
+                      stream.write("exit\n");
+                      setTimeout(() => {
+                        stream.end();
+                      }, 500);
+                    }, waitTime);
+                  }
+                }, outputTimeout);
                 return;
               }
             }
 
-            // Collect command output
+            // Collect command output - collect everything, filter later
             if (commandExecuted) {
-              // Filter out menu text, prompts, and the command echo
-              const lines = text.split("\n");
-              for (const line of lines) {
-                const cleanLine = line.replace(/\r/g, "").trim();
-                // Skip menu text, prompts, command echo, and empty lines
-                if (
-                  cleanLine.length > 0 &&
-                  !cleanLine.includes("Enter an option") &&
-                  !cleanLine.includes("OPNsense") &&
-                  !cleanLine.match(/^\d+\)\s+/) &&
-                  !cleanLine.match(/^root@.*[#>$]\s*$/) &&
-                  !cleanLine.match(/^.*[#>$]\s*$/) &&
-                  cleanLine !== command.trim() &&
-                  cleanLine !== "exit" &&
-                  !cleanLine.match(/^HomeNetwork|^LabNetwork|^securityLab|^HTTPS:|^SSH:/) &&
-                  !cleanLine.match(/^SHA256/) &&
-                  !cleanLine.match(/^[A-F0-9]{2}(\s+[A-F0-9]{2}){15}$/) && // Skip hex fingerprints
-                  !cleanLine.match(/^[a-f0-9]{64}$/) // Skip full SHA256 hashes
-                ) {
-                  stdout += cleanLine + "\n";
-                }
-              }
+              stdout += text; // Collect raw output first
             }
           });
 
@@ -294,18 +332,90 @@ export class SSHTool extends BaseTool {
           stream.on("close", () => {
             clearTimeout(timeout);
             conn.end();
-            // Clean up output - remove empty lines and trim
-            const outputLines = stdout.split("\n")
-              .filter(line => line.trim().length > 0)
-              .filter(line => 
-                !line.includes("Enter an option") &&
-                !line.includes("OPNsense") &&
-                !line.match(/^\d+\.\s+/) &&
-                !line.match(/^root@.*[#>$]\s*$/) &&
-                !line.match(/^.*[#>$]\s*$/)
-              );
             
-            const commandOutput = outputLines.join("\n").trim();
+            // Process collected output
+            // Remove ANSI escape codes and control sequences more aggressively
+            let cleanOutput = stdout
+              .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // ANSI escape codes
+              .replace(/\x1b\[[?0-9;]*[hl]/g, '') // More ANSI codes
+              .replace(/\[?2004[hl]/g, '') // Bracketed paste mode
+              .replace(/\x1b\[[0-9;]*m/g, '') // Color codes
+              .replace(/\x1b\[K/g, '') // Clear line
+              .replace(/\x1b\[[0-9]*[JK]/g, '') // More clear codes
+              .replace(/\r/g, '') // Carriage returns
+              .replace(/\x1b/g, ''); // Any remaining escape chars
+            
+            // Split into lines and filter
+            const lines = cleanOutput.split("\n");
+            const filteredLines: string[] = [];
+            
+            for (const line of lines) {
+              const cleanLine = line.trim();
+              
+              // Skip empty lines
+              if (cleanLine.length === 0) continue;
+              
+              // Skip menu text and OPNsense-specific content
+              if (cleanLine.includes("Enter an option") || 
+                  cleanLine.includes("OPNsense") ||
+                  cleanLine.match(/^\d+\)\s+/)) {
+                continue;
+              }
+              
+              // Skip shell prompts (but be less aggressive)
+              if (cleanLine.match(/^[a-zA-Z0-9_-]+@[a-zA-Z0-9_.-]+[:\s]+[~#\$].*[#>$]\s*$/)) {
+                continue;
+              }
+              
+              // Skip command echo (exact match)
+              if (cleanLine === command.trim() || 
+                  cleanLine === `$ ${command.trim()}` ||
+                  cleanLine === `# ${command.trim()}`) {
+                continue;
+              }
+              
+              // Skip exit/logout commands
+              if (cleanLine === "exit" || cleanLine === "logout") {
+                continue;
+              }
+              
+              // Skip OPNsense-specific content
+              if (cleanLine.match(/^HomeNetwork|^LabNetwork|^securityLab|^HTTPS:|^SSH:/)) {
+                continue;
+              }
+              
+              // Skip fingerprints and hashes
+              if (cleanLine.match(/^SHA256/) ||
+                  cleanLine.match(/^[A-F0-9]{2}(\s+[A-F0-9]{2}){15}$/) ||
+                  cleanLine.match(/^[a-f0-9]{64}$/)) {
+                continue;
+              }
+              
+              // Keep guest agent errors for debugging, but we'll filter them if they're the only output
+              // For now, include everything else
+              filteredLines.push(cleanLine);
+            }
+            
+            let commandOutput = filteredLines.join("\n").trim();
+            
+            // If output is just guest agent errors, log them but return empty
+            if (commandOutput.match(/^ipcc_send_rec.*\nUnable to load access control list.*$/s) && 
+                !commandOutput.match(/[\{\[]/)) {
+              logger.warn("Guest agent errors detected, but no JSON output", { 
+                rawOutput: rawOutput.substring(0, 500),
+                command 
+              });
+              // Still return the errors so caller knows what happened
+            }
+            
+            // Log raw output for debugging if it's suspiciously short
+            if (commandOutput.length < 10 && rawOutput.length > 100) {
+              logger.debug("Output seems filtered too aggressively", {
+                commandOutputLength: commandOutput.length,
+                rawOutputLength: rawOutput.length,
+                rawOutputSample: rawOutput.substring(0, 500)
+              });
+            }
             
             resolve({ 
               stdout: commandOutput || stdout, 
@@ -314,6 +424,66 @@ export class SSHTool extends BaseTool {
             });
           });
         });
+        } else {
+          // For regular Linux hosts (like Proxmox), use exec for direct command execution
+          logger.info(`Using exec mode for host: ${targetHost}`);
+          conn.exec(command, (err, stream) => {
+            if (err) {
+              conn.end();
+              reject(err);
+              return;
+            }
+
+            stream.on("data", (data: Buffer) => {
+              stdout += data.toString();
+            });
+
+            stream.stderr.on("data", (data: Buffer) => {
+              stderr += data.toString();
+            });
+
+            stream.on("close", (code: number) => {
+              conn.end();
+              
+              // Clean output - remove ANSI codes
+              let cleanStdout = stdout
+                .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                .replace(/\x1b\[[?0-9;]*[hl]/g, '')
+                .replace(/\[?2004[hl]/g, '')
+                .replace(/\x1b\[[0-9;]*m/g, '')
+                .replace(/\x1b\[K/g, '')
+                .replace(/\x1b\[[0-9]*[JK]/g, '')
+                .replace(/\r/g, '')
+                .replace(/\x1b/g, '')
+                .trim();
+              
+              let cleanStderr = stderr
+                .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+                .replace(/\x1b\[[?0-9;]*[hl]/g, '')
+                .replace(/\[?2004[hl]/g, '')
+                .replace(/\r/g, '')
+                .trim();
+              
+              // If stderr has guest agent errors but stdout has actual data, prefer stdout
+              // Guest agent errors are often harmless warnings
+              const hasGuestAgentErrors = cleanStderr.includes("ipcc_send_rec") || 
+                                         cleanStderr.includes("Unable to load access control list");
+              
+              if (hasGuestAgentErrors && cleanStdout.length > 0) {
+                logger.debug("Guest agent errors detected but stdout has data", {
+                  stdoutLength: cleanStdout.length,
+                  stderrLength: cleanStderr.length
+                });
+              }
+              
+              resolve({
+                stdout: cleanStdout,
+                stderr: cleanStderr,
+                exitCode: code || 0,
+              });
+            });
+          });
+        }
       });
 
       conn.on("error", (err) => {
@@ -392,7 +562,22 @@ export class SSHTool extends BaseTool {
     }
 
     try {
-      logger.info(`Executing approved SSH command on ${resolvedHost} (requested as ${host}): ${command}`);
+      // Support placeholder substitution in commands (e.g., {vmid} -> actual vmid)
+      // This allows commands like "qm guest cmd {vmid} network-get-interfaces"
+      let finalCommand = command;
+      if (params.vmid && command.includes("{vmid}")) {
+        finalCommand = finalCommand.replace(/{vmid}/g, String(params.vmid));
+      }
+      if (params.node && command.includes("{node}")) {
+        finalCommand = finalCommand.replace(/{node}/g, params.node);
+      }
+      // Also support {hostname} placeholder
+      if (command.includes("{hostname}")) {
+        // We'll need to get hostname, but for now use resolvedHost
+        finalCommand = finalCommand.replace(/{hostname}/g, resolvedHost);
+      }
+      
+      logger.info(`Executing approved SSH command on ${resolvedHost} (requested as ${host}): ${finalCommand}`);
 
       // Get SSH credentials from config first, then environment (use resolved host for env vars)
       const config = this.loadApprovedCommands();
@@ -400,7 +585,31 @@ export class SSHTool extends BaseTool {
       const envHostKey = resolvedHost.replace(/\./g, "_");
       let username = hostConfig?.username || process.env[`SSH_USER_${envHostKey}`] || process.env.SSH_USER || "root";
       let password = process.env[`SSH_PASSWORD_${envHostKey}`] || process.env.SSH_PASSWORD;
-      const privateKey = process.env[`SSH_KEY_${envHostKey}`];
+      let privateKey = process.env[`SSH_KEY_${envHostKey}`];
+      
+      // If no key specified, try to use default SSH keys for passwordless auth
+      if (!privateKey && !password) {
+        const fs = await import("fs/promises");
+        const os = await import("os");
+        const path = await import("path");
+        const homeDir = os.homedir();
+        const defaultKeys = [
+          path.join(homeDir, ".ssh", "id_rsa"),
+          path.join(homeDir, ".ssh", "id_ed25519"),
+          path.join(homeDir, ".ssh", "id_ecdsa"),
+        ];
+        
+        for (const keyPath of defaultKeys) {
+          try {
+            await fs.access(keyPath);
+            privateKey = await fs.readFile(keyPath, "utf-8");
+            logger.info(`Using default SSH key: ${keyPath}`);
+            break;
+          } catch {
+            // Key doesn't exist, try next one
+          }
+        }
+      }
 
       // Remove quotes if present (dotenv might preserve them)
       if (username) username = username.replace(/^["']|["']$/g, "");
@@ -408,7 +617,7 @@ export class SSHTool extends BaseTool {
 
       logger.info(`SSH auth: user=${username}, hasPassword=${!!password}, hasKey=${!!privateKey}`);
 
-      const result = await this.executeSSHCommand(resolvedHost, command, username, privateKey, password);
+      const result = await this.executeSSHCommand(resolvedHost, finalCommand, username, privateKey, password, resolvedHost);
 
       if (result.exitCode !== 0) {
         return {
