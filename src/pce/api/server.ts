@@ -125,11 +125,28 @@ export class PceApiServer {
   private async handleRequest(req: Request, server: BunServer): Promise<Response> {
     const url = new URL(req.url);
 
+    // Handle CORS preflight
+    if (req.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        },
+      });
+    }
+
     if (req.method === "POST" && url.pathname === "/query") {
       return await this.handleQuery(req, server);
     }
 
     if (req.method === "GET" && url.pathname === "/metrics") {
+      // Check if Prometheus format is requested
+      const acceptHeader = req.headers.get("accept") || "";
+      if (acceptHeader.includes("application/openmetrics-text") || url.searchParams.get("format") === "prometheus") {
+        return this.handlePrometheusMetrics();
+      }
       return this.handleMetrics();
     }
 
@@ -139,6 +156,39 @@ export class PceApiServer {
 
     if (req.method === "GET" && url.pathname.startsWith("/history/")) {
       return this.handleHistory(url.pathname);
+    }
+
+    // Dashboard API endpoints
+    if (req.method === "GET" && url.pathname === "/api/dashboard/tool-executions") {
+      return await this.handleToolExecutions(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/cluster-status") {
+      return await this.handleClusterStatus(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/ontology-graph") {
+      return await this.handleOntologyGraph(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/vector-stats") {
+      return await this.handleVectorStats(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/rag-diagnostics") {
+      return await this.handleRagDiagnostics(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/execution-stats") {
+      return await this.handleExecutionStats(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/reasoning-traces") {
+      return await this.handleReasoningTraces(req);
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/dashboard/reasoning-traces/")) {
+      return await this.handleReasoningTrace(req, url.pathname);
     }
 
     return new Response("Not Found", { status: 404 });
@@ -263,6 +313,90 @@ export class PceApiServer {
     });
   }
 
+  /**
+   * Prometheus metrics exporter endpoint
+   * Returns metrics in Prometheus text format
+   */
+  private handlePrometheusMetrics(): Response {
+    const snapshot = this.metricsCollector.getSnapshot();
+    const lines: string[] = [];
+    
+    // Add HELP and TYPE comments for each metric
+    const seenMetrics = new Set<string>();
+    
+    // Export all metrics in Prometheus format
+    for (const [metricName, stats] of Object.entries(snapshot.metrics)) {
+      // Prometheus metric names should be lowercase with underscores
+      const promName = metricName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+      
+      if (!seenMetrics.has(promName)) {
+        lines.push(`# HELP ${promName} Palindrome PCE metric: ${metricName}`);
+        lines.push(`# TYPE ${promName} gauge`);
+        seenMetrics.add(promName);
+      }
+      
+      // Export latest value (Prometheus typically uses latest/gauge)
+      lines.push(`${promName} ${stats.latest}`);
+      
+      // Also export aggregated stats as separate metrics
+      const baseName = promName.replace(/_latest$/, "");
+      if (!seenMetrics.has(`${baseName}_avg`)) {
+        lines.push(`# HELP ${baseName}_avg Average value for ${metricName}`);
+        lines.push(`# TYPE ${baseName}_avg gauge`);
+        seenMetrics.add(`${baseName}_avg`);
+      }
+      lines.push(`${baseName}_avg ${stats.avg}`);
+      
+      if (!seenMetrics.has(`${baseName}_count`)) {
+        lines.push(`# HELP ${baseName}_count Count of samples for ${metricName}`);
+        lines.push(`# TYPE ${baseName}_count counter`);
+        seenMetrics.add(`${baseName}_count`);
+      }
+      lines.push(`${baseName}_count ${stats.count}`);
+      
+      if (!seenMetrics.has(`${baseName}_max`)) {
+        lines.push(`# HELP ${baseName}_max Maximum value for ${metricName}`);
+        lines.push(`# TYPE ${baseName}_max gauge`);
+        seenMetrics.add(`${baseName}_max`);
+      }
+      lines.push(`${baseName}_max ${stats.max}`);
+      
+      if (!seenMetrics.has(`${baseName}_min`)) {
+        lines.push(`# HELP ${baseName}_min Minimum value for ${metricName}`);
+        lines.push(`# TYPE ${baseName}_min gauge`);
+        seenMetrics.add(`${baseName}_min`);
+      }
+      lines.push(`${baseName}_min ${stats.min}`);
+    }
+    
+    // Add system metrics
+    const uptime = (Date.now() - this.startTime) / 1000;
+    lines.push(`# HELP pce_api_uptime_seconds Uptime of PCE API server in seconds`);
+    lines.push(`# TYPE pce_api_uptime_seconds gauge`);
+    lines.push(`pce_api_uptime_seconds ${uptime}`);
+    
+    // Add log counters
+    const counters = pceLogger.getAllCounters();
+    for (const [counterName, value] of Object.entries(counters)) {
+      const promName = `pce_log_${counterName.toLowerCase().replace(/[^a-z0-9_]/g, "_")}_total`;
+      if (!seenMetrics.has(promName)) {
+        lines.push(`# HELP ${promName} Total count of ${counterName} log events`);
+        lines.push(`# TYPE ${promName} counter`);
+        seenMetrics.add(promName);
+      }
+      lines.push(`${promName} ${value}`);
+    }
+    
+    const prometheusText = lines.join("\n") + "\n";
+    
+    return new Response(prometheusText, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+      },
+    });
+  }
+
   private async handleHealth(): Promise<Response> {
     const checks = await Promise.all(
       this.dependencyChecks.map(async (dep) => {
@@ -332,6 +466,208 @@ export class PceApiServer {
     return "unknown";
   }
 
+  private async handleToolExecutions(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const toolName = url.searchParams.get("toolName");
+      const userId = url.searchParams.get("userId");
+      const aclGroup = url.searchParams.get("aclGroup") as ACLGroup | null;
+      const since = url.searchParams.get("since");
+      const limit = parseInt(url.searchParams.get("limit") || "100");
+      const offset = parseInt(url.searchParams.get("offset") || "0");
+
+      const { ToolExecutionStore } = await import("./tool-execution-store");
+      const store = new ToolExecutionStore();
+      
+      const result = await store.getExecutions({
+        toolName: toolName || undefined,
+        userId: userId || undefined,
+        aclGroup: aclGroup || undefined,
+        since: since ? new Date(since) : undefined,
+        limit,
+        offset,
+      });
+
+      return this.jsonResponse(200, result);
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch tool executions", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleClusterStatus(req: Request): Promise<Response> {
+    try {
+      // This would need to call Proxmox tools internally
+      // For now, return a placeholder structure
+      // TODO: Integrate with ProxmoxClient to get real cluster status
+      return this.jsonResponse(200, {
+        nodes: [],
+        vms: [],
+        alerts: [],
+        message: "Cluster status endpoint - implementation pending Proxmox integration",
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch cluster status", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleOntologyGraph(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const limit = parseInt(url.searchParams.get("limit") || "100");
+      
+      // Get graph store from dependencies (if available) or create new instance
+      const graphStore = new Neo4jGraphStore();
+      await graphStore.connect();
+      const queryInterface = new GraphQueryInterface(graphStore);
+      
+      const result = await queryInterface.executeQuery(`
+        MATCH (n)-[r]->(m)
+        RETURN n, r, m
+        LIMIT $limit
+      `, { limit });
+
+      await graphStore.close();
+      
+      return this.jsonResponse(200, {
+        nodes: result.nodes,
+        relationships: result.relationships,
+        paths: result.paths,
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch ontology graph", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleVectorStats(req: Request): Promise<Response> {
+    try {
+      const vectorStore = new QdrantVectorStore();
+      const embeddingService = new EmbeddingService();
+      
+      // Get collection info from Qdrant
+      // This is a simplified version - you may need to adjust based on Qdrant client API
+      const collectionName = process.env.QDRANT_COLLECTION || "pce_chunks";
+      
+      return this.jsonResponse(200, {
+        collectionName,
+        message: "Vector stats endpoint - full implementation pending Qdrant client methods",
+        // TODO: Add actual Qdrant collection stats
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch vector stats", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleRagDiagnostics(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const query = url.searchParams.get("query");
+      
+      if (!query) {
+        return this.jsonResponse(400, { error: "Query parameter required" });
+      }
+
+      // Run a test query and return diagnostic information
+      const aclGroup = (url.searchParams.get("aclGroup") || "viewer") as ACLGroup;
+      const ragResponse = await this.orchestrator.query(query, aclGroup);
+      
+      return this.jsonResponse(200, {
+        query,
+        queryType: ragResponse.queryType,
+        sTotalScore: ragResponse.sTotalScore,
+        fusionMetrics: ragResponse.fusionMetrics,
+        sources: ragResponse.sources.map(s => ({
+          sourcePath: s.sourcePath,
+          score: s.score,
+          chunkId: s.chunkId,
+          textPreview: s.text?.slice(0, 200),
+        })),
+        context: {
+          semanticChunks: ragResponse.context.semanticChunks.map(c => ({
+            sourcePath: c.sourcePath,
+            score: c.score,
+            textPreview: c.text?.slice(0, 200),
+          })),
+          structuralPaths: ragResponse.context.structuralPaths,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to run RAG diagnostics", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleExecutionStats(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const since = url.searchParams.get("since");
+
+      const { ToolExecutionStore } = await import("./tool-execution-store");
+      const store = new ToolExecutionStore();
+      
+      const stats = await store.getExecutionStats(
+        since ? new Date(since) : undefined
+      );
+
+      return this.jsonResponse(200, stats);
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch execution stats", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleReasoningTraces(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId");
+      const aclGroup = url.searchParams.get("aclGroup");
+      const since = url.searchParams.get("since");
+      const limit = parseInt(url.searchParams.get("limit") || "50");
+      const offset = parseInt(url.searchParams.get("offset") || "0");
+
+      const { ReasoningTraceStore } = await import("./reasoning-trace-store");
+      const store = new ReasoningTraceStore();
+      
+      const result = await store.getTraces({
+        userId: userId || undefined,
+        aclGroup: aclGroup || undefined,
+        since: since ? new Date(since) : undefined,
+        limit,
+        offset,
+      });
+
+      return this.jsonResponse(200, result);
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch reasoning traces", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleReasoningTrace(req: Request, pathname: string): Promise<Response> {
+    try {
+      const traceId = pathname.split("/").pop();
+      if (!traceId) {
+        return this.jsonResponse(400, { error: "Trace ID required" });
+      }
+
+      const { ReasoningTraceStore } = await import("./reasoning-trace-store");
+      const store = new ReasoningTraceStore();
+      
+      const trace = await store.getTrace(traceId);
+      if (!trace) {
+        return this.jsonResponse(404, { error: "Trace not found" });
+      }
+
+      return this.jsonResponse(200, trace);
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch reasoning trace", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
   private mapQueryType(queryType: QueryType): "vector" | "graph" | "hybrid" {
     if (queryType === "SEMANTIC_ONLY") {
       return "vector";
@@ -347,6 +683,9 @@ export class PceApiServer {
       status,
       headers: {
         "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
       },
     });
   }

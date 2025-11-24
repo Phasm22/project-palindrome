@@ -13,7 +13,7 @@ import { pceLogger } from "../utils/logger";
 const DEFAULT_CONFIG: RetrievalConfig = {
   topK: 5,
   maxTokens: 4096,
-  similarityThreshold: 0.15, // Lowered to match fusion engine threshold for short structural documents (Proxmox inventory)
+  similarityThreshold: 0.10, // Lowered from 0.15 to 0.10 for better recall on VM names and short queries
 };
 
 export class RetrievalService {

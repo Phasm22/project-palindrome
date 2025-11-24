@@ -101,7 +101,13 @@ async function executeWithPolicies(
     }
   }
 
-  const result = await executeToolCall({ toolName, parameters }, tools);
+  const execContext = {
+    userId: session.userId,
+    aclGroup: session.aclGroup,
+    node: parameters.node || parameters.host,
+    vmid: typeof parameters.vmid === "number" ? parameters.vmid : undefined,
+  };
+  const result = await executeToolCall({ toolName, parameters }, tools, execContext);
   return { ...result, data: sanitizeToolPayload(result.data) };
 }
 
@@ -447,6 +453,7 @@ if (args[0] === "hello") {
     "reset-vm": { action: "reset_vm", defaultType: "qemu" },
     "shutdown-vm": { action: "shutdown_vm", defaultType: "qemu" },
     "migrate-vm": { action: "migrate_vm", defaultType: "qemu" },
+    "destroy-vm": { action: "destroy_vm", defaultType: "qemu" },
   };
 
   const readonlyActions: Record<string, string> = {
@@ -488,6 +495,7 @@ if (args[0] === "hello") {
     console.log("    reset-vm                - Reset a VM (requires --node, --vmid, optional --type)");
     console.log("    shutdown-vm             - Shutdown a VM (requires --node, --vmid, optional --type)");
     console.log("    migrate-vm              - Migrate a VM (requires --node, --vmid, optional --type)");
+    console.log("    destroy-vm             - Permanently destroy a VM/container (EXTREME RISK - requires --node, --vmid, optional --type)");
     console.log("  Cluster-Level:");
     console.log("    cluster-resources       - Get cluster resources");
     console.log("    cluster-status          - Get cluster status");
@@ -501,7 +509,7 @@ if (args[0] === "hello") {
     console.log("  --json                    - Output raw JSON instead of formatted text");
     console.log("\nExamples:");
     console.log("  agent proxmox list-vms --node=yin");
-    console.log("  agent proxmox start-vm --node=yang --vmid=105 --type=lxc");
+    console.log("  agent proxmox start-vm --node=YANG --vmid=105 --type=lxc");
     console.log("  agent proxmox vm-status --node=yin --vmid=200");
     console.log("  agent proxmox cluster-status");
   };

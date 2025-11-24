@@ -1,0 +1,136 @@
+{
+  "dashboard": {
+    "title": "Palindrome PCE - System Overview",
+    "tags": ["palindrome", "pce"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Query Latency by Type",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [
+          {
+            "expr": "query_latency_vector_ms_avg",
+            "legendFormat": "Vector",
+            "refId": "A"
+          },
+          {
+            "expr": "query_latency_graph_ms_avg",
+            "legendFormat": "Graph",
+            "refId": "B"
+          },
+          {
+            "expr": "query_latency_hybrid_ms_avg",
+            "legendFormat": "Hybrid",
+            "refId": "C"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "custom": {
+              "axisLabel": "Latency (ms)"
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Total Queries",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+        "targets": [
+          {
+            "expr": "sum(query_latency_vector_ms_count) + sum(query_latency_graph_ms_count) + sum(query_latency_hybrid_ms_count)",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value"
+        }
+      },
+      {
+        "id": 3,
+        "title": "API Uptime",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+        "targets": [
+          {
+            "expr": "pce_api_uptime_seconds",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "value",
+          "unit": "s"
+        }
+      },
+      {
+        "id": 4,
+        "title": "Ingestion Throughput",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+        "targets": [
+          {
+            "expr": "ingestion_throughput_documents_per_min_avg",
+            "legendFormat": "Documents/min",
+            "refId": "A"
+          },
+          {
+            "expr": "ingestion_throughput_chunks_per_min_avg",
+            "legendFormat": "Chunks/min",
+            "refId": "B"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Error Rate",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "targets": [
+          {
+            "expr": "rate(pce_log_error_total[5m])",
+            "legendFormat": "Errors/sec",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short"
+          }
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {},
+    "templating": {
+      "list": []
+    },
+    "annotations": {
+      "list": []
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "links": [],
+    "liveNow": false,
+    "style": "dark",
+    "uid": "pce-overview",
+    "weekStart": ""
+  }
+}

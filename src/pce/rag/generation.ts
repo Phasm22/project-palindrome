@@ -1,23 +1,45 @@
 /**
  * Core RAG & Orchestrator - Generation Layer
  * Task 4.2: Generation Layer Integration
+ * Supports: OpenAI, Local (Ollama), and Mixed modes
  */
 
 import OpenAI from "openai";
 import type { DocumentChunk, RAGResponse } from "../types";
 import { pceLogger } from "../utils/logger";
+import { LocalLLMService, type LLMProvider } from "../llm/local-llm-service";
 
+const LLM_PROVIDER = (process.env.LLM_PROVIDER || "openai") as LLMProvider;
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_MAX_TOKENS = 1000;
 
 export class GenerationService {
   private openai: OpenAI | null = null;
-  private model: string;
+  private localLLM: LocalLLMService | null = null;
+  private provider: LLMProvider;
+  private openaiModel: string;
   private maxTokens: number;
 
-  constructor(model: string = DEFAULT_MODEL, maxTokens: number = DEFAULT_MAX_TOKENS) {
-    this.model = model;
+  constructor(
+    provider?: LLMProvider,
+    model?: string,
+    maxTokens: number = DEFAULT_MAX_TOKENS
+  ) {
+    this.provider = provider || LLM_PROVIDER;
+    this.openaiModel = model || DEFAULT_MODEL;
     this.maxTokens = maxTokens;
+
+    if (this.provider === "local" || this.provider === "mixed") {
+      this.localLLM = new LocalLLMService({
+        provider: this.provider,
+        maxTokens: this.maxTokens,
+      });
+    }
+
+    pceLogger.info("GenerationService initialized", {
+      provider: this.provider,
+      openaiModel: this.openaiModel,
+    });
   }
 
   private getClient(): OpenAI {
@@ -40,6 +62,36 @@ export class GenerationService {
     chunks: DocumentChunk[]
   ): Promise<RAGResponse> {
     try {
+      if (this.provider === "openai") {
+        return await this.generateOpenAI(query, chunks);
+      } else if (this.provider === "local") {
+        if (!this.localLLM) {
+          throw new Error("LocalLLM not initialized");
+        }
+        return await this.localLLM.generateRAG(query, chunks);
+      } else {
+        // Mixed: try local first, fallback to OpenAI
+        try {
+          if (!this.localLLM) {
+            throw new Error("LocalLLM not initialized");
+          }
+          return await this.localLLM.generateRAG(query, chunks);
+        } catch (error: any) {
+          pceLogger.warn("Local LLM failed, falling back to OpenAI", { error: error.message });
+          return await this.generateOpenAI(query, chunks);
+        }
+      }
+    } catch (error: any) {
+      pceLogger.error("Failed to generate RAG response", { error: error.message, provider: this.provider });
+      throw error;
+    }
+  }
+
+  private async generateOpenAI(
+    query: string,
+    chunks: DocumentChunk[]
+  ): Promise<RAGResponse> {
+    try {
       const client = this.getClient();
 
       // Build context from chunks
@@ -56,7 +108,7 @@ If the context doesn't contain enough information to answer the question, say so
       const userPrompt = `Context:\n${context}\n\nQuestion: ${query}\n\nAnswer:`;
 
       const response = await client.chat.completions.create({
-        model: this.model,
+        model: this.openaiModel,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -78,10 +130,11 @@ If the context doesn't contain enough information to answer the question, say so
       // Estimate tokens used
       const tokensUsed = response.usage?.total_tokens || 0;
 
-      pceLogger.info("Generated RAG response", {
+      pceLogger.info("Generated OpenAI RAG response", {
         answerLength: answer.length,
         chunksUsed: chunks.length,
         tokensUsed,
+        model: this.openaiModel,
       });
 
       return {
@@ -93,7 +146,7 @@ If the context doesn't contain enough information to answer the question, say so
         },
       };
     } catch (error: any) {
-      pceLogger.error("Failed to generate RAG response", { error: error.message });
+      pceLogger.error("Failed to generate OpenAI RAG response", { error: error.message });
       throw error;
     }
   }

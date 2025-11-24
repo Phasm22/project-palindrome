@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Palindrome Dashboard</title>
+  <script src="https://unpkg.com/vis-network@latest/dist/vis-network.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 20px;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      color: #60a5fa;
+      margin-bottom: 30px;
+      font-size: 2rem;
+    }
+
+    .panel {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .panel h2 {
+      color: #94a3b8;
+      margin-bottom: 15px;
+      font-size: 1.25rem;
+      border-bottom: 1px solid #334155;
+      padding-bottom: 10px;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-top: 15px;
+    }
+
+    .stat-card {
+      background: #0f172a;
+      padding: 15px;
+      border-radius: 6px;
+      border: 1px solid #334155;
+    }
+
+    .stat-label {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      margin-bottom: 5px;
+    }
+
+    .stat-value {
+      color: #60a5fa;
+      font-size: 1.5rem;
+      font-weight: bold;
+    }
+
+    #graph {
+      height: 600px;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      background: #0f172a;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+    }
+
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #334155;
+    }
+
+    th {
+      color: #94a3b8;
+      font-weight: 600;
+      background: #0f172a;
+    }
+
+    td {
+      color: #e2e8f0;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .status-success {
+      background: #10b981;
+      color: white;
+    }
+
+    .status-error {
+      background: #ef4444;
+      color: white;
+    }
+
+    .loading {
+      color: #94a3b8;
+      text-align: center;
+      padding: 20px;
+    }
+
+    .error {
+      color: #ef4444;
+      background: #7f1d1d;
+      padding: 10px;
+      border-radius: 4px;
+      margin-top: 10px;
+    }
+
+    .refresh-btn {
+      background: #3b82f6;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      margin-top: 10px;
+    }
+
+    .refresh-btn:hover {
+      background: #2563eb;
+    }
+
+    pre {
+      background: #0f172a;
+      padding: 10px;
+      border-radius: 4px;
+      overflow-x: auto;
+      font-size: 0.75rem;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid #334155;
+    }
+
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      color: #94a3b8;
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab.active {
+      color: #60a5fa;
+      border-bottom-color: #60a5fa;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔷 Palindrome Dashboard</h1>
+
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('overview', this)">Overview</div>
+      <div class="tab" onclick="switchTab('executions', this)">Tool Executions</div>
+      <div class="tab" onclick="switchTab('reasoning', this)">Reasoning Traces</div>
+      <div class="tab" onclick="switchTab('graph', this)">Ontology Graph</div>
+      <div class="tab" onclick="switchTab('rag', this)">RAG Diagnostics</div>
+    </div>
+
+    <!-- Overview Tab -->
+    <div id="overview" class="tab-content active">
+      <div class="panel">
+        <h2>Execution Statistics</h2>
+        <div id="execution-stats" class="loading">Loading...</div>
+      </div>
+
+      <div class="panel">
+        <h2>Cluster Status</h2>
+        <div id="cluster-status" class="loading">Loading...</div>
+      </div>
+
+      <div class="panel">
+        <h2>System Health</h2>
+        <div id="system-health" class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Tool Executions Tab -->
+    <div id="executions" class="tab-content">
+      <div class="panel">
+        <h2>Recent Tool Executions</h2>
+        <button class="refresh-btn" onclick="loadToolExecutions()">Refresh</button>
+        <div id="tool-executions" class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Reasoning Traces Tab -->
+    <div id="reasoning" class="tab-content">
+      <div class="panel">
+        <h2>Agent Reasoning Traces</h2>
+        <button class="refresh-btn" onclick="loadReasoningTraces()">Refresh</button>
+        <div id="reasoning-traces" class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Ontology Graph Tab -->
+    <div id="graph" class="tab-content">
+      <div class="panel">
+        <h2>Ontology Graph</h2>
+        <button class="refresh-btn" onclick="loadGraph()">Refresh</button>
+        <div id="graph-container"></div>
+      </div>
+    </div>
+
+    <!-- RAG Diagnostics Tab -->
+    <div id="rag" class="tab-content">
+      <div class="panel">
+        <h2>RAG Diagnostics</h2>
+        <input type="text" id="rag-query" placeholder="Enter query to test..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
+        <button class="refresh-btn" onclick="testRagQuery()">Test Query</button>
+        <div id="rag-results" class="loading">Enter a query and click Test Query</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = "http://localhost:4000";
+
+    function switchTab(tabName, clickedElement) {
+      // Hide all tabs
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      
+      // Show selected tab
+      if (clickedElement) {
+        clickedElement.classList.add('active');
+      } else {
+        // Fallback: find tab by text content
+        document.querySelectorAll('.tab').forEach(t => {
+          if (t.textContent.trim().toLowerCase().includes(tabName.toLowerCase())) {
+            t.classList.add('active');
+          }
+        });
+      }
+      document.getElementById(tabName).classList.add('active');
+      
+      // Load data for the tab
+      if (tabName === 'executions') loadToolExecutions();
+      if (tabName === 'reasoning') loadReasoningTraces();
+      if (tabName === 'graph') loadGraph();
+    }
+
+    async function loadExecutionStats() {
+      const element = document.getElementById('execution-stats');
+      if (!element) return;
+      
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/execution-stats`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const stats = await response.json();
+        
+        const html = `
+          <div class="status-grid">
+            <div class="stat-card">
+              <div class="stat-label">Total Executions</div>
+              <div class="stat-value">${stats.total || 0}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Error Rate</div>
+              <div class="stat-value">${((stats.errorRate || 0) * 100).toFixed(1)}%</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Avg Duration</div>
+              <div class="stat-value">${Math.round(stats.avgDurationMs || 0)}ms</div>
+            </div>
+          </div>
+          ${stats.recentErrors && stats.recentErrors.length > 0 ? `
+            <h3 style="margin-top: 20px; color: #ef4444;">Recent Errors</h3>
+            <table>
+              <tr>
+                <th>Tool</th>
+                <th>User</th>
+                <th>Error</th>
+                <th>Time</th>
+              </tr>
+              ${stats.recentErrors.map(e => `
+                <tr>
+                  <td>${e.toolName}</td>
+                  <td>${e.userId}</td>
+                  <td>${e.error || 'Unknown'}</td>
+                  <td>${new Date(e.timestamp).toLocaleString()}</td>
+                </tr>
+              `).join('')}
+            </table>
+          ` : ''}
+        `;
+        
+        document.getElementById('execution-stats').innerHTML = html;
+      } catch (error) {
+        document.getElementById('execution-stats').innerHTML = 
+          `<div class="error">Failed to load execution stats: ${error.message}</div>`;
+      }
+    }
+
+    async function loadToolExecutions() {
+      const element = document.getElementById('tool-executions');
+      if (!element) return;
+      
+      element.innerHTML = '<div class="loading">Loading...</div>';
+      
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/tool-executions?limit=50`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data = await response.json();
+        
+        if (!data.executions || data.executions.length === 0) {
+          document.getElementById('tool-executions').innerHTML = '<p>No tool executions found.</p>';
+          return;
+        }
+        
+        const html = `
+          <table>
+            <tr>
+              <th>Timestamp</th>
+              <th>Tool</th>
+              <th>User</th>
+              <th>Status</th>
+              <th>Duration</th>
+              <th>Parameters</th>
+            </tr>
+            ${data.executions.map(e => `
+              <tr>
+                <td>${new Date(e.timestamp).toLocaleString()}</td>
+                <td>${e.toolName}</td>
+                <td>${e.userId}</td>
+                <td>
+                  <span class="status-badge ${e.error ? 'status-error' : 'status-success'}">
+                    ${e.error ? 'Failed' : 'Success'}
+                  </span>
+                </td>
+                <td>${e.durationMs}ms</td>
+                <td><pre>${JSON.stringify(e.parameters, null, 2).slice(0, 100)}...</pre></td>
+              </tr>
+            `).join('')}
+          </table>
+        `;
+        
+        document.getElementById('tool-executions').innerHTML = html;
+      } catch (error) {
+        document.getElementById('tool-executions').innerHTML = 
+          `<div class="error">Failed to load tool executions: ${error.message}</div>`;
+      }
+    }
+
+    async function loadClusterStatus() {
+      const element = document.getElementById('cluster-status');
+      if (!element) return;
+      
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/cluster-status`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data = await response.json();
+        
+        document.getElementById('cluster-status').innerHTML = 
+          `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+      } catch (error) {
+        document.getElementById('cluster-status').innerHTML = 
+          `<div class="error">Failed to load cluster status: ${error.message}</div>`;
+      }
+    }
+
+    async function loadSystemHealth() {
+      const element = document.getElementById('system-health');
+      if (!element) return;
+      
+      try {
+        const response = await fetch(`${API_URL}/health`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data = await response.json();
+        
+        const html = `
+          <div class="status-grid">
+            ${Object.entries(data.dependencies || {}).map(([name, status]) => {
+              const s = status || {};
+              return `
+              <div class="stat-card">
+                <div class="stat-label">${name}</div>
+                <div class="stat-value">
+                  <span class="status-badge ${s.healthy ? 'status-success' : 'status-error'}">
+                    ${s.healthy ? 'Healthy' : 'Unhealthy'}
+                  </span>
+                </div>
+              </div>
+            `;
+            }).join('')}
+          </div>
+        `;
+        
+        document.getElementById('system-health').innerHTML = html;
+      } catch (error) {
+        document.getElementById('system-health').innerHTML = 
+          `<div class="error">Failed to load system health: ${error.message}</div>`;
+      }
+    }
+
+    async function loadGraph() {
+      const container = document.getElementById('graph-container');
+      if (!container) return;
+      
+      container.innerHTML = '<div class="loading">Loading graph...</div>';
+      
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=100`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data = await response.json();
+        
+        if (!data.nodes || data.nodes.length === 0) {
+          document.getElementById('graph-container').innerHTML = 
+            '<p>No graph data available. The ontology graph may be empty.</p>';
+          return;
+        }
+        
+        const nodes = data.nodes.map(n => ({
+          id: n.id || n.properties?.id || Math.random().toString(),
+          label: n.name || n.properties?.name || n.id || 'Unknown',
+          group: n.type || n.labels?.[0] || 'unknown',
+          title: JSON.stringify(n, null, 2),
+        }));
+        
+        const edges = data.relationships.map(r => ({
+          from: r.from || r.start,
+          to: r.to || r.end,
+          label: r.type || r.properties?.type || '',
+          arrows: 'to',
+        }));
+        
+        const visData = { nodes, edges };
+        const options = {
+          nodes: {
+            shape: 'dot',
+            size: 16,
+            font: { color: '#e2e8f0' },
+            borderWidth: 2,
+          },
+          edges: {
+            arrows: { to: { enabled: true } },
+            color: { color: '#60a5fa' },
+            font: { color: '#94a3b8', size: 12 },
+          },
+          physics: {
+            enabled: true,
+            stabilization: { iterations: 100 },
+          },
+          interaction: {
+            hover: true,
+            tooltipDelay: 100,
+          },
+        };
+        
+        const container = document.getElementById('graph-container');
+        container.innerHTML = '<div id="graph"></div>';
+        new vis.Network(document.getElementById('graph'), visData, options);
+      } catch (error) {
+        document.getElementById('graph-container').innerHTML = 
+          `<div class="error">Failed to load graph: ${error.message}</div>`;
+      }
+    }
+
+    async function loadReasoningTraces() {
+      const element = document.getElementById('reasoning-traces');
+      if (!element) return;
+      
+      element.innerHTML = '<div class="loading">Loading...</div>';
+      
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/reasoning-traces?limit=20`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        const data = await response.json();
+        
+        if (!data.traces || data.traces.length === 0) {
+          element.innerHTML = '<p>No reasoning traces found.</p>';
+          return;
+        }
+        
+        const html = data.traces.map(trace => `
+          <div class="panel" style="margin-bottom: 30px; border-left: 3px solid ${trace.maxStepsReached ? '#ef4444' : '#10b981'};">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+              <div>
+                <h3 style="margin: 0 0 10px 0; color: #60a5fa;">Trace ${trace.id.slice(0, 8)}</h3>
+                <div style="font-size: 0.875rem; color: #94a3b8; line-height: 1.6;">
+                  <div><strong style="color: #e2e8f0;">Input:</strong> <span style="color: #cbd5e1;">${trace.userInput}</span></div>
+                  <div style="margin-top: 5px;">
+                    <span style="margin-right: 15px;"><strong>User:</strong> ${trace.userId}</span>
+                    <span style="margin-right: 15px;"><strong>ACL:</strong> ${trace.aclGroup}</span>
+                    <span style="margin-right: 15px;"><strong>Steps:</strong> ${trace.totalSteps}</span>
+                    <span style="margin-right: 15px;"><strong>Tools:</strong> ${trace.totalToolCalls}</span>
+                    <span><strong>Duration:</strong> ${trace.durationMs}ms</span>
+                  </div>
+                  <div style="margin-top: 5px;">
+                    <span class="status-badge ${trace.maxStepsReached ? 'status-error' : 'status-success'}" style="margin-right: 10px;">
+                      ${trace.maxStepsReached ? 'Max Steps Reached' : 'Completed'}
+                    </span>
+                    <span style="color: #94a3b8;">${new Date(trace.timestamp).toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div style="margin-top: 20px;">
+              ${trace.steps.map((step, idx) => `
+                <div style="margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
+                  <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                    <span style="background: #3b82f6; color: white; padding: 4px 10px; border-radius: 4px; font-weight: 600; margin-right: 10px;">
+                      Step ${step.step}
+                    </span>
+                    ${step.ragContext ? `
+                      <span style="background: #8b5cf6; color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; margin-right: 10px;">
+                        RAG: ${step.ragContext.queryType}
+                      </span>
+                    ` : ''}
+                    ${step.toolCalls.length > 0 ? `
+                      <span style="background: #10b981; color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem;">
+                        ${step.toolCalls.length} tool${step.toolCalls.length > 1 ? 's' : ''}
+                      </span>
+                    ` : ''}
+                  </div>
+                  
+                  ${step.llmResponse ? `
+                    <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #60a5fa;">
+                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">LLM Response</div>
+                      <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.875rem;">${step.llmResponse}</div>
+                    </div>
+                  ` : ''}
+                  
+                  ${step.ragContext ? `
+                    <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #8b5cf6;">
+                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">RAG Context</div>
+                      <div style="color: #e2e8f0; font-size: 0.875rem;">
+                        <div><strong>Type:</strong> ${step.ragContext.queryType}</div>
+                        <div><strong>Score:</strong> ${(step.ragContext.sTotalScore || 0).toFixed(3)}</div>
+                        <div><strong>Sources:</strong> ${step.ragContext.sourcesCount}</div>
+                      </div>
+                    </div>
+                  ` : ''}
+                  
+                  ${step.toolCalls.length > 0 ? `
+                    <div style="margin-bottom: 10px;">
+                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Tool Calls</div>
+                      ${step.toolCalls.map(tc => `
+                        <div style="margin-bottom: 8px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid ${tc.result.success ? '#10b981' : '#ef4444'};">
+                          <div style="display: flex; align-items: center; margin-bottom: 5px;">
+                            <span style="color: #60a5fa; font-weight: 600; margin-right: 10px;">${tc.toolName}</span>
+                            <span class="status-badge ${tc.result.success ? 'status-success' : 'status-error'}" style="margin-right: 10px;">
+                              ${tc.result.success ? 'Success' : 'Failed'}
+                            </span>
+                            <span style="color: #94a3b8; font-size: 0.75rem;">${tc.durationMs}ms</span>
+                          </div>
+                          <div style="margin-top: 5px;">
+                            <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 3px;">Parameters:</div>
+                            <pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; margin: 0;">${JSON.stringify(tc.parameters, null, 2)}</pre>
+                          </div>
+                          ${tc.result.error ? `
+                            <div style="margin-top: 5px; color: #ef4444; font-size: 0.875rem;">
+                              <strong>Error:</strong> ${tc.result.error}
+                            </div>
+                          ` : tc.result.dataPreview ? `
+                            <div style="margin-top: 5px;">
+                              <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 3px;">Result Preview:</div>
+                              <pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; margin: 0; max-height: 100px; overflow-y: auto;">${tc.result.dataPreview}</pre>
+                            </div>
+                          ` : ''}
+                        </div>
+                      `).join('')}
+                    </div>
+                  ` : ''}
+                  
+                  ${step.decisions.length > 0 ? `
+                    <div style="margin-top: 10px;">
+                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Decisions</div>
+                      ${step.decisions.map(d => {
+                        const colors = {
+                          'duplicate_detected': '#f59e0b',
+                          'limit_reached': '#ef4444',
+                          'fallback': '#8b5cf6',
+                          'tool_choice': '#10b981',
+                          'rag_used': '#3b82f6'
+                        };
+                        const color = colors[d.type] || '#94a3b8';
+                        return `
+                        <div style="margin-bottom: 5px; padding: 6px 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid ${color};">
+                          <span style="color: ${color}; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; margin-right: 8px;">${d.type.replace('_', ' ')}</span>
+                          <span style="color: #e2e8f0; font-size: 0.875rem;">${d.description}</span>
+                        </div>
+                      `;
+                      }).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+              `).join('')}
+            </div>
+            
+            ${trace.finalResponse ? `
+              <div style="margin-top: 20px; padding: 15px; background: #1e293b; border-radius: 6px; border-left: 3px solid #10b981;">
+                <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;">Final Response</div>
+                <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace;">${trace.finalResponse}</div>
+              </div>
+            ` : ''}
+          </div>
+        `).join('');
+        
+        element.innerHTML = html;
+      } catch (error) {
+        element.innerHTML = 
+          `<div class="error">Failed to load reasoning traces: ${error.message}</div>`;
+      }
+    }
+
+    async function testRagQuery() {
+      const query = document.getElementById('rag-query').value;
+      if (!query) {
+        alert('Please enter a query');
+        return;
+      }
+      
+      document.getElementById('rag-results').innerHTML = '<div class="loading">Testing query...</div>';
+      
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/rag-diagnostics?query=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        const html = `
+          <h3>Query Results</h3>
+          <div class="status-grid">
+            <div class="stat-card">
+              <div class="stat-label">Query Type</div>
+              <div class="stat-value">${data.queryType || 'Unknown'}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Total Score</div>
+              <div class="stat-value">${(data.sTotalScore || 0).toFixed(3)}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Sources Found</div>
+              <div class="stat-value">${data.sources?.length || 0}</div>
+            </div>
+          </div>
+          
+          <h3 style="margin-top: 20px;">Top Sources</h3>
+          <table>
+            <tr>
+              <th>Source</th>
+              <th>Score</th>
+              <th>Preview</th>
+            </tr>
+            ${(data.sources || []).slice(0, 10).map(s => `
+              <tr>
+                <td>${s.sourcePath || s.chunkId || 'Unknown'}</td>
+                <td>${(s.score || 0).toFixed(3)}</td>
+                <td>${s.textPreview || ''}</td>
+              </tr>
+            `).join('')}
+          </table>
+          
+          <h3 style="margin-top: 20px;">Full Response</h3>
+          <pre>${JSON.stringify(data, null, 2)}</pre>
+        `;
+        
+        document.getElementById('rag-results').innerHTML = html;
+      } catch (error) {
+        document.getElementById('rag-results').innerHTML = 
+          `<div class="error">Failed to test query: ${error.message}</div>`;
+      }
+    }
+
+    // Load initial data when page loads
+    window.addEventListener('DOMContentLoaded', () => {
+      loadExecutionStats();
+      loadClusterStatus();
+      loadSystemHealth();
+    });
+    
+    // Auto-refresh every 30 seconds
+    setInterval(() => {
+      const overviewTab = document.getElementById('overview');
+      if (overviewTab && overviewTab.classList.contains('active')) {
+        loadExecutionStats();
+        loadClusterStatus();
+        loadSystemHealth();
+      }
+    }, 30000);
+  </script>
+</body>
+</html>
+

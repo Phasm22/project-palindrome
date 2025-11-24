@@ -119,7 +119,7 @@ hosts:
     aliases:
       - "yang"
       - "yang.prox"
-    description: "Proxmox node - yang (OS-level operations only, use Proxmox tool for VM operations)"
+    description: "Proxmox node - YANG (OS-level operations only, use Proxmox tool for VM operations)"
     username: "opsadmin"
     read_only: true
     commands:

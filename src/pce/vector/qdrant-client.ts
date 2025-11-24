@@ -16,6 +16,7 @@ const COLLECTION_NAME = process.env.PCE_COLLECTION_NAME || "pce_documents";
 export class QdrantVectorStore {
   private client: QdrantClient;
   private collectionName: string;
+  private vectorDimension: number = 1536; // Default, will be set by initializeCollection
 
   constructor(url: string = QDRANT_URL, apiKey?: string, collectionName: string = COLLECTION_NAME) {
     this.client = new QdrantClient({
@@ -28,19 +29,36 @@ export class QdrantVectorStore {
   /**
    * Initialize collection with schema
    * Task 3.1: Create collection using defined schema
+   * If collection exists with wrong dimension, it will be recreated
    */
   async initializeCollection(vectorSize: number = 1536): Promise<void> {
     try {
+      this.vectorDimension = vectorSize;
+      
       // Check if collection exists
       const collections = await this.client.getCollections();
-      const exists = collections.collections.some((c: any) => c.name === this.collectionName);
+      const existing = collections.collections.find((c: any) => c.name === this.collectionName);
 
-      if (exists) {
-        pceLogger.info(`Collection '${this.collectionName}' already exists`);
-        return;
+      if (existing) {
+        // Check if the existing collection has the correct dimension
+        const collectionInfo = await this.client.getCollection(this.collectionName);
+        const existingSize = collectionInfo.config?.params?.vectors?.size;
+        
+        if (existingSize === vectorSize) {
+          pceLogger.info(`Collection '${this.collectionName}' already exists with correct dimension ${vectorSize}`);
+          return;
+        } else {
+          pceLogger.warn(
+            `Collection '${this.collectionName}' exists with dimension ${existingSize}, but expected ${vectorSize}. ` +
+            `Recreating collection...`
+          );
+          // Delete existing collection
+          await this.client.deleteCollection(this.collectionName);
+          pceLogger.info(`Deleted existing collection '${this.collectionName}'`);
+        }
       }
 
-      // Create collection
+      // Create collection with correct dimension
       await this.client.createCollection(this.collectionName, {
         vectors: {
           size: vectorSize,
@@ -65,8 +83,8 @@ export class QdrantVectorStore {
       const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text, chunk.id);
       
       // Validate vector dimension
-      if (!vector || vector.length !== 1536) {
-        throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected 1536, got ${vector?.length || 0}`);
+      if (!vector || vector.length !== this.vectorDimension) {
+        throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected ${this.vectorDimension}, got ${vector?.length || 0}`);
       }
       
       // Ensure all payload fields are defined
@@ -147,8 +165,8 @@ export class QdrantVectorStore {
           const payload: QdrantPayload = metadataToPayload(chunk.metadata, chunk.text, chunk.id);
           
           // Validate vector dimension
-          if (!batchVectors[index] || batchVectors[index].length !== 1536) {
-            throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected 1536, got ${batchVectors[index]?.length || 0}`);
+          if (!batchVectors[index] || batchVectors[index].length !== this.vectorDimension) {
+            throw new Error(`Invalid vector dimension for chunk ${chunk.id}: expected ${this.vectorDimension}, got ${batchVectors[index]?.length || 0}`);
           }
           
           // Ensure all payload fields are defined

@@ -9,6 +9,7 @@ import { SYSTEM_PROMPT } from "./system-prompt";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
+import { getReasoningTraceStore, type ReasoningStep } from "../pce/api/reasoning-trace-store";
 
 let openaiClient: OpenAI | null = null;
 
@@ -134,6 +135,12 @@ export async function runAgent(
 
   const tools = loadTools();
   const openaiTools = buildToolDefinitions(tools);
+  
+  // Initialize reasoning trace
+  const startTime = Date.now();
+  const reasoningSteps: ReasoningStep[] = [];
+  let totalToolCalls = 0;
+  
   const ragPayload = await fetchHybridContext(userInput, {
     baseUrl: options.ragBaseUrl,
     userId: session.userId,
@@ -148,6 +155,30 @@ export async function runAgent(
 
   for (let step = 0; step < MAX_STEPS; step++) {
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
+
+    // Initialize reasoning step
+    const reasoningStep: ReasoningStep = {
+      step: step + 1,
+      toolCalls: [],
+      decisions: [],
+    };
+
+    // Capture RAG context for first step
+    if (step === 0 && ragPayload) {
+      reasoningStep.ragContext = {
+        queryType: ragPayload.queryType,
+        sTotalScore: ragPayload.sTotalScore,
+        sourcesCount: ragPayload.sources?.length || 0,
+      };
+      reasoningStep.decisions.push({
+        type: "rag_used",
+        description: `RAG context retrieved: ${ragPayload.queryType} query with ${ragPayload.sources?.length || 0} sources`,
+        metadata: {
+          sTotalScore: ragPayload.sTotalScore,
+          queryType: ragPayload.queryType,
+        },
+      });
+    }
 
     const messages = [
       { role: "system", content: SYSTEM_PROMPT },
@@ -167,12 +198,20 @@ export async function runAgent(
 
     const response = await client.chat.completions.create(request);
     const message = response.choices[0]?.message;
+    
+    // Capture LLM response
+    reasoningStep.llmResponse = message?.content || "";
 
     const toolCalls = ((message?.tool_calls as any[]) ?? []) as Array<any>;
     if (toolCalls.length) {
       // Limit tool calls per step to prevent flooding
       if (toolCalls.length > MAX_TOOL_CALLS_PER_STEP) {
         logger.warn(`Too many tool calls in step ${step + 1} (${toolCalls.length}), limiting to ${MAX_TOOL_CALLS_PER_STEP}`);
+        reasoningStep.decisions.push({
+          type: "limit_reached",
+          description: `Tool call limit reached: ${toolCalls.length} calls, limiting to ${MAX_TOOL_CALLS_PER_STEP}`,
+          metadata: { originalCount: toolCalls.length, limit: MAX_TOOL_CALLS_PER_STEP },
+        });
         toolCalls.splice(MAX_TOOL_CALLS_PER_STEP);
       }
 
@@ -202,6 +241,11 @@ export async function runAgent(
         const callSignature = `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
         if (seenToolCalls.has(callSignature)) {
           logger.warn(`Duplicate tool call detected, skipping: ${callSignature}`);
+          reasoningStep.decisions.push({
+            type: "duplicate_detected",
+            description: `Duplicate tool call detected: ${toolName}`,
+            metadata: { toolName, parameters: parsedArgs },
+          });
           context.addToolResult(toolCall.id, toolName, {
             provenanceId: `tool://${toolName}/duplicate-${Date.now()}`,
             success: false,
@@ -216,6 +260,11 @@ export async function runAgent(
           const similarSignature = `${toolName}:${parsedArgs.action}:${parsedArgs.vmid}:${parsedArgs.node}`;
           if (seenToolCalls.has(similarSignature)) {
             logger.warn(`Similar proxmox_write call detected, skipping: ${similarSignature}`);
+            reasoningStep.decisions.push({
+              type: "duplicate_detected",
+              description: `Similar proxmox_write call detected: ${parsedArgs.action} on VMID ${parsedArgs.vmid}`,
+              metadata: { toolName, action: parsedArgs.action, vmid: parsedArgs.vmid, node: parsedArgs.node },
+            });
             context.addToolResult(toolCall.id, toolName, {
               provenanceId: `tool://${toolName}/similar-duplicate-${Date.now()}`,
               success: false,
@@ -225,6 +274,13 @@ export async function runAgent(
           }
           seenToolCalls.add(similarSignature);
         }
+        
+        // Record tool choice decision
+        reasoningStep.decisions.push({
+          type: "tool_choice",
+          description: `Selected tool: ${toolName}`,
+          metadata: { toolName, parameters: parsedArgs },
+        });
         const targetTool = tools.find((t) => t.metadata.name === toolName);
         const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -254,13 +310,26 @@ export async function runAgent(
           continue;
         }
 
+        // Extract node and vmid from parameters for audit trail
+        const node = parsedArgs.node || parsedArgs.host;
+        const vmid = parsedArgs.vmid || parsedArgs.vmId;
+        
+        // Build execution context for audit trail
+        const execContext = {
+          userId: session.userId,
+          aclGroup: session.aclGroup,
+          node,
+          vmid: typeof vmid === "number" ? vmid : undefined,
+        };
+
         // For proxmox_write operations, do a dry-run first to check if action is needed
         // This avoids prompting for confirmation when the VM is already in the desired state
         let result: ExecutionResult;
         if (toolName === "proxmox_write" && parsedArgs.action) {
           const dryRunResult = await executeToolCall(
             { toolName, parameters: { ...parsedArgs, dryRun: true } },
-            tools
+            tools,
+            execContext
           );
           
           // Check if the dry-run indicates no action is needed
@@ -294,7 +363,8 @@ export async function runAgent(
             // Execute the actual operation
             result = await executeToolCall(
               { toolName, parameters: parsedArgs },
-              tools
+              tools,
+              execContext
             );
           }
         } else {
@@ -318,7 +388,8 @@ export async function runAgent(
 
           result = await executeToolCall(
             { toolName, parameters: parsedArgs },
-            tools
+            tools,
+            execContext
           );
         }
 
@@ -333,6 +404,23 @@ export async function runAgent(
           });
         }
 
+        // Capture tool execution in reasoning step
+        const dataPreview = result.data && typeof result.data === 'object' 
+          ? JSON.stringify(result.data).slice(0, 200) 
+          : String(result.data || '').slice(0, 200);
+        
+        reasoningStep.toolCalls.push({
+          toolName,
+          parameters: parsedArgs,
+          result: {
+            success: !result.error,
+            error: result.error,
+            dataPreview,
+          },
+          durationMs: result.durationMs ?? 0,
+        });
+        totalToolCalls++;
+
         const sanitizedData = sanitizeToolPayload(result.data);
 
         context.addToolResult(toolCall.id, toolName, {
@@ -344,14 +432,63 @@ export async function runAgent(
         });
       }
 
+      // Record this reasoning step
+      reasoningSteps.push(reasoningStep);
       continue;
     }
+
+    // Record step even if no tool calls
+    if (message?.content) {
+      reasoningStep.llmResponse = message.content;
+    }
+    reasoningSteps.push(reasoningStep);
 
     const finalText = coerceTextContent(message?.content).trim();
     if (finalText) {
       context.addAssistantMessage(finalText);
+      
+      // Record reasoning trace
+      const durationMs = Date.now() - startTime;
+      try {
+        const traceStore = getReasoningTraceStore();
+        await traceStore.recordTrace({
+          userId: session.userId,
+          aclGroup: session.aclGroup,
+          userInput,
+          finalResponse: finalText,
+          steps: reasoningSteps,
+          totalSteps: reasoningSteps.length,
+          totalToolCalls,
+          maxStepsReached: false,
+          timestamp: new Date(),
+          durationMs,
+        });
+      } catch (error: any) {
+        logger.warn("Failed to record reasoning trace", { error: error.message });
+      }
+      
       return { text: finalText };
     }
+  }
+
+  // Max steps reached - record trace
+  const durationMs = Date.now() - startTime;
+  try {
+    const traceStore = getReasoningTraceStore();
+    await traceStore.recordTrace({
+      userId: session.userId,
+      aclGroup: session.aclGroup,
+      userInput,
+      finalResponse: "Max reasoning depth reached. Please try a simpler query.",
+      steps: reasoningSteps,
+      totalSteps: reasoningSteps.length,
+      totalToolCalls,
+      maxStepsReached: true,
+      timestamp: new Date(),
+      durationMs,
+    });
+  } catch (error: any) {
+    logger.warn("Failed to record reasoning trace", { error: error.message });
   }
 
   return { text: "Max reasoning depth reached. Please try a simpler query." };

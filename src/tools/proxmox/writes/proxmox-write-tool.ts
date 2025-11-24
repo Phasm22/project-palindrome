@@ -20,6 +20,7 @@ const ProxmoxWriteParams = z.object({
     "rollback_snapshot",
     "clone_vm",
     "migrate_vm",
+    "destroy_vm",
   ]),
   node: z.string().min(1, "Node name is required for all VM operations"),
   vmid: z.number().int().positive("VMID must be a positive integer"),
@@ -42,7 +43,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     super({
       name: "proxmox_write",
       description:
-        "Execute safe write operations on Proxmox VMs: start, stop, shutdown, reboot, reset, snapshot, rollback, clone, and migrate. All operations support dry-run mode and require confirmation.",
+        "Execute safe write operations on Proxmox VMs: start, stop, shutdown, reboot, reset, snapshot, rollback, clone, migrate, and destroy. All operations support dry-run mode and require confirmation. WARNING: destroy_vm is a destructive operation.",
       parameters: {
         type: "object",
         properties: {
@@ -58,8 +59,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
               "rollback_snapshot",
               "clone_vm",
               "migrate_vm",
+              "destroy_vm",
             ],
-            description: "The write action to execute",
+            description: "The write action to execute. WARNING: destroy_vm is a destructive operation that permanently deletes the VM/container and cannot be undone.",
           },
           node: {
             type: "string",
@@ -101,7 +103,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       },
       allowedAcls: ["admin", "ops"], // Write operations restricted to admin/ops
       requiresConfirmation: true, // All write operations require HIL
-      risk: "medium", // Controlled write operations
+      risk: "medium", // Controlled write operations (destroy_vm handled separately)
     });
   }
 
@@ -165,6 +167,15 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     const client = this.getApiClient();
     const { action, dryRun, ...actionParams } = parsed.data;
 
+    // For destroy_vm, add extra warning to context
+    if (action === "destroy_vm" && !dryRun) {
+      logger.warn("⚠️  EXTREME RISK: destroy_vm operation requested", {
+        node: actionParams.node,
+        vmid: actionParams.vmid,
+        type: actionParams.type,
+      });
+    }
+
     // Route to appropriate handler based on action
     return this.executeApiCall(
       () => this.handleAction(action, actionParams, client, dryRun || false),
@@ -181,6 +192,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     proxbig: "proxBig",
     prox_big: "proxBig",
     "prox-big": "proxBig",
+    // YANG variations (case-sensitive - must be uppercase)
+    yang: "YANG",
+    "yang.prox": "YANG",
     // Add more aliases as needed
   };
 
@@ -406,12 +420,35 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           params.targetNode!,
           dryRun
         );
+      case "destroy_vm":
+        // Auto-detect type if not provided
+        let destroyType = params.type;
+        if (!destroyType) {
+          try {
+            // Try qemu first
+            await this.getVmStatus(client, params.node!, params.vmid!, "qemu");
+            destroyType = "qemu";
+          } catch {
+            // Try lxc if qemu fails
+            try {
+              await this.getVmStatus(client, params.node!, params.vmid!, "lxc");
+              destroyType = "lxc";
+            } catch {
+              throw new Error(`Could not determine VM type for VMID ${params.vmid} on node ${params.node}. Please specify type parameter.`);
+            }
+          }
+        }
+        return this.destroyVm(
+          client,
+          params.node!,
+          params.vmid!,
+          destroyType,
+          dryRun
+        );
       default:
         throw new Error(
           `Unknown action: ${action}. ` +
-          `Supported actions: start_vm, stop_vm, shutdown_vm, reboot_vm, reset_vm, create_snapshot, rollback_snapshot, clone_vm, migrate_vm. ` +
-          `Actions like 'delete_vm', 'destroy_vm', 'remove_vm' are not supported for safety reasons. ` +
-          `Please use the Proxmox web UI for destructive operations.`
+          `Supported actions: start_vm, stop_vm, shutdown_vm, reboot_vm, reset_vm, create_snapshot, rollback_snapshot, clone_vm, migrate_vm, destroy_vm.`
         );
     }
   }
@@ -915,38 +952,136 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
 
     try {
       // Check 1: Source node resources
-      const sourceResources = await client.get(`/nodes/${sourceNode}/status`);
-      const sourceData = sourceResources.data.data;
-      checks.push({
-        name: "source_node_available",
-        passed: sourceData.status === "online",
-        message: sourceData.status === "online" ? "Source node is online" : "Source node is not online",
-      });
+      try {
+        const sourceResources = await client.get(`/nodes/${sourceNode}/status`);
+        const sourceData = sourceResources.data.data;
+        checks.push({
+          name: "source_node_available",
+          passed: sourceData.status === "online",
+          message: sourceData.status === "online" ? "Source node is online" : "Source node is not online",
+        });
+      } catch (error: any) {
+        const errorStatus = error?.response?.status || error?.status;
+        if (errorStatus === 403) {
+          checks.push({
+            name: "source_node_available",
+            passed: false,
+            message: `Source node "${sourceNode}" not found or access denied (403). Verify node name is correct.`,
+          });
+        } else {
+          checks.push({
+            name: "source_node_available",
+            passed: false,
+            message: `Failed to check source node status: ${error?.message || String(error)}`,
+          });
+        }
+      }
 
       // Check 2: Target node resources
-      const targetResources = await client.get(`/nodes/${targetNode}/status`);
-      const targetData = targetResources.data.data;
-      checks.push({
-        name: "target_node_available",
-        passed: targetData.status === "online",
-        message: targetData.status === "online" ? "Target node is online" : "Target node is not online",
-      });
+      try {
+        const targetResources = await client.get(`/nodes/${targetNode}/status`);
+        const targetData = targetResources.data.data;
+        checks.push({
+          name: "target_node_available",
+          passed: targetData.status === "online",
+          message: targetData.status === "online" ? "Target node is online" : "Target node is not online",
+        });
+      } catch (error: any) {
+        const errorStatus = error?.response?.status || error?.status;
+        if (errorStatus === 403) {
+          checks.push({
+            name: "target_node_available",
+            passed: false,
+            message: `Target node "${targetNode}" not found or access denied (403). Verify node name is correct.`,
+          });
+        } else {
+          checks.push({
+            name: "target_node_available",
+            passed: false,
+            message: `Failed to check target node status: ${error?.message || String(error)}`,
+          });
+        }
+      }
 
       // Check 3: VM/Container status on source
+      // For LXC, we need to check lxc endpoint, not qemu
       try {
         const vmStatus = await this.getVmStatus(client, sourceNode, vmid, type);
         checks.push({
           name: "vm_exists_on_source",
           passed: !!vmStatus,
-          message: vmStatus ? "VM/container exists on source node" : "VM/container not found on source node",
+          message: vmStatus ? `VM/container exists on source node (type: ${type})` : "VM/container not found on source node",
         });
       } catch (error: any) {
-        // If getVmStatus fails, the VM/container doesn't exist or wrong type
-        checks.push({
-          name: "vm_exists_on_source",
-          passed: false,
-          message: `VM/container not found on source node or incorrect type (tried ${type}): ${error.message}`,
-        });
+        // Distinguish between different error types
+        const errorStatus = error?.response?.status || error?.status;
+        const errorMessage = error?.message || String(error);
+        
+        // If we get 500 for LXC, try the other type to see if it's a type mismatch
+        if (errorStatus === 500 && type === "lxc") {
+          try {
+            // Try qemu to see if it's actually a QEMU VM
+            const qemuStatus = await this.getVmStatus(client, sourceNode, vmid, "qemu");
+            if (qemuStatus) {
+              checks.push({
+                name: "vm_exists_on_source",
+                passed: false,
+                message: `VM/container exists but is type 'qemu', not 'lxc'. Please specify type: "qemu" for this migration.`,
+              });
+            } else {
+              checks.push({
+                name: "vm_exists_on_source",
+                passed: false,
+                message: `VM/container ${vmid} not found on source node ${sourceNode} (checked both qemu and lxc types)`,
+              });
+            }
+          } catch {
+            // Both types failed - VM doesn't exist
+            checks.push({
+              name: "vm_exists_on_source",
+              passed: false,
+              message: `VM/container ${vmid} not found on source node ${sourceNode}`,
+            });
+          }
+        } else if (errorStatus === 500 && type === "qemu") {
+          try {
+            // Try lxc to see if it's actually an LXC container
+            const lxcStatus = await this.getVmStatus(client, sourceNode, vmid, "lxc");
+            if (lxcStatus) {
+              checks.push({
+                name: "vm_exists_on_source",
+                passed: false,
+                message: `VM/container exists but is type 'lxc', not 'qemu'. Please specify type: "lxc" for this migration.`,
+              });
+            } else {
+              checks.push({
+                name: "vm_exists_on_source",
+                passed: false,
+                message: `VM/container ${vmid} not found on source node ${sourceNode} (checked both qemu and lxc types)`,
+              });
+            }
+          } catch {
+            checks.push({
+              name: "vm_exists_on_source",
+              passed: false,
+              message: `VM/container ${vmid} not found on source node ${sourceNode}`,
+            });
+          }
+        } else if (errorStatus === 403) {
+          // Node might not exist or permission issue
+          checks.push({
+            name: "vm_exists_on_source",
+            passed: false,
+            message: `Access denied (403) when checking VM/container ${vmid} on node ${sourceNode}. Node may not exist or insufficient permissions.`,
+          });
+        } else {
+          // Generic error
+          checks.push({
+            name: "vm_exists_on_source",
+            passed: false,
+            message: `Failed to check VM/container status: ${errorMessage}`,
+          });
+        }
       }
 
       // Check 4: Target node CPU/RAM margin
@@ -1016,6 +1151,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
 
   /**
    * Helper to get VM status
+   * Returns status data or throws error with details
    */
   private async getVmStatus(
     client: ProxmoxClient,
@@ -1026,8 +1162,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     try {
       const result = await client.get(this.getVmPath(type, node, vmid, "/status/current"));
       return result.data.data;
-    } catch {
-      return null;
+    } catch (error: any) {
+      // Re-throw with more context for better error handling
+      const enhancedError = new Error(error?.message || "Failed to get VM status");
+      (enhancedError as any).response = error?.response;
+      (enhancedError as any).status = error?.response?.status || error?.status;
+      throw enhancedError;
     }
   }
 
@@ -1047,6 +1187,102 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       return config.name || config.hostname || null;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Destroy VM/Container (EXTREME RISK - permanent deletion)
+   * WARNING: This operation cannot be undone
+   */
+  private async destroyVm(
+    client: ProxmoxClient,
+    node: string,
+    vmid: number,
+    type: "qemu" | "lxc",
+    dryRun: boolean
+  ): Promise<{ data: any; metadata: any }> {
+    // Get VM name for verification
+    const vmName = await this.getVmName(client, node, vmid, type);
+    
+    // Check current state first
+    const currentState = await this.getVmStatus(client, node, vmid, type);
+    const currentStatus = currentState?.status;
+
+    // For destroy, VM must be stopped first
+    if (currentStatus === "running") {
+      return {
+        data: {
+          action: "destroy_vm",
+          node,
+          vmid,
+          vmName: vmName || "unknown",
+          status: "cannot_destroy_running",
+          message: `Cannot destroy VM/container ${vmid}${vmName ? ` (${vmName})` : ""} - it is currently running. Stop it first, then destroy.`,
+          currentStatus: "running",
+          warning: vmName ? `VM/container "${vmName}" must be stopped before destruction` : "VM/container must be stopped before destruction",
+        },
+        metadata: { status: 400, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/destroy-blocked-running" },
+      };
+    }
+
+    if (dryRun) {
+      return {
+        data: {
+          action: "destroy_vm",
+          node,
+          vmid,
+          vmName: vmName || "unknown",
+          type,
+          status: "dry_run",
+          message: `DRY RUN: Would permanently destroy VM/container ${vmid}${vmName ? ` (${vmName})` : ""} on node ${node}. This operation CANNOT be undone.`,
+          warning: `⚠️  DESTRUCTIVE OPERATION: This will permanently delete VM/container ${vmid}${vmName ? ` "${vmName}"` : ""}. All data will be lost.`,
+          currentStatus,
+        },
+        metadata: { status: 200, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/dry-run/destroy" },
+      };
+    }
+
+    const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
+    
+    try {
+      // Destroy endpoint: DELETE /nodes/{node}/{type}/{vmid}
+      const result = await client.delete(this.getVmPath(type, node, vmid, ""));
+      
+      return {
+        data: {
+          action: "destroy_vm",
+          node,
+          vmid,
+          vmName: vmName || "unknown",
+          type,
+          status: "destroyed",
+          message: `VM/container ${vmid}${vmName ? ` (${vmName})` : ""} has been permanently destroyed on node ${node}`,
+          preWriteState: preWriteState.hash,
+          warning: `⚠️  VM/container ${vmid}${vmName ? ` "${vmName}"` : ""} has been permanently deleted. This operation cannot be undone.`,
+          ...result.data,
+        },
+        metadata: result.metadata,
+      };
+    } catch (error: any) {
+      // Handle specific error cases
+      if (error.response?.status === 400) {
+        const errorMsg = error.response?.data?.message || error.message;
+        if (errorMsg?.includes("running") || errorMsg?.includes("not stopped")) {
+          return {
+            data: {
+              action: "destroy_vm",
+              node,
+              vmid,
+              vmName: vmName || "unknown",
+              status: "cannot_destroy_running",
+              message: `Cannot destroy VM/container ${vmid}${vmName ? ` (${vmName})` : ""} - it is currently running. Stop it first, then destroy.`,
+              error: errorMsg,
+            },
+            metadata: { status: 400, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/destroy-blocked-running" },
+          };
+        }
+      }
+      throw error;
     }
   }
 }

@@ -72,6 +72,16 @@ export class HybridOrchestrator {
         aclGroup: userACLGroup,
       });
 
+      // Step 0: Check for exact-match VM/container names before semantic search
+      // This improves recall for queries like "what is vm-123" or "where is container-456"
+      const exactMatchResult = await this.tryExactMatchFallback(userQuery, userACLGroup);
+      if (exactMatchResult) {
+        pceLogger.info("Exact match found, bypassing semantic search", {
+          query: userQuery.slice(0, 100),
+        });
+        return exactMatchResult;
+      }
+
       // Step 1: Analyze query and determine routing
       const analysis = await this.queryAnalyzer.analyzeQuery(userQuery);
 
@@ -538,6 +548,119 @@ export class HybridOrchestrator {
         setTimeout(() => reject(new Error("Operation timed out")), timeoutMs)
       ),
     ]);
+  }
+
+  /**
+   * Try exact-match fallback for VM/container names
+   * If query looks like a VM name (e.g., "vm-123", "container-456"), check graph first
+   * Returns response if exact match found, null otherwise
+   */
+  private async tryExactMatchFallback(
+    query: string,
+    aclGroup: ACLGroup
+  ): Promise<HybridRAGResponse | null> {
+    try {
+      // Extract potential VM/container names from query
+      // Patterns: "vm-123", "container-456", "lxc-789", "qemu-101", or just "123" if context suggests VM
+      const vmNamePatterns = [
+        /\b(?:vm|container|lxc|qemu|ct)[-_]?(\d+)\b/gi,
+        /\b(\d{3,})\b/g, // 3+ digit numbers (likely VMIDs)
+      ];
+
+      const potentialVmNames: string[] = [];
+      for (const pattern of vmNamePatterns) {
+        const matches = query.matchAll(pattern);
+        for (const match of matches) {
+          const vmName = match[0].toLowerCase();
+          if (!potentialVmNames.includes(vmName)) {
+            potentialVmNames.push(vmName);
+          }
+        }
+      }
+
+      // If no VM-like patterns found, skip exact match
+      if (potentialVmNames.length === 0) {
+        return null;
+      }
+
+      // Try to find exact matches in graph
+      for (const vmName of potentialVmNames) {
+        try {
+          // Query graph for exact match by name or ID
+          const graphResult = await this.graphRetrieval.retrieve(
+            vmName,
+            "entities",
+            aclGroup
+          );
+
+          // If we found entities, check if any match exactly
+          const exactMatches = graphResult.entities.filter((e: any) => {
+            const entityName = (e.name || e.id || "").toLowerCase();
+            const normalizedVmName = vmName.replace(/[-_]/g, "").toLowerCase();
+            const normalizedEntityName = entityName.replace(/[-_]/g, "").toLowerCase();
+            return (
+              entityName === vmName ||
+              normalizedEntityName === normalizedVmName ||
+              entityName.includes(vmName) ||
+              vmName.includes(entityName)
+            );
+          });
+
+          if (exactMatches.length > 0) {
+            pceLogger.info("Exact match found in graph", {
+              vmName,
+              matches: exactMatches.length,
+            });
+
+            // Build context from exact match
+            // Convert graph entities to structural path format
+            const structuralPaths = exactMatches.map((e: any) => ({
+              entities: [e],
+              relationships: [],
+              score: 1.0, // Exact match = perfect score
+            }));
+
+            const context: HybridContext = {
+              semanticChunks: [],
+              structuralPaths,
+            };
+
+            // Generate response using exact match context
+            const response = await this.generateHybridResponse(query, context);
+
+            return {
+              ...response,
+              queryType: "HYBRID",
+              fallbackMode: "exact_match",
+              context,
+              sTotalScore: 1.0, // Exact match = perfect score
+              fusionMetrics: {
+                vectorResults: 0,
+                graphResults: exactMatches.length,
+                fusedResults: exactMatches.length,
+                prunedResults: exactMatches.length,
+                avgTotalScore: 1.0,
+              },
+            };
+          }
+        } catch (error: any) {
+          // If graph query fails, continue to normal flow
+          pceLogger.debug("Exact match graph query failed, continuing", {
+            vmName,
+            error: error.message,
+          });
+        }
+      }
+
+      // No exact matches found
+      return null;
+    } catch (error: any) {
+      // If exact match check fails, continue to normal flow
+      pceLogger.debug("Exact match fallback failed, continuing", {
+        error: error.message,
+      });
+      return null;
+    }
   }
 }
 
