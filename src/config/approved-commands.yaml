@@ -11,6 +11,8 @@ hosts:
       - "opnsense"
       - "radar"
       - "firewall"
+      - "opnsense.prox"
+      - "OPNsense.prox"
     description: "OPNsense firewall in lab network"
     read_only: true
     commands:
@@ -31,6 +33,11 @@ hosts:
         - "uptime"
         - "free -h"
         - "ps aux | head -20"
+      firewall:
+        - "pfctl -sr"
+        - "pfctl -sn"
+        - "pfctl -si"
+        - "pfctl -sa"
         
   "172.16.0.10":  # prox_big
     hostname: "172.16.0.10"

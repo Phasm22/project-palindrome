@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ToolSchema } from "../../tool-schema";
 import { createToolSchema } from "../../tool-helpers";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
+import { SSHTool } from "../../SSHTool";
 
 /**
  * Schema for OPNsense read-only tool parameters
@@ -54,6 +55,7 @@ export type OpnsenseReadOnlyParams = z.infer<typeof OpnsenseReadOnlyParams>;
  * Provides comprehensive read-only access to OPNsense state
  */
 export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
+  private sshTool: SSHTool | null = null;
   constructor() {
     super({
       name: "opnsense_readonly",
@@ -64,7 +66,7 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     });
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     return createToolSchema(this, OpnsenseReadOnlyParams, {
       examples: [
         {
@@ -92,7 +94,7 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     });
   }
 
-  getParameterSchema() {
+  override getParameterSchema() {
     return OpnsenseReadOnlyParams;
   }
 
@@ -318,27 +320,44 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
             timestamp: new Date().toISOString(),
           };
         } catch (getError: any) {
-          throw new Error(
-            `OPNsense API endpoint /api/firewall/rule/searchRule is not available. ` +
-            `For firewall rules, you may need to use SSH to query the configuration directly. ` +
-            `Error: ${getError.response?.data?.message || getError.message}`
-          );
+          if (this.shouldFallbackToSshForFirewallRules(getError)) {
+            return this.getFirewallRulesViaSSH(limit);
+          }
+          throw getError;
         }
+      }
+      if (this.shouldFallbackToSshForFirewallRules(error)) {
+        return this.getFirewallRulesViaSSH(limit);
       }
       throw error;
     }
   }
 
   private async getFirewallAliases(client: any, limit?: number): Promise<any> {
-    const response = await client.get("/api/firewall/alias/searchItem");
-    const aliases = response.data?.rows || [];
-    return {
-      action: "firewall_aliases_list",
-      count: limit ? Math.min(aliases.length, limit) : aliases.length,
-      total: aliases.length,
-      aliases: limit ? aliases.slice(0, limit) : aliases,
-      timestamp: new Date().toISOString(),
-    };
+    try {
+      const response = await client.post("/api/firewall/alias/searchItem", {});
+      const aliases = response.data?.rows || [];
+      return {
+        action: "firewall_aliases_list",
+        count: limit ? Math.min(aliases.length, limit) : aliases.length,
+        total: aliases.length,
+        aliases: limit ? aliases.slice(0, limit) : aliases,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      if (error.response?.status === 405 || error.response?.status === 404) {
+        const response = await client.get("/api/firewall/alias/searchItem");
+        const aliases = response.data?.rows || [];
+        return {
+          action: "firewall_aliases_list",
+          count: limit ? Math.min(aliases.length, limit) : aliases.length,
+          total: aliases.length,
+          aliases: limit ? aliases.slice(0, limit) : aliases,
+          timestamp: new Date().toISOString(),
+        };
+      }
+      throw error;
+    }
   }
 
   private async getFirewallAlias(client: any, aliasName: string): Promise<any> {
@@ -618,6 +637,104 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       count: response.data?.rows?.length || 0,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  private getSshTool(): SSHTool {
+    if (!this.sshTool) {
+      this.sshTool = new SSHTool();
+    }
+    return this.sshTool;
+  }
+
+  private getOpnsenseSshHost(): string {
+    return process.env.OPNSENSE_SSH_HOST || "OPNsense.prox";
+  }
+
+  private shouldFallbackToSshForFirewallRules(error: any): boolean {
+    if (!error) return false;
+    const status = error.response?.status;
+    if (status && [400, 404, 405, 501].includes(status)) {
+      return true;
+    }
+    const message = (error.response?.data?.message || error.message || "").toLowerCase();
+    return message.includes("invalid json") || message.includes("not available");
+  }
+
+  private async getFirewallRulesViaSSH(limit?: number): Promise<any> {
+    const host = this.getOpnsenseSshHost();
+    const sshTool = this.getSshTool();
+    const context = { toolName: this.metadata.name, startedAt: Date.now() };
+    const sections: Record<string, any> = {};
+    const commands = [
+      { command: "pfctl -sr", key: "rules" },
+      { command: "pfctl -sn", key: "nat" },
+      { command: "pfctl -si", key: "info" },
+      { command: "pfctl -sa", key: "summary" },
+    ];
+
+    for (const { command, key } of commands) {
+      const result = await sshTool.execute({ host, command }, context);
+      if (result.error) {
+        sections[key] = { error: result.error };
+        continue;
+      }
+      sections[key] = (result.data?.stdout || "").trim();
+    }
+
+    const rulesOutput = typeof sections.rules === "string" ? sections.rules : "";
+    const natOutput = typeof sections.nat === "string" ? sections.nat : "";
+    const infoOutput = typeof sections.info === "string" ? sections.info : "";
+    const summaryValue =
+      typeof sections.summary === "string"
+        ? sections.summary
+        : typeof sections.summary?.error === "string"
+        ? sections.summary.error
+        : null;
+
+    const rules = this.parsePfctlLines(rulesOutput);
+    const natRules = this.parsePfctlLines(natOutput);
+    const info = this.parsePfctlInfoOutput(infoOutput);
+
+    return {
+      action: "firewall_rules_list",
+      source: "ssh_pfctl",
+      timestamp: new Date().toISOString(),
+      count: limit ? Math.min(rules.length, limit) : rules.length,
+      total: rules.length,
+      rules: limit ? rules.slice(0, limit) : rules,
+      nat: natRules,
+      info,
+      summary: summaryValue,
+    };
+  }
+
+  private parsePfctlLines(output: string): string[] {
+    if (!output || typeof output !== "string") {
+      return [];
+    }
+    return output
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+  }
+
+  private parsePfctlInfoOutput(output: string): Array<{ label: string; value: string }> {
+    if (!output || typeof output !== "string") {
+      return [];
+    }
+    return output
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .map(line => {
+        if (!line.includes(":")) {
+          return { label: "info", value: line };
+        }
+        const [labelRaw, ...rest] = line.split(":");
+        const label = (labelRaw ?? "info").trim();
+        const value = rest.join(":").trim();
+        return { label, value };
+      });
   }
 }
 
