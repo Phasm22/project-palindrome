@@ -10,6 +10,7 @@ import { fetchHybridContext, type HybridApiContext } from "./rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
 import { getReasoningTraceStore, type ReasoningStep } from "../pce/api/reasoning-trace-store";
+import { AgentEventBus } from "./event-bus";
 
 let openaiClient: OpenAI | null = null;
 
@@ -97,6 +98,7 @@ export type AgentRunOptions = {
   aclGroup?: string;
   confirmHighRisk?: (info: { toolName: string; parameters: Record<string, any>; risk: string }) => Promise<boolean>;
   ragBaseUrl?: string;
+  sessionId?: string; // Optional session ID for event tracking
 };
 
 function coerceTextContent(content: any): string {
@@ -122,6 +124,10 @@ export async function runAgent(
   }
 
   logger.info(`Agent received input: "${userInput}"`);
+
+  // Generate session ID if not provided
+  const sessionId = options.sessionId ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const eventBus = AgentEventBus.getInstance();
 
   const session: ToolSession = {
     userId: options.userId ?? "agent-user",
@@ -152,9 +158,65 @@ export async function runAgent(
   const MAX_TOOL_CALLS_PER_STEP = 5; // Prevent tool call flooding (reduced from 10)
   const seenToolCalls = new Set<string>(); // Track tool calls to prevent infinite loops
   const client = getOpenAIClient();
+  
+  // Track "all nodes" queries to prevent partial answers
+  // Match patterns like "all nodes", "all the nodes", "temperature of all nodes", etc.
+  const isAllNodesQuery = /\ball\s+(the\s+)?nodes?\b/i.test(userInput);
+  let discoveredNodeCount = 0;
+  let queriedNodeCount = 0;
+  let expectedProxmoxNodes: string[] = []; // Track which Proxmox nodes we expect to query
+  const queriedNodeIds = new Set<string>(); // Track unique physical nodes queried (not aliases)
+  
+  // For temperature queries, discover Proxmox nodes from SSH config (not Proxmox API)
+  // This handles the case where proxBig is standalone and yin/YANG are in a cluster
+  if (isAllNodesQuery && /\btemperature|temp\b/i.test(userInput)) {
+    try {
+      const { loadYaml } = await import("../utils/config");
+      const pathModule = await import("path");
+      const { fileURLToPath } = await import("url");
+      const __filename = fileURLToPath(import.meta.url);
+      const __dirname = pathModule.dirname(__filename);
+      const configPath = pathModule.join(__dirname, "../config/approved-commands.yaml");
+      const config = loadYaml(configPath) as any;
+      
+      // Find all unique Proxmox nodes (those with "sensors" command in system category)
+      // Count unique physical nodes, not aliases - use hostname/IP as the unique identifier
+      const uniqueNodes = new Set<string>();
+      for (const [hostKey, hostConfig] of Object.entries(config.hosts || {})) {
+        const host = hostConfig as any;
+        if (host.commands?.system?.includes("sensors")) {
+          // This is a Proxmox node - use the hostname/IP as the unique identifier
+          uniqueNodes.add(host.hostname || hostKey);
+          // Also add all aliases for matching purposes
+          expectedProxmoxNodes.push(host.hostname || hostKey);
+          if (host.aliases) {
+            expectedProxmoxNodes.push(...host.aliases);
+          }
+        }
+      }
+      discoveredNodeCount = uniqueNodes.size; // Count unique physical nodes, not aliases
+      console.error(`[ALL NODES QUERY DETECTED] Found ${discoveredNodeCount} unique Proxmox nodes from SSH config: ${Array.from(uniqueNodes).join(", ")}`);
+      logger.warn(`[ALL NODES QUERY DETECTED] Found ${discoveredNodeCount} unique Proxmox nodes from SSH config: ${Array.from(uniqueNodes).join(", ")}`);
+    } catch (error: any) {
+      logger.warn(`Failed to load SSH config for node discovery: ${error.message}`);
+    }
+  } else if (isAllNodesQuery) {
+    console.error(`[ALL NODES QUERY DETECTED] Will track node discovery and queries for: "${userInput}"`);
+    logger.warn(`[ALL NODES QUERY DETECTED] Will track node discovery and queries for: "${userInput}"`);
+  } else {
+    console.error(`[NOT ALL NODES] Query: "${userInput}"`);
+  }
 
   for (let step = 0; step < MAX_STEPS; step++) {
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
+    
+    // Emit agent step event
+    eventBus.emit({
+      type: "agent:step",
+      sessionId,
+      timestamp: Date.now(),
+      data: { step: step + 1, maxSteps: MAX_STEPS, userInput },
+    });
 
     // Initialize reasoning step
     const reasoningStep: ReasoningStep = {
@@ -273,7 +335,160 @@ export async function runAgent(
       };
       context.getMessages().push(assistantMsg);
       
-      for (const toolCall of toolCalls) {
+      // Check if we can parallelize tool calls (for "all nodes" queries with independent SSH calls)
+      const canParallelize = isAllNodesQuery && 
+        toolCalls.length > 1 && 
+        toolCalls.every(tc => {
+          const fnCall = tc.function ?? {};
+          const toolName = fnCall.name;
+          if (toolName !== "ssh_execute") return false;
+          try {
+            const args = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
+            return args.command?.includes("sensors");
+          } catch {
+            return false;
+          }
+        });
+      
+      if (canParallelize) {
+        // Execute all SSH calls in parallel for "all nodes" queries
+        logger.info(`Parallelizing ${toolCalls.length} SSH tool calls for "all nodes" query`);
+        const toolPromises = toolCalls.map(async (toolCall) => {
+          const fnCall = toolCall.function ?? {};
+          const toolName = fnCall.name as string | undefined;
+          if (!toolName) return null;
+          
+          let parsedArgs: Record<string, any> = {};
+          try {
+            parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
+          } catch {
+            return null;
+          }
+          
+          // Check duplicates
+          const callSignature = `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
+          if (seenToolCalls.has(callSignature)) {
+            logger.warn(`Duplicate tool call detected, skipping: ${callSignature}`);
+            return null;
+          }
+          seenToolCalls.add(callSignature);
+          
+          const targetTool = tools.find((t) => t.metadata.name === toolName);
+          if (!targetTool || !isToolAuthorized(targetTool, session)) {
+            return null;
+          }
+          
+          const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          const node = parsedArgs.node || parsedArgs.host;
+          const execContext = {
+            userId: session.userId,
+            aclGroup: session.aclGroup,
+            node,
+          };
+          
+          // Emit tool:start
+          eventBus.emit({
+            type: "tool:start",
+            sessionId,
+            timestamp: Date.now(),
+            data: { toolName, parameters: parsedArgs, toolCallId: toolCall.id },
+          });
+          
+          // Execute tool (SSH calls are read-only, no confirmation needed)
+          const result = await executeToolCall(
+            { toolName, parameters: parsedArgs },
+            tools,
+            execContext
+          );
+          
+          // Emit tool:complete
+          eventBus.emit({
+            type: "tool:complete",
+            sessionId,
+            timestamp: Date.now(),
+            data: {
+              toolName,
+              parameters: parsedArgs,
+              toolCallId: toolCall.id,
+              success: !result.error,
+              error: result.error,
+              durationMs: result.durationMs,
+            },
+          });
+          
+          return { toolCall, toolName, parsedArgs, result, provenanceId, execContext };
+        });
+        
+        const toolResults = await Promise.all(toolPromises);
+        
+        // Process results and add to context
+        for (const toolResult of toolResults) {
+          if (!toolResult) continue;
+          
+          const { toolCall, toolName, parsedArgs, result, provenanceId } = toolResult;
+          
+          // Track node queries
+          if (isAllNodesQuery && !result.error) {
+            const host = parsedArgs.host;
+            const proxmoxNodePatterns = [
+              { pattern: /prox.*big|172\.16\.0\.10/i, id: "prox_big" },
+              { pattern: /^yin$|172\.16\.0\.11/i, id: "yin" },
+              { pattern: /^yang$|172\.16\.0\.12/i, id: "yang" },
+            ];
+            
+            let matchedNodeId: string | null = null;
+            for (const nodePattern of proxmoxNodePatterns) {
+              if (nodePattern.pattern.test(host || "")) {
+                matchedNodeId = nodePattern.id;
+                break;
+              }
+            }
+            
+            if (matchedNodeId && !queriedNodeIds.has(matchedNodeId)) {
+              queriedNodeIds.add(matchedNodeId);
+              queriedNodeCount++;
+              logger.warn(`[ALL NODES TRACKING] Queried ${queriedNodeCount}/${discoveredNodeCount} Proxmox nodes (host: ${host}, node: ${matchedNodeId})`);
+            }
+          }
+          
+          // Add to reasoning step
+          const dataPreview = result.data && typeof result.data === 'object' 
+            ? JSON.stringify(result.data).slice(0, 500) 
+            : String(result.data || '').slice(0, 500);
+          const dataSize = result.data && typeof result.data === 'object'
+            ? JSON.stringify(result.data).length
+            : String(result.data || '').length;
+          const resultType = result.data 
+            ? (Array.isArray(result.data) ? 'array' : typeof result.data)
+            : undefined;
+          
+          reasoningStep.toolCalls.push({
+            toolName,
+            parameters: parsedArgs,
+            result: {
+              success: !result.error,
+              error: result.error,
+              dataPreview,
+              dataSize,
+              resultType,
+            },
+            durationMs: result.durationMs ?? 0,
+          });
+          totalToolCalls++;
+          
+          // Add to context
+          const sanitizedData = sanitizeToolPayload(result.data);
+          context.addToolResult(toolCall.id, toolName, {
+            provenanceId,
+            success: !result.error,
+            data: sanitizedData,
+            error: result.error ?? null,
+            durationMs: result.durationMs ?? 0,
+          });
+        }
+      } else {
+        // Sequential execution (original behavior)
+        for (const toolCall of toolCalls) {
         // Create a signature for this tool call to detect duplicates
         const fnCall = toolCall.function ?? {};
         const toolName = fnCall.name as string | undefined;
@@ -332,6 +547,14 @@ export async function runAgent(
         });
         const targetTool = tools.find((t) => t.metadata.name === toolName);
         const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        
+        // Emit tool:start event
+        eventBus.emit({
+          type: "tool:start",
+          sessionId,
+          timestamp: Date.now(),
+          data: { toolName, parameters: parsedArgs, toolCallId: toolCall.id },
+        });
 
         // parsedArgs already parsed above for duplicate detection
         logger.debug(`Tool call parsed: ${toolName}`, {
@@ -442,6 +665,24 @@ export async function runAgent(
           );
         }
 
+        // Emit tool:complete event
+        eventBus.emit({
+          type: "tool:complete",
+          sessionId,
+          timestamp: Date.now(),
+          data: {
+            toolName,
+            parameters: parsedArgs,
+            toolCallId: toolCall.id,
+            success: !result.error,
+            error: result.error,
+            durationMs: result.durationMs,
+            dataPreview: result.data && typeof result.data === 'object' 
+              ? JSON.stringify(result.data).slice(0, 200) 
+              : String(result.data || '').slice(0, 200),
+          },
+        });
+
         if (result.error) {
           logger.error(`Tool execution failed: ${toolName}`, {
             error: result.error,
@@ -451,6 +692,71 @@ export async function runAgent(
           logger.debug(`Tool execution succeeded: ${toolName}`, {
             dataKeys: result.data && typeof result.data === 'object' ? Object.keys(result.data) : [],
           });
+        }
+
+        // Track node discovery and queries for "all nodes" validation (BEFORE sanitization)
+        if (isAllNodesQuery && !result.error) {
+          console.error(`[ALL NODES TRACKING] Tool: ${toolName}, Action: ${parsedArgs.action}, Command: ${parsedArgs.command}`);
+          logger.warn(`[ALL NODES TRACKING] Tool: ${toolName}, Action: ${parsedArgs.action}, Command: ${parsedArgs.command}`);
+          
+          // For temperature queries, we use SSH config discovery (already done above)
+          // For other "all nodes" queries, use Proxmox API discovery
+          if (toolName === "proxmox_readonly" && parsedArgs.action === "list_nodes" && expectedProxmoxNodes.length === 0) {
+            // Response structure: { data: { nodes: [...], count: ... } }
+            const data = result.data as any;
+            const nodes = data?.nodes || data?.data?.nodes || [];
+            discoveredNodeCount = Array.isArray(nodes) ? nodes.length : (data?.count || 0);
+            logger.warn(`[ALL NODES TRACKING] Discovered ${discoveredNodeCount} nodes from Proxmox API`, {
+              nodesArray: Array.isArray(nodes) ? nodes.length : 'not array',
+              countField: data?.count,
+              dataKeys: data && typeof data === 'object' ? Object.keys(data) : [],
+              rawData: JSON.stringify(data).slice(0, 500),
+            });
+          }
+          
+          // Track SSH queries for temperature - check if this host is one of our expected Proxmox nodes
+          if (toolName === "ssh_execute" && parsedArgs.command?.includes("sensors")) {
+            const host = parsedArgs.host;
+            // For temperature queries, we expect 3 Proxmox nodes: prox_big, yin, yang
+            // Match by checking if host is one of the known Proxmox nodes (flexible matching)
+            const proxmoxNodePatterns = [
+              { pattern: /prox.*big|172\.16\.0\.10/i, id: "prox_big" },  // prox_big, proxBig, 172.16.0.10
+              { pattern: /^yin$|172\.16\.0\.11/i, id: "yin" },          // yin, 172.16.0.11
+              { pattern: /^yang$|172\.16\.0\.12/i, id: "yang" },        // yang, YANG, 172.16.0.12
+            ];
+            
+            let matchedNodeId: string | null = null;
+            if (expectedProxmoxNodes.length > 0) {
+              // Try to match against expected nodes
+              for (const nodePattern of proxmoxNodePatterns) {
+                if (nodePattern.pattern.test(host || "")) {
+                  matchedNodeId = nodePattern.id;
+                  break;
+                }
+              }
+            } else {
+              // Fallback: use pattern matching
+              for (const nodePattern of proxmoxNodePatterns) {
+                if (nodePattern.pattern.test(host || "")) {
+                  matchedNodeId = nodePattern.id;
+                  break;
+                }
+              }
+            }
+              
+            if (matchedNodeId) {
+              // Only increment if we haven't queried this physical node yet
+              if (!queriedNodeIds.has(matchedNodeId)) {
+                queriedNodeIds.add(matchedNodeId);
+                queriedNodeCount++;
+                logger.warn(`[ALL NODES TRACKING] Queried ${queriedNodeCount}/${discoveredNodeCount} Proxmox nodes (host: ${host}, node: ${matchedNodeId})`);
+              } else {
+                logger.warn(`[ALL NODES TRACKING] Duplicate query for node ${matchedNodeId} (host: ${host}) - not counted`);
+              }
+            } else {
+              logger.warn(`[ALL NODES TRACKING] Sensors query on non-Proxmox host: ${host} (not counted)`);
+            }
+          }
         }
 
         // Capture tool execution in reasoning step with enhanced details
@@ -489,6 +795,7 @@ export async function runAgent(
           error: result.error ?? null,
           durationMs: result.durationMs ?? 0,
         });
+        }
       }
 
       // Record this reasoning step
@@ -504,10 +811,43 @@ export async function runAgent(
 
     const finalText = coerceTextContent(message?.content).trim();
     if (finalText) {
+      // Validate "all nodes" queries - prevent partial answers
+      if (isAllNodesQuery) {
+        logger.warn(`[ALL NODES VALIDATION] discovered=${discoveredNodeCount}, queried=${queriedNodeCount}, hasText=${!!finalText}`);
+        if (discoveredNodeCount > 0 && queriedNodeCount < discoveredNodeCount) {
+          logger.error(`[ALL NODES VALIDATION] BLOCKING partial answer: discovered ${discoveredNodeCount} nodes but only queried ${queriedNodeCount}`);
+          reasoningStep.decisions.push({
+            type: "validation_failed",
+            description: `Partial answer prevented: need to query all ${discoveredNodeCount} nodes, only ${queriedNodeCount} queried`,
+            metadata: { discoveredNodeCount, queriedNodeCount },
+          });
+          // Force continuation by adding a user message to the context
+          context.addUserMessage(`You have not queried all discovered nodes yet. You discovered ${discoveredNodeCount} nodes but have only queried ${queriedNodeCount}. You MUST continue querying the remaining ${discoveredNodeCount - queriedNodeCount} node(s) before providing an answer. Do NOT provide a text response yet - make more tool calls instead.`);
+          reasoningSteps.push(reasoningStep);
+          continue; // Force another iteration
+        } else if (discoveredNodeCount === 0 && queriedNodeCount > 0) {
+          // Nodes were queried but we didn't track discovery - might be a tracking issue
+          logger.warn(`All nodes query: nodes were queried (${queriedNodeCount}) but discovery count is 0 - tracking may have failed`);
+        }
+      }
+      
       context.addAssistantMessage(finalText);
       
-      // Record reasoning trace
+      // Emit agent:final event
       const durationMs = Date.now() - startTime;
+      eventBus.emit({
+        type: "agent:final",
+        sessionId,
+        timestamp: Date.now(),
+        data: {
+          text: finalText,
+          totalSteps: step + 1,
+          totalToolCalls,
+          durationMs,
+        },
+      });
+      
+      // Record reasoning trace
       try {
         const traceStore = getReasoningTraceStore();
         await traceStore.recordTrace({

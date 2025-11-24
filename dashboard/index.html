@@ -74,6 +74,63 @@
       font-weight: bold;
     }
 
+    .agent-thinking {
+      color: #94a3b8;
+      font-style: italic;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9em;
+    }
+
+    .icon {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    .agent-response {
+      color: #e2e8f0;
+      line-height: 1.6;
+      font-size: 0.95em;
+    }
+
+    .agent-response h3 {
+      color: #60a5fa;
+      font-size: 1.1em;
+      margin-top: 20px;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+
+    .agent-response h3:first-child {
+      margin-top: 0;
+    }
+
+    .agent-response ul {
+      list-style: none;
+      padding-left: 0;
+      margin: 10px 0;
+    }
+
+    .agent-response li {
+      padding: 4px 0;
+      color: #cbd5e1;
+    }
+
+    .agent-response .temp-label {
+      color: #94a3b8;
+      font-weight: 500;
+      display: inline-block;
+      min-width: 180px;
+    }
+
+    .agent-response .temp-value {
+      color: #e2e8f0;
+    }
+
     #graph {
       height: 600px;
       border: 1px solid #334155;
@@ -578,7 +635,11 @@
       }
     }
 
-    // Chat functionality
+    // Chat functionality with agent streaming
+    let currentEventSource = null;
+    let currentSessionId = null;
+    let currentResponseId = null;
+
     async function sendChatMessage() {
       const input = document.getElementById('chat-input');
       const sendBtn = document.getElementById('chat-send-btn');
@@ -592,15 +653,27 @@
       sendBtn.disabled = true;
       sendBtn.textContent = 'Sending...';
 
+      // Close any existing SSE connection
+      if (currentEventSource) {
+        currentEventSource.close();
+        currentEventSource = null;
+      }
+
       // Add user message to chat
       addChatMessage('user', message);
       input.value = '';
 
-      // Add loading indicator
-      const loadingId = addChatMessage('assistant', 'Thinking...', true);
+      // Add loading indicator for agent response
+      currentResponseId = addChatMessage('assistant', `
+        <div class="agent-thinking">
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+          Thinking...
+        </div>
+      `, true);
 
       try {
-        const response = await fetch(`${API_URL}/api/dashboard/query/rag`, {
+        // Start agent execution
+        const startResponse = await fetch(`${API_URL}/api/agent/query`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -610,52 +683,310 @@
           })
         });
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        if (!startResponse.ok) {
+          throw new Error(`HTTP ${startResponse.status}: ${startResponse.statusText}`);
         }
 
-        const result = await response.json();
-        const data = result.data || result;
+        const startResult = await startResponse.json();
+        currentSessionId = startResult.sessionId;
 
-        // Remove loading indicator
-        removeChatMessage(loadingId);
-
-        // Add assistant response
-        let answerHtml = `<div style="color: #e2e8f0; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(data.answer || 'No answer provided')}</div>`;
+        // Connect to SSE stream
+        currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
         
-        // Add sources if available
-        if (data.sources && data.sources.length > 0) {
-          answerHtml += `<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #334155;">`;
-          answerHtml += `<div style="color: #94a3b8; font-size: 0.9em; margin-bottom: 10px;">Sources:</div>`;
-          data.sources.slice(0, 3).forEach((source, idx) => {
-            const sourcePath = source.sourcePath || source.chunkId || 'Unknown';
-            const score = (source.score || 0).toFixed(3);
-            answerHtml += `<div style="color: #94a3b8; font-size: 0.85em; margin-bottom: 5px;">${idx + 1}. ${escapeHtml(sourcePath)} (${score})</div>`;
-          });
-          if (data.sources.length > 3) {
-            answerHtml += `<div style="color: #94a3b8; font-size: 0.85em;">... and ${data.sources.length - 3} more</div>`;
+        let toolExecutions = [];
+        let finalText = '';
+
+        currentEventSource.onmessage = (event) => {
+          try {
+            const agentEvent = JSON.parse(event.data);
+            handleAgentEvent(agentEvent, toolExecutions);
+            
+            if (agentEvent.type === 'agent:final') {
+              finalText = agentEvent.data.text || '';
+            }
+          } catch (error) {
+            console.error('Error parsing SSE event:', error);
           }
-          answerHtml += `</div>`;
-        }
+        };
 
-        addChatMessage('assistant', answerHtml);
+        currentEventSource.onerror = (error) => {
+          console.error('SSE connection error:', error);
+          
+          // Check if connection was closed (readyState 2 = CLOSED)
+          if (currentEventSource.readyState === EventSource.CLOSED) {
+            // Connection closed - check if we have final text
+            if (finalText) {
+              // We have the final response, update the message
+              updateChatMessage(currentResponseId, `
+                <div class="agent-response">
+                  ${formatAgentResponse(finalText)}
+                </div>
+                ${toolExecutions.length > 0 ? `
+                  <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; color: #94a3b8; font-size: 0.85em;">
+                    Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
+                  </div>
+                ` : ''}
+              `);
+            } else {
+              // No final text yet - connection may have timed out
+              updateChatMessage(currentResponseId, `
+                <div style="color: #fbbf24; padding: 10px; background: #78350f; border-radius: 4px; margin-top: 10px;">
+                  ⚠️ Connection closed. The agent may still be processing. Try refreshing or asking again.
+                </div>
+              `);
+            }
+            
+            // Re-enable input
+            input.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+            input.focus();
+          }
+          
+          currentEventSource.close();
+          currentEventSource = null;
+        };
 
-        // Scroll to bottom
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        // Wait a bit for events, then check if we got a final response
+        setTimeout(() => {
+          if (currentEventSource && finalText) {
+            currentEventSource.close();
+            currentEventSource = null;
+            
+            // Re-enable input
+            input.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+            input.focus();
+          }
+        }, 5000);
 
       } catch (error) {
         // Remove loading indicator
-        removeChatMessage(loadingId);
+        if (currentResponseId) {
+          removeChatMessage(currentResponseId);
+        }
         
         // Add error message
         addChatMessage('assistant', `<div style="color: #ef4444;">Error: ${escapeHtml(error.message)}</div>`);
-      } finally {
+        
         // Re-enable input and button
         input.disabled = false;
         sendBtn.disabled = false;
         sendBtn.textContent = 'Send';
         input.focus();
       }
+    }
+
+    function handleAgentEvent(event, toolExecutions) {
+      const messagesDiv = document.getElementById('chat-messages');
+      
+      switch (event.type) {
+        case 'agent:step':
+          updateChatMessage(currentResponseId, 
+            `<div class="agent-thinking">
+              <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+              Reasoning step ${event.data.step}/${event.data.maxSteps}...
+            </div>`);
+          break;
+          
+        case 'tool:start':
+          const toolInfo = {
+            toolName: event.data.toolName,
+            params: event.data.parameters,
+            startTime: Date.now()
+          };
+          toolExecutions.push(toolInfo);
+          
+          const paramsStr = Object.entries(event.data.parameters || {})
+            .map(([k, v]) => `${k}=${typeof v === 'string' ? v.substring(0, 30) : JSON.stringify(v).substring(0, 30)}`)
+            .join(', ');
+          
+          const toolHtml = `
+            <div data-tool-name="${escapeHtml(event.data.toolName)}" style="margin-top: 8px; padding: 8px 10px; background: #1e3a8a; border-radius: 4px; font-size: 0.85em;">
+              <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #60a5fa;"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
+              <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
+              ${paramsStr ? `<div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">${escapeHtml(paramsStr)}</div>` : ''}
+              <div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                Executing...
+              </div>
+            </div>
+          `;
+          
+          // Append tool execution to current message
+          const toolMessageDiv = document.getElementById(currentResponseId);
+          if (toolMessageDiv) {
+            const currentContent = toolMessageDiv.innerHTML;
+            toolMessageDiv.innerHTML = currentContent + toolHtml;
+          } else {
+            updateChatMessage(currentResponseId, 
+              `<div class="agent-thinking">
+                <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                Thinking...
+              </div>${toolHtml}`);
+          }
+          break;
+          
+        case 'tool:complete':
+          const tool = toolExecutions.find(t => t.toolName === event.data.toolName);
+          const duration = event.data.durationMs || (tool ? Date.now() - tool.startTime : 0);
+          const statusIcon = event.data.success ? '✅' : '❌';
+          const statusColor = event.data.success ? '#10b981' : '#ef4444';
+          
+          // Find and update the tool execution div
+          const completeMessageDiv = document.getElementById(currentResponseId);
+          if (completeMessageDiv) {
+            const toolDivs = completeMessageDiv.querySelectorAll('div[data-tool-name]');
+            const toolDiv = Array.from(toolDivs).find(d => 
+              d.getAttribute('data-tool-name') === event.data.toolName
+            );
+            
+            if (toolDiv) {
+              const successIcon = event.data.success 
+                ? '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #10b981;"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
+                : '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #ef4444;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
+              toolDiv.innerHTML = `
+                ${successIcon}
+                <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
+                <span style="color: ${statusColor}; margin-left: 8px; font-size: 0.9em;">${event.data.success ? 'Completed' : 'Failed'}</span>
+                <div style="color: #94a3b8; margin-top: 4px; font-size: 0.85em;">
+                  <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+                  ${duration}ms
+                </div>
+                ${event.data.error ? `<div style="color: #ef4444; margin-top: 4px; font-size: 0.85em;">${escapeHtml(event.data.error)}</div>` : ''}
+              `;
+            }
+          }
+          break;
+          
+        case 'agent:final':
+          // Parse markdown and convert to styled HTML
+          const formattedText = formatAgentResponse(event.data.text || 'No response');
+          const finalHtml = `
+            <div class="agent-response">
+              ${formattedText}
+            </div>
+            ${toolExecutions.length > 0 ? `
+              <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; color: #94a3b8; font-size: 0.85em;">
+                Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''} in ${(event.data.durationMs || 0) / 1000}s
+              </div>
+            ` : ''}
+          `;
+          
+          updateChatMessage(currentResponseId, finalHtml);
+          
+          // Scroll to bottom
+          messagesDiv.scrollTop = messagesDiv.scrollHeight;
+          
+          // Close SSE connection
+          if (currentEventSource) {
+            currentEventSource.close();
+            currentEventSource = null;
+          }
+          
+          // Re-enable input
+          const input = document.getElementById('chat-input');
+          const sendBtn = document.getElementById('chat-send-btn');
+          input.disabled = false;
+          sendBtn.disabled = false;
+          sendBtn.textContent = 'Send';
+          input.focus();
+          break;
+      }
+    }
+
+    function updateChatMessage(messageId, newContent) {
+      const messageDiv = document.getElementById(messageId);
+      if (messageDiv) {
+        messageDiv.innerHTML = newContent;
+        // Scroll to bottom
+        const messagesDiv = document.getElementById('chat-messages');
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      }
+    }
+
+    function formatAgentResponse(text) {
+      if (!text) return '';
+      
+      // Split into lines for processing
+      const lines = text.split('\n');
+      let html = '';
+      let inList = false;
+      let currentList = '';
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        // Handle headers (###)
+        if (line.startsWith('### ')) {
+          // Close any open list
+          if (inList) {
+            html += '<ul>' + currentList + '</ul>';
+            currentList = '';
+            inList = false;
+          }
+          
+          // Parse "### Node: name (IP: x.x.x.x)"
+          const headerMatch = line.match(/^### Node: (.+?) \(IP: (.+?)\)/);
+          if (headerMatch) {
+            html += `<h3>${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
+          } else {
+            // Regular header
+            const headerText = line.replace(/^### /, '');
+            html += `<h3>${escapeHtml(headerText)}</h3>`;
+          }
+          continue;
+        }
+        
+        // Handle list items (- **label**: value)
+        if (line.startsWith('- ')) {
+          if (!inList) {
+            inList = true;
+            currentList = '';
+          }
+          
+          // Parse "- **label**: value" or "- label: value"
+          const listMatch = line.match(/^- \*\*(.+?)\*\*:\s*(.+)$/) || line.match(/^- (.+?):\s*(.+)$/);
+          if (listMatch) {
+            const label = escapeHtml(listMatch[1]);
+            const value = escapeHtml(listMatch[2]);
+            currentList += `<li><span class="temp-label">${label}:</span> <span class="temp-value">${value}</span></li>`;
+          } else {
+            // Fallback for other list formats
+            const listText = escapeHtml(line.replace(/^- /, ''));
+            currentList += `<li>${listText}</li>`;
+          }
+          continue;
+        }
+        
+        // Close list if we hit a non-list line
+        if (inList && line) {
+          html += '<ul>' + currentList + '</ul>';
+          currentList = '';
+          inList = false;
+        }
+        
+        // Handle regular text (remove ** and style)
+        if (line) {
+          let processedLine = escapeHtml(line);
+          // Remove ** and style the text
+          processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
+          html += `<p style="margin: 8px 0;">${processedLine}</p>`;
+        } else {
+          // Empty line
+          if (!inList) {
+            html += '<br>';
+          }
+        }
+      }
+      
+      // Close any remaining list
+      if (inList) {
+        html += '<ul>' + currentList + '</ul>';
+      }
+      
+      return html;
     }
 
     function addChatMessage(role, content, isLoading = false) {
@@ -669,12 +1000,13 @@
       const messageDiv = document.createElement('div');
       messageDiv.id = messageId;
       messageDiv.style.cssText = `
-        margin-bottom: 20px;
-        padding: 15px;
+        margin-bottom: 12px;
+        padding: 10px 14px;
         border-radius: 8px;
+        max-width: 75%;
         ${role === 'user' 
-          ? 'background: #1e3a8a; margin-left: 20%; text-align: right;' 
-          : 'background: #1e293b; margin-right: 20%;'}
+          ? 'background: #1e3a8a; margin-left: auto; text-align: right;' 
+          : 'background: #1e293b; margin-right: auto;'}
       `;
 
       if (role === 'user') {

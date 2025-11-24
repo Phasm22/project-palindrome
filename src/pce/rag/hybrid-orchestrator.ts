@@ -32,6 +32,11 @@ export interface HybridOrchestratorConfig {
  * Hybrid Orchestrator
  * Coordinates query analysis, parallel retrieval, fusion, and generation
  */
+interface CacheEntry {
+  response: HybridRAGResponse;
+  timestamp: number;
+}
+
 export class HybridOrchestrator {
   private queryAnalyzer: QueryAnalyzer;
   private retrievalService: RetrievalService;
@@ -39,6 +44,8 @@ export class HybridOrchestrator {
   private fusionEngine: FusionEngine;
   private generationService: GenerationService;
   private config: HybridOrchestratorConfig;
+  private cache: Map<string, CacheEntry> = new Map();
+  private cacheTTL = 30000; // 30 seconds for common queries
 
   constructor(
     queryAnalyzer: QueryAnalyzer,
@@ -72,6 +79,14 @@ export class HybridOrchestrator {
         aclGroup: userACLGroup,
       });
 
+      // Check cache for common queries (temperature, status checks, etc.)
+      const cacheKey = `${userQuery.toLowerCase().trim()}:${userACLGroup}`;
+      const cached = this.cache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
+        pceLogger.debug("Cache hit for RAG query", { query: userQuery.slice(0, 50) });
+        return cached.response;
+      }
+
       // Step 0: Check for exact-match VM/container names before semantic search
       // This improves recall for queries like "what is vm-123" or "where is container-456"
       const exactMatchResult = await this.tryExactMatchFallback(userQuery, userACLGroup);
@@ -79,6 +94,8 @@ export class HybridOrchestrator {
         pceLogger.info("Exact match found, bypassing semantic search", {
           query: userQuery.slice(0, 100),
         });
+        // Cache exact match results
+        this.cache.set(cacheKey, { response: exactMatchResult, timestamp: Date.now() });
         return exactMatchResult;
       }
 
@@ -112,6 +129,16 @@ export class HybridOrchestrator {
 
       // Log counters
       pceLogger.logCounters();
+
+      // Cache response for common query patterns (temperature, status, etc.)
+      const isCacheable = this.isCacheableQuery(userQuery);
+      if (isCacheable) {
+        this.cache.set(cacheKey, { response, timestamp: Date.now() });
+        // Clean old cache entries periodically
+        if (this.cache.size > 100) {
+          this.cleanCache();
+        }
+      }
 
       return response;
     } catch (error: any) {
@@ -660,6 +687,35 @@ export class HybridOrchestrator {
         error: error.message,
       });
       return null;
+    }
+  }
+
+  /**
+   * Check if query is cacheable (deterministic queries like temperature, status)
+   */
+  private isCacheableQuery(query: string): boolean {
+    const lowerQuery = query.toLowerCase();
+    const cacheablePatterns = [
+      /temperature/i,
+      /temp/i,
+      /status/i,
+      /health/i,
+      /uptime/i,
+      /all nodes/i,
+      /all the nodes/i,
+    ];
+    return cacheablePatterns.some(pattern => pattern.test(lowerQuery));
+  }
+
+  /**
+   * Clean old cache entries
+   */
+  private cleanCache() {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (now - entry.timestamp > this.cacheTTL) {
+        this.cache.delete(key);
+      }
     }
   }
 }

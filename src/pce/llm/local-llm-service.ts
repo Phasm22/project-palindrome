@@ -54,38 +54,53 @@ export class LocalLLMService {
       }
       messages.push({ role: "user", content: prompt });
 
-      const response = await fetch(`${this.config.baseUrl}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      // Add timeout to prevent hanging requests
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      
+      try {
+        const response = await fetch(`${this.config.baseUrl}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: this.config.model,
+            messages,
+            options: {
+              temperature: this.config.temperature,
+              num_predict: this.config.maxTokens,
+            },
+            stream: false,
+          }),
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Ollama API error: ${response.status} ${errorText}`);
+        }
+
+        const data = await response.json();
+        const content = data.message?.content;
+
+        if (!content) {
+          throw new Error("No content in Ollama response");
+        }
+
+        pceLogger.debug("Generated local LLM response", {
           model: this.config.model,
-          messages,
-          options: {
-            temperature: this.config.temperature,
-            num_predict: this.config.maxTokens,
-          },
-          stream: false,
-        }),
-      });
+          responseLength: content.length,
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Ollama API error: ${response.status} ${errorText}`);
+        return content;
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error("Ollama request timed out after 60 seconds");
+        }
+        throw fetchError;
       }
-
-      const data = await response.json();
-      const content = data.message?.content;
-
-      if (!content) {
-        throw new Error("No content in Ollama response");
-      }
-
-      pceLogger.debug("Generated local LLM response", {
-        model: this.config.model,
-        responseLength: content.length,
-      });
-
-      return content;
     } catch (error: any) {
       pceLogger.error("Failed to generate local LLM response", { error: error.message });
       throw error;

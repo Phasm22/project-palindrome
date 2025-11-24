@@ -12,6 +12,8 @@ import type { ApiHistoryPayload, ApiQueryResponse, DependencyHealthCheck, Health
 import { ApiRateLimiter, type RateLimitConfig } from "./rate-limiter";
 import { ContextHistoryStore } from "./history-store";
 import { transformHybridContext } from "./context-transformer";
+import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
+import { runAgent } from "../../agent/runner";
 
 type BunServer = ReturnType<typeof Bun.serve>;
 
@@ -95,6 +97,7 @@ export class PceApiServer {
       hostname: "0.0.0.0", // Bind to all interfaces (IPv4) for Docker access
       port: this.options.port,
       fetch: (req, server) => this.handleRequest(req, server),
+      idleTimeout: 255, // Maximum allowed (4.25 minutes) for long-running agent queries
     });
 
     pceLogger.info("PCE API server started", {
@@ -211,6 +214,16 @@ export class PceApiServer {
 
     if (req.method === "POST" && url.pathname === "/api/dashboard/query/cypher") {
       return await this.handleDashboardCypherQuery(req);
+    }
+
+    // Agent streaming endpoint (SSE)
+    if (req.method === "GET" && url.pathname === "/api/agent/stream") {
+      return await this.handleAgentStream(req);
+    }
+
+    // Agent query endpoint (triggers agent with tool calling)
+    if (req.method === "POST" && url.pathname === "/api/agent/query") {
+      return await this.handleAgentQuery(req);
     }
 
     return this.jsonResponse(404, { error: "Not Found" });
@@ -981,6 +994,133 @@ export class PceApiServer {
       sources: sanitizedSources,
       context: sanitizedContext,
     };
+  }
+
+  /**
+   * Handle agent query (triggers agent execution)
+   */
+  private async handleAgentQuery(req: Request): Promise<Response> {
+    try {
+      const body = await req.json() as {
+        query?: string;
+        userId?: string;
+        aclGroup?: string;
+        sessionId?: string;
+      };
+
+      if (!body.query) {
+        return this.jsonResponse(400, { error: "Query is required" });
+      }
+
+      const userId = body.userId || "dashboard-user";
+      const aclGroup = (body.aclGroup || "admin") as ACLGroup;
+      const sessionId = body.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+      // Start agent execution in background (non-blocking)
+      runAgent(body.query, {
+        userId,
+        aclGroup,
+        ragBaseUrl: `http://localhost:${this.options.port}`,
+        sessionId,
+      }).catch((error: any) => {
+        pceLogger.error("Agent execution error", { error: error.message, sessionId });
+      });
+
+      // Return immediately with sessionId so client can connect to SSE stream
+      return this.jsonResponse(200, {
+        success: true,
+        sessionId,
+        message: "Agent query started. Connect to /api/agent/stream?sessionId=" + sessionId + " to receive events.",
+      });
+    } catch (error: any) {
+      pceLogger.error("Agent query endpoint error", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle Server-Sent Events (SSE) stream for agent events
+   */
+  private async handleAgentStream(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const sessionId = url.searchParams.get("sessionId") || undefined;
+
+    // Create SSE stream
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        
+        // Send initial connection message
+        controller.enqueue(encoder.encode(": connected\n\n"));
+
+        // Keepalive interval to prevent connection timeout
+        const keepaliveInterval = setInterval(() => {
+          try {
+            // Check if controller is still open before sending keepalive
+            if (controller.desiredSize !== null) {
+              controller.enqueue(encoder.encode(": keepalive\n\n"));
+            } else {
+              // Controller closed, stop keepalive
+              clearInterval(keepaliveInterval);
+            }
+          } catch (error) {
+            // Connection closed, stop keepalive
+            clearInterval(keepaliveInterval);
+          }
+        }, 5000); // Send keepalive every 5 seconds
+
+        // Subscribe to event bus
+        const eventBus = AgentEventBus.getInstance();
+        const unsubscribe = eventBus.onEvent((event: AgentEvent) => {
+          // Filter by sessionId if provided
+          if (sessionId && event.sessionId !== sessionId) {
+            return;
+          }
+
+          try {
+            // Format as SSE: "data: {json}\n\n"
+            const data = `data: ${JSON.stringify(event)}\n\n`;
+            controller.enqueue(encoder.encode(data));
+            
+            // If this is the final event, close the stream after a short delay
+            if (event.type === "agent:final") {
+              setTimeout(() => {
+                clearInterval(keepaliveInterval);
+                unsubscribe();
+                try {
+                  // Check if controller is still open before closing
+                  if (controller.desiredSize !== null) {
+                    controller.close();
+                  }
+                } catch (error: any) {
+                  // Controller may already be closed (e.g., client disconnected), ignore
+                  // This is expected behavior when client closes connection
+                }
+              }, 1000);
+            }
+          } catch (error: any) {
+            pceLogger.error("Error encoding SSE event", { error: error.message });
+          }
+        });
+
+        // Handle client disconnect
+        req.signal.addEventListener("abort", () => {
+          clearInterval(keepaliveInterval);
+          unsubscribe();
+          controller.close();
+        });
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no", // Disable nginx buffering
+      },
+    });
   }
 }
 

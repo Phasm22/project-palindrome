@@ -114,6 +114,43 @@ async function executeWithPolicies(
 /**
  * Formats tool execution results for user-friendly CLI output
  */
+/**
+ * Handle streaming agent events for CLI output
+ */
+function handleStreamEvent(event: any): void {
+  switch (event.type) {
+    case "agent:step":
+      console.log(`\n[Step ${event.data.step}/${event.data.maxSteps}]`);
+      break;
+      
+    case "tool:start":
+      console.log(`\n🔧 Executing: ${event.data.toolName}`);
+      if (event.data.parameters) {
+        const params = Object.entries(event.data.parameters)
+          .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+          .join(", ");
+        if (params) console.log(`   Parameters: ${params}`);
+      }
+      break;
+      
+    case "tool:complete":
+      if (event.data.success) {
+        console.log(`✅ ${event.data.toolName} completed (${event.data.durationMs}ms)`);
+      } else {
+        console.log(`❌ ${event.data.toolName} failed: ${event.data.error}`);
+      }
+      break;
+      
+    case "agent:final":
+      // Final response will be printed after stream closes
+      break;
+      
+    default:
+      // Ignore other event types
+      break;
+  }
+}
+
 function formatToolOutput(result: ExecutionResult, toolName: string): string {
   if (result.error) {
     return `❌ Error: ${result.error}`;
@@ -199,9 +236,10 @@ if (args[0] === "hello") {
   
   const prompt = nonFlagArgs.join(" ");
   if (!prompt) {
-    console.log("Usage: agent pce [--yes|--auto-approve] \"your question\"");
+    console.log("Usage: agent pce [--yes|--auto-approve] [--stream] \"your question\"");
     console.log("\nFlags:");
     console.log("  --yes, --auto-approve    Auto-approve high-risk operations (write actions)");
+    console.log("  --stream                 Stream events in real-time via SSE");
     process.exit(1);
   }
 
@@ -210,6 +248,7 @@ if (args[0] === "hello") {
     // This allows the LLM to autonomously select and execute OPNsense tools
     const userId = process.env.PCE_USER_ID || "default-user";
     const aclGroup = process.env.PCE_ACL_GROUP || "viewer";
+    const useStream = flags.stream || process.env.PCE_STREAM === "true";
     
     // Handle confirmation for write operations
     const autoApprove = flags.yes || flags["auto-approve"] || process.env.PCE_AUTO_APPROVE_HIGH_RISK_TOOLS === "true";
@@ -224,15 +263,59 @@ if (args[0] === "hello") {
       return confirmHighRiskPrompt(info);
     };
     
-    // Use runAgent which includes tool calling, RAG context, and LLM reasoning
-    const response = await runAgent(prompt, {
-      userId,
-      aclGroup,
-      ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
-      confirmHighRisk,
-    });
+    if (useStream) {
+      // Streaming mode: Start agent and consume SSE events
+      const apiUrl = process.env.PCE_API_URL || "http://localhost:4000";
+      const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      
+      // Start agent in background
+      const agentPromise = runAgent(prompt, {
+        userId,
+        aclGroup,
+        ragBaseUrl: apiUrl,
+        confirmHighRisk,
+        sessionId,
+      });
+      
+      // Connect to SSE stream
+      const eventSource = new EventSource(`${apiUrl}/api/agent/stream?sessionId=${sessionId}`);
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const agentEvent = JSON.parse(event.data);
+          handleStreamEvent(agentEvent);
+        } catch (error: any) {
+          console.error("Error parsing SSE event:", error.message);
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error("SSE connection error:", error);
+        eventSource.close();
+      };
+      
+      // Wait for agent to complete
+      const response = await agentPromise;
+      
+      // Give SSE a moment to flush final events
+      await new Promise(resolve => setTimeout(resolve, 500));
+      eventSource.close();
+      
+      if (response.text) {
+        console.log("\n" + response.text);
+      }
+    } else {
+      // Non-streaming mode: traditional execution
+      const response = await runAgent(prompt, {
+        userId,
+        aclGroup,
+        ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
+        confirmHighRisk,
+      });
+      
+      console.log(response.text);
+    }
     
-    console.log(response.text);
     process.exit(0);
   } catch (error: any) {
     console.error("Error:", error.message);
