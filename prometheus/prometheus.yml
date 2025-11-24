@@ -8,7 +8,8 @@ global:
 scrape_configs:
   - job_name: 'pce-api'
     static_configs:
-      - targets: ['host.docker.internal:4000']
+      # With host network mode, use localhost to access PCE API
+      - targets: ['localhost:4000']
         labels:
           service: 'pce-api'
           component: 'api-server'

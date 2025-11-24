@@ -92,6 +92,7 @@ export class PceApiServer {
     }
 
     this.server = Bun.serve({
+      hostname: "0.0.0.0", // Bind to all interfaces (IPv4) for Docker access
       port: this.options.port,
       fetch: (req, server) => this.handleRequest(req, server),
     });
@@ -144,7 +145,15 @@ export class PceApiServer {
     if (req.method === "GET" && url.pathname === "/metrics") {
       // Check if Prometheus format is requested
       const acceptHeader = req.headers.get("accept") || "";
-      if (acceptHeader.includes("application/openmetrics-text") || url.searchParams.get("format") === "prometheus") {
+      const formatParam = url.searchParams.get("format");
+      // Also check URL directly as fallback
+      const urlString = req.url.toLowerCase();
+      const wantsPrometheus = 
+        acceptHeader.includes("application/openmetrics-text") || 
+        formatParam === "prometheus" ||
+        urlString.includes("format=prometheus");
+      
+      if (wantsPrometheus) {
         return this.handlePrometheusMetrics();
       }
       return this.handleMetrics();
@@ -191,7 +200,20 @@ export class PceApiServer {
       return await this.handleReasoningTrace(req, url.pathname);
     }
 
-    return new Response("Not Found", { status: 404 });
+    // Unified query endpoints
+    if (req.method === "POST" && url.pathname === "/api/dashboard/query/rag") {
+      return await this.handleDashboardRagQuery(req);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/dashboard/query/graph") {
+      return await this.handleDashboardGraphQuery(req);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/dashboard/query/cypher") {
+      return await this.handleDashboardCypherQuery(req);
+    }
+
+    return this.jsonResponse(404, { error: "Not Found" });
   }
 
   private async handleQuery(req: Request, server: BunServer): Promise<Response> {
@@ -217,7 +239,11 @@ export class PceApiServer {
 
     let payload: z.infer<typeof QueryRequestSchema>;
     try {
-      const body = await req.json();
+      const body = (await req.json()) as {
+        query?: string;
+        userId?: string;
+        aclGroup?: ACLGroup;
+      };
       payload = QueryRequestSchema.parse(body);
     } catch (error: any) {
       return this.jsonResponse(400, {
@@ -515,18 +541,22 @@ export class PceApiServer {
   private async handleOntologyGraph(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
-      const limit = parseInt(url.searchParams.get("limit") || "100");
+      const limitParam = url.searchParams.get("limit") || "100";
+      // Ensure limit is an integer, not a float
+      const limitValue = Math.floor(parseInt(limitParam, 10)) || 100;
       
       // Get graph store from dependencies (if available) or create new instance
       const graphStore = new Neo4jGraphStore();
       await graphStore.connect();
       const queryInterface = new GraphQueryInterface(graphStore);
       
+      // Use neo4j.int() to ensure integer type for LIMIT clause
+      const { int } = await import("neo4j-driver");
       const result = await queryInterface.executeQuery(`
         MATCH (n)-[r]->(m)
         RETURN n, r, m
         LIMIT $limit
-      `, { limit });
+      `, { limit: int(limitValue) });
 
       await graphStore.close();
       
@@ -541,19 +571,243 @@ export class PceApiServer {
     }
   }
 
+  private async handleDashboardRagQuery(req: Request): Promise<Response> {
+    try {
+      const body = (await req.json()) as {
+        query?: string;
+        userId?: string;
+        aclGroup?: ACLGroup;
+      };
+      const { query, userId = "dashboard-user", aclGroup = "viewer" } = body;
+
+      if (!query) {
+        return this.jsonResponse(400, { error: "Query is required" });
+      }
+
+      // Use orchestrator directly (dashboard queries bypass rate limiting)
+      const ragResponse = await this.orchestrator.query(query, aclGroup as ACLGroup);
+      
+      const context = transformHybridContext(ragResponse.context);
+      const apiResponse: ApiQueryResponse = {
+        answer: ragResponse.answer,
+        queryType: ragResponse.queryType,
+        fallbackMode: ragResponse.fallbackMode ?? null,
+        sources: ragResponse.sources,
+        metadata: ragResponse.metadata,
+        fusionMetrics: ragResponse.fusionMetrics,
+        context,
+        sTotalScore: ragResponse.sTotalScore ?? ragResponse.fusionMetrics?.avgTotalScore ?? null,
+      };
+
+      const safeResponse = this.sanitizeResponse(apiResponse);
+      
+      return this.jsonResponse(200, {
+        success: true,
+        data: safeResponse,
+      });
+    } catch (error: any) {
+      if (error instanceof AccessDeniedError) {
+        return this.jsonResponse(error.statusCode, {
+          success: false,
+          error: error.code,
+          details: error.details,
+        });
+      }
+      pceLogger.error("Failed to execute RAG query", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleDashboardGraphQuery(req: Request): Promise<Response> {
+    try {
+      const body = (await req.json()) as {
+        queryType?: string;
+        param?: string;
+        param2?: string;
+      };
+      const { queryType, param, param2 } = body;
+
+      if (!queryType || !param) {
+        return this.jsonResponse(400, { error: "queryType and param are required" });
+      }
+
+      const graphStore = new Neo4jGraphStore();
+      await graphStore.connect();
+      const queryInterface = new GraphQueryInterface(graphStore);
+
+      let result;
+      switch (queryType) {
+        case "findByIdOrName":
+          result = await queryInterface.findEntitiesByIdOrName(param);
+          break;
+        case "findByType":
+          result = await queryInterface.getEntitiesByType(param);
+          break;
+        case "findByPurpose":
+          result = await queryInterface.findByPurpose(param);
+          break;
+        case "findByRole":
+          result = await queryInterface.findByRole(param);
+          break;
+        case "findDependencies":
+          result = await queryInterface.findDependencies(param);
+          break;
+        case "findDependents":
+          result = await queryInterface.findDependents(param);
+          break;
+        case "findPath":
+          if (!param2) {
+            await graphStore.close();
+            return this.jsonResponse(400, { error: "param2 is required for findPath" });
+          }
+          result = await queryInterface.findPath(param, param2);
+          break;
+        case "findHostedEntities":
+          result = await queryInterface.findHostedEntities(param);
+          break;
+        default:
+          await graphStore.close();
+          return this.jsonResponse(400, { error: `Unknown query type: ${queryType}` });
+      }
+
+      await graphStore.close();
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: {
+          nodes: result.nodes,
+          relationships: result.relationships,
+          paths: result.paths,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to execute graph query", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleDashboardCypherQuery(req: Request): Promise<Response> {
+    try {
+      const body = (await req.json()) as {
+        cypher?: string;
+        limit?: number;
+      };
+      const { cypher, limit = 100 } = body;
+
+      if (!cypher) {
+        return this.jsonResponse(400, { error: "Cypher query is required" });
+      }
+
+      const graphStore = new Neo4jGraphStore();
+      await graphStore.connect();
+      const queryInterface = new GraphQueryInterface(graphStore);
+
+      // Use neo4j.int() for limit if provided
+      const { int } = await import("neo4j-driver");
+      const params: Record<string, any> = {};
+      if (limit) {
+        params.limit = int(Math.floor(parseInt(String(limit), 10)) || 100);
+      }
+
+      const result = await queryInterface.executeQuery(cypher, params);
+      await graphStore.close();
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: {
+          nodes: result.nodes,
+          relationships: result.relationships,
+          paths: result.paths,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to execute Cypher query", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
   private async handleVectorStats(req: Request): Promise<Response> {
     try {
       const vectorStore = new QdrantVectorStore();
-      const embeddingService = new EmbeddingService();
+      const collectionInfo = await vectorStore.getCollectionInfo();
+      const collectionName = vectorStore.getCollectionName();
+      const client = vectorStore.getClient();
       
-      // Get collection info from Qdrant
-      // This is a simplified version - you may need to adjust based on Qdrant client API
-      const collectionName = process.env.QDRANT_COLLECTION || "pce_chunks";
+      // Get total points count
+      const totalChunks = collectionInfo.points_count || 0;
+      
+      // Get collection configuration
+      const vectorSize = collectionInfo.config?.params?.vectors?.size || 0;
+      const distance = collectionInfo.config?.params?.vectors?.distance || "unknown";
+      
+      // Get chunk distribution by source type and ACL group
+      // Use scroll to sample chunks and analyze distribution
+      const sampleSize = Math.min(1000, totalChunks); // Sample up to 1000 chunks
+      const scrollResult = await client.scroll(collectionName, {
+        limit: sampleSize,
+        with_payload: {
+          include: ["source_type", "acl_group", "timestamp", "version_hash"],
+        },
+        with_vector: false,
+      });
+      
+      const points = scrollResult.points || [];
+      
+      // Analyze distribution
+      const bySourceType: Record<string, number> = {};
+      const byAclGroup: Record<string, number> = {};
+      const byVersionHash: Record<string, number> = {};
+      let latestTimestamp: string | null = null;
+      
+      for (const point of points) {
+        const payload = point.payload as any;
+        const sourceType = payload?.source_type || "unknown";
+        const aclGroup = payload?.acl_group || "unknown";
+        const versionHash = payload?.version_hash || "unknown";
+        const timestamp = payload?.timestamp;
+        
+        bySourceType[sourceType] = (bySourceType[sourceType] || 0) + 1;
+        byAclGroup[aclGroup] = (byAclGroup[aclGroup] || 0) + 1;
+        byVersionHash[versionHash] = (byVersionHash[versionHash] || 0) + 1;
+        
+        if (timestamp && (!latestTimestamp || timestamp > latestTimestamp)) {
+          latestTimestamp = timestamp;
+        }
+      }
+      
+      // Extrapolate distribution percentages (if we sampled)
+      const sampleRatio = totalChunks > 0 ? points.length / totalChunks : 1;
+      const distribution = {
+        bySourceType: Object.fromEntries(
+          Object.entries(bySourceType).map(([key, count]) => [
+            key,
+            {
+              count: sampleRatio < 1 ? Math.round(count / sampleRatio) : count,
+              percentage: points.length > 0 ? ((count / points.length) * 100).toFixed(1) : "0",
+            },
+          ])
+        ),
+        byAclGroup: Object.fromEntries(
+          Object.entries(byAclGroup).map(([key, count]) => [
+            key,
+            {
+              count: sampleRatio < 1 ? Math.round(count / sampleRatio) : count,
+              percentage: points.length > 0 ? ((count / points.length) * 100).toFixed(1) : "0",
+            },
+          ])
+        ),
+        uniqueVersions: Object.keys(byVersionHash).length,
+      };
       
       return this.jsonResponse(200, {
         collectionName,
-        message: "Vector stats endpoint - full implementation pending Qdrant client methods",
-        // TODO: Add actual Qdrant collection stats
+        totalChunks,
+        vectorSize,
+        distance,
+        lastIngestion: latestTimestamp,
+        distribution,
+        sampleSize: points.length,
+        sampleRatio: sampleRatio < 1 ? (sampleRatio * 100).toFixed(1) + "%" : "100%",
       });
     } catch (error: any) {
       pceLogger.error("Failed to fetch vector stats", { error: error.message });
@@ -579,20 +833,32 @@ export class PceApiServer {
         queryType: ragResponse.queryType,
         sTotalScore: ragResponse.sTotalScore,
         fusionMetrics: ragResponse.fusionMetrics,
-        sources: ragResponse.sources.map(s => ({
+        sources: ragResponse.sources.map((s) => ({
           sourcePath: s.sourcePath,
           score: s.score,
           chunkId: s.chunkId,
           textPreview: s.text?.slice(0, 200),
         })),
-        context: {
-          semanticChunks: ragResponse.context.semanticChunks.map(c => ({
-            sourcePath: c.sourcePath,
-            score: c.score,
-            textPreview: c.text?.slice(0, 200),
-          })),
-          structuralPaths: ragResponse.context.structuralPaths,
-        },
+        context: ragResponse.context
+          ? {
+              semanticChunks: ragResponse.context.semanticChunks.map(({ chunk, score }) => ({
+                id: chunk.id,
+                text: chunk.text,
+                score,
+                sourcePath: chunk.metadata.sourcePath,
+                versionHash: chunk.metadata.versionHash,
+                aclGroup: chunk.metadata.aclGroup,
+                chunkIndex: chunk.metadata.chunkIndex,
+                totalChunks: chunk.metadata.totalChunks,
+              })),
+              structuralPaths: ragResponse.context.structuralPaths,
+              provenance: ragResponse.context.provenance,
+            }
+          : {
+              semanticChunks: [],
+              structuralPaths: [],
+              provenance: [],
+            },
       });
     } catch (error: any) {
       pceLogger.error("Failed to run RAG diagnostics", { error: error.message });

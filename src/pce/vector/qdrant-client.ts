@@ -46,7 +46,7 @@ export class QdrantVectorStore {
         
         if (existingSize === vectorSize) {
           pceLogger.info(`Collection '${this.collectionName}' already exists with correct dimension ${vectorSize}`);
-          return;
+        return;
         } else {
           pceLogger.warn(
             `Collection '${this.collectionName}' exists with dimension ${existingSize}, but expected ${vectorSize}. ` +
@@ -488,6 +488,20 @@ export class QdrantVectorStore {
       pceLogger.error("Failed to get collection info", { error: error.message });
       throw error;
     }
+  }
+
+  /**
+   * Get collection name (for external access)
+   */
+  getCollectionName(): string {
+    return this.collectionName;
+  }
+
+  /**
+   * Get Qdrant client (for external access to scroll/query methods)
+   */
+  getClient(): QdrantClient {
+    return this.client;
   }
 
   /**

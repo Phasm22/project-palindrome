@@ -68,8 +68,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
-    ports:
-      - "9090:9090"  # Prometheus UI
+    network_mode: host  # Use host network to access localhost:4000 directly
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
@@ -85,13 +84,13 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
-    # Prometheus scrapes metrics from PCE API and provides query API for Grafana
+    # Using host network mode allows Prometheus to access localhost:4000 directly
+    # Note: With host network, ports are not mapped - Prometheus UI is at localhost:9090
 
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
-    ports:
-      - "3000:3000"  # Grafana UI
+    network_mode: host  # Use host network to access Prometheus at localhost:9090
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -111,13 +110,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    depends_on:
-      prometheus:
-        condition: service_healthy
-    # Grafana uses Prometheus as data source (Prometheus scrapes from PCE API)
-    # Prometheus is configured to scrape: http://host.docker.internal:4000/metrics?format=prometheus
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # Using host network mode - Grafana UI is at localhost:3000
+    # Can access Prometheus at localhost:9090 directly
 
 volumes:
   qdrant_storage:

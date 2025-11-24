@@ -578,8 +578,8 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         // If status fetch fails (e.g., 403 ACL), return basic info only
         return {
           node: nodeName,
-          status: node.status,
-          level: node.level,
+        status: node.status,
+        level: node.level,
           cpu: undefined,
           maxcpu: undefined,
           mem: undefined,
@@ -1160,7 +1160,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         return { config: configData, result };
       } catch (error: any) {
         return null;
-      }
+    }
     };
     
     // Try with the specified type first
@@ -1202,8 +1202,8 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
             statusCode,
             error: errorMessage 
           });
-        }
       }
+    }
     }
     
     vmName = config.name || config.hostname || config['hostname'] || null;
@@ -1282,13 +1282,13 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           } catch (statusError: any) {
             // Status check failed, but continue to try network-get-interfaces
             pceLogger.debug("Agent status check failed", { error: statusError.message });
-          }
+    }
 
           // Query guest agent for network interfaces
-          const agentResult = await client.get(
-            `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
-          );
-          const interfaces = agentResult.data.data?.result || [];
+      const agentResult = await client.get(
+        `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
+      );
+      const interfaces = agentResult.data.data?.result || [];
 
           if (!Array.isArray(interfaces) || interfaces.length === 0) {
             resolutionLayers.push({
@@ -1297,13 +1297,13 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
               method: "Guest agent responded but no network interfaces found",
             });
           } else {
-            for (const iface of interfaces) {
-              if (iface["ip-addresses"] && Array.isArray(iface["ip-addresses"])) {
-                for (const ip of iface["ip-addresses"]) {
-                  if (
-                    ip["ip-address-type"] === "ipv4" &&
-                    !ip["ip-address"].startsWith("127.")
-                  ) {
+      for (const iface of interfaces) {
+        if (iface["ip-addresses"] && Array.isArray(iface["ip-addresses"])) {
+          for (const ip of iface["ip-addresses"]) {
+            if (
+              ip["ip-address-type"] === "ipv4" &&
+              !ip["ip-address"].startsWith("127.")
+            ) {
                     resolvedIP = ip["ip-address"];
                     finalSource = "guest_agent";
                     resolutionLayers.push({
@@ -1324,9 +1324,9 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
                 layer: 2,
                 source: "guest_agent",
                 method: "Guest agent responded but no valid IPv4 addresses found (only loopback or IPv6)",
-              });
-            }
-          }
+          });
+        }
+      }
         } catch (error: any) {
           const statusCode = error.response?.status;
           const errorData = error.response?.data;
@@ -1426,7 +1426,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
             method: `No matching DHCP lease found (searched by MAC: ${macs.join(", ")}, hostname: ${hostname || "N/A"})`,
           });
         }
-      } catch (error: any) {
+    } catch (error: any) {
         resolutionLayers.push({
           layer: 3,
           source: "opnsense_dhcp",
@@ -1568,17 +1568,17 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     // Build response with resolution details
     const allIPs = resolvedIP ? [resolvedIP] : [];
     
-    return {
-      data: {
-        node,
-        vmid,
-        type,
-        status: vmStatus,
+      return {
+        data: {
+          node,
+          vmid,
+          type,
+          status: vmStatus,
         name: vmName || undefined,
         ip: resolvedIP || null,
-        ips: allIPs,
-        hostname: hostname || undefined,
-        macs: macs.length > 0 ? macs : undefined,
+          ips: allIPs,
+          hostname: hostname || undefined,
+          macs: macs.length > 0 ? macs : undefined,
         source: finalSource,
         resolutionLayers,
         ...(isOffline && { 
@@ -1587,10 +1587,10 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         ...(!resolvedIP && {
           message: "IP resolution failed through all 4 layers. No IP address found.",
           suggestion: "Check VM configuration, ensure guest agent is enabled (for QEMU), or verify DHCP leases.",
-        }),
-      },
-      metadata: configResult?.metadata || { timestamp: Date.now(), durationMs: 0 },
-    };
+          }),
+        },
+        metadata: configResult?.metadata || { timestamp: Date.now(), durationMs: 0 },
+      };
   }
 
   /**

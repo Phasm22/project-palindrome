@@ -163,21 +163,70 @@ export async function runAgent(
       decisions: [],
     };
 
-    // Capture RAG context for first step
+    // Capture RAG context for first step with detailed chunk information
     if (step === 0 && ragPayload) {
+      const topChunks = ragPayload.context?.semanticChunks?.slice(0, 5).map(chunk => ({
+        sourcePath: chunk.sourcePath || "unknown",
+        score: chunk.score || 0,
+        textPreview: chunk.text?.slice(0, 200) || "",
+        chunkId: chunk.chunkId,
+      })) || [];
+      
       reasoningStep.ragContext = {
         queryType: ragPayload.queryType,
         sTotalScore: ragPayload.sTotalScore,
         sourcesCount: ragPayload.sources?.length || 0,
+        topChunks,
+        structuralPaths: ragPayload.context?.structuralPaths?.length || 0,
+        fusionMetrics: ragPayload.fusionMetrics ? {
+          vectorResults: ragPayload.fusionMetrics.vectorResults || 0,
+          graphResults: ragPayload.fusionMetrics.graphResults || 0,
+          fusedResults: ragPayload.fusionMetrics.fusedResults || 0,
+          prunedResults: ragPayload.fusionMetrics.prunedResults || 0,
+        } : undefined,
       };
+      
+      // Add decision for RAG usage
       reasoningStep.decisions.push({
         type: "rag_used",
-        description: `RAG context retrieved: ${ragPayload.queryType} query with ${ragPayload.sources?.length || 0} sources`,
+        description: `RAG context retrieved: ${ragPayload.queryType} query with ${ragPayload.sources?.length || 0} sources, ${topChunks.length} top chunks`,
         metadata: {
           sTotalScore: ragPayload.sTotalScore,
           queryType: ragPayload.queryType,
+          topChunkScores: topChunks.map(c => c.score),
         },
       });
+      
+      // Add decision for graph usage if fusion metrics show graph results
+      if (ragPayload.fusionMetrics?.graphResults && ragPayload.fusionMetrics.graphResults > 0) {
+        reasoningStep.graphContext = {
+          entitiesFound: ragPayload.fusionMetrics.graphResults,
+          relationshipsFound: 0, // Not directly available in fusion metrics
+          queryType: ragPayload.queryType,
+        };
+        reasoningStep.decisions.push({
+          type: "graph_used",
+          description: `Graph retrieval found ${ragPayload.fusionMetrics.graphResults} entities`,
+          metadata: {
+            graphResults: ragPayload.fusionMetrics.graphResults,
+          },
+        });
+      }
+      
+      // Add decision for fusion if both vector and graph were used
+      if (ragPayload.fusionMetrics && 
+          ragPayload.fusionMetrics.vectorResults > 0 && 
+          ragPayload.fusionMetrics.graphResults > 0) {
+        reasoningStep.decisions.push({
+          type: "fusion_used",
+          description: `Fusion combined ${ragPayload.fusionMetrics.vectorResults} vector results with ${ragPayload.fusionMetrics.graphResults} graph results`,
+          metadata: {
+            vectorResults: ragPayload.fusionMetrics.vectorResults,
+            graphResults: ragPayload.fusionMetrics.graphResults,
+            fusedResults: ragPayload.fusionMetrics.fusedResults,
+          },
+        });
+      }
     }
 
     const messages = [
@@ -404,10 +453,18 @@ export async function runAgent(
           });
         }
 
-        // Capture tool execution in reasoning step
+        // Capture tool execution in reasoning step with enhanced details
         const dataPreview = result.data && typeof result.data === 'object' 
-          ? JSON.stringify(result.data).slice(0, 200) 
-          : String(result.data || '').slice(0, 200);
+          ? JSON.stringify(result.data).slice(0, 500) 
+          : String(result.data || '').slice(0, 500);
+        
+        const dataSize = result.data && typeof result.data === 'object'
+          ? JSON.stringify(result.data).length
+          : String(result.data || '').length;
+        
+        const resultType = result.data 
+          ? (Array.isArray(result.data) ? 'array' : typeof result.data)
+          : undefined;
         
         reasoningStep.toolCalls.push({
           toolName,
@@ -416,6 +473,8 @@ export async function runAgent(
             success: !result.error,
             error: result.error,
             dataPreview,
+            dataSize,
+            resultType,
           },
           durationMs: result.durationMs ?? 0,
         });

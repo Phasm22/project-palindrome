@@ -9,16 +9,45 @@ export interface ReasoningStep {
   toolCalls: Array<{
     toolName: string;
     parameters: Record<string, any>;
-    result?: { success: boolean; error?: string; dataPreview?: string };
+    result?: { 
+      success: boolean; 
+      error?: string; 
+      dataPreview?: string;
+      dataSize?: number;
+      resultType?: string;
+    };
     durationMs?: number;
   }>;
   ragContext?: {
     queryType: string;
     sTotalScore: number | null;
     sourcesCount: number;
+    topChunks?: Array<{
+      sourcePath: string;
+      score: number;
+      textPreview: string;
+      chunkId?: string;
+    }>;
+    structuralPaths?: number;
+    fusionMetrics?: {
+      vectorResults: number;
+      graphResults: number;
+      fusedResults: number;
+      prunedResults: number;
+    };
+  };
+  graphContext?: {
+    entitiesFound: number;
+    relationshipsFound: number;
+    queryType?: string;
+    topEntities?: Array<{
+      name: string;
+      type: string;
+      score?: number;
+    }>;
   };
   decisions: Array<{
-    type: "duplicate_detected" | "limit_reached" | "fallback" | "tool_choice" | "rag_used";
+    type: "duplicate_detected" | "limit_reached" | "fallback" | "tool_choice" | "rag_used" | "graph_used" | "fusion_used";
     description: string;
     metadata?: Record<string, any>;
   }>;

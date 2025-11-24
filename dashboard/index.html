@@ -198,6 +198,8 @@
       <div class="tab" onclick="switchTab('reasoning', this)">Reasoning Traces</div>
       <div class="tab" onclick="switchTab('graph', this)">Ontology Graph</div>
       <div class="tab" onclick="switchTab('rag', this)">RAG Diagnostics</div>
+      <div class="tab" onclick="switchTab('query', this)">Query</div>
+      <div class="tab" onclick="switchTab('chat', this)">Chat</div>
     </div>
 
     <!-- Overview Tab -->
@@ -254,6 +256,92 @@
         <div id="rag-results" class="loading">Enter a query and click Test Query</div>
       </div>
     </div>
+
+    <!-- Query Tab -->
+    <div id="query" class="tab-content">
+      <div class="panel">
+        <h2>Unified Query Interface</h2>
+        
+        <!-- Query Type Selector -->
+        <div style="margin-bottom: 15px;">
+          <label style="color: #94a3b8; margin-right: 15px;">Query Type:</label>
+          <select id="query-type" style="padding: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-right: 15px;">
+            <option value="rag">Natural Language (RAG)</option>
+            <option value="graph">Graph Query</option>
+            <option value="cypher">Cypher Query</option>
+          </select>
+        </div>
+
+        <!-- RAG Query Section -->
+        <div id="rag-query-section">
+          <textarea id="query-input" placeholder="Ask a question in natural language..." style="width: 100%; min-height: 100px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; margin-bottom: 10px; resize: vertical;"></textarea>
+          <button class="refresh-btn" onclick="executeQuery()">Query</button>
+        </div>
+
+        <!-- Graph Query Builder -->
+        <div id="graph-query-section" style="display: none;">
+          <div style="margin-bottom: 15px;">
+            <label style="color: #94a3b8; display: block; margin-bottom: 5px;">Query Type:</label>
+            <select id="graph-query-type" style="width: 100%; padding: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
+              <option value="findByIdOrName">Find by ID or Name</option>
+              <option value="findByType">Find by Entity Type</option>
+              <option value="findByPurpose">Find by Purpose</option>
+              <option value="findByRole">Find by Role</option>
+              <option value="findDependencies">Find Dependencies</option>
+              <option value="findDependents">Find Dependents</option>
+              <option value="findPath">Find Path Between Entities</option>
+              <option value="findHostedEntities">Find Hosted Entities</option>
+            </select>
+          </div>
+          <input type="text" id="graph-query-param" placeholder="Enter search term, entity ID, or parameter..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
+          <input type="text" id="graph-query-param2" placeholder="Second parameter (for findPath)..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px; display: none;">
+          <button class="refresh-btn" onclick="executeGraphQuery()">Query Graph</button>
+        </div>
+
+        <!-- Cypher Query Section -->
+        <div id="cypher-query-section" style="display: none;">
+          <textarea id="cypher-input" placeholder="MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50" style="width: 100%; min-height: 150px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; margin-bottom: 10px; resize: vertical;"></textarea>
+          <button class="refresh-btn" onclick="executeCypherQuery()">Execute Cypher</button>
+        </div>
+
+        <!-- Results -->
+        <div id="query-results" style="margin-top: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; min-height: 200px;">
+          <div style="color: #94a3b8;">Results will appear here...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Tab -->
+    <div id="chat" class="tab-content">
+      <div class="panel" style="display: flex; flex-direction: column; height: calc(100vh - 200px); max-height: 800px;">
+        <h2 style="margin-bottom: 15px;">Chat with Palindrome</h2>
+        
+        <!-- Chat Messages Area -->
+        <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; margin-bottom: 15px; min-height: 400px;">
+          <div style="color: #94a3b8; text-align: center; padding: 20px;">
+            Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.
+          </div>
+        </div>
+
+        <!-- Chat Input Area -->
+        <div style="display: flex; gap: 10px; align-items: flex-end;">
+          <textarea 
+            id="chat-input" 
+            placeholder="Ask me anything about your infrastructure..." 
+            style="flex: 1; min-height: 60px; max-height: 200px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: inherit; resize: vertical;"
+            onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); }"
+          ></textarea>
+          <button 
+            class="refresh-btn" 
+            onclick="sendChatMessage()" 
+            id="chat-send-btn"
+            style="padding: 12px 24px; min-width: 80px;"
+          >
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -281,6 +369,337 @@
       if (tabName === 'executions') loadToolExecutions();
       if (tabName === 'reasoning') loadReasoningTraces();
       if (tabName === 'graph') loadGraph();
+      if (tabName === 'query') setupQueryInterface();
+      if (tabName === 'chat') {
+        // Focus chat input when switching to chat tab
+        setTimeout(() => {
+          const chatInput = document.getElementById('chat-input');
+          if (chatInput) chatInput.focus();
+        }, 100);
+      }
+    }
+
+    // Setup query interface
+    function setupQueryInterface() {
+      const queryTypeSelect = document.getElementById('query-type');
+      if (!queryTypeSelect) return;
+
+      // Handle query type change
+      queryTypeSelect.addEventListener('change', function() {
+        const type = this.value;
+        document.getElementById('rag-query-section').style.display = type === 'rag' ? 'block' : 'none';
+        document.getElementById('graph-query-section').style.display = type === 'graph' ? 'block' : 'none';
+        document.getElementById('cypher-query-section').style.display = type === 'cypher' ? 'block' : 'none';
+      });
+
+      // Handle graph query type change (for findPath second param)
+      const graphQueryType = document.getElementById('graph-query-type');
+      if (graphQueryType) {
+        graphQueryType.addEventListener('change', function() {
+          const param2Input = document.getElementById('graph-query-param2');
+          if (param2Input) {
+            param2Input.style.display = this.value === 'findPath' ? 'block' : 'none';
+          }
+        });
+      }
+    }
+
+    // Execute RAG query
+    async function executeQuery() {
+      const query = document.getElementById('query-input').value;
+      if (!query) {
+        alert('Please enter a query');
+        return;
+      }
+
+      const resultsDiv = document.getElementById('query-results');
+      resultsDiv.innerHTML = '<div class="loading">Querying...</div>';
+
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/query/rag`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, userId: 'dashboard-user', aclGroup: 'admin' })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        const data = result.data || result;
+
+        let html = '<h3 style="color: #60a5fa; margin-bottom: 15px;">Answer</h3>';
+        html += `<div style="color: #e2e8f0; margin-bottom: 20px; padding: 15px; background: #1e293b; border-radius: 4px;">${data.answer || 'No answer provided'}</div>`;
+
+        if (data.sources && data.sources.length > 0) {
+          html += '<h3 style="color: #60a5fa; margin-bottom: 15px;">Sources</h3>';
+          html += '<table><thead><tr><th>Source</th><th>Score</th><th>Preview</th></tr></thead><tbody>';
+          data.sources.forEach(source => {
+            html += `<tr>
+              <td>${source.sourcePath || source.chunkId || 'Unknown'}</td>
+              <td>${(source.score || 0).toFixed(4)}</td>
+              <td>${(source.text || '').substring(0, 100)}...</td>
+            </tr>`;
+          });
+          html += '</tbody></table>';
+        }
+
+        if (data.sTotalScore !== null && data.sTotalScore !== undefined) {
+          html += `<div style="margin-top: 15px; color: #94a3b8;">Total Score: ${data.sTotalScore.toFixed(4)}</div>`;
+        }
+
+        resultsDiv.innerHTML = html;
+      } catch (error) {
+        resultsDiv.innerHTML = `<div class="error">Failed to execute query: ${error.message}</div>`;
+      }
+    }
+
+    // Execute graph query
+    async function executeGraphQuery() {
+      const queryType = document.getElementById('graph-query-type').value;
+      const param = document.getElementById('graph-query-param').value;
+      const param2 = document.getElementById('graph-query-param2').value;
+
+      if (!param) {
+        alert('Please enter a parameter');
+        return;
+      }
+
+      const resultsDiv = document.getElementById('query-results');
+      resultsDiv.innerHTML = '<div class="loading">Querying graph...</div>';
+
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/query/graph`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queryType, param, param2: param2 || undefined })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        const data = result.data || result;
+
+        let html = '<h3 style="color: #60a5fa; margin-bottom: 15px;">Graph Query Results</h3>';
+        html += `<div style="color: #94a3b8; margin-bottom: 15px;">Found ${data.nodes?.length || 0} nodes, ${data.relationships?.length || 0} relationships</div>`;
+
+        if (data.nodes && data.nodes.length > 0) {
+          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Nodes</h4>';
+          html += '<table><thead><tr><th>ID</th><th>Type</th><th>Attributes</th></tr></thead><tbody>';
+          data.nodes.slice(0, 50).forEach(node => {
+            html += `<tr>
+              <td>${node.id || 'N/A'}</td>
+              <td>${node.type || 'N/A'}</td>
+              <td><pre style="max-width: 400px; overflow: auto; font-size: 0.85em;">${JSON.stringify(node.attributes || {}, null, 2)}</pre></td>
+            </tr>`;
+          });
+          html += '</tbody></table>';
+        }
+
+        if (data.relationships && data.relationships.length > 0) {
+          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Relationships</h4>';
+          html += '<table><thead><tr><th>From</th><th>Type</th><th>To</th></tr></thead><tbody>';
+          data.relationships.slice(0, 50).forEach(rel => {
+            html += `<tr>
+              <td>${rel.from || 'N/A'}</td>
+              <td>${rel.type || 'N/A'}</td>
+              <td>${rel.to || 'N/A'}</td>
+            </tr>`;
+          });
+          html += '</tbody></table>';
+        }
+
+        resultsDiv.innerHTML = html;
+      } catch (error) {
+        resultsDiv.innerHTML = `<div class="error">Failed to execute graph query: ${error.message}</div>`;
+      }
+    }
+
+    // Execute Cypher query
+    async function executeCypherQuery() {
+      const cypher = document.getElementById('cypher-input').value;
+      if (!cypher) {
+        alert('Please enter a Cypher query');
+        return;
+      }
+
+      const resultsDiv = document.getElementById('query-results');
+      resultsDiv.innerHTML = '<div class="loading">Executing Cypher query...</div>';
+
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/query/cypher`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cypher, limit: 100 })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        const data = result.data || result;
+
+        let html = '<h3 style="color: #60a5fa; margin-bottom: 15px;">Cypher Query Results</h3>';
+        html += `<div style="color: #94a3b8; margin-bottom: 15px;">Found ${data.nodes?.length || 0} nodes, ${data.relationships?.length || 0} relationships</div>`;
+
+        if (data.nodes && data.nodes.length > 0) {
+          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Nodes</h4>';
+          html += '<table><thead><tr><th>ID</th><th>Type</th><th>Attributes</th></tr></thead><tbody>';
+          data.nodes.slice(0, 100).forEach(node => {
+            html += `<tr>
+              <td>${node.id || 'N/A'}</td>
+              <td>${node.type || 'N/A'}</td>
+              <td><pre style="max-width: 400px; overflow: auto; font-size: 0.85em;">${JSON.stringify(node.attributes || {}, null, 2)}</pre></td>
+            </tr>`;
+          });
+          html += '</tbody></table>';
+        }
+
+        if (data.relationships && data.relationships.length > 0) {
+          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Relationships</h4>';
+          html += '<table><thead><tr><th>From</th><th>Type</th><th>To</th></tr></thead><tbody>';
+          data.relationships.slice(0, 100).forEach(rel => {
+            html += `<tr>
+              <td>${rel.from || 'N/A'}</td>
+              <td>${rel.type || 'N/A'}</td>
+              <td>${rel.to || 'N/A'}</td>
+            </tr>`;
+          });
+          html += '</tbody></table>';
+        }
+
+        resultsDiv.innerHTML = html;
+      } catch (error) {
+        resultsDiv.innerHTML = `<div class="error">Failed to execute Cypher query: ${error.message}</div>`;
+      }
+    }
+
+    // Chat functionality
+    async function sendChatMessage() {
+      const input = document.getElementById('chat-input');
+      const sendBtn = document.getElementById('chat-send-btn');
+      const messagesDiv = document.getElementById('chat-messages');
+      
+      const message = input.value.trim();
+      if (!message) return;
+
+      // Disable input and button
+      input.disabled = true;
+      sendBtn.disabled = true;
+      sendBtn.textContent = 'Sending...';
+
+      // Add user message to chat
+      addChatMessage('user', message);
+      input.value = '';
+
+      // Add loading indicator
+      const loadingId = addChatMessage('assistant', 'Thinking...', true);
+
+      try {
+        const response = await fetch(`${API_URL}/api/dashboard/query/rag`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            query: message, 
+            userId: 'dashboard-user', 
+            aclGroup: 'admin' 
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        const data = result.data || result;
+
+        // Remove loading indicator
+        removeChatMessage(loadingId);
+
+        // Add assistant response
+        let answerHtml = `<div style="color: #e2e8f0; line-height: 1.6; white-space: pre-wrap;">${escapeHtml(data.answer || 'No answer provided')}</div>`;
+        
+        // Add sources if available
+        if (data.sources && data.sources.length > 0) {
+          answerHtml += `<div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #334155;">`;
+          answerHtml += `<div style="color: #94a3b8; font-size: 0.9em; margin-bottom: 10px;">Sources:</div>`;
+          data.sources.slice(0, 3).forEach((source, idx) => {
+            const sourcePath = source.sourcePath || source.chunkId || 'Unknown';
+            const score = (source.score || 0).toFixed(3);
+            answerHtml += `<div style="color: #94a3b8; font-size: 0.85em; margin-bottom: 5px;">${idx + 1}. ${escapeHtml(sourcePath)} (${score})</div>`;
+          });
+          if (data.sources.length > 3) {
+            answerHtml += `<div style="color: #94a3b8; font-size: 0.85em;">... and ${data.sources.length - 3} more</div>`;
+          }
+          answerHtml += `</div>`;
+        }
+
+        addChatMessage('assistant', answerHtml);
+
+        // Scroll to bottom
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+      } catch (error) {
+        // Remove loading indicator
+        removeChatMessage(loadingId);
+        
+        // Add error message
+        addChatMessage('assistant', `<div style="color: #ef4444;">Error: ${escapeHtml(error.message)}</div>`);
+      } finally {
+        // Re-enable input and button
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        input.focus();
+      }
+    }
+
+    function addChatMessage(role, content, isLoading = false) {
+      const messagesDiv = document.getElementById('chat-messages');
+      const messageId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+      
+      // Remove welcome message if it exists
+      const welcomeMsg = messagesDiv.querySelector('div[style*="text-align: center"]');
+      if (welcomeMsg) welcomeMsg.remove();
+
+      const messageDiv = document.createElement('div');
+      messageDiv.id = messageId;
+      messageDiv.style.cssText = `
+        margin-bottom: 20px;
+        padding: 15px;
+        border-radius: 8px;
+        ${role === 'user' 
+          ? 'background: #1e3a8a; margin-left: 20%; text-align: right;' 
+          : 'background: #1e293b; margin-right: 20%;'}
+      `;
+
+      if (role === 'user') {
+        messageDiv.innerHTML = `<div style="color: #e2e8f0; white-space: pre-wrap;">${escapeHtml(content)}</div>`;
+      } else {
+        messageDiv.innerHTML = isLoading 
+          ? `<div style="color: #94a3b8; font-style: italic;">${content}</div>`
+          : content;
+      }
+
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+      return messageId;
+    }
+
+    function removeChatMessage(messageId) {
+      const message = document.getElementById(messageId);
+      if (message) message.remove();
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
     }
 
     async function loadExecutionStats() {
@@ -670,7 +1089,7 @@
       document.getElementById('rag-results').innerHTML = '<div class="loading">Testing query...</div>';
       
       try {
-        const response = await fetch(`${API_URL}/api/dashboard/rag-diagnostics?query=${encodeURIComponent(query)}`);
+        const response = await fetch(`${API_URL}/api/dashboard/rag-diagnostics?query=${encodeURIComponent(query)}&aclGroup=admin`);
         const data = await response.json();
         
         const html = `

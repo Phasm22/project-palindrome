@@ -24,6 +24,14 @@ A lightweight dashboard for monitoring Palindrome agent activity, tool execution
 
 ## Features
 
+### Query Tab
+The Query tab provides an interactive interface for querying both RAG and graph data. See [QUERY_TAB_GUIDE.md](./QUERY_TAB_GUIDE.md) for detailed usage instructions.
+
+**Quick Start:**
+- **Natural Language (RAG):** Ask questions in plain English
+- **Graph Query:** Use preset queries to explore the knowledge graph
+- **Cypher Query:** Write custom Neo4j Cypher queries
+
 ### Overview Tab
 - **Execution Statistics**: Total executions, error rate, average duration
 - **Cluster Status**: Proxmox cluster health (when implemented)
@@ -57,6 +65,9 @@ The dashboard calls these endpoints from the PCE API:
 - `GET /api/dashboard/cluster-status` - Proxmox cluster status
 - `GET /api/dashboard/ontology-graph` - Neo4j graph data
 - `GET /api/dashboard/rag-diagnostics?query=...` - RAG query diagnostics
+- `POST /api/dashboard/query/rag` - Execute RAG query
+- `POST /api/dashboard/query/graph` - Execute graph query
+- `POST /api/dashboard/query/cypher` - Execute Cypher query
 - `GET /health` - System health check
 
 ## Next Steps
