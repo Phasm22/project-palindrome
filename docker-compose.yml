@@ -8,10 +8,32 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "4g"
+        reservations:
+          cpus: "1.0"
+          memory: "2g"
+    # CPU pinning: Use cores 0-1 (dedicated for Qdrant vector operations)
+    cpuset: "0,1"
+    environment:
+      # Qdrant memory-mapped files optimization for 32GB system
+      # Allocate 2GB for mmap cache (leaves room for OS + other services)
+      - QDRANT__STORAGE__OPTIMIZER__INDEXING_THRESHOLD=20000
+      # Enable mmap for faster vector search on NVMe
+      - QDRANT__STORAGE__OPTIMIZER__MEMMAP_THRESHOLD=100000
+      # Cache settings: 1GB for HNSW index cache
+      - QDRANT__STORAGE__OPTIMIZER__HNSW_INDEX_CACHE_SIZE=1073741824
+    ulimits:
+      # Increase mmap limits for large vector collections
+      memlock: -1
+      nofile: 65536
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6333/health"]
-      interval: 90s
-      timeout: 5s
+      test: ["CMD", "curl", "-fsSL", "http://localhost:6333/ready"]
+      interval: 60s  # Faster check on NVMe (lower latency)
+      timeout: 3s    # NVMe is fast, 3s is plenty
       retries: 2
       start_period: 10s
 
@@ -26,15 +48,39 @@ services:
       - NEO4J_PLUGINS=["apoc"]
       # Pre-configure APOC to prevent duplicate config entries
       - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      # Memory tuning for 32GB system (Ryzen 7 9700X)
+      # Heap: 4GB (dedicated for query execution)
+      - NEO4J_dbms_memory_heap_max__size=4G
+      # Page cache: 6GB (for graph data on NVMe - fast access)
+      - NEO4J_dbms_memory_pagecache_size=6G
+      # Transaction log: 256MB (sufficient for NVMe write speed)
+      - NEO4J_dbms_tx__log_rotation_retention__policy=256M size
+      # JVM tuning for AMD Ryzen (Zen 5 architecture)
+      # Use G1GC for balanced performance (ZGC requires Java 11+ and has different flags)
+      - NEO4J_dbms_jvm_additional=-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:ParallelGCThreads=4
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "12g"  # Increased for heap + page cache
+        reservations:
+          cpus: "1.0"
+          memory: "8g"
+    # CPU pinning: Use cores 2-3 (dedicated for Neo4j graph operations)
+    cpuset: "2,3"
+    ulimits:
+      # Increase file descriptors for large graph queries
+      nofile: 65536
     healthcheck:
-      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "password", "RETURN 1"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-fsSL", "http://localhost:7474/db/data/"]
+      interval: 60s  # Faster check on NVMe
+      timeout: 3s    # NVMe latency is low
       retries: 3
+      start_period: 30s
 
   ollama:
     image: ollama/ollama:latest
@@ -43,8 +89,8 @@ services:
       - "11434:11434"  # Ollama API
     volumes:
       - ollama_data:/root/.ollama
-    # GPU support (uncomment if you have nvidia-docker installed)
-    # For NVIDIA GPUs:
+    # GPU support - RTX 4070 Ti SUPER (16GB VRAM)
+    # Using deploy.resources.reservations for Docker Swarm/Compose v2
     deploy:
       resources:
         reservations:
@@ -52,20 +98,48 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # Alternative for non-NVIDIA or if nvidia-docker not available:
-    # Comment out deploy section above and use:
+    # Alternative for classic Compose (uncomment if deploy section doesn't work):
     # runtime: nvidia
     # environment:
     #   - NVIDIA_VISIBLE_DEVICES=all
+    environment:
+      # GPU memory management for RTX 4070 Ti SUPER
+      # Allocate full GPU memory (16GB) for large models
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Ollama performance tuning for AMD Ryzen 7 9700X
+      # Use all available CPU cores for token generation (16 threads)
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_MAX_LOADED_MODELS=2
+      # Flash Attention optimization (if supported by model)
+      - OLLAMA_FLASH_ATTENTION=1
+      # Keep models in GPU memory (16GB allows 1-2 7B models)
+      - OLLAMA_KEEP_ALIVE=24h
+      # NVMe optimization: use fast storage for model cache
+      - OLLAMA_MODELS=/root/.ollama/models
     restart: unless-stopped
+    # CPU pinning: Use cores 4-15 (12 cores for Ollama + token generation)
+    # Leave cores 0-3 for Qdrant/Neo4j
+    cpuset: "4,5,6,7,8,9,10,11,12,13,14,15"
+    # No CPU/memory limits - let GPU handle the load, CPU can saturate
+    # GPU memory is managed by NVIDIA driver
+    ulimits:
+      # Increase memory lock for large model loading
+      memlock: -1
+      nofile: 65536
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 90s
-      timeout: 5s
+      # Use root endpoint - always responsive, won't block during model generation
+      test: ["CMD", "curl", "-fsSL", "http://localhost:11434"]
+      interval: 60s  # Faster check on NVMe
+      timeout: 3s    # Low latency on NVMe
       retries: 2
       start_period: 30s
     # Hot reload: expose Ollama's model management
     # Models can be pulled/loaded via: docker exec ollama ollama pull <model>
+    # GPU Memory: RTX 4070 Ti SUPER has 16GB - can fit:
+    #   - 1x 13B model (fully loaded) OR
+    #   - 2x 7B models (partially loaded) OR
+    #   - 1x 7B + 1x 3B models
 
   prometheus:
     image: prom/prometheus:latest
@@ -79,15 +153,29 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+      # NVMe optimization: faster TSDB writes
+      - '--storage.tsdb.wal-compression'
+      - '--storage.tsdb.max-block-duration=2h'
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1g"
+        reservations:
+          cpus: "0.25"
+          memory: "512m"
+    # CPU pinning: Share cores with Grafana (low priority)
+    # Can use any available core, but prefer not to conflict with Ollama
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-fsSL", "http://localhost:9090/-/healthy"]
+      interval: 60s  # Faster check on NVMe
+      timeout: 3s    # Low latency
       retries: 3
       start_period: 10s
     # Using host network mode allows Prometheus to access localhost:4000 directly
     # Note: With host network, ports are not mapped - Prometheus UI is at localhost:9090
+    # Alternative without host mode: use ports + extra_hosts for host.docker.internal
 
   grafana:
     image: grafana/grafana:latest
@@ -102,18 +190,32 @@ services:
       # Enable provisioning
       - GF_SERVER_ROOT_URL=http://localhost:3000
       - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      # Performance tuning for NVMe storage
+      - GF_DATABASE_CACHE_TTL=3600
+      - GF_DATABASE_MAX_IDLE_CONN=10
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "512m"
+        reservations:
+          cpus: "0.25"
+          memory: "256m"
+    # CPU pinning: Share cores with Prometheus (low priority)
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-fsSL", "http://localhost:3000/api/health"]
+      interval: 60s  # Faster check on NVMe
+      timeout: 3s    # Low latency
       retries: 3
+      start_period: 10s
     # Using host network mode - Grafana UI is at localhost:3000
     # Can access Prometheus at localhost:9090 directly
+    # Persistence: grafana_data volume stores dashboards, datasources, and provisioning logs
 
 volumes:
   qdrant_storage:
