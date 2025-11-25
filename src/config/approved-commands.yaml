@@ -71,6 +71,13 @@ hosts:
         - "journalctl -u {service} -n 50"
         - "tail -n 100 /var/log/{logfile}"
         - "ps aux | head -20"
+      proxmox:
+        - "pvesh get /nodes/{node}/qemu"
+        - "pvesh get /nodes/{node}/lxc"
+        - "pvesh get /nodes/{node}/status"
+        - "pvesh get /nodes/{node}/qemu --output-format json"
+        - "pvesh get /nodes/{node}/lxc --output-format json"
+        - "pvesh get /nodes/{node}/status --output-format json"
       maintenance:
         - "apt update"
         - "apt list --upgradable"
@@ -113,6 +120,13 @@ hosts:
         - "journalctl -u {service} -n 50"
         - "tail -n 100 /var/log/{logfile}"
         - "ps aux | head -20"
+      proxmox:
+        - "pvesh get /nodes/{node}/qemu"
+        - "pvesh get /nodes/{node}/lxc"
+        - "pvesh get /nodes/{node}/status"
+        - "pvesh get /nodes/{node}/qemu --output-format json"
+        - "pvesh get /nodes/{node}/lxc --output-format json"
+        - "pvesh get /nodes/{node}/status --output-format json"
       maintenance:
         - "apt update"
         - "apt list --upgradable"
@@ -155,6 +169,13 @@ hosts:
         - "journalctl -u {service} -n 50"
         - "tail -n 100 /var/log/{logfile}"
         - "ps aux | head -20"
+      proxmox:
+        - "pvesh get /nodes/{node}/qemu"
+        - "pvesh get /nodes/{node}/lxc"
+        - "pvesh get /nodes/{node}/status"
+        - "pvesh get /nodes/{node}/qemu --output-format json"
+        - "pvesh get /nodes/{node}/lxc --output-format json"
+        - "pvesh get /nodes/{node}/status --output-format json"
       maintenance:
         - "apt update"
         - "apt list --upgradable"

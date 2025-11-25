@@ -67,7 +67,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     });
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     return createToolSchema(this, ProxmoxReadOnlyParams, {
       examples: [
         {
@@ -111,7 +111,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     });
   }
 
-  getParameterSchema() {
+  override getParameterSchema() {
     return ProxmoxReadOnlyParams;
   }
 
@@ -201,7 +201,8 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         }
         const originalNodeResources = params.node;
         const normalizedNodeResources = await this.normalizeNodeName(client, params.node);
-        const resourcesResult = await this.getNodeResources(client, normalizedNodeResources);
+        const activeClientResources = this.apiClient || client;
+        const resourcesResult = await this.getNodeResources(activeClientResources, normalizedNodeResources);
         if (originalNodeResources !== normalizedNodeResources) {
           resourcesResult.data._hint = `Note: Node name "${originalNodeResources}" was normalized to "${normalizedNodeResources}". For future queries, use the exact node name "${normalizedNodeResources}" or call "list_nodes" first to see available nodes.`;
         }
@@ -213,7 +214,8 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         }
         const originalNodeDisks = params.node;
         const normalizedNodeDisks = await this.normalizeNodeName(client, params.node);
-        const disksResult = await this.getNodeDisks(client, normalizedNodeDisks);
+        const activeClientDisks = this.apiClient || client;
+        const disksResult = await this.getNodeDisks(activeClientDisks, normalizedNodeDisks);
         if (originalNodeDisks !== normalizedNodeDisks) {
           disksResult.data._hint = `Note: Node name "${originalNodeDisks}" was normalized to "${normalizedNodeDisks}". For future queries, use the exact node name "${normalizedNodeDisks}" or call "list_nodes" first to see available nodes.`;
         }
@@ -225,7 +227,8 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         }
         const originalNodeNetwork = params.node;
         const normalizedNodeNetwork = await this.normalizeNodeName(client, params.node);
-        const networkResult = await this.getNodeNetworkInterfaces(client, normalizedNodeNetwork);
+        const activeClientNetwork = this.apiClient || client;
+        const networkResult = await this.getNodeNetworkInterfaces(activeClientNetwork, normalizedNodeNetwork);
         if (originalNodeNetwork !== normalizedNodeNetwork) {
           networkResult.data._hint = `Note: Node name "${originalNodeNetwork}" was normalized to "${normalizedNodeNetwork}". For future queries, use the exact node name "${normalizedNodeNetwork}" or call "list_nodes" first to see available nodes.`;
         }
@@ -237,21 +240,25 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           return this.listVmsFromCluster(client, params.type);
         }
         // Normalize node name and capture original for hint
+        // normalizeNodeName may switch to an alternative cluster, updating this.apiClient
         const originalNodeName = params.node;
         const normalizedNode = await this.normalizeNodeName(client, params.node);
+        
+        // Use the updated client if it was switched to an alternative cluster
+        const activeClient = this.apiClient || client;
         
         // Try node-specific list first, but fallback to cluster_resources if it fails
         try {
           // If no type specified, query both qemu and lxc
           if (!params.type) {
-            const result = await this.listVmsBothTypes(client, normalizedNode);
+            const result = await this.listVmsBothTypes(activeClient, normalizedNode);
             // Add hint if node name was normalized
             if (originalNodeName !== normalizedNode) {
               result.data._hint = `Note: Node name "${originalNodeName}" was normalized to "${normalizedNode}". For future queries, use the exact node name "${normalizedNode}" or call "list_nodes" first to see available nodes.`;
             }
             return result;
           }
-          const result = await this.listVms(client, normalizedNode, params.type);
+          const result = await this.listVms(activeClient, normalizedNode, params.type);
           // Add hint if node name was normalized
           if (originalNodeName !== normalizedNode) {
             result.data._hint = `Note: Node name "${originalNodeName}" was normalized to "${normalizedNode}". For future queries, use the exact node name "${normalizedNode}" or call "list_nodes" first to see available nodes.`;
@@ -261,13 +268,13 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           // If node-specific list fails (e.g., 403), fallback to cluster_resources filtered by node
           const errorStatus = error?.response?.status || error?.status;
           if (errorStatus === 403 || errorStatus === 404) {
-            logger.warn("Node-specific list_vms failed, falling back to cluster_resources", {
+            pceLogger.warn("Node-specific list_vms failed, falling back to cluster_resources", {
               node: normalizedNode,
               originalNode: originalNodeName,
               errorStatus,
             });
-            // Use cluster_resources and filter by node
-            const clusterResult = await this.getClusterResources(client);
+            // Use cluster_resources and filter by node (use activeClient which may be from alternative cluster)
+            const clusterResult = await this.getClusterResources(activeClient);
             const allResources = clusterResult.data.resources || [];
             const filteredResources = allResources.filter((r: any) => {
               const nodeMatch = r.node?.toLowerCase() === normalizedNode.toLowerCase() ||
@@ -313,7 +320,9 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       );
     }
     // Normalize node name for VM actions too
+    // normalizeNodeName may switch to an alternative cluster, updating this.apiClient
     params.node = await this.normalizeNodeName(client, params.node);
+    const activeClientVm = this.apiClient || client;
     if (!params.vmid) {
       throw new Error(
         `vmid parameter required for VM actions. ` +
@@ -327,14 +336,14 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     if (!vmType) {
       try {
         // Try qemu first (most common)
-        await client.get(`/nodes/${params.node}/qemu/${params.vmid}/status/current`);
+        await activeClientVm.get(`/nodes/${params.node}/qemu/${params.vmid}/status/current`);
         vmType = "qemu";
       } catch (error: any) {
         // If qemu fails with 404/403/500, try lxc (500 can indicate wrong type)
         const status = error?.response?.status;
         if (status === 404 || status === 403 || status === 500) {
           try {
-            await client.get(`/nodes/${params.node}/lxc/${params.vmid}/status/current`);
+            await activeClientVm.get(`/nodes/${params.node}/lxc/${params.vmid}/status/current`);
             vmType = "lxc";
           } catch (lxcError: any) {
             // If both fail, default to qemu and let the error propagate
@@ -349,22 +358,22 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
     switch (action) {
       case "get_vm_status":
-        return this.getVmStatus(client, params.node, params.vmid, vmType);
+        return this.getVmStatus(activeClientVm, params.node, params.vmid, vmType);
 
       case "get_vm_config":
-        return this.getVmConfig(client, params.node, params.vmid, vmType);
+        return this.getVmConfig(activeClientVm, params.node, params.vmid, vmType);
 
       case "get_vm_network":
-        return this.getVmNetwork(client, params.node, params.vmid, vmType);
+        return this.getVmNetwork(activeClientVm, params.node, params.vmid, vmType);
 
       case "get_vm_snapshots":
-        return this.getVmSnapshots(client, params.node, params.vmid, vmType);
+        return this.getVmSnapshots(activeClientVm, params.node, params.vmid, vmType);
 
       case "get_vm_ip":
-        return this.getVmIP(client, params.node, params.vmid, vmType);
+        return this.getVmIP(activeClientVm, params.node, params.vmid, vmType);
 
       case "get_lxc_config":
-        return this.getLxcConfig(client, params.node, params.vmid);
+        return this.getLxcConfig(activeClientVm, params.node, params.vmid);
 
       default:
         throw new Error(`Unknown VM action: ${action}`);
@@ -521,10 +530,64 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       }
     }
 
-    // Step 6: Node not found - throw helpful error with available nodes
+    // Step 6: Node not found in primary cluster - try alternative endpoints
+    // Try alternative Proxmox endpoints based on node name (e.g., yin -> yin.prox:8006)
+    const alternativeEndpoints = this.getAlternativeEndpoints(nodeName);
+    for (const altEndpoint of alternativeEndpoints) {
+      try {
+        pceLogger.debug(`Trying alternative Proxmox endpoint for node "${nodeName}": ${altEndpoint.url}`);
+        // Get credentials - prefer node-specific, fallback to default
+        const normalizedNameForCreds = nodeName.toLowerCase().replace(/[_-]/g, '');
+        const nodeNameUpper = normalizedNameForCreds.toUpperCase();
+        const tokenId = altEndpoint.tokenId || process.env.PROXMOX_TOKEN_ID || this.getApiConfig().tokenId;
+        const tokenSecret = altEndpoint.tokenSecret || process.env[`${nodeNameUpper}_TOKEN_SECRET`] || process.env.PROXMOX_TOKEN_SECRET || this.getApiConfig().tokenSecret;
+        const verifySsl = this.getApiConfig().verifySsl;
+        
+        if (!tokenId || !tokenSecret) {
+          pceLogger.debug(`Skipping alternative endpoint ${altEndpoint.url}: missing credentials`);
+          continue;
+        }
+        
+        const altClient = new ProxmoxClient({
+          url: altEndpoint.url,
+          tokenId,
+          tokenSecret,
+          verifySsl,
+        });
+        
+        const result = await altClient.get("/nodes");
+        let nodes: any[] = [];
+        if (result?.data?.data) {
+          nodes = Array.isArray(result.data.data) ? result.data.data : [];
+        } else if (Array.isArray(result?.data)) {
+          nodes = result.data;
+        }
+        
+        // Try to find the node in this alternative cluster
+        const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
+        const searchNormalized = normalizeForMatch(nodeName);
+        const normalized = nodes.find(
+          (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
+        );
+        
+        if (normalized?.node) {
+          pceLogger.info(`Found node "${nodeName}" in alternative cluster: ${altEndpoint.url} (normalized to "${normalized.node}")`);
+          // Update the client to use this endpoint for future requests
+          this.apiClient = altClient;
+          return normalized.node;
+        } else {
+          pceLogger.debug(`Node "${nodeName}" not found in alternative cluster ${altEndpoint.url}. Found nodes: ${nodes.map((n: any) => n?.node).filter(Boolean).join(", ") || "none"}`);
+        }
+      } catch (altError: any) {
+        const statusCode = altError?.response?.status;
+        pceLogger.debug(`Alternative endpoint ${altEndpoint.url} failed: ${altError.message}${statusCode ? ` (HTTP ${statusCode})` : ''}`);
+        // Continue to next endpoint
+      }
+    }
+
+    // Step 7: Node not found in any cluster - throw helpful error
     try {
       const result = await client.get("/nodes");
-      // Handle various response structures defensively
       let nodes: any[] = [];
       if (result?.data?.data) {
         nodes = Array.isArray(result.data.data) ? result.data.data : [];
@@ -532,18 +595,51 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         nodes = result.data;
       }
       const availableNodes = nodes.filter((n: any) => n?.node).map((n: any) => n.node).join(", ");
-      const errorMsg = `Node "${nodeName}" not found in cluster. Available nodes: ${availableNodes || "none"}. ` +
-        `If "${nodeName}" is a standalone node, ensure PROXMOX_URL points to that node. ` +
+      const errorMsg = `Node "${nodeName}" not found in any accessible cluster. Available nodes in primary cluster: ${availableNodes || "none"}. ` +
+        `If "${nodeName}" is in a different cluster, ensure the appropriate PROXMOX_URL and credentials are configured. ` +
         `Current PROXMOX_URL: ${proxmoxUrl || "not set"}`;
       pceLogger.warn(errorMsg);
       throw new Error(errorMsg);
     } catch (error: any) {
       // If we can't even list nodes, throw a simpler error
-      if (error.message.includes("not found in cluster")) {
+      if (error.message.includes("not found")) {
         throw error;
       }
       throw new Error(`Node "${nodeName}" not found and could not validate against cluster. ${error.message}`);
     }
+  }
+
+  /**
+   * Get alternative Proxmox endpoints to try when a node isn't found in the primary cluster
+   * Returns array of endpoint configs based on node name patterns
+   */
+  private getAlternativeEndpoints(nodeName: string): Array<{ url: string; tokenId?: string; tokenSecret?: string }> {
+    const endpoints: Array<{ url: string; tokenId?: string; tokenSecret?: string }> = [];
+    const normalizedName = nodeName.toLowerCase().replace(/[_-]/g, '');
+    
+    // Map common node names to their likely endpoints
+    const nodeEndpointMap: Record<string, string> = {
+      'yin': 'https://yin.prox:8006',
+      'yang': 'https://yang.prox:8006',
+      'proxbig': 'https://proxBig.prox:8006',
+      'prox_big': 'https://proxBig.prox:8006',
+    };
+    
+    const endpoint = nodeEndpointMap[normalizedName];
+    if (endpoint) {
+      // Try to get node-specific credentials
+      const nodeNameUpper = normalizedName.toUpperCase().replace(/[_-]/g, '');
+      const tokenId = process.env.PROXMOX_TOKEN_ID || process.env[`${nodeNameUpper}_TOKEN_ID`];
+      const tokenSecret = process.env.PROXMOX_TOKEN_SECRET || process.env[`${nodeNameUpper}_TOKEN_SECRET`];
+      
+      endpoints.push({
+        url: endpoint,
+        tokenId: tokenId || undefined,
+        tokenSecret: tokenSecret || undefined,
+      });
+    }
+    
+    return endpoints;
   }
 
   /**
@@ -763,13 +859,14 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         if (error?.response?.status === 403) {
           pceLogger.warn(`403 error querying QEMU VMs on ${node} - may be permission issue`);
         }
-        return { data: { vms: [], count: 0 }, metadata: {}, error: error?.message };
+        // Return error object that can be checked later
+        return { data: { vms: [], count: 0 }, metadata: {}, _error: error };
       }),
       this.listVms(client, node, "lxc").catch((error: any) => {
         if (error?.response?.status === 403) {
           pceLogger.warn(`403 error querying LXC containers on ${node} - may be permission issue`);
         }
-        return { data: { vms: [], count: 0 }, metadata: {}, error: error?.message };
+        return { data: { vms: [], count: 0 }, metadata: {}, _error: error };
       }),
     ]);
 
@@ -779,8 +876,12 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     const allVms = [...(qemuData.vms || []), ...(lxcData.vms || [])];
     
     // Check if both failed with 403
-    const qemuError = qemuResult.status === "rejected" ? qemuResult.reason : (qemuResult.status === "fulfilled" && qemuResult.value.error ? qemuResult.value.error : null);
-    const lxcError = lxcResult.status === "rejected" ? lxcResult.reason : (lxcResult.status === "fulfilled" && lxcResult.value.error ? lxcResult.value.error : null);
+    const qemuError = qemuResult.status === "rejected" 
+      ? qemuResult.reason 
+      : (qemuResult.status === "fulfilled" && (qemuResult.value as any)._error ? (qemuResult.value as any)._error : null);
+    const lxcError = lxcResult.status === "rejected" 
+      ? lxcResult.reason 
+      : (lxcResult.status === "fulfilled" && (lxcResult.value as any)._error ? (lxcResult.value as any)._error : null);
     
     const has403Error = (qemuError?.response?.status === 403 || lxcError?.response?.status === 403) && allVms.length === 0;
     const both403 = qemuError?.response?.status === 403 && lxcError?.response?.status === 403;
@@ -919,7 +1020,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           const macMatch = value.match(
             /(?:hwaddr=|virtio=|model=)([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
           );
-          if (macMatch) {
+          if (macMatch && macMatch[1]) {
             macs.push(macMatch[1].toLowerCase());
           }
         }
@@ -992,8 +1093,11 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       if ((key.startsWith("net") || key.startsWith("ip")) && typeof value === "string") {
         // Match patterns like: ip=192.168.1.1/24, ip=10.0.0.1/8, etc.
         const staticIPMatch = value.match(/ip=([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:\/[0-9]{1,2})?)/);
-        if (staticIPMatch && !value.includes("ip=dhcp")) {
-          staticIPs.push(staticIPMatch[1].split("/")[0]); // Extract IP without CIDR
+        if (staticIPMatch && staticIPMatch[1] && !value.includes("ip=dhcp")) {
+          const ipPart = staticIPMatch[1].split("/")[0];
+          if (ipPart) {
+            staticIPs.push(ipPart); // Extract IP without CIDR
+          }
         }
       }
     }
@@ -1003,7 +1107,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   /**
    * Extract hostname from config
    */
-  private extractHostname(config: Record<string, any>): string | null {
+  private extractHostname(config: Record<string, any>): string | undefined {
     // Check common hostname fields
     if (config.hostname && typeof config.hostname === "string") {
       return config.hostname;
@@ -1015,11 +1119,11 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     if (config.searchdomain && typeof config.searchdomain === "string") {
       // Sometimes hostname is combined with searchdomain
       const parts = config.searchdomain.split(".");
-      if (parts.length > 0) {
+      if (parts.length > 0 && parts[0]) {
         return parts[0];
       }
     }
-    return null;
+    return undefined;
   }
 
   /**
@@ -1215,7 +1319,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         const macMatch = value.match(
           /(?:hwaddr=|virtio=|model=)([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/
         );
-        if (macMatch) {
+        if (macMatch && macMatch[1]) {
           macs.push(macMatch[1].toLowerCase());
         }
       }
@@ -1223,14 +1327,15 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
     const hostname = this.extractHostname(config);
     const resolutionLayers: Array<{ layer: number; source: string; ip?: string; method: string }> = [];
-    let resolvedIP: string | null = null;
+    let resolvedIP: string | undefined = undefined;
     let finalSource = "unknown";
 
     // ===== LAYER 1: Proxmox Config (LXC only) =====
     if (type === "lxc" && config) {
       const staticIPs = this.extractStaticIPs(config);
-      if (staticIPs.length > 0) {
-        resolvedIP = staticIPs[0];
+      const firstIP = staticIPs[0];
+      if (firstIP) {
+        resolvedIP = firstIP;
         finalSource = "proxmox_config";
         resolutionLayers.push({
           layer: 1,
@@ -1499,31 +1604,33 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
             return { node, attrs, score, hostname, nodeId, hasIP };
           }).filter(m => m.score > 0).sort((a, b) => b.score - a.score);
           
-          if (matches.length > 0) {
+          if (matches.length > 0 && matches[0]) {
             graphResult.nodes = [matches[0].node];
           }
         }
 
         if (graphResult.nodes.length > 0) {
           const entity = graphResult.nodes[0];
-          // Parse attributes if stored as JSON string
-          const attrs = typeof entity.attributes === 'string' 
-            ? JSON.parse(entity.attributes) 
-            : entity.attributes;
-          const topologyIP = attrs?.ip || entity.ip;
-          
-          if (topologyIP) {
-            // Handle array or single IP
-            const ipValue = Array.isArray(topologyIP) ? topologyIP[0] : topologyIP;
-            if (typeof ipValue === "string" && ipValue.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-              resolvedIP = ipValue;
-              finalSource = "topology";
-              resolutionLayers.push({
-                layer: 4,
-                source: "topology",
-                ip: resolvedIP,
-                method: `Found in topology graph by name: ${vmName} (matched: ${attrs.hostname || attrs.name || entity.id})`,
-              });
+          if (entity && entity.attributes) {
+            // Parse attributes if stored as JSON string
+            const attrs = typeof entity.attributes === 'string' 
+              ? JSON.parse(entity.attributes) 
+              : entity.attributes;
+            const topologyIP = attrs?.ip;
+            
+            if (topologyIP) {
+              // Handle array or single IP
+              const ipValue = Array.isArray(topologyIP) ? topologyIP[0] : topologyIP;
+              if (typeof ipValue === "string" && ipValue.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+                resolvedIP = ipValue;
+                finalSource = "topology";
+                resolutionLayers.push({
+                  layer: 4,
+                  source: "topology",
+                  ip: resolvedIP,
+                  method: `Found in topology graph by name: ${vmName} (matched: ${attrs?.hostname || attrs?.name || entity.id || "unknown"})`,
+                });
+              }
             }
           }
         }

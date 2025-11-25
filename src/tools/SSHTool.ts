@@ -375,6 +375,33 @@ export class SSHTool extends BaseTool {
     return expansions;
   }
 
+  /**
+   * Check if a command matches a template with placeholders
+   * Example: "pvesh get /nodes/yin/qemu" matches "pvesh get /nodes/{node}/qemu"
+   */
+  private matchesPlaceholderTemplate(actualCommand: string, template: string): boolean {
+    // If template has no placeholders, skip (already checked exact match)
+    if (!template.includes("{") || !template.includes("}")) {
+      return false;
+    }
+
+    // Build regex pattern: escape the template first, then replace {placeholder} with (.+)
+    // Step 1: Escape all special regex characters
+    let regexPattern = template.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    
+    // Step 2: Replace escaped \{placeholder\} with (.+)
+    regexPattern = regexPattern.replace(/\\\{[^}]+\\\}/g, "(.+)");
+
+    // Test if actual command matches the pattern
+    try {
+      const regex = new RegExp("^" + regexPattern + "$");
+      return regex.test(actualCommand);
+    } catch (error) {
+      // If regex construction fails, fall back to false
+      return false;
+    }
+  }
+
   private isCommandApproved(host: string, command: string): { approved: boolean; reason?: string; suggestions?: string[]; expandedCommand?: string } {
     const config = this.loadApprovedCommands();
     const resolvedHost = this.resolveHost(host);
@@ -402,12 +429,21 @@ export class SSHTool extends BaseTool {
         const commands = hostConfig.commands[category];
         // Handle both array and object formats from YAML
         const commandList = Array.isArray(commands) ? commands : Object.values(commands);
+        
+        // First try exact match
         if (commandList.includes(expandedCmd)) {
           // If we used an expansion, return the expanded command
           if (expandedCmd !== command) {
             return { approved: true, expandedCommand: expandedCmd };
           }
           return { approved: true };
+        }
+        
+        // Then try placeholder matching (e.g., {node} -> yin, yang, proxBig, etc.)
+        for (const approvedCmd of commandList) {
+          if (this.matchesPlaceholderTemplate(expandedCmd, approvedCmd)) {
+            return { approved: true, expandedCommand: expandedCmd };
+          }
         }
       }
     }
@@ -740,7 +776,7 @@ export class SSHTool extends BaseTool {
             });
           });
         }
-      });
+      };
 
       conn.on("error", (err) => {
         // Remove connection from pool on error
@@ -803,14 +839,29 @@ export class SSHTool extends BaseTool {
       // Support placeholder substitution in commands (e.g., {vmid} -> actual vmid)
       // This allows commands like "qm guest cmd {vmid} network-get-interfaces"
       let finalCommand = commandToExecute;
-      if (params.vmid && command.includes("{vmid}")) {
+      
+      // Handle {vmid} placeholder
+      if (params.vmid && commandToExecute.includes("{vmid}")) {
         finalCommand = finalCommand.replace(/{vmid}/g, String(params.vmid));
       }
-      if (params.node && command.includes("{node}")) {
-        finalCommand = finalCommand.replace(/{node}/g, params.node);
+      
+      // Handle {node} placeholder
+      // For pvesh commands executed via SSH, {node} should be replaced with $(hostname)
+      // to get the actual Proxmox node name at runtime (not the SSH hostname)
+      // Example: "pvesh get /nodes/{node}/qemu" -> "pvesh get /nodes/$(hostname)/qemu"
+      if (commandToExecute.includes("{node}")) {
+        if (commandToExecute.includes("pvesh")) {
+          // For pvesh commands, use $(hostname) to get the actual Proxmox node name
+          // This works because pvesh on a local node can use the hostname
+          finalCommand = finalCommand.replace(/{node}/g, "$(hostname)");
+        } else if (params.node) {
+          // For other commands, use the provided node parameter if available
+          finalCommand = finalCommand.replace(/{node}/g, params.node);
+        }
       }
+      
       // Also support {hostname} placeholder
-      if (command.includes("{hostname}")) {
+      if (commandToExecute.includes("{hostname}")) {
         // We'll need to get hostname, but for now use resolvedHost
         finalCommand = finalCommand.replace(/{hostname}/g, resolvedHost);
       }
