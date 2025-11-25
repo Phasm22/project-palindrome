@@ -30,11 +30,11 @@ docs/
 - [Bug Fixes](technical/BUG_FIXES.md)
 - [Management Guide](technical/management.md)
 - [Agent Environment Notes](technical/agent-notes.md)
-- [Documentation Structure](technical/structure.md)
-- [Documentation Migration](technical/migration.md)
+- [Filesystem Analysis Options](technical/filesystem-analysis-options.md)
+- [Security: OpenAI API](technical/security-openai-api.md)
 
 ### Features
-- [IP Resolution](features/) - Strategy, setup, implementation, and recommendations
+- [IP Resolution](features/) - Strategy, setup, and implementation
 
 ### Testing
 - [Proxmox Tests](tests/proxmox-test-status.md)
