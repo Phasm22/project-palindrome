@@ -117,7 +117,6 @@ import { MyTool } from "../tools/MyTool";
 
 export function loadTools(): BaseTool[] {
   return [
-    new GlancesTool(),
     new OpnsenseTool(),
     new SSHTool(),
     new MyTool(), // ← Just add it here

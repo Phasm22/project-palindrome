@@ -22,13 +22,13 @@ test("AgentContext adds assistant messages", () => {
 
 test("AgentContext adds tool results", () => {
   const context = new AgentContext();
-  context.addToolResult("call-123", "glances", { cpu: 50 });
+  context.addToolResult("call-123", "run_diagnostic_command", { success: true });
   const messages = context.getMessages();
   
   expect(messages.length).toBe(1);
   expect(messages[0].role).toBe("tool");
-  expect(messages[0].name).toBe("glances");
-  expect(messages[0].content).toContain("cpu");
+  expect(messages[0].name).toBe("run_diagnostic_command");
+  expect(messages[0].content).toContain("success");
   expect(messages[0].tool_call_id).toBe("call-123");
 });
 

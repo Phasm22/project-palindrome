@@ -183,10 +183,6 @@ function formatToolOutput(result: ExecutionResult, toolName: string): string {
       // For OPNsense, show formatted JSON (it's usually structured data)
       return JSON.stringify(result.data, null, 2);
 
-    case "glances":
-      // For Glances, show formatted JSON (metrics data)
-      return JSON.stringify(result.data, null, 2);
-
     case "mcp_opnsense":
       // For MCP OPNsense, show formatted JSON (structured data)
       return JSON.stringify(result.data, null, 2);
@@ -216,11 +212,6 @@ if (args[0] === "hello") {
   const res = await runAgent(question);
   console.log(res.text);
   process.exit(0);
-} else if (args[0] === "glances") {
-  const tools = loadTools();
-  const res = await executeWithPolicies("glances", { section: "all" }, tools);
-  console.log(formatToolOutput(res, "glances"));
-  process.exit(res.error ? 1 : 0);
 } else if (args[0] === "pce") {
   // Parse flags
   const flags: { [key: string]: boolean } = {};
@@ -710,7 +701,6 @@ if (args[0] === "hello") {
   console.log("  ask           - Ask the agent a question");
   console.log("  pce           - Query the PCE API (Hybrid RAG)");
   console.log("  repl          - Start interactive REPL");
-  console.log("  glances       - Test Glances tool directly");
   console.log("  opnsense      - Test OPNsense tool directly");
   console.log("    status      - Get OPNsense system status");
   console.log("    aliases     - List OPNsense firewall aliases");

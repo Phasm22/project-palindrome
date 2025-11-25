@@ -1,0 +1,1052 @@
+[
+  {
+    "service": "proxmox",
+    "baseUrl": "https://proxBig.prox:8006",
+    "endpoints": [
+      {
+        "path": "/nodes/{node}/status",
+        "method": "GET",
+        "category": "node",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "object",
+              "properties": {
+                "ksm": {
+                  "type": "object",
+                  "properties": {
+                    "shared": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "pveversion": {
+                  "type": "string"
+                },
+                "current-kernel": {
+                  "type": "object",
+                  "properties": {
+                    "sysname": {
+                      "type": "string"
+                    },
+                    "machine": {
+                      "type": "string"
+                    },
+                    "release": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "memory": {
+                  "type": "object",
+                  "properties": {
+                    "free": {
+                      "type": "number"
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "used": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "rootfs": {
+                  "type": "object",
+                  "properties": {
+                    "used": {
+                      "type": "number"
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "avail": {
+                      "type": "number"
+                    },
+                    "free": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "wait": {
+                  "type": "number"
+                },
+                "cpuinfo": {
+                  "type": "object",
+                  "properties": {
+                    "mhz": {
+                      "type": "string"
+                    },
+                    "flags": {
+                      "type": "string"
+                    },
+                    "user_hz": {
+                      "type": "number"
+                    },
+                    "hvm": {
+                      "type": "string"
+                    },
+                    "cpus": {
+                      "type": "number"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "sockets": {
+                      "type": "number"
+                    },
+                    "cores": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "idle": {
+                  "type": "number"
+                },
+                "swap": {
+                  "type": "object",
+                  "properties": {
+                    "used": {
+                      "type": "number"
+                    },
+                    "total": {
+                      "type": "number"
+                    },
+                    "free": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "loadavg": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "kversion": {
+                  "type": "string"
+                },
+                "uptime": {
+                  "type": "number"
+                },
+                "boot-info": {
+                  "type": "object",
+                  "properties": {
+                    "secureboot": {
+                      "type": "number"
+                    },
+                    "mode": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "cpu": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/resources",
+        "method": "GET",
+        "category": "node",
+        "readOnly": true
+      },
+      {
+        "path": "/nodes/{node}/qemu",
+        "method": "GET",
+        "category": "vm",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "cpus": {
+                    "type": "number"
+                  },
+                  "vmid": {
+                    "type": "number"
+                  },
+                  "diskwrite": {
+                    "type": "number"
+                  },
+                  "pid": {
+                    "type": "number"
+                  },
+                  "uptime": {
+                    "type": "number"
+                  },
+                  "disk": {
+                    "type": "number"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "maxmem": {
+                    "type": "number"
+                  },
+                  "netout": {
+                    "type": "number"
+                  },
+                  "maxdisk": {
+                    "type": "number"
+                  },
+                  "netin": {
+                    "type": "number"
+                  },
+                  "cpu": {
+                    "type": "number"
+                  },
+                  "mem": {
+                    "type": "number"
+                  },
+                  "diskread": {
+                    "type": "number"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "serial": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/lxc",
+        "method": "GET",
+        "category": "container",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {}
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/storage",
+        "method": "GET",
+        "category": "storage",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "shared": {
+                    "type": "number"
+                  },
+                  "used_fraction": {
+                    "type": "number"
+                  },
+                  "active": {
+                    "type": "number"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "used": {
+                    "type": "number"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": "number"
+                  },
+                  "enabled": {
+                    "type": "number"
+                  },
+                  "storage": {
+                    "type": "string"
+                  },
+                  "avail": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/network",
+        "method": "GET",
+        "category": "network",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "method6": {
+                    "type": "string"
+                  },
+                  "families": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "autostart": {
+                    "type": "number"
+                  },
+                  "active": {
+                    "type": "number"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "number"
+                  },
+                  "iface": {
+                    "type": "string"
+                  },
+                  "exists": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/services",
+        "method": "GET",
+        "category": "system",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "desc": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "unit-state": {
+                    "type": "string"
+                  },
+                  "active-state": {
+                    "type": "string"
+                  },
+                  "service": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/tasks",
+        "method": "GET",
+        "category": "system",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "upid": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "pstart": {
+                    "type": "number"
+                  },
+                  "user": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "starttime": {
+                    "type": "number"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "node": {
+                    "type": "string"
+                  },
+                  "pid": {
+                    "type": "number"
+                  },
+                  "endtime": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "total": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/disks/list",
+        "method": "GET",
+        "category": "storage",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "by_id_link": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "number"
+                  },
+                  "vendor": {
+                    "type": "string"
+                  },
+                  "rpm": {
+                    "type": "number"
+                  },
+                  "used": {
+                    "type": "string"
+                  },
+                  "osdid": {
+                    "type": "number"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "wearout": {
+                    "type": "number"
+                  },
+                  "health": {
+                    "type": "string"
+                  },
+                  "devpath": {
+                    "type": "string"
+                  },
+                  "wwn": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "osdid-list": {
+                    "type": "object"
+                  },
+                  "gpt": {
+                    "type": "number"
+                  },
+                  "serial": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/qemu/{vmid}/status",
+        "method": "GET",
+        "category": "vm",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "subdir": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/qemu/{vmid}/config",
+        "method": "GET",
+        "category": "vm",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "object",
+              "properties": {
+                "smbios1": {
+                  "type": "string"
+                },
+                "memory": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "cpu": {
+                  "type": "string"
+                },
+                "onboot": {
+                  "type": "number"
+                },
+                "net0": {
+                  "type": "string"
+                },
+                "net2": {
+                  "type": "string"
+                },
+                "cores": {
+                  "type": "number"
+                },
+                "boot": {
+                  "type": "string"
+                },
+                "vmgenid": {
+                  "type": "string"
+                },
+                "ostype": {
+                  "type": "string"
+                },
+                "scsi0": {
+                  "type": "string"
+                },
+                "serial0": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string"
+                },
+                "sockets": {
+                  "type": "number"
+                },
+                "tablet": {
+                  "type": "number"
+                },
+                "scsihw": {
+                  "type": "string"
+                },
+                "net1": {
+                  "type": "string"
+                },
+                "meta": {
+                  "type": "string"
+                },
+                "numa": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes/{node}/qemu/{vmid}/snapshot",
+        "method": "GET",
+        "category": "vm",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "digest": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "running": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/version",
+        "method": "GET",
+        "category": "system",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "object",
+              "properties": {
+                "release": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "repoid": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/nodes",
+        "method": "GET",
+        "category": "cluster",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "disk": {
+                    "type": "number"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "cpu": {
+                    "type": "number"
+                  },
+                  "uptime": {
+                    "type": "number"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "level": {
+                    "type": "string"
+                  },
+                  "ssl_fingerprint": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "maxdisk": {
+                    "type": "number"
+                  },
+                  "mem": {
+                    "type": "number"
+                  },
+                  "maxcpu": {
+                    "type": "number"
+                  },
+                  "node": {
+                    "type": "string"
+                  },
+                  "maxmem": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/storage",
+        "method": "GET",
+        "category": "storage",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "prune-backups": {
+                    "type": "string"
+                  },
+                  "digest": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "storage": {
+                    "type": "string"
+                  },
+                  "nodes": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "shared": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/access/users",
+        "method": "GET",
+        "category": "access",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "userid": {
+                    "type": "string"
+                  },
+                  "expire": {
+                    "type": "number"
+                  },
+                  "enable": {
+                    "type": "number"
+                  },
+                  "realm-type": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/access/roles",
+        "method": "GET",
+        "category": "access",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "roleid": {
+                    "type": "string"
+                  },
+                  "special": {
+                    "type": "number"
+                  },
+                  "privs": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/access/permissions",
+        "method": "GET",
+        "category": "access",
+        "readOnly": true,
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "object",
+              "properties": {
+                "/storage": {
+                  "type": "object",
+                  "properties": {
+                    "SDN.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "Mapping.Audit": {
+                      "type": "number"
+                    },
+                    "Datastore.Audit": {
+                      "type": "number"
+                    },
+                    "Sys.Audit": {
+                      "type": "number"
+                    },
+                    "Pool.Audit": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/access": {
+                  "type": "object",
+                  "properties": {
+                    "Pool.Audit": {
+                      "type": "number"
+                    },
+                    "Sys.Audit": {
+                      "type": "number"
+                    },
+                    "Datastore.Audit": {
+                      "type": "number"
+                    },
+                    "Mapping.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "SDN.Audit": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/vms/100": {
+                  "type": "object",
+                  "properties": {
+                    "VM.Config.Cloudinit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Config.CDROM": {
+                      "type": "number"
+                    },
+                    "VM.Console": {
+                      "type": "number"
+                    },
+                    "VM.Monitor": {
+                      "type": "number"
+                    },
+                    "VM.PowerMgmt": {
+                      "type": "number"
+                    },
+                    "VM.Backup": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/access/groups": {
+                  "type": "object",
+                  "properties": {
+                    "Pool.Audit": {
+                      "type": "number"
+                    },
+                    "Datastore.Audit": {
+                      "type": "number"
+                    },
+                    "Sys.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "Mapping.Audit": {
+                      "type": "number"
+                    },
+                    "SDN.Audit": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/": {
+                  "type": "object",
+                  "properties": {
+                    "Mapping.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "SDN.Audit": {
+                      "type": "number"
+                    },
+                    "Pool.Audit": {
+                      "type": "number"
+                    },
+                    "Sys.Audit": {
+                      "type": "number"
+                    },
+                    "Datastore.Audit": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/pool": {
+                  "type": "object",
+                  "properties": {
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "Mapping.Audit": {
+                      "type": "number"
+                    },
+                    "SDN.Audit": {
+                      "type": "number"
+                    },
+                    "Pool.Audit": {
+                      "type": "number"
+                    },
+                    "Datastore.Audit": {
+                      "type": "number"
+                    },
+                    "Sys.Audit": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/vms": {
+                  "type": "object",
+                  "properties": {
+                    "Datastore.Audit": {
+                      "type": "number"
+                    },
+                    "Sys.Audit": {
+                      "type": "number"
+                    },
+                    "Pool.Audit": {
+                      "type": "number"
+                    },
+                    "SDN.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "Mapping.Audit": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/nodes": {
+                  "type": "object",
+                  "properties": {
+                    "Pool.Audit": {
+                      "type": "number"
+                    },
+                    "Sys.Audit": {
+                      "type": "number"
+                    },
+                    "Datastore.Audit": {
+                      "type": "number"
+                    },
+                    "Mapping.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    },
+                    "SDN.Audit": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "/sdn": {
+                  "type": "object",
+                  "properties": {
+                    "Sys.Audit": {
+                      "type": "number"
+                    },
+                    "Datastore.Audit": {
+                      "type": "number"
+                    },
+                    "Pool.Audit": {
+                      "type": "number"
+                    },
+                    "SDN.Audit": {
+                      "type": "number"
+                    },
+                    "Mapping.Audit": {
+                      "type": "number"
+                    },
+                    "VM.Audit": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "path": "/network",
+        "method": "GET",
+        "category": "network",
+        "readOnly": true
+      }
+    ],
+    "discoveredAt": "2025-11-25T01:45:04.231Z",
+    "metadata": {
+      "isStandalone": true,
+      "nodeName": "proxBig",
+      "hasGlobalAccess": true
+    }
+  }
+]

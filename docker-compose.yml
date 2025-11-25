@@ -31,9 +31,11 @@ services:
       memlock: -1
       nofile: 65536
     healthcheck:
-      test: ["CMD", "curl", "-fsSL", "http://localhost:6333/ready"]
+      # Qdrant doesn't have curl/wget/pgrep, check if qdrant process is running
+      # Search /proc for any process with qdrant in cmdline (qdrant runs as child of entrypoint.sh)
+      test: ["CMD-SHELL", "find /proc -maxdepth 2 -name cmdline -exec grep -l qdrant {} \\; 2>/dev/null | head -1 | xargs -r cat | grep -q qdrant || exit 1"]
       interval: 60s  # Faster check on NVMe (lower latency)
-      timeout: 3s    # NVMe is fast, 3s is plenty
+      timeout: 5s    # Process search can take a moment
       retries: 2
       start_period: 10s
 
@@ -128,10 +130,11 @@ services:
       memlock: -1
       nofile: 65536
     healthcheck:
-      # Use root endpoint - always responsive, won't block during model generation
-      test: ["CMD", "curl", "-fsSL", "http://localhost:11434"]
+      # Use ollama CLI to check health (curl not available in container)
+      # ollama list is lightweight and confirms service is responding
+      test: ["CMD", "ollama", "list"]
       interval: 60s  # Faster check on NVMe
-      timeout: 3s    # Low latency on NVMe
+      timeout: 10s   # Model loading can take time, give more timeout
       retries: 2
       start_period: 30s
     # Hot reload: expose Ollama's model management

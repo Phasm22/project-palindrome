@@ -1,0 +1,157 @@
+[
+  {
+    "service": "proxmox",
+    "discoveredEndpoints": 15,
+    "enabledActions": 17,
+    "missingEndpoints": [
+      {
+        "path": "/nodes/{node}/status",
+        "method": "GET",
+        "category": "node",
+        "reason": "Discovered as \"get_status\" but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/qemu",
+        "method": "GET",
+        "category": "vm",
+        "reason": "Discovered as \"get_qemu\" but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/lxc",
+        "method": "GET",
+        "category": "container",
+        "reason": "Discovered as \"get_lxc\" but not enabled in tool"
+      },
+      {
+        "path": "/storage",
+        "method": "GET",
+        "category": "storage",
+        "reason": "Discovered as \"get_storage\" but not enabled in tool"
+      },
+      {
+        "path": "/network",
+        "method": "GET",
+        "category": "network",
+        "reason": "Discovered as \"get_network\" but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/services",
+        "method": "GET",
+        "category": "system",
+        "reason": "Discovered as \"get_services\" but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/tasks",
+        "method": "GET",
+        "category": "system",
+        "reason": "Discovered as \"get_tasks\" but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/disks/list",
+        "method": "GET",
+        "category": "storage",
+        "reason": "Discovered as \"get_list\" but not enabled in tool"
+      },
+      {
+        "path": "/version",
+        "method": "GET",
+        "category": "system",
+        "reason": "Discovered as \"get_version\" but not enabled in tool"
+      },
+      {
+        "path": "/nodes",
+        "method": "GET",
+        "category": "cluster",
+        "reason": "Discovered as \"get_nodes\" but not enabled in tool"
+      },
+      {
+        "path": "/access/users",
+        "method": "GET",
+        "category": "access",
+        "reason": "Discovered as \"get_users\" but not enabled in tool"
+      },
+      {
+        "path": "/access/roles",
+        "method": "GET",
+        "category": "access",
+        "reason": "Discovered as \"get_roles\" but not enabled in tool"
+      },
+      {
+        "path": "/access/permissions",
+        "method": "GET",
+        "category": "access",
+        "reason": "Discovered as \"get_permissions\" but not enabled in tool"
+      }
+    ],
+    "enabledButNotDiscovered": [
+      {
+        "action": "list_nodes",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_resources",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_disks",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_network_interfaces",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "list_vms",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_config",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_network",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_snapshots",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_ip",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_lxc_config",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "cluster_resources",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "cluster_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "cluster_ceph_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "ha_groups",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "ha_resources",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      }
+    ]
+  }
+]

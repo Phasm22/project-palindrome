@@ -24,6 +24,6 @@ Planned capabilities:
 - query_stats
 
 ## Monitoring
-### Glances (local macOS or lab hosts)
+### System Metrics (via SSH)
 Planned capabilities:
-- get_system_usage
+- get_system_usage (via ssh_execute with standard commands)

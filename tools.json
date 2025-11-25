@@ -1,44 +1,5 @@
 [
   {
-    "name": "glances",
-    "description": "Fetches system metrics from the Glances API",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "section": {
-          "type": "string",
-          "enum": [
-            "all",
-            "cpu",
-            "mem",
-            "load"
-          ],
-          "description": "Which metrics set to fetch",
-          "default": "all"
-        }
-      },
-      "additionalProperties": false
-    },
-    "examples": [
-      {
-        "description": "Get all metrics",
-        "parameters": {
-          "section": "all"
-        }
-      },
-      {
-        "description": "Get CPU metrics only",
-        "parameters": {
-          "section": "cpu"
-        }
-      }
-    ],
-    "notes": [],
-    "categories": [
-      "system"
-    ]
-  },
-  {
     "name": "opnsense_manage",
     "description": "Read-only access to OPNsense system status and firewall aliases in LAB ONLY.",
     "parameters": {

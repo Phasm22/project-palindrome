@@ -66,23 +66,6 @@
 
 ---
 
-#### **(D) glances tool: ECONNREFUSED** ✅ **VALID (Environment Issue)**
-
-**Status:** Code is correct, but glances service not running
-
-**Evidence:**
-- ✅ GlancesTool exists (`src/tools/GlancesTool.ts`)
-- ✅ Hardcoded to `http://127.0.0.1:61208` (line 54)
-- ⚠️ **Issue:** No fallback or error handling for service not running
-- ⚠️ **Issue:** No configuration for different hosts
-
-**Fix Needed:**
-- Add environment variable for Glances URL
-- Add graceful fallback when service unavailable
-- Or document that glances must be installed on nodes
-
----
-
 ### **2. Reasoning Layer Issues**
 
 #### **(A) Missing ontology / cluster roles → "What is the purpose of every workload?" falls flat** ✅ **VALID**
@@ -226,7 +209,6 @@
 | Node name 403s | ✅ **FIXED** | HIGH | Fallback to cluster_resources added |
 | LXC migration preflight | ✅ **FIXED** | HIGH | Error handling improved, type checking added |
 | Missing destroy_vm | ✅ **FIXED** | MEDIUM | Fully implemented with safety checks |
-| glances ECONNREFUSED | ✅ Valid | LOW | Environment issue (code is correct) |
 | Missing purpose metadata | ✅ Valid | MEDIUM | Feature gap (P2 - not yet implemented) |
 | RAG threshold too strict | ✅ **FIXED** | MEDIUM | Threshold lowered, exact-match fallback added |
 | Cross-system correlation | ✅ Valid | LOW | Phase IV feature (not yet implemented) |
@@ -266,7 +248,6 @@
 
 ### **P2 (Quality of Life)** ⏳ **NOT YET IMPLEMENTED**
 7. ⏳ Add purpose metadata extraction (Feature gap - not yet implemented)
-8. ⏳ Better glances error handling (Environment issue - code is correct)
 9. ⏳ Document environment requirements (Documentation task - not yet done)
 
 ---

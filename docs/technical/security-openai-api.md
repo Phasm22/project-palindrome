@@ -37,7 +37,6 @@ All tool results are sanitized before being sent to OpenAI:
 
 - **SSH Tool**: Sanitizes `stdout` and `stderr` output
 - **OPNsense Tool**: Sanitizes all response data
-- **Glances Tool**: Sanitizes system metrics (less sensitive, but still sanitized)
 
 ## What Could Still Leak
 
