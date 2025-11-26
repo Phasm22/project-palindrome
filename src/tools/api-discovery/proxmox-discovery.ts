@@ -207,7 +207,7 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
     
     const nodePatterns = [
       { path: `/nodes/${nodeName}/status`, method: "GET" as const, category: "node" },
-      { path: `/nodes/${nodeName}/resources`, method: "GET" as const, category: "node" },
+      // Note: /nodes/{node}/resources doesn't exist (returns 501) - removed
       { path: `/nodes/${nodeName}/qemu`, method: "GET" as const, category: "vm" },
       { path: `/nodes/${nodeName}/lxc`, method: "GET" as const, category: "container" },
       { path: `/nodes/${nodeName}/storage`, method: "GET" as const, category: "storage" },
@@ -236,8 +236,17 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
           });
         }
       } catch (error: any) {
-        // Skip endpoints that return 401/403 (not authorized) or 404 (not available)
-        if (error.response?.status === 401 || error.response?.status === 403 || error.response?.status === 404) {
+        const status = error.response?.status;
+        // 501 = Not implemented (endpoint doesn't exist)
+        // 404 = Not found (endpoint doesn't exist)
+        if (status === 501 || status === 404) {
+          logger.debug(`Skipping non-existent endpoint: ${pattern.path} (${status})`);
+          continue;
+        }
+        // 401/403 = Not authorized (endpoint exists but requires permissions)
+        // We'll skip these for now, but could mark them as requiring higher permissions
+        if (status === 401 || status === 403) {
+          logger.debug(`Skipping unauthorized endpoint: ${pattern.path} (${status})`);
           continue;
         }
         // Other errors might indicate endpoint exists but requires params
@@ -255,8 +264,10 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
         const vmPatterns = [
           { path: `/nodes/${nodeName}/qemu/${sampleVmid}/status`, method: "GET" as const, category: "vm" },
           { path: `/nodes/${nodeName}/qemu/${sampleVmid}/config`, method: "GET" as const, category: "vm" },
-          { path: `/nodes/${nodeName}/qemu/${sampleVmid}/agent/network-get-interfaces`, method: "GET" as const, category: "vm" },
           { path: `/nodes/${nodeName}/qemu/${sampleVmid}/snapshot`, method: "GET" as const, category: "vm" },
+          // Agent endpoints require higher permissions (guest agent must be enabled and running)
+          { path: `/nodes/${nodeName}/qemu/${sampleVmid}/agent/network-get-interfaces`, method: "GET" as const, category: "vm", requiresHigherPermissions: true },
+          { path: `/nodes/${nodeName}/qemu/${sampleVmid}/agent/info`, method: "GET" as const, category: "vm", requiresHigherPermissions: true },
         ];
         
         for (const pattern of vmPatterns) {
@@ -275,12 +286,44 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
                 ...pattern,
                 path: pattern.path.replace(nodeName, "{node}").replace(`/${sampleVmid}/`, "/{vmid}/"),
                 readOnly: true,
+                requiresHigherPermissions: pattern.requiresHigherPermissions || false,
                 responseSchema: result.responseSchema,
+                description: pattern.requiresHigherPermissions 
+                  ? "Requires guest agent to be enabled and running in the VM"
+                  : undefined,
+              });
+            } else if (result.error && pattern.requiresHigherPermissions) {
+              // Mark agent endpoints that failed due to permissions
+              logger.debug(`Agent endpoint requires higher permissions: ${pattern.path} - ${result.error}`);
+              endpoints.push({
+                ...pattern,
+                path: pattern.path.replace(nodeName, "{node}").replace(`/${sampleVmid}/`, "/{vmid}/"),
+                readOnly: true,
+                requiresHigherPermissions: true,
+                description: `Requires guest agent enabled and running. Error: ${result.error}`,
               });
             }
           } catch (error: any) {
-            // Skip endpoints that return 401/403/404
-            if (error.response?.status === 401 || error.response?.status === 403 || error.response?.status === 404) {
+            const status = error.response?.status;
+            // 501 = Not implemented (endpoint doesn't exist)
+            // 404 = Not found (endpoint doesn't exist)
+            if (status === 501 || status === 404) {
+              logger.debug(`Skipping non-existent endpoint: ${pattern.path} (${status})`);
+              continue;
+            }
+            // 401/403 = Not authorized (endpoint exists but requires permissions)
+            if (status === 401 || status === 403) {
+              if (pattern.requiresHigherPermissions) {
+                // Mark agent endpoints that require permissions
+                logger.debug(`Agent endpoint requires higher permissions: ${pattern.path} (${status})`);
+                endpoints.push({
+                  ...pattern,
+                  path: pattern.path.replace(nodeName, "{node}").replace(`/${sampleVmid}/`, "/{vmid}/"),
+                  readOnly: true,
+                  requiresHigherPermissions: true,
+                  description: `Requires guest agent enabled and running. HTTP ${status}`,
+                });
+              }
               continue;
             }
           }
@@ -414,7 +457,7 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
       { path: "/access/users", method: "GET" as const, category: "access" },
       { path: "/access/roles", method: "GET" as const, category: "access" },
       { path: "/access/permissions", method: "GET" as const, category: "access" },
-      { path: "/network", method: "GET" as const, category: "network" },
+      // Note: /network doesn't exist (returns 501) - removed
     ];
 
     for (const pattern of globalPatterns) {
@@ -432,8 +475,16 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
           });
         }
       } catch (error: any) {
-        // Skip endpoints that return 401/403 (not authorized) or 404 (not available)
-        if (error.response?.status === 401 || error.response?.status === 403 || error.response?.status === 404) {
+        const status = error.response?.status;
+        // 501 = Not implemented (endpoint doesn't exist)
+        // 404 = Not found (endpoint doesn't exist)
+        if (status === 501 || status === 404) {
+          logger.debug(`Skipping non-existent endpoint: ${pattern.path} (${status})`);
+          continue;
+        }
+        // 401/403 = Not authorized (endpoint exists but requires permissions)
+        if (status === 401 || status === 403) {
+          logger.debug(`Skipping unauthorized endpoint: ${pattern.path} (${status})`);
           continue;
         }
       }
@@ -461,6 +512,10 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
           return { accessible: false, error: "No node name available for probing" };
         }
       }
+      if (probePath.includes("{vmid}")) {
+        // This should be replaced by the caller, but if not, we can't probe
+        return { accessible: false, error: "VMID placeholder not replaced" };
+      }
 
       const result = await this.client.get(probePath);
       
@@ -469,14 +524,19 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
         responseSchema: this.inferSchema(result.data),
       };
     } catch (error: any) {
+      const status = error.response?.status;
+      // 501 = Not implemented (endpoint doesn't exist)
+      // 404 = Not found (endpoint doesn't exist)
+      if (status === 501 || status === 404) {
+        return { accessible: false, error: `HTTP ${status}: Endpoint not implemented or not found` };
+      }
       // 401 = Not authorized (token doesn't have permission)
       // 403 = Forbidden (endpoint exists but access denied)
-      // 404 = Not found (endpoint doesn't exist)
-      if (error.response?.status === 401 || error.response?.status === 403 || error.response?.status === 404) {
-        return { accessible: false, error: error.response.statusText || `HTTP ${error.response.status}` };
+      if (status === 401 || status === 403) {
+        return { accessible: false, error: `HTTP ${status}: ${error.response?.statusText || "Unauthorized"}` };
       }
       // Other errors might indicate endpoint exists but requires params
-      return { accessible: true }; // Assume accessible if not 401/403/404
+      return { accessible: true }; // Assume accessible if not 401/403/404/501
     }
   }
 

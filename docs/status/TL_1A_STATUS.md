@@ -132,7 +132,7 @@ bun test tests/tools/opnsense/readonly/opnsense-readonly.test.ts --grep "TL-1A.4
 **Status**: ✅ **COMPLETE**
 
 **Implementation**:
-- End-to-end test via `agent pce` command
+- End-to-end test via `agent ask` or `agent pce` command (both use PCE/Hybrid RAG)
 - Tool execution through PCE API
 - Provenance tag verification in response
 - Tool source appears in API response sources

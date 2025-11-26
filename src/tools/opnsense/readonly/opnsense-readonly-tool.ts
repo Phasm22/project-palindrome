@@ -59,7 +59,7 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
   constructor() {
     super({
       name: "opnsense_readonly",
-      description: "Comprehensive read-only access to OPNsense state (Firewall, Interfaces, System, Diagnostics, DHCP). All operations return structured JSON data.",
+      description: "OPNsense read-only tool. Supports firewall_rules_list (uses SSH internally with pfctl commands), firewall aliases (REST API), and other read-only operations. Note: OPNsense REST API is intentionally incomplete (~20-30% coverage). For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
       categories: ["opnsense", "networking", "firewall", "system"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
@@ -70,23 +70,26 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     return createToolSchema(this, OpnsenseReadOnlyParams, {
       examples: [
         {
-          description: "List all firewall rules",
+          description: "List firewall rules (uses SSH internally with pfctl commands)",
           parameters: { action: "firewall_rules_list" },
         },
         {
-          description: "Get system status",
-          parameters: { action: "system_status" },
+          description: "List firewall aliases (REST API works well for aliases)",
+          parameters: { action: "firewall_aliases_list" },
         },
         {
-          description: "Get interface status",
-          parameters: { action: "interface_status", interface_name: "wan" },
+          description: "Get a specific firewall alias",
+          parameters: { action: "firewall_aliases_get", alias_name: "allowed_guest" },
         },
         {
-          description: "List DHCP leases",
-          parameters: { action: "dhcp_leases_list" },
+          description: "List firewall categories",
+          parameters: { action: "firewall_categories_list" },
         },
       ],
       notes: [
+        "firewall_rules_list action uses SSH internally with approved pfctl commands (parallelized for performance).",
+        "Firewall aliases use REST API (good coverage).",
+        "For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
         "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
         "All responses are structured JSON objects for easy parsing and dashboarding.",
         "Internal IP addresses and credentials are automatically sanitized from responses.",
@@ -295,42 +298,28 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
   // ========== Firewall API Methods ==========
 
   private async getFirewallRules(client: any, limit?: number): Promise<any> {
-    try {
-      // Try POST first (OPNsense API often requires POST for search endpoints)
-      const response = await client.post("/api/firewall/rule/searchRule", {});
-      const rules = response.data?.rows || [];
-      return {
-        action: "firewall_rules_list",
-        count: limit ? Math.min(rules.length, limit) : rules.length,
-        total: rules.length,
-        rules: limit ? rules.slice(0, limit) : rules,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error: any) {
-      // Fallback to GET if POST fails
-      if (error.response?.status === 404 || error.response?.status === 405) {
-        try {
-          const response = await client.get("/api/firewall/rule/searchRule");
-          const rules = response.data?.rows || [];
-          return {
-            action: "firewall_rules_list",
-            count: limit ? Math.min(rules.length, limit) : rules.length,
-            total: rules.length,
-            rules: limit ? rules.slice(0, limit) : rules,
-            timestamp: new Date().toISOString(),
-          };
-        } catch (getError: any) {
-          if (this.shouldFallbackToSshForFirewallRules(getError)) {
-            return this.getFirewallRulesViaSSH(limit);
-          }
-          throw getError;
-        }
-      }
-      if (this.shouldFallbackToSshForFirewallRules(error)) {
-        return this.getFirewallRulesViaSSH(limit);
-      }
-      throw error;
-    }
+    // IMPORTANT: OPNsense does NOT expose a firewall rules search/list endpoint in the API.
+    // This is a known limitation across OPNsense 23.x, 24.x, and 25.x.
+    // 
+    // What EXISTS in OPNsense API:
+    // - GET /api/firewall/rule/getRule/{uuid} - Get individual rule by UUID
+    // - POST /api/firewall/rule/setRule/{uuid} - Update rule
+    // - POST /api/firewall/rule/addRule - Create rule
+    // - POST /api/firewall/rule/delRule/{uuid} - Delete rule
+    //
+    // What DOES NOT EXIST:
+    // - /api/firewall/rule/search
+    // - /api/firewall/rule/searchRule
+    // - /api/firewall/rule/list
+    // - /api/firewall/filter/search
+    // - Any "list all rules" or "search rules" endpoint
+    //
+    // Workarounds:
+    // 1. Use MCP Server (recommended) - exposes firewall rules via MCP tools
+    // 2. Parse config file over SSH (current implementation)
+    //
+    // Therefore, we skip API attempts and go directly to SSH fallback.
+    return this.getFirewallRulesViaSSH(limit);
   }
 
   private async getFirewallAliases(client: any, limit?: number): Promise<any> {
@@ -650,6 +639,8 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     return process.env.OPNSENSE_SSH_HOST || "OPNsense.prox";
   }
 
+  // This method is no longer used since we skip API attempts entirely for firewall rules,
+  // but kept for potential future use or other endpoints that might need SSH fallback.
   private shouldFallbackToSshForFirewallRules(error: any): boolean {
     if (!error) return false;
     const status = error.response?.status;
@@ -664,7 +655,6 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     const host = this.getOpnsenseSshHost();
     const sshTool = this.getSshTool();
     const context = { toolName: this.metadata.name, startedAt: Date.now() };
-    const sections: Record<string, any> = {};
     const commands = [
       { command: "pfctl -sr", key: "rules" },
       { command: "pfctl -sn", key: "nat" },
@@ -672,8 +662,18 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       { command: "pfctl -sa", key: "summary" },
     ];
 
-    for (const { command, key } of commands) {
-      const result = await sshTool.execute({ host, command }, context);
+    // Execute all SSH commands in parallel for better performance
+    const results = await Promise.all(
+      commands.map(({ command, key }) =>
+        sshTool.execute({ host, command }, context).then(
+          (result) => ({ key, result }),
+          (error) => ({ key, result: { error: error.message || String(error) } })
+        )
+      )
+    );
+
+    const sections: Record<string, any> = {};
+    for (const { key, result } of results) {
       if (result.error) {
         sections[key] = { error: result.error };
         continue;

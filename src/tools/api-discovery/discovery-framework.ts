@@ -21,6 +21,7 @@ export interface DiscoveredEndpoint {
   category?: string;
   readOnly?: boolean;
   requiresAuth?: boolean;
+  requiresHigherPermissions?: boolean; // For endpoints that need elevated privileges (e.g., agent endpoints)
   rateLimit?: number;
 }
 

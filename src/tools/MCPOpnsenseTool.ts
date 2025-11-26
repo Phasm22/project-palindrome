@@ -77,6 +77,19 @@ export class MCPOpnsenseTool extends BaseTool {
       // Discover all tools
       this.allTools = await this.mcpClient.listTools();
       logger.info(`Discovered ${this.allTools.length} MCP tools`);
+      
+      // Log all tool names for debugging
+      const allToolNames = this.allTools.map(t => t.name);
+      logger.debug(`All MCP tool names: ${allToolNames.join(", ")}`);
+      
+      // Check if firewall_list_rules exists (user says it should)
+      const firewallListRules = this.allTools.find(t => 
+        t.name === "firewall_list_rules" || 
+        (t.name.toLowerCase().includes("firewall") && t.name.toLowerCase().includes("list") && t.name.toLowerCase().includes("rule"))
+      );
+      if (firewallListRules) {
+        logger.info(`Found firewall_list_rules tool: ${firewallListRules.name}`);
+      }
 
       // Group tools by module
       this.groupToolsByModule();
@@ -122,14 +135,17 @@ export class MCPOpnsenseTool extends BaseTool {
     }
 
     // Group tools by module prefix
+    // MCP tool names: "firewall_list_rules", "firewall_get_rule", etc.
+    // Split on first underscore: "firewall" + "list_rules"
     for (const tool of this.allTools) {
-      // MCP tool names: "opnsense_firewall_list_rules" or "firewall_list_rules"
-      const parts = tool.name.toLowerCase().split("_");
+      const toolName = tool.name.toLowerCase();
       
-      // Find matching module
+      // Find matching module by checking if tool name starts with module_
       for (const [module, group] of this.moduleGroups.entries()) {
-        if (parts.includes(module) || tool.name.toLowerCase().startsWith(module + "_")) {
+        const modulePrefix = module + "_";
+        if (toolName.startsWith(modulePrefix) || toolName === module) {
           group.tools.push(tool);
+          logger.debug(`Grouped tool ${tool.name} into module ${module}`);
           break;
         }
       }
@@ -181,6 +197,8 @@ export class MCPOpnsenseTool extends BaseTool {
 
   /**
    * Find MCP tool by module and action
+   * MCP tool names are like: firewall_list_rules, firewall_get_rule, etc.
+   * We need to match: module="firewall", action="list_rules" -> tool="firewall_list_rules"
    */
   private findMCPTool(module: OPNsenseModule, action: string): MCPTool | null {
     const group = this.moduleGroups.get(module);
@@ -191,20 +209,22 @@ export class MCPOpnsenseTool extends BaseTool {
     const actionLower = action.toLowerCase();
     const moduleLower = module.toLowerCase();
 
-    // Try various naming patterns
-    const patterns = [
-      `opnsense_${moduleLower}_${actionLower}`,
-      `${moduleLower}_${actionLower}`,
-      `${actionLower}`, // Just the action (for tools like "manage")
-    ];
+    // Primary pattern: module_action (e.g., firewall_list_rules)
+    const primaryPattern = `${moduleLower}_${actionLower}`;
+    const exactMatch = group.tools.find(tool => 
+      tool.name.toLowerCase() === primaryPattern
+    );
+    if (exactMatch) {
+      return exactMatch;
+    }
 
-    for (const pattern of patterns) {
-      const exactMatch = group.tools.find(tool => 
-        tool.name.toLowerCase() === pattern
-      );
-      if (exactMatch) {
-        return exactMatch;
-      }
+    // Try with opnsense_ prefix
+    const prefixedPattern = `opnsense_${moduleLower}_${actionLower}`;
+    const prefixedMatch = group.tools.find(tool => 
+      tool.name.toLowerCase() === prefixedPattern
+    );
+    if (prefixedMatch) {
+      return prefixedMatch;
     }
 
     // Try partial match - tool name contains both module and action
@@ -217,7 +237,7 @@ export class MCPOpnsenseTool extends BaseTool {
       return partialMatch;
     }
 
-    // Try action-only match (some tools might just be the action name)
+    // Try action-only match (for tools like "manage")
     const actionOnlyMatch = group.tools.find(tool => 
       tool.name.toLowerCase() === actionLower ||
       tool.name.toLowerCase().endsWith(`_${actionLower}`)
@@ -226,7 +246,7 @@ export class MCPOpnsenseTool extends BaseTool {
     return actionOnlyMatch || null;
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     // Ensure we have discovered tools (synchronous, but schema might be called before init)
     // For now, return a schema that will work, and we'll validate at execution time
     const moduleDescriptions: Record<string, string> = {
@@ -271,7 +291,7 @@ export class MCPOpnsenseTool extends BaseTool {
     });
   }
 
-  getParameterSchema() {
+  override getParameterSchema() {
     return MCPOpnsenseParams;
   }
 
@@ -294,17 +314,38 @@ export class MCPOpnsenseTool extends BaseTool {
       const { module, action, parameters = {} } = parsed.data;
 
       // Find the MCP tool
-      // Special handling: if action is a known method name (like "systemStatus"), 
-      // and module is "core", use "manage" as the tool name and pass method as parameter
+      // MCP server exposes tools like: firewall_manage, core_manage
+      // These use method parameters for different operations
       let mcpToolName: string;
       let mcpParams = { ...parameters };
 
-      if (module === "core" && !this.findMCPTool(module, action)) {
-        // For core module, try "manage" tool with method parameter
+      // Try to find exact tool first (e.g., interfaces_list, diagnostics_arp)
+      let mcpTool = this.findMCPTool(module, action);
+      
+      if (mcpTool) {
+        // Found exact tool match - use it directly
+        mcpToolName = mcpTool.name;
+      } else {
+        // Try "manage" tool pattern (used by core, firewall modules)
         const manageTool = this.findMCPTool(module, "manage");
         if (manageTool) {
           mcpToolName = manageTool.name;
-          mcpParams = { ...parameters, method: action };
+          // Map action names to MCP method names
+          // MCP server v0.6.0 uses module_manage pattern (firewall_manage, core_manage, etc.)
+          // Actions map to methods on the manage tool
+          const methodMap: Record<string, Record<string, string>> = {
+            firewall: {
+              "list_rules": "filterBaseGet",  // May not work - returns 404 in some OPNsense versions
+              "get_rule": "filterGetRule",
+              "search_aliases": "aliasSearchItem",
+            },
+            core: {},
+          };
+          // If action is already a method name (like "systemStatus"), use it directly
+          // Otherwise, try the method map
+          const method = methodMap[module]?.[action] || action;
+          // MCP server expects method and params in the arguments
+          mcpParams = { method, ...(parameters.params ? { params: parameters.params } : parameters) };
         } else {
           const availableActions = this.getModuleActions(module);
           return {
@@ -312,16 +353,6 @@ export class MCPOpnsenseTool extends BaseTool {
             durationMs: Date.now() - started,
           };
         }
-      } else {
-        const mcpTool = this.findMCPTool(module, action);
-        if (!mcpTool) {
-          const availableActions = this.getModuleActions(module);
-          return {
-            error: `Action "${action}" not found in module "${module}". Available actions: ${availableActions.slice(0, 10).join(", ")}${availableActions.length > 10 ? "..." : ""}`,
-            durationMs: Date.now() - started,
-          };
-        }
-        mcpToolName = mcpTool.name;
       }
 
       // Call MCP tool

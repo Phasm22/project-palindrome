@@ -10,15 +10,17 @@ import { promises as dns } from "dns";
 
 /**
  * Schema for Proxmox read-only tool parameters
- * Supports 15 distinct read-only actions across Nodes, VMs, and Cluster
+ * Supports 18 distinct read-only actions across Nodes, VMs, Cluster, and System
  */
 export const ProxmoxReadOnlyParams = z.object({
   action: z
     .enum([
-      // Node-Level (5 actions)
+      // Node-Level (7 actions)
       "list_nodes",
       "node_status",
-      "node_resources",
+      "node_storage",
+      "node_services",
+      "node_tasks",
       "node_disks",
       "node_network_interfaces",
 
@@ -37,6 +39,9 @@ export const ProxmoxReadOnlyParams = z.object({
       "cluster_ceph_status",
       "ha_groups",
       "ha_resources",
+
+      // System-Level (1 action)
+      "get_version",
     ])
     .describe("The read-only Proxmox operation to perform"),
 
@@ -79,6 +84,22 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           parameters: { action: "node_status", node: "pve1" },
         },
         {
+          description: "List storage on a node",
+          parameters: { action: "node_storage", node: "pve1" },
+        },
+        {
+          description: "List services on a node",
+          parameters: { action: "node_services", node: "pve1" },
+        },
+        {
+          description: "List tasks on a node",
+          parameters: { action: "node_tasks", node: "pve1" },
+        },
+        {
+          description: "Get Proxmox version",
+          parameters: { action: "get_version" },
+        },
+        {
           description: "List all VMs",
           parameters: { action: "list_vms", node: "pve1" },
         },
@@ -95,7 +116,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           parameters: { action: "cluster_resources" },
         },
         {
-          description: "Get VM IP address via guest agent",
+          description: "Get VM IP address via guest agent (requires guest agent enabled and VM.Monitor + VM.Audit permissions)",
           parameters: { action: "get_vm_ip", node: "YANG", vmid: 211, type: "qemu" },
         },
         {
@@ -106,6 +127,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       notes: [
         "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
         "All responses are structured JSON objects with normalized data (memory in MB/GB, timestamps in ISO8601).",
+        "get_vm_ip requires guest agent enabled in VM config and API token with VM.Monitor + VM.Audit permissions. Returns 403 if permissions insufficient or guest agent unavailable.",
         "Internal IP addresses, MAC addresses, and credentials are automatically sanitized from responses.",
       ],
     });
@@ -148,6 +170,11 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     params: Record<string, any>,
     client: ProxmoxClient
   ): Promise<{ data: any; metadata: any }> {
+    // System-level actions (no node required)
+    if (action === "get_version") {
+      return this.handleSystemAction(action, params, client);
+    }
+
     // Node-level actions
     if (
       action.startsWith("node_") ||
@@ -195,18 +222,44 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         }
         return statusResult;
 
-      case "node_resources":
+      case "node_storage":
         if (!params.node) {
-          throw new Error("node parameter required for node_resources");
+          throw new Error("node parameter required for node_storage");
         }
-        const originalNodeResources = params.node;
-        const normalizedNodeResources = await this.normalizeNodeName(client, params.node);
-        const activeClientResources = this.apiClient || client;
-        const resourcesResult = await this.getNodeResources(activeClientResources, normalizedNodeResources);
-        if (originalNodeResources !== normalizedNodeResources) {
-          resourcesResult.data._hint = `Note: Node name "${originalNodeResources}" was normalized to "${normalizedNodeResources}". For future queries, use the exact node name "${normalizedNodeResources}" or call "list_nodes" first to see available nodes.`;
+        const originalNodeStorage = params.node;
+        const normalizedNodeStorage = await this.normalizeNodeName(client, params.node);
+        const activeClientStorage = this.apiClient || client;
+        const storageResult = await this.getNodeStorage(activeClientStorage, normalizedNodeStorage);
+        if (originalNodeStorage !== normalizedNodeStorage) {
+          storageResult.data._hint = `Note: Node name "${originalNodeStorage}" was normalized to "${normalizedNodeStorage}". For future queries, use the exact node name "${normalizedNodeStorage}" or call "list_nodes" first to see available nodes.`;
         }
-        return resourcesResult;
+        return storageResult;
+
+      case "node_services":
+        if (!params.node) {
+          throw new Error("node parameter required for node_services");
+        }
+        const originalNodeServices = params.node;
+        const normalizedNodeServices = await this.normalizeNodeName(client, params.node);
+        const activeClientServices = this.apiClient || client;
+        const servicesResult = await this.getNodeServices(activeClientServices, normalizedNodeServices);
+        if (originalNodeServices !== normalizedNodeServices) {
+          servicesResult.data._hint = `Note: Node name "${originalNodeServices}" was normalized to "${normalizedNodeServices}". For future queries, use the exact node name "${normalizedNodeServices}" or call "list_nodes" first to see available nodes.`;
+        }
+        return servicesResult;
+
+      case "node_tasks":
+        if (!params.node) {
+          throw new Error("node parameter required for node_tasks");
+        }
+        const originalNodeTasks = params.node;
+        const normalizedNodeTasks = await this.normalizeNodeName(client, params.node);
+        const activeClientTasks = this.apiClient || client;
+        const tasksResult = await this.getNodeTasks(activeClientTasks, normalizedNodeTasks);
+        if (originalNodeTasks !== normalizedNodeTasks) {
+          tasksResult.data._hint = `Note: Node name "${originalNodeTasks}" was normalized to "${normalizedNodeTasks}". For future queries, use the exact node name "${normalizedNodeTasks}" or call "list_nodes" first to see available nodes.`;
+        }
+        return tasksResult;
 
       case "node_disks":
         if (!params.node) {
@@ -377,6 +430,23 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
       default:
         throw new Error(`Unknown VM action: ${action}`);
+    }
+  }
+
+  /**
+   * Handle system-level actions (no node required)
+   */
+  private async handleSystemAction(
+    action: string,
+    params: Record<string, any>,
+    client: ProxmoxClient
+  ): Promise<{ data: any; metadata: any }> {
+    switch (action) {
+      case "get_version":
+        return this.getVersion(client);
+
+      default:
+        throw new Error(`Unknown system action: ${action}`);
     }
   }
 
@@ -718,38 +788,103 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   }
 
   /**
-   * Get node resources (CPU, memory, disk, network)
+   * Get node storage
    */
-  private async getNodeResources(
+  private async getNodeStorage(
     client: ProxmoxClient,
     node: string
   ): Promise<{ data: any; metadata: any }> {
-    const result = await client.get(`/nodes/${node}/status`);
-    const status = result.data.data || {};
+    const result = await client.get(`/nodes/${node}/storage`);
+    const storage = result.data.data || [];
 
-    // Normalize with memory fields at top level so normalization works correctly
+    const normalized = storage.map((s: any) =>
+      normalizeProxmoxResponse({
+        storage: s.storage,
+        type: s.type,
+        content: s.content,
+        shared: s.shared,
+        active: s.active,
+        enabled: s.enabled,
+        used: s.used,
+        avail: s.avail,
+        total: s.total,
+        used_fraction: s.used_fraction,
+      })
+    );
+
+    return {
+      data: { node, storage: normalized, count: normalized.length },
+      metadata: result.metadata,
+    };
+  }
+
+  /**
+   * Get node services
+   */
+  private async getNodeServices(
+    client: ProxmoxClient,
+    node: string
+  ): Promise<{ data: any; metadata: any }> {
+    const result = await client.get(`/nodes/${node}/services`);
+    const services = result.data.data || [];
+
+    const normalized = services.map((s: any) =>
+      normalizeProxmoxResponse({
+        name: s.name,
+        state: s.state,
+        active_state: s.active_state,
+        sub_state: s.sub_state,
+      })
+    );
+
+    return {
+      data: { node, services: normalized, count: normalized.length },
+      metadata: result.metadata,
+    };
+  }
+
+  /**
+   * Get node tasks
+   */
+  private async getNodeTasks(
+    client: ProxmoxClient,
+    node: string
+  ): Promise<{ data: any; metadata: any }> {
+    const result = await client.get(`/nodes/${node}/tasks`);
+    const tasks = result.data.data || [];
+
+    const normalized = tasks.map((t: any) =>
+      normalizeProxmoxResponse({
+        upid: t.upid,
+        type: t.type,
+        id: t.id,
+        user: t.user,
+        status: t.status,
+        starttime: t.starttime,
+        endtime: t.endtime,
+        node: t.node,
+      })
+    );
+
+    return {
+      data: { node, tasks: normalized, count: normalized.length },
+      metadata: result.metadata,
+    };
+  }
+
+  /**
+   * Get Proxmox version
+   */
+  private async getVersion(
+    client: ProxmoxClient
+  ): Promise<{ data: any; metadata: any }> {
+    const result = await client.get("/version");
+    const version = result.data.data || {};
+
     const normalized = normalizeProxmoxResponse({
-      node,
-      status: status.status,
-      cpu: status.cpu,
-      maxcpu: status.maxcpu,
-      mem: status.mem,
-      maxmem: status.maxmem,
-      uptime: status.uptime,
-      kversion: status.kversion,
-      pveversion: status.pveversion,
-      // Also include structured format for convenience
-      cpu_info: {
-        usage: status.cpu,
-        cores: status.maxcpu,
-      },
-      memory_info: {
-        used: status.mem,
-        total: status.maxmem,
-        free: status.maxmem - (status.mem || 0),
-        used_normalized: normalizeMemory(status.mem),
-        total_normalized: normalizeMemory(status.maxmem),
-      },
+      version: version.version,
+      release: version.release,
+      repoid: version.repoid,
     });
 
     return {
@@ -1377,22 +1512,13 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         });
       } else {
         try {
-          // Try to get agent status first (lighter permission check)
-          let agentAvailable = false;
-          try {
-            const statusResult = await client.get(
-              `/nodes/${node}/qemu/${vmid}/agent/status`
-            );
-            agentAvailable = statusResult.data?.data?.result?.status === "enabled";
-          } catch (statusError: any) {
-            // Status check failed, but continue to try network-get-interfaces
-            pceLogger.debug("Agent status check failed", { error: statusError.message });
-    }
-
-          // Query guest agent for network interfaces
-      const agentResult = await client.get(
-        `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
-      );
+          // Query guest agent for network interfaces directly
+          // Note: /agent/status endpoint does not exist in Proxmox API (returns 501)
+          // Valid endpoints: /agent/network-get-interfaces, /agent/ping, /agent/get-osinfo, etc.
+          // We go straight to network-get-interfaces which is the correct endpoint
+          const agentResult = await client.get(
+            `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
+          );
       const interfaces = agentResult.data.data?.result || [];
 
           if (!Array.isArray(interfaces) || interfaces.length === 0) {
@@ -1447,6 +1573,12 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
               layer: 2,
               source: "guest_agent",
               method: `Guest agent query failed: Server error (500). Guest agent may not be running in the VM or VM may be stopped.`,
+            });
+          } else if (statusCode === 501) {
+            resolutionLayers.push({
+              layer: 2,
+              source: "guest_agent",
+              method: `Guest agent query failed: Feature not implemented (501). This endpoint may not be available on this Proxmox version or the guest agent feature is not enabled.`,
             });
           } else {
             resolutionLayers.push({

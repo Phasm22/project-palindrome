@@ -203,16 +203,96 @@ const args = process.argv.slice(2);
 if (args[0] === "hello") {
   console.log("Agent online.");
   process.exit(0);
-} else if (args[0] === "ask") {
-  const question = args.slice(1).join(" ");
-  if (!question) {
-    console.log("Usage: agent ask \"your question\"");
+} else if (args[0] === "ask" || args[0] === "pce") {
+  // Unified agent mode: uses PCE (Hybrid RAG) by default
+  // "ask" and "pce" are now aliases - both use the same functionality
+  const flags: { [key: string]: boolean } = {};
+  const nonFlagArgs: string[] = [];
+  
+  for (const arg of args.slice(1)) {
+    if (arg.startsWith("--")) {
+      flags[arg.slice(2)] = true;
+    } else {
+      nonFlagArgs.push(arg);
+    }
+  }
+  
+  const prompt = nonFlagArgs.join(" ");
+  if (!prompt) {
+    console.log(`Usage: agent ${args[0]} [--yes|--auto-approve] [--stream] "your question"`);
+    console.log("\nFlags:");
+    console.log("  --yes, --auto-approve    Auto-approve high-risk operations (write actions)");
+    console.log("  --stream                 Stream events in real-time via SSE");
     process.exit(1);
   }
-  const res = await runAgent(question);
-  console.log(res.text);
-  process.exit(0);
-} else if (args[0] === "pce") {
+
+  try {
+    const userId = process.env.PCE_USER_ID || "default-user";
+    const aclGroup = process.env.PCE_ACL_GROUP || "viewer";
+    const useStream = flags.stream || process.env.PCE_STREAM === "true";
+    const autoApprove = flags.yes || flags["auto-approve"] || process.env.PCE_AUTO_APPROVE_HIGH_RISK_TOOLS === "true";
+    
+    const confirmHighRisk = async (info: { toolName: string; parameters: Record<string, any>; risk: string }): Promise<boolean> => {
+      if (autoApprove) {
+        console.log(`\n⚠️  Auto-approving ${info.risk}-risk operation: ${info.toolName}`);
+        console.log(`   Parameters: ${JSON.stringify(info.parameters, null, 2)}\n`);
+        return true;
+      }
+      return confirmHighRiskPrompt(info);
+    };
+    
+    if (useStream) {
+      const apiUrl = process.env.PCE_API_URL || "http://localhost:4000";
+      const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      
+      const agentPromise = runAgent(prompt, {
+        userId,
+        aclGroup,
+        ragBaseUrl: apiUrl,
+        confirmHighRisk,
+        sessionId,
+      });
+      
+      const eventSource = new EventSource(`${apiUrl}/api/agent/stream?sessionId=${sessionId}`);
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const agentEvent = JSON.parse(event.data);
+          handleStreamEvent(agentEvent);
+        } catch (error: any) {
+          console.error("Error parsing SSE event:", error.message);
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error("SSE connection error:", error);
+        eventSource.close();
+      };
+      
+      const response = await agentPromise;
+      await new Promise(resolve => setTimeout(resolve, 500));
+      eventSource.close();
+      
+      if (response.text) {
+        console.log("\n" + response.text);
+      }
+    } else {
+      const response = await runAgent(prompt, {
+        userId,
+        aclGroup,
+        ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
+        confirmHighRisk,
+      });
+      
+      console.log(response.text);
+    }
+    
+    process.exit(0);
+  } catch (error: any) {
+    console.error("Error:", error.message);
+    process.exit(1);
+  }
+} else if (args[0] === "pce-api") {
   // Parse flags
   const flags: { [key: string]: boolean } = {};
   const nonFlagArgs: string[] = [];
@@ -313,7 +393,8 @@ if (args[0] === "hello") {
     process.exit(1);
   }
 } else if (args[0] === "pce-api") {
-  // Legacy API-only mode (RAG only, no tool calling)
+  // DEPRECATED: Use "agent ask" or "agent pce" instead (both now use PCE with tool calling)
+  // Legacy API-only mode (RAG only, no tool calling) - kept for backward compatibility
   const prompt = args.slice(1).join(" ");
   if (!prompt) {
     console.log("Usage: agent pce-api \"your question\"");
@@ -533,14 +614,19 @@ if (args[0] === "hello") {
   const readonlyActions: Record<string, string> = {
     "list-nodes": "list_nodes",
     "node-status": "node_status",
-    "node-resources": "node_resources",
+    "node-storage": "node_storage",
+    "node-services": "node_services",
+    "node-tasks": "node_tasks",
     "node-disks": "node_disks",
     "node-network": "node_network_interfaces",
+    "version": "get_version",
     "list-vms": "list_vms",
     "vm-status": "get_vm_status",
     "vm-config": "get_vm_config",
     "vm-network": "get_vm_network",
     "vm-snapshots": "get_vm_snapshots",
+    "get-vm-ip": "get_vm_ip",
+    "vm-ip": "get_vm_ip", // Alias for convenience
     "cluster-resources": "cluster_resources",
     "cluster-status": "cluster_status",
     "cluster-ceph": "cluster_ceph_status",
@@ -563,6 +649,8 @@ if (args[0] === "hello") {
     console.log("    vm-config               - Get VM configuration (requires --node, --vmid)");
     console.log("    vm-network              - Get VM network info (requires --node, --vmid)");
     console.log("    vm-snapshots            - List VM snapshots (requires --node, --vmid)");
+    console.log("    get-vm-ip               - Get VM IP address (requires --node, --vmid, optional --type)");
+    console.log("    vm-ip                   - Alias for get-vm-ip");
     console.log("  VM-Level (write actions):");
     console.log("    start-vm                - Start a VM (requires --node, --vmid, optional --type)");
     console.log("    stop-vm                 - Stop a VM (requires --node, --vmid, optional --type)");
@@ -585,6 +673,7 @@ if (args[0] === "hello") {
     console.log("  agent proxmox list-vms --node=yin");
     console.log("  agent proxmox start-vm --node=YANG --vmid=105 --type=lxc");
     console.log("  agent proxmox vm-status --node=yin --vmid=200");
+    console.log("  agent proxmox get-vm-ip --node=proxBig --vmid=100");
     console.log("  agent proxmox cluster-status");
   };
 
@@ -636,7 +725,11 @@ if (args[0] === "hello") {
 
   const readonlyAction = readonlyActions[actionName];
   if (!readonlyAction) {
-    console.error(`Unknown action: ${actionName}`);
+    console.error(`❌ Unknown action: ${actionName}`);
+    console.error(`\nAvailable actions:`);
+    console.error(`  Read-only: ${Object.keys(readonlyActions).join(", ")}`);
+    console.error(`  Write: ${Object.keys(writeActions).join(", ")}`);
+    console.error(`\nUse 'agent proxmox help' for full documentation.`);
     printProxmoxHelp();
     process.exit(1);
   }
@@ -698,8 +791,9 @@ if (args[0] === "hello") {
   console.log("Usage: agent <command>");
   console.log("Commands:");
   console.log("  hello         - Check if agent is online");
-  console.log("  ask           - Ask the agent a question");
-  console.log("  pce           - Query the PCE API (Hybrid RAG)");
+  console.log("  ask           - Ask the agent a question (uses PCE/Hybrid RAG)");
+  console.log("  pce           - Alias for 'ask' (uses PCE/Hybrid RAG)");
+  console.log("  pce-api       - DEPRECATED: Legacy RAG-only mode (use 'ask' instead)");
   console.log("  repl          - Start interactive REPL");
   console.log("  opnsense      - Test OPNsense tool directly");
   console.log("    status      - Get OPNsense system status");

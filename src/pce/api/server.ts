@@ -536,14 +536,88 @@ export class PceApiServer {
 
   private async handleClusterStatus(req: Request): Promise<Response> {
     try {
-      // This would need to call Proxmox tools internally
-      // For now, return a placeholder structure
-      // TODO: Integrate with ProxmoxClient to get real cluster status
+      // Check if Proxmox environment variables are set
+      const proxmoxUrl = process.env.PROXMOX_URL;
+      const proxmoxTokenId = process.env.PROXMOX_TOKEN_ID || process.env.PROXMOX_API_TOKEN_ID;
+      const proxmoxTokenSecret = process.env.PROXMOX_TOKEN_SECRET || process.env.PROXMOX_API_TOKEN_SECRET;
+
+      if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
+        return this.jsonResponse(200, {
+          nodes: [],
+          vms: [],
+          alerts: [],
+          message: "Proxmox not configured (missing environment variables)",
+        });
+      }
+
+      // Import Proxmox tools dynamically to avoid circular dependencies
+      const { ProxmoxClient } = await import("../../tools/proxmox/client");
+      const { ProxmoxReadOnlyTool } = await import("../../tools/proxmox/readonly/proxmox-readonly-tool");
+
+      // Create Proxmox client
+      const client = new ProxmoxClient({
+        url: proxmoxUrl,
+        tokenId: proxmoxTokenId,
+        tokenSecret: proxmoxTokenSecret,
+        verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+      });
+
+      const tool = new ProxmoxReadOnlyTool();
+      const context = { toolName: "proxmox_readonly", startedAt: Date.now() };
+
+      // Fetch cluster data in parallel
+      const [nodesResult, clusterStatusResult, resourcesResult] = await Promise.all([
+        tool.execute({ action: "list_nodes" }, context),
+        tool.execute({ action: "cluster_status" }, context),
+        tool.execute({ action: "cluster_resources" }, context),
+      ]);
+
+      // Handle errors gracefully
+      if (nodesResult.error) {
+        pceLogger.warn("Failed to fetch nodes for cluster status", { error: nodesResult.error });
+      }
+      if (clusterStatusResult.error) {
+        pceLogger.warn("Failed to fetch cluster status", { error: clusterStatusResult.error });
+      }
+      if (resourcesResult.error) {
+        pceLogger.warn("Failed to fetch cluster resources", { error: resourcesResult.error });
+      }
+
+      const nodes = nodesResult.data?.nodes || [];
+      const clusterStatus = clusterStatusResult.data || {};
+      const resources = resourcesResult.data?.resources || [];
+
+      // Aggregate VM statistics
+      const runningVms = resources.filter((r: any) => r.status === "running");
+      const stoppedVms = resources.filter((r: any) => r.status === "stopped");
+      const totalVms = resources.length;
+
+      // Aggregate node statistics
+      const onlineNodes = nodes.filter((n: any) => n.status_normalized === "online" || n.status === "online");
+      const offlineNodes = nodes.filter((n: any) => n.status_normalized === "offline" || n.status === "offline");
+
       return this.jsonResponse(200, {
-        nodes: [],
-        vms: [],
-        alerts: [],
-        message: "Cluster status endpoint - implementation pending Proxmox integration",
+        quorum: clusterStatus.quorum || null,
+        nodes: {
+          total: nodes.length,
+          online: onlineNodes.length,
+          offline: offlineNodes.length,
+          list: nodes.map((n: any) => ({
+            name: n.node,
+            status: n.status_normalized || n.status,
+            cpu: n.cpu,
+            memory: n.mem_normalized || n.mem,
+            uptime: n.uptime,
+          })),
+        },
+        vms: {
+          total: totalVms,
+          running: runningVms.length,
+          stopped: stoppedVms.length,
+          resources: resources.slice(0, 50), // Limit to first 50 for performance
+        },
+        alerts: [], // TODO: Implement alert detection
+        timestamp: new Date().toISOString(),
       });
     } catch (error: any) {
       pceLogger.error("Failed to fetch cluster status", { error: error.message });

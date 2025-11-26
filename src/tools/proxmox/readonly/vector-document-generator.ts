@@ -102,19 +102,15 @@ export async function generateNodeProfileDocument(
     { toolName: "proxmox_readonly", startedAt: Date.now() }
   );
 
-  const resourcesResult = await tool.execute(
-    { action: "node_resources", node },
-    { toolName: "proxmox_readonly", startedAt: Date.now() }
-  );
-
-  if (statusResult.error || resourcesResult.error) {
+  if (statusResult.error) {
     throw new Error(
-      `Failed to generate node profile: ${statusResult.error || resourcesResult.error}`
+      `Failed to generate node profile: ${statusResult.error}`
     );
   }
 
   const status = statusResult.data || {};
-  const resources = resourcesResult.data || {};
+  // node_status provides the same information as node_resources (which was removed)
+  const resources = status;
 
   const lines: string[] = [];
 

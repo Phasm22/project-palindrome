@@ -33,6 +33,10 @@ export interface QdrantPayload {
   chunk_index: number;
   total_chunks: number;
   chunk_id?: string; // Store original chunk ID for retrieval
+  // Enhanced metadata fields
+  agent_id?: string;
+  time_series_window?: string;
+  document_version?: string;
 }
 
 /**
@@ -49,6 +53,10 @@ export function metadataToPayload(metadata: ChunkMetadata, text: string, chunkId
     chunk_index: metadata.chunkIndex,
     total_chunks: metadata.totalChunks,
     chunk_id: chunkId, // Store original chunk ID
+    // Enhanced metadata fields (optional)
+    agent_id: metadata.agent_ID,
+    time_series_window: metadata.time_series_window,
+    document_version: metadata.document_version,
   };
 }
 
@@ -64,6 +72,10 @@ export function payloadToMetadata(payload: QdrantPayload): ChunkMetadata {
     timestamp: new Date(payload.timestamp),
     chunkIndex: payload.chunk_index,
     totalChunks: payload.total_chunks,
+    // Enhanced metadata fields (optional)
+    agent_ID: payload.agent_id,
+    time_series_window: payload.time_series_window,
+    document_version: payload.document_version,
   };
 }
 
