@@ -19,6 +19,13 @@ import {
   listVmsWithoutAgentChain,
   listStoppedVmsChain,
 } from "../reasoning/chains/compute";
+import { detectNetworkIntent, type NetworkIntent } from "../reasoning/detectNetworkIntent";
+import {
+  describeNetworkChain,
+  listNodeInterfacesChain,
+  reachabilityChain,
+  vmsBySubnetChain,
+} from "../reasoning/chains/network";
 
 let openaiClient: OpenAI | null = null;
 
@@ -124,6 +131,30 @@ async function executeComputeIntent(
   }
 }
 
+async function executeNetworkIntent(
+  intent: NetworkIntent,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string | null> {
+  try {
+    switch (intent.type) {
+      case "describe_network":
+        return await describeNetworkChain(tools, session);
+      case "node_interfaces":
+        return await listNodeInterfacesChain(tools, session, intent.nodeName);
+      case "vms_by_subnet":
+        return await vmsBySubnetChain(tools, session, intent.subnet);
+      case "reachability":
+        return await reachabilityChain(tools, session, intent.fromId);
+      default:
+        return null;
+    }
+  } catch (error: any) {
+    logger.error(`Network reasoning chain failed: ${error.message}`);
+    return null;
+  }
+}
+
 export type AgentRunOptions = {
   stream?: boolean;
   userId?: string;
@@ -179,6 +210,15 @@ export async function runAgent(
     if (twinAnswer) {
       logger.info("Responding via twin-first reasoning chain (no LLM needed).");
       return { text: twinAnswer };
+    }
+  }
+
+  const networkIntent = detectNetworkIntent(userInput);
+  if (networkIntent) {
+    const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
+    if (networkAnswer) {
+      logger.info("Responding via twin-first network reasoning chain.");
+      return { text: networkAnswer };
     }
   }
 

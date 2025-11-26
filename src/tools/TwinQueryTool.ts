@@ -11,10 +11,16 @@ const TwinQueryParams = z.object({
     "vms_by_node",
     "vms_without_agent",
     "stopped_vms_on_node",
+    "network_list_interfaces",
+    "network_interfaces_by_node",
+    "network_vms_by_subnet",
+    "network_reachability",
   ]),
   params: z
     .object({
       nodeName: z.string().optional(),
+      subnet: z.string().optional(),
+      fromId: z.string().optional(),
     })
     .partial()
     .optional(),
@@ -55,6 +61,18 @@ export class TwinQueryTool extends BaseTool {
         {
           description: "List VMs on proxBig that are stopped",
           parameters: { operation: "stopped_vms_on_node", params: { nodeName: "proxBig" } },
+        },
+        {
+          description: "Show all network interfaces",
+          parameters: { operation: "network_list_interfaces" },
+        },
+        {
+          description: "List interfaces on proxBig",
+          parameters: { operation: "network_interfaces_by_node", params: { nodeName: "proxBig" } },
+        },
+        {
+          description: "Find VMs sharing subnet 172.16.0.0/22",
+          parameters: { operation: "network_vms_by_subnet", params: { subnet: "172.16.0.0/22" } },
         },
       ],
     });
@@ -99,6 +117,34 @@ export class TwinQueryTool extends BaseTool {
           }
           const data = await this.service.stoppedVmsOnNode(nodeName);
           return { data: { kind: "vm_list", nodeName, data } };
+        }
+        case "network_list_interfaces": {
+          const data = await this.service.listInterfaces();
+          return { data: { kind: "network_interface_list", data } };
+        }
+        case "network_interfaces_by_node": {
+          const nodeName = opParams?.nodeName;
+          if (!nodeName) {
+            return { error: "nodeName is required for network_interfaces_by_node" };
+          }
+          const data = await this.service.interfacesByNode(nodeName);
+          return { data: { kind: "network_interface_list", nodeName, data } };
+        }
+        case "network_vms_by_subnet": {
+          const subnet = opParams?.subnet;
+          if (!subnet) {
+            return { error: "subnet is required for network_vms_by_subnet" };
+          }
+          const data = await this.service.vmsBySubnet(subnet);
+          return { data: { kind: "vm_list", subnet, data } };
+        }
+        case "network_reachability": {
+          const fromId = opParams?.fromId;
+          if (!fromId) {
+            return { error: "fromId is required for network_reachability" };
+          }
+          const data = await this.service.reachability(fromId);
+          return { data: { kind: "reachability", fromId, data } };
         }
         default:
           return { error: `Unsupported operation: ${operation}` };

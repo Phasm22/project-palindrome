@@ -3,6 +3,8 @@ import { z } from "zod";
 export enum TwinEntityType {
   COMPUTE_NODE = "compute_node",
   COMPUTE_VM = "compute_vm",
+  NETWORK_INTERFACE = "network_interface",
+  NETWORK_SUBNET = "network_subnet",
 }
 
 const BaseTwinEntitySchema = z.object({
@@ -36,12 +38,42 @@ export const ComputeVmEntitySchema = BaseTwinEntitySchema.extend({
   }),
 });
 
+export const NetworkInterfaceEntitySchema = BaseTwinEntitySchema.extend({
+  type: z.literal(TwinEntityType.NETWORK_INTERFACE),
+  data: z.object({
+    nodeName: z.string(),
+    vmId: z.string().nullable().optional(),
+    name: z.string(),
+    mac: z.string().nullable().optional(),
+    ips: z.array(z.string()).default([]),
+    primaryIp: z.string().nullable().optional(),
+    cidrs: z.array(z.string()).default([]),
+    status: z.enum(["up", "down", "unknown"]).optional(),
+    vlan: z.string().nullable().optional(),
+    parent: z.string().nullable().optional(),
+  }),
+});
+
+export const NetworkSubnetEntitySchema = BaseTwinEntitySchema.extend({
+  type: z.literal(TwinEntityType.NETWORK_SUBNET),
+  data: z.object({
+    cidr: z.string(),
+    mask: z.number(),
+    gateway: z.string().nullable().optional(),
+    interfaceCount: z.number().default(0),
+  }),
+});
+
 export const TwinEntitySchema = z.union([
   ComputeNodeEntitySchema,
   ComputeVmEntitySchema,
+  NetworkInterfaceEntitySchema,
+  NetworkSubnetEntitySchema,
 ]);
 
 export type TwinEntity = z.infer<typeof TwinEntitySchema>;
 export type ComputeNodeEntity = z.infer<typeof ComputeNodeEntitySchema>;
 export type ComputeVmEntity = z.infer<typeof ComputeVmEntitySchema>;
+export type NetworkInterfaceEntity = z.infer<typeof NetworkInterfaceEntitySchema>;
+export type NetworkSubnetEntity = z.infer<typeof NetworkSubnetEntitySchema>;
 

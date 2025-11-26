@@ -18,6 +18,8 @@
     "pce:provenance-audit": "bun run scripts/run-provenance-audit.ts",
     "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts",
     "pce:ingest-proxmox": "bun run scripts/ingest-proxmox.ts",
+    "pce:ingest-network": "bun run scripts/ingest-network.ts",
+    "pce:ingest-all": "bun run scripts/ingest-all.ts",
     "pce:debug-vector": "bun run src/pce/debug-vector.ts",
     "pce:check-indexed": "bun run src/pce/check-indexed.ts",
     "opnsense:generate-unified-schema": "bun run src/tools/opnsense/generate-unified-schema.ts",

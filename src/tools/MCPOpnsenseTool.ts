@@ -403,5 +403,12 @@ export class MCPOpnsenseTool extends BaseTool {
     }
     return info;
   }
+
+  close(): void {
+    this.mcpClient?.close();
+    this.mcpClient = null;
+    this.discoveryComplete = false;
+    this.discoveryPromise = null;
+  }
 }
 

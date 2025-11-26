@@ -3,6 +3,8 @@ import { z } from "zod";
 export enum TwinRelationshipType {
   HOSTS = "HOSTS",
   RUNS_ON = "RUNS_ON",
+  CONNECTS_TO = "CONNECTS_TO",
+  ROUTES_TO = "ROUTES_TO",
 }
 
 const BaseRelationshipSchema = z.object({
@@ -22,9 +24,19 @@ export const RunsOnRelationshipSchema = BaseRelationshipSchema.extend({
   type: z.literal(TwinRelationshipType.RUNS_ON),
 });
 
+export const ConnectsToRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.CONNECTS_TO),
+});
+
+export const RoutesToRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.ROUTES_TO),
+});
+
 export const TwinRelationshipSchema = z.union([
   HostsRelationshipSchema,
   RunsOnRelationshipSchema,
+  ConnectsToRelationshipSchema,
+  RoutesToRelationshipSchema,
 ]);
 
 export type TwinRelationship = z.infer<typeof TwinRelationshipSchema>;

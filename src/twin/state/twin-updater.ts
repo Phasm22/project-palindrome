@@ -2,6 +2,7 @@ import neo4j from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 import type { TwinEntity } from "../models/entities";
 import { TwinEntityType } from "../models/entities";
+import { TwinEntityType } from "../models/entities";
 import type { TwinRelationship } from "../models/relationships";
 
 export interface TwinUpdateOptions {
@@ -61,7 +62,12 @@ export class TwinUpdateService {
                 n.agentAvailable = $agentAvailable,
                 n.nodeId = $nodeId,
                 n.nodeName = $nodeName,
-                n.normalizedNodeName = $normalizedNodeName
+                n.normalizedNodeName = $normalizedNodeName,
+                n.vmId = $vmId,
+                n.primaryIp = $primaryIp,
+                n.gateway = $gateway,
+                n.cidr = $cidr,
+                n.ips = $ips
           `,
           {
             id: entity.id,
@@ -77,6 +83,11 @@ export class TwinUpdateService {
             nodeId: props.nodeId,
             nodeName: props.nodeName,
             normalizedNodeName: props.normalizedNodeName,
+            vmId: props.vmId,
+            primaryIp: props.primaryIp,
+            gateway: props.gateway,
+            cidr: props.cidr,
+            ips: props.ips,
           }
         );
       }
@@ -127,6 +138,11 @@ export class TwinUpdateService {
       nodeId: null,
       nodeName: null,
       normalizedNodeName: null,
+      vmId: null,
+      primaryIp: null,
+      gateway: null,
+      cidr: null,
+      ips: null,
     };
 
     if (entity.type === TwinEntityType.COMPUTE_NODE) {
@@ -145,6 +161,22 @@ export class TwinUpdateService {
         typeof data.nodeId === "string" ? data.nodeId.split(":").pop() ?? null : null;
       props.nodeName = derivedNodeName;
       props.normalizedNodeName = derivedNodeName?.toLowerCase() ?? null;
+    }
+
+    if (entity.type === TwinEntityType.NETWORK_INTERFACE) {
+      props.status = data.status ?? null;
+      props.nodeName = data.nodeName ?? null;
+      props.normalizedNodeName = (data.nodeName || "")
+        .toString()
+        .toLowerCase();
+      props.vmId = data.vmId ?? null;
+      props.primaryIp = data.primaryIp ?? null;
+      props.ips = Array.isArray(data.ips) ? data.ips : null;
+    }
+
+    if (entity.type === TwinEntityType.NETWORK_SUBNET) {
+      props.cidr = data.cidr ?? null;
+      props.gateway = data.gateway ?? null;
     }
 
     return props;
