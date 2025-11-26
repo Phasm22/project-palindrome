@@ -11,6 +11,14 @@ import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession }
 import { sanitizeToolPayload } from "./tool-sanitizer";
 import { getReasoningTraceStore, type ReasoningStep } from "../pce/api/reasoning-trace-store";
 import { AgentEventBus } from "./event-bus";
+import type { BaseTool } from "../tools/BaseTool";
+import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-intents";
+import {
+  describeClusterChain,
+  listVmsByNodeChain,
+  listVmsWithoutAgentChain,
+  listStoppedVmsChain,
+} from "../reasoning/chains/compute";
 
 let openaiClient: OpenAI | null = null;
 
@@ -92,6 +100,30 @@ async function defaultConfirmHighRisk(toolName: string): Promise<boolean> {
   });
 }
 
+async function executeComputeIntent(
+  intent: ComputeIntent,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string | null> {
+  try {
+    switch (intent.type) {
+      case "describe_cluster":
+        return await describeClusterChain(tools, session);
+      case "vms_by_node":
+        return await listVmsByNodeChain(tools, session, intent.nodeName);
+      case "vms_without_agent":
+        return await listVmsWithoutAgentChain(tools, session);
+      case "stopped_vms_on_node":
+        return await listStoppedVmsChain(tools, session, intent.nodeName);
+      default:
+        return null;
+    }
+  } catch (error: any) {
+    logger.error(`Twin reasoning chain failed: ${error.message}`);
+    return null;
+  }
+}
+
 export type AgentRunOptions = {
   stream?: boolean;
   userId?: string;
@@ -140,6 +172,16 @@ export async function runAgent(
   context.addUserMessage(userInput);
 
   const tools = loadTools();
+
+  const computeIntent = detectComputeIntent(userInput);
+  if (computeIntent) {
+    const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
+    if (twinAnswer) {
+      logger.info("Responding via twin-first reasoning chain (no LLM needed).");
+      return { text: twinAnswer };
+    }
+  }
+
   const openaiTools = buildToolDefinitions(tools);
   
   // Initialize reasoning trace
