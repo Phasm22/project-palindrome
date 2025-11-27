@@ -20,6 +20,10 @@ const TwinQueryParams = z.object({
     "firewall_rules_allowing_subnet",
     "firewall_rules_blocking_subnet",
     "firewall_exposure_map",
+    "exposure_vm_analysis",
+    "exposure_vms_by_subnet",
+    "exposure_path",
+    "exposure_internet_exposed",
   ]),
   params: z
     .object({
@@ -28,6 +32,9 @@ const TwinQueryParams = z.object({
       fromId: z.string().optional(),
       chain: z.string().optional(),
       vmId: z.string().optional(),
+      fromSubnet: z.string().optional(),
+      toVmId: z.string().optional(),
+      vmKind: z.enum(["qemu", "lxc", "all"]).optional(),
     })
     .partial()
     .optional(),
@@ -105,11 +112,53 @@ export class TwinQueryTool extends BaseTool {
     return TwinQueryParams;
   }
 
+  private normalizeVmKind(
+    value?: string
+  ): "qemu" | "lxc" | null | undefined {
+    if (!value) {
+      return undefined;
+    }
+    if (value === "all") {
+      return null;
+    }
+    if (value === "qemu" || value === "lxc") {
+      return value;
+    }
+    return undefined;
+  }
+
   async execute(
     params: Record<string, unknown>,
     _context: ExecutionContext
   ): Promise<ExecutionResult> {
-    const parsed = TwinQueryParams.safeParse(params);
+    const normalizedParams: Record<string, unknown> = { ...params };
+
+    if (normalizedParams.params == null) {
+      const fallbackKeys = [
+        "nodeName",
+        "subnet",
+        "fromId",
+        "chain",
+        "vmId",
+        "fromSubnet",
+        "toVmId",
+        "vmKind",
+      ] as const;
+      const fallbackParams: Record<string, unknown> = {};
+      let hasFallback = false;
+      for (const key of fallbackKeys) {
+        if (normalizedParams[key] !== undefined) {
+          fallbackParams[key] = normalizedParams[key];
+          delete normalizedParams[key];
+          hasFallback = true;
+        }
+      }
+      if (hasFallback) {
+        normalizedParams.params = fallbackParams;
+      }
+    }
+
+    const parsed = TwinQueryParams.safeParse(normalizedParams);
     if (!parsed.success) {
       return { error: `Invalid parameters: ${parsed.error.message}` };
     }
@@ -118,7 +167,8 @@ export class TwinQueryTool extends BaseTool {
     try {
       switch (operation) {
         case "describe_cluster": {
-          const data = await this.service.describeCluster();
+          const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
+          const data = await this.service.describeCluster(vmKind ?? undefined);
           return { data: { kind: "cluster_overview", data } };
         }
         case "vms_by_node": {
@@ -126,11 +176,13 @@ export class TwinQueryTool extends BaseTool {
           if (!nodeName) {
             return { error: "nodeName is required for vms_by_node" };
           }
-          const data = await this.service.vmsByNode(nodeName);
+          const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
+          const data = await this.service.vmsByNode(nodeName, { vmKind: vmKind ?? undefined });
           return { data: { kind: "vm_list", nodeName, data } };
         }
         case "vms_without_agent": {
-          const data = await this.service.vmsWithoutAgent();
+          const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
+          const data = await this.service.vmsWithoutAgent(vmKind ?? undefined);
           return { data: { kind: "vm_list", data } };
         }
         case "stopped_vms_on_node": {
@@ -138,7 +190,8 @@ export class TwinQueryTool extends BaseTool {
           if (!nodeName) {
             return { error: "nodeName is required for stopped_vms_on_node" };
           }
-          const data = await this.service.stoppedVmsOnNode(nodeName);
+          const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
+          const data = await this.service.stoppedVmsOnNode(nodeName, { vmKind: vmKind ?? undefined });
           return { data: { kind: "vm_list", nodeName, data } };
         }
         case "network_list_interfaces": {
@@ -201,6 +254,35 @@ export class TwinQueryTool extends BaseTool {
           const vmId = opParams?.vmId;
           const data = await this.service.exposureMap(vmId);
           return { data: { kind: "exposure_map", vmId, data } };
+        }
+        case "exposure_vm_analysis": {
+          const vmId = opParams?.vmId;
+          if (!vmId) {
+            return { error: "vmId is required for exposure_vm_analysis" };
+          }
+          const data = await this.service.vmExposure(vmId);
+          return { data: { kind: "vm_exposure", vmId, data } };
+        }
+        case "exposure_vms_by_subnet": {
+          const subnet = opParams?.subnet;
+          if (!subnet) {
+            return { error: "subnet is required for exposure_vms_by_subnet" };
+          }
+          const data = await this.service.vmsExposedToSubnet(subnet);
+          return { data: { kind: "vms_exposed_to_subnet", subnet, data } };
+        }
+        case "exposure_path": {
+          const fromSubnet = opParams?.fromSubnet;
+          const toVmId = opParams?.toVmId;
+          if (!fromSubnet || !toVmId) {
+            return { error: "fromSubnet and toVmId are required for exposure_path" };
+          }
+          const data = await this.service.exposurePath(fromSubnet, toVmId);
+          return { data: { kind: "exposure_path", fromSubnet, toVmId, data } };
+        }
+        case "exposure_internet_exposed": {
+          const data = await this.service.internetExposedVms();
+          return { data: { kind: "internet_exposed_vms", data } };
         }
         default:
           return { error: `Unsupported operation: ${operation}` };

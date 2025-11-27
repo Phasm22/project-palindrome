@@ -4,28 +4,53 @@ import { executeToolCall } from "../../agent/tool-executor";
 
 function formatVmList(
   title: string,
-  vms: Array<{ name?: string; id?: string; state?: string; nodeName?: string; agentAvailable?: boolean }>
+  vms: Array<{
+    name?: string;
+    id?: string;
+    state?: string;
+    nodeName?: string;
+    agentAvailable?: boolean;
+    vmKind?: "qemu" | "lxc";
+  }>
 ): string {
+  const lines = [title];
   if (!vms.length) {
-    return `${title}\n- None`;
+    lines.push("- None discovered in the twin.");
+    return lines.join("\n");
   }
 
-  const lines = [title];
   for (const vm of vms) {
-    const parts = [
-      vm.name || vm.id || "Unnamed VM",
+    const label = vm.name || vm.id || "Unnamed compute entity";
+    const vmType = vm.vmKind === "lxc" ? "LXC container" : "QEMU VM";
+    const state = vm.state ? vm.state : "unknown state";
+    lines.push(`- ${label} (${vmType}, ${state})`);
+
+    const detailParts = [
       vm.nodeName ? `node=${vm.nodeName}` : null,
-      vm.state ? `state=${vm.state}` : null,
-      vm.agentAvailable !== undefined ? `agent=${vm.agentAvailable ? "available" : "missing"}` : null,
+      `trace=${vm.id ?? "unknown"}`,
     ].filter(Boolean);
-    lines.push(`- ${parts.join(" | ")}`);
+    lines.push(`  - Details: ${detailParts.join(" | ")}`);
+    const agentNote =
+      vm.agentAvailable === undefined
+        ? "agent status unknown"
+        : vm.agentAvailable
+        ? "guest agent detected"
+        : "guest agent missing";
+    lines.push(`  - Source: Digital twin (Proxmox ingest); ${agentNote}.`);
   }
+
+  lines.push(
+    "Tip: Use twin_query with the trace ID above to retrieve raw fields for auditing."
+  );
   return lines.join("\n");
 }
 
 export async function describeClusterChain(tools: BaseTool[], session: ToolSession): Promise<string> {
   const result = await executeToolCall(
-    { toolName: "twin_query", parameters: { operation: "describe_cluster" } },
+    {
+      toolName: "twin_query",
+      parameters: { operation: "describe_cluster", params: { vmKind: "qemu" } },
+    },
     tools,
     session
   );
@@ -60,7 +85,7 @@ export async function listVmsByNodeChain(
   const result = await executeToolCall(
     {
       toolName: "twin_query",
-      parameters: { operation: "vms_by_node", params: { nodeName } },
+      parameters: { operation: "vms_by_node", params: { nodeName, vmKind: "qemu" } },
     },
     tools,
     session
@@ -77,7 +102,10 @@ export async function listVmsByNodeChain(
 
 export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolSession): Promise<string> {
   const result = await executeToolCall(
-    { toolName: "twin_query", parameters: { operation: "vms_without_agent" } },
+    {
+      toolName: "twin_query",
+      parameters: { operation: "vms_without_agent", params: { vmKind: "qemu" } },
+    },
     tools,
     session
   );
@@ -99,7 +127,7 @@ export async function listStoppedVmsChain(
   const result = await executeToolCall(
     {
       toolName: "twin_query",
-      parameters: { operation: "stopped_vms_on_node", params: { nodeName } },
+      parameters: { operation: "stopped_vms_on_node", params: { nodeName, vmKind: "qemu" } },
     },
     tools,
     session

@@ -30,6 +30,10 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
     return { type: "describe_cluster" };
   }
 
+  if (normalized.includes("all") && (normalized.includes("vm") || normalized.includes("virtual machine"))) {
+    return { type: "describe_cluster" };
+  }
+
   if (normalized.includes("guest agent")) {
     return { type: "vms_without_agent" };
   }

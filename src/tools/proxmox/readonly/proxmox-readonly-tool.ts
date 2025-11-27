@@ -497,6 +497,20 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   };
 
   /**
+   * Known node → endpoint map so we can query alternate clusters directly.
+   * This helps list_nodes discover nodes that live on separate API endpoints.
+   */
+  private static readonly NODE_ENDPOINT_MAP: Record<string, string> = {
+    proxbig: "https://proxBig.prox:8006",
+    yin: "https://yin.prox:8006",
+    yang: "https://yang.prox:8006",
+  };
+
+  private static normalizeNodeKey(name: string): string {
+    return name.toLowerCase().replace(/[_-]/g, "");
+  }
+
+  /**
    * Normalize node name by validating FIRST, then using fuzzy matching
    * This prevents 403 errors from trying non-existent node names
    * 
@@ -685,17 +699,9 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
    */
   private getAlternativeEndpoints(nodeName: string): Array<{ url: string; tokenId?: string; tokenSecret?: string }> {
     const endpoints: Array<{ url: string; tokenId?: string; tokenSecret?: string }> = [];
-    const normalizedName = nodeName.toLowerCase().replace(/[_-]/g, '');
+    const normalizedName = ProxmoxReadOnlyTool.normalizeNodeKey(nodeName);
     
-    // Map common node names to their likely endpoints
-    const nodeEndpointMap: Record<string, string> = {
-      'yin': 'https://yin.prox:8006',
-      'yang': 'https://yang.prox:8006',
-      'proxbig': 'https://proxBig.prox:8006',
-      'prox_big': 'https://proxBig.prox:8006',
-    };
-    
-    const endpoint = nodeEndpointMap[normalizedName];
+    const endpoint = ProxmoxReadOnlyTool.NODE_ENDPOINT_MAP[normalizedName];
     if (endpoint) {
       // Try to get node-specific credentials
       const nodeNameUpper = normalizedName.toUpperCase().replace(/[_-]/g, '');
@@ -713,57 +719,124 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   }
 
   /**
-   * List all nodes in the cluster
+   * List all nodes in the cluster (across primary + alternative endpoints)
    * Fetches basic node info from /nodes, then enriches with CPU/memory from /nodes/{node}/status
    */
-  private async listNodes(
-    client: ProxmoxClient
-  ): Promise<{ data: any; metadata: any }> {
+  private async listNodes(client: ProxmoxClient): Promise<{ data: any; metadata: any }> {
     const result = await client.get("/nodes");
-    const nodes = result.data.data || [];
+    const primaryNodes = Array.isArray(result.data.data) ? result.data.data : [];
 
-    // Fetch status for each node in parallel to get CPU/memory data
-    const nodeStatusPromises = nodes.map(async (node: any) => {
-      const nodeName = node.node;
-      if (!nodeName) return null;
-
-      try {
-        const statusResult = await client.get(`/nodes/${nodeName}/status`);
-        const status = statusResult.data.data || {};
-        return {
-          node: nodeName,
-          status: node.status || status.status,
-          level: node.level,
-          cpu: status.cpu,
-          maxcpu: status.maxcpu,
-          mem: status.mem,
-          maxmem: status.maxmem,
-          uptime: status.uptime,
-        };
-      } catch (error: any) {
-        // If status fetch fails (e.g., 403 ACL), return basic info only
-        return {
-          node: nodeName,
-        status: node.status,
-        level: node.level,
-          cpu: undefined,
-          maxcpu: undefined,
-          mem: undefined,
-          maxmem: undefined,
-          uptime: undefined,
-        };
+    const combinedNodes: any[] = [];
+    const seenKeys = new Set<string>();
+    const addNodes = (nodes: any[], sourceLabel: string) => {
+      for (const node of nodes) {
+        if (!node?.node) continue;
+        const key = ProxmoxReadOnlyTool.normalizeNodeKey(node.node);
+        if (seenKeys.has(key)) {
+          continue;
+        }
+        seenKeys.add(key);
+        combinedNodes.push(node);
+        pceLogger.debug(`Discovered node "${node.node}" via ${sourceLabel}`);
       }
-    });
+    };
 
-    const enrichedNodes = await Promise.all(nodeStatusPromises);
-    const normalized = enrichedNodes
-      .filter((node): node is NonNullable<typeof node> => node !== null)
-      .map((node) => normalizeProxmoxResponse(node));
+    const enrichedPrimary = await this.enrichNodesWithStatus(client, primaryNodes);
+    addNodes(enrichedPrimary, "primary cluster");
+
+    // Also probe known alternative endpoints so we can include nodes from other hosts/clusters.
+    for (const [nodeName, endpointUrl] of Object.entries(ProxmoxReadOnlyTool.NODE_ENDPOINT_MAP)) {
+      const normalizedKey = ProxmoxReadOnlyTool.normalizeNodeKey(nodeName);
+      if (seenKeys.has(normalizedKey)) {
+        continue;
+      }
+
+      const alternativeEndpoints = this.getAlternativeEndpoints(nodeName);
+      for (const endpoint of alternativeEndpoints) {
+        const altClient = this.createClientForEndpoint(endpoint);
+        if (!altClient) {
+          continue;
+        }
+        try {
+          const altResult = await altClient.get("/nodes");
+          const altNodes = Array.isArray(altResult.data?.data) ? altResult.data.data : [];
+          if (!altNodes.length) {
+            continue;
+          }
+          const enrichedAlt = await this.enrichNodesWithStatus(altClient, altNodes);
+          addNodes(enrichedAlt, endpoint.url);
+        } catch (error: any) {
+          pceLogger.debug(
+            `Alternative endpoint ${endpoint.url} list_nodes failed: ${error?.message || "unknown error"}`
+          );
+        }
+      }
+    }
+
+    const normalized = combinedNodes.map((node) => normalizeProxmoxResponse(node));
 
     return {
       data: { nodes: normalized, count: normalized.length },
       metadata: result.metadata,
     };
+  }
+
+  private async enrichNodesWithStatus(client: ProxmoxClient, nodes: any[]): Promise<any[]> {
+    const nodeStatusPromises = nodes
+      .filter((node): node is { node: string; [key: string]: any } => Boolean(node?.node))
+      .map(async (node) => {
+        const nodeName = node.node;
+        try {
+          const statusResult = await client.get(`/nodes/${nodeName}/status`);
+          const status = statusResult.data?.data || {};
+          return {
+            node: nodeName,
+            status: node.status || status.status,
+            level: node.level,
+            cpu: status.cpu,
+            maxcpu: status.maxcpu,
+            mem: status.mem,
+            maxmem: status.maxmem,
+            uptime: status.uptime,
+          };
+        } catch {
+          return {
+            node: nodeName,
+            status: node.status,
+            level: node.level,
+            cpu: undefined,
+            maxcpu: undefined,
+            mem: undefined,
+            maxmem: undefined,
+            uptime: undefined,
+          };
+        }
+      });
+
+    const enriched = await Promise.all(nodeStatusPromises);
+    return enriched.filter(Boolean);
+  }
+
+  private createClientForEndpoint(
+    endpoint: { url: string; tokenId?: string; tokenSecret?: string }
+  ): ProxmoxClient | null {
+    const baseConfig = this.getApiConfig();
+    const tokenId = endpoint.tokenId || baseConfig.tokenId;
+    const tokenSecret = endpoint.tokenSecret || baseConfig.tokenSecret;
+
+    if (!endpoint.url || !tokenId || !tokenSecret) {
+      pceLogger.debug(
+        `Skipping alternative endpoint ${endpoint.url}: missing credentials (tokenId/tokenSecret)`
+      );
+      return null;
+    }
+
+    return new ProxmoxClient({
+      url: endpoint.url,
+      tokenId,
+      tokenSecret,
+      verifySsl: baseConfig.verifySsl,
+    });
   }
 
   /**

@@ -1,6 +1,8 @@
 import neo4j from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 
+type VmKind = "qemu" | "lxc" | null;
+
 interface ClusterNodeSummary {
   id: string;
   name: string;
@@ -14,6 +16,7 @@ interface ClusterVmSummary {
   nodeName?: string;
   state?: string;
   agentAvailable?: boolean;
+  vmKind?: "qemu" | "lxc";
 }
 
 export class TwinQueryService {
@@ -161,7 +164,7 @@ export class TwinQueryService {
     }
   }
 
-  async describeCluster(): Promise<{
+  async describeCluster(vmKind: VmKind = "qemu"): Promise<{
     nodes: ClusterNodeSummary[];
     vms: ClusterVmSummary[];
   }> {
@@ -188,15 +191,17 @@ export class TwinQueryService {
     const vmsResult = await this.runQuery(
       `
         MATCH (vm:TwinEntity {type: $vmType})
+        WHERE $vmKind IS NULL OR toLower(coalesce(vm.vmKind, 'qemu')) = toLower($vmKind)
         OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
         RETURN vm.id AS id,
                coalesce(vm.displayName, vm.id) AS name,
                vm.state AS state,
                vm.agentAvailable AS agentAvailable,
-               n.displayName AS nodeName
+               n.displayName AS nodeName,
+               vm.vmKind AS vmKind
         ORDER BY name
       `,
-      { nodeType: "compute_node", vmType: "compute_vm" }
+      { nodeType: "compute_node", vmType: "compute_vm", vmKind }
     );
 
     const vms = vmsResult.records.map((record) => ({
@@ -205,27 +210,35 @@ export class TwinQueryService {
       nodeName: record.get("nodeName") ?? undefined,
       state: record.get("state") ?? undefined,
       agentAvailable: record.get("agentAvailable") ?? undefined,
+      vmKind: record.get("vmKind") ?? undefined,
     }));
 
     return { nodes, vms };
   }
 
-  async vmsByNode(nodeName: string): Promise<ClusterVmSummary[]> {
+  async vmsByNode(
+    nodeName: string,
+    options: { vmKind?: VmKind } = {}
+  ): Promise<ClusterVmSummary[]> {
+    const vmKind = options.vmKind === undefined ? "qemu" : options.vmKind;
     const result = await this.runQuery(
       `
         MATCH (vm:TwinEntity {type: $vmType})-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
         WHERE toLower(n.displayName) = toLower($nodeName)
+          AND ($vmKind IS NULL OR toLower(coalesce(vm.vmKind, 'qemu')) = toLower($vmKind))
         RETURN vm.id AS id,
                coalesce(vm.displayName, vm.id) AS name,
                vm.state AS state,
                vm.agentAvailable AS agentAvailable,
-               n.displayName AS nodeName
+               n.displayName AS nodeName,
+               vm.vmKind AS vmKind
         ORDER BY name
       `,
       {
         nodeName,
         nodeType: "compute_node",
         vmType: "compute_vm",
+        vmKind,
       }
     );
 
@@ -235,24 +248,28 @@ export class TwinQueryService {
       nodeName: record.get("nodeName") ?? undefined,
       state: record.get("state") ?? undefined,
       agentAvailable: record.get("agentAvailable") ?? undefined,
+      vmKind: record.get("vmKind") ?? undefined,
     }));
   }
 
-  async vmsWithoutAgent(): Promise<ClusterVmSummary[]> {
+  async vmsWithoutAgent(vmKind: VmKind = "qemu"): Promise<ClusterVmSummary[]> {
     const result = await this.runQuery(
       `
         MATCH (vm:TwinEntity {type: $vmType})
-        OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
         WHERE coalesce(vm.agentAvailable, false) = false
+          AND ($vmKind IS NULL OR toLower(coalesce(vm.vmKind, 'qemu')) = toLower($vmKind))
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
         RETURN vm.id AS id,
                coalesce(vm.displayName, vm.id) AS name,
                vm.state AS state,
-               n.displayName AS nodeName
+               n.displayName AS nodeName,
+               vm.vmKind AS vmKind
         ORDER BY name
       `,
       {
         nodeType: "compute_node",
         vmType: "compute_vm",
+        vmKind,
       }
     );
 
@@ -262,26 +279,34 @@ export class TwinQueryService {
       nodeName: record.get("nodeName") ?? undefined,
       state: record.get("state") ?? undefined,
       agentAvailable: false,
+      vmKind: record.get("vmKind") ?? undefined,
     }));
   }
 
-  async stoppedVmsOnNode(nodeName: string): Promise<ClusterVmSummary[]> {
+  async stoppedVmsOnNode(
+    nodeName: string,
+    options: { vmKind?: VmKind } = {}
+  ): Promise<ClusterVmSummary[]> {
+    const vmKind = options.vmKind === undefined ? "qemu" : options.vmKind;
     const result = await this.runQuery(
       `
         MATCH (vm:TwinEntity {type: $vmType})-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
         WHERE toLower(n.displayName) = toLower($nodeName)
           AND toLower(coalesce(vm.state, "")) = "stopped"
+          AND ($vmKind IS NULL OR toLower(coalesce(vm.vmKind, 'qemu')) = toLower($vmKind))
         RETURN vm.id AS id,
                coalesce(vm.displayName, vm.id) AS name,
                vm.state AS state,
                vm.agentAvailable AS agentAvailable,
-               n.displayName AS nodeName
+               n.displayName AS nodeName,
+               vm.vmKind AS vmKind
         ORDER BY name
       `,
       {
         nodeName,
         nodeType: "compute_node",
         vmType: "compute_vm",
+        vmKind,
       }
     );
 
@@ -291,6 +316,7 @@ export class TwinQueryService {
       nodeName: record.get("nodeName") ?? undefined,
       state: record.get("state") ?? undefined,
       agentAvailable: record.get("agentAvailable") ?? undefined,
+      vmKind: record.get("vmKind") ?? undefined,
     }));
   }
 
@@ -513,6 +539,373 @@ export class TwinQueryService {
       subnet: record.get("subnet") as string,
       allowedBy: (record.get("allowedBy")?.toArray?.() || record.get("allowedBy") || []).filter((x: any) => x),
       blockedBy: (record.get("blockedBy")?.toArray?.() || record.get("blockedBy") || []).filter((x: any) => x),
+    }));
+  }
+
+  /**
+   * Analyze full exposure for a specific VM.
+   * Returns interfaces, subnets, and all firewall rules affecting it.
+   */
+  async vmExposure(vmId: string): Promise<{
+    vmId: string;
+    vmName: string;
+    nodeName?: string;
+    interfaces: Array<{
+      interfaceId: string;
+      interfaceName: string;
+      subnet: string;
+      subnetId: string;
+      allowedBy: Array<{
+        ruleId: string;
+        action: string;
+        direction?: string;
+        protocol?: string;
+      }>;
+      blockedBy: Array<{
+        ruleId: string;
+        action: string;
+        direction?: string;
+        protocol?: string;
+      }>;
+    }>;
+    exposureLevel: "high" | "medium" | "low" | "none";
+  }> {
+    const result = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType, id: $vmId})
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(node:TwinEntity {type: $nodeType})
+        MATCH (iface:TwinEntity {type: $ifaceType})
+        WHERE iface.vmId = vm.id
+        OPTIONAL MATCH (iface)-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
+        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(subnet)
+        RETURN vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               node.displayName AS nodeName,
+               iface.id AS interfaceId,
+               iface.dataJson AS interfaceData,
+               subnet.id AS subnetId,
+               subnet.displayName AS subnetCidr,
+               allowRule.id AS allowRuleId,
+               allowRule.action AS allowAction,
+               allowRule.direction AS allowDirection,
+               allowRule.protocol AS allowProtocol,
+               blockRule.id AS blockRuleId,
+               blockRule.action AS blockAction,
+               blockRule.direction AS blockDirection,
+               blockRule.protocol AS blockProtocol
+        ORDER BY iface.id, subnet.id
+      `,
+      {
+        vmType: "compute_vm",
+        nodeType: "compute_node",
+        ifaceType: "network_interface",
+        subnetType: "network_subnet",
+        ruleType: "firewall_rule",
+        vmId,
+      }
+    );
+
+    const vmName = result.records[0]?.get("vmName") as string || vmId;
+    const nodeName = result.records[0]?.get("nodeName") as string | undefined;
+
+    // Group by interface
+    const interfaceMap = new Map<string, any>();
+    for (const record of result.records) {
+      const ifaceId = record.get("interfaceId") as string;
+      if (!ifaceId) continue;
+
+      if (!interfaceMap.has(ifaceId)) {
+        const ifaceData = JSON.parse(record.get("interfaceData") || "{}");
+        interfaceMap.set(ifaceId, {
+          interfaceId: ifaceId,
+          interfaceName: ifaceData.name || ifaceId.split(":").pop() || "unknown",
+          subnet: record.get("subnetCidr") as string | null,
+          subnetId: record.get("subnetId") as string | null,
+          allowedBy: [],
+          blockedBy: [],
+        });
+      }
+
+      const iface = interfaceMap.get(ifaceId)!;
+      const subnetId = record.get("subnetId") as string;
+      if (subnetId && subnetId === iface.subnetId) {
+        const allowRuleId = record.get("allowRuleId");
+        if (allowRuleId) {
+          iface.allowedBy.push({
+            ruleId: allowRuleId,
+            action: record.get("allowAction"),
+            direction: record.get("allowDirection"),
+            protocol: record.get("allowProtocol"),
+          });
+        }
+        const blockRuleId = record.get("blockRuleId");
+        if (blockRuleId) {
+          iface.blockedBy.push({
+            ruleId: blockRuleId,
+            action: record.get("blockAction"),
+            direction: record.get("blockDirection"),
+            protocol: record.get("blockProtocol"),
+          });
+        }
+      }
+    }
+
+    const interfaces = Array.from(interfaceMap.values());
+    
+    // Calculate exposure level
+    let exposureLevel: "high" | "medium" | "low" | "none" = "none";
+    const totalAllows = interfaces.reduce((sum, iface) => sum + iface.allowedBy.length, 0);
+    const totalBlocks = interfaces.reduce((sum, iface) => sum + iface.blockedBy.length, 0);
+    
+    if (totalAllows > 0) {
+      if (totalAllows > totalBlocks * 2) {
+        exposureLevel = "high";
+      } else if (totalAllows > totalBlocks) {
+        exposureLevel = "medium";
+      } else {
+        exposureLevel = "low";
+      }
+    }
+
+    return {
+      vmId,
+      vmName,
+      nodeName,
+      interfaces,
+      exposureLevel,
+    };
+  }
+
+  /**
+   * Find VMs exposed to a specific subnet (e.g., WAN).
+   */
+  async vmsExposedToSubnet(subnetCidr: string): Promise<Array<{
+    vmId: string;
+    vmName: string;
+    nodeName?: string;
+    subnet: string;
+    allowRules: number;
+    blockRules: number;
+  }>> {
+    // Extract mask for pattern matching
+    const maskMatch = subnetCidr.match(/\/(\d+)$/);
+    const mask = maskMatch ? maskMatch[1] : null;
+    const maskPattern = mask ? `/${mask}` : null;
+
+    const result = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType})
+        MATCH (iface:TwinEntity {type: $ifaceType})
+        WHERE iface.vmId = vm.id
+        MATCH (iface)-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
+        WHERE subnet.displayName = $subnetCidr
+           OR subnet.id = $subnetId
+           OR (subnet.displayName ENDS WITH $maskPattern AND $mask IS NOT NULL)
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(node:TwinEntity {type: $nodeType})
+        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(subnet)
+        RETURN DISTINCT vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               node.displayName AS nodeName,
+               subnet.displayName AS subnet,
+               count(DISTINCT allowRule) AS allowRules,
+               count(DISTINCT blockRule) AS blockRules
+        ORDER BY allowRules DESC, vmName
+      `,
+      {
+        vmType: "compute_vm",
+        nodeType: "compute_node",
+        ifaceType: "network_interface",
+        subnetType: "network_subnet",
+        ruleType: "firewall_rule",
+        subnetId: `network-subnet:${subnetCidr.toLowerCase()}`,
+        subnetCidr,
+        maskPattern,
+        mask,
+      }
+    );
+
+    return result.records.map((record) => ({
+      vmId: record.get("vmId") as string,
+      vmName: record.get("vmName") as string,
+      nodeName: record.get("nodeName") ?? undefined,
+      subnet: record.get("subnet") as string,
+      allowRules: this.safeToNumber(record.get("allowRules")),
+      blockRules: this.safeToNumber(record.get("blockRules")),
+    }));
+  }
+
+  /**
+   * Find attack path from source subnet to target VM.
+   */
+  async exposurePath(fromSubnetCidr: string, toVmId: string): Promise<{
+    fromSubnet: string;
+    toVm: string;
+    toVmName: string;
+    path: Array<{
+      step: number;
+      entityType: string;
+      entityId: string;
+      entityName: string;
+      relationship: string;
+    }>;
+    reachable: boolean;
+  }> {
+    // Extract mask for pattern matching
+    const maskMatch = fromSubnetCidr.match(/\/(\d+)$/);
+    const mask = maskMatch ? maskMatch[1] : null;
+    const maskPattern = mask ? `/${mask}` : null;
+
+    const result = await this.runQuery(
+      `
+        MATCH (sourceSubnet:TwinEntity {type: $subnetType})
+        WHERE sourceSubnet.displayName = $fromSubnetCidr
+           OR sourceSubnet.id = $fromSubnetId
+           OR (sourceSubnet.displayName ENDS WITH $maskPattern AND $mask IS NOT NULL)
+        MATCH (targetVm:TwinEntity {type: $vmType, id: $toVmId})
+        MATCH (targetIface:TwinEntity {type: $ifaceType})
+        WHERE targetIface.vmId = targetVm.id
+        MATCH (targetIface)-[:CONNECTS_TO]->(targetSubnet:TwinEntity {type: $subnetType})
+        OPTIONAL MATCH path = shortestPath((sourceSubnet)-[:ALLOWS*..5]-(targetSubnet))
+        RETURN sourceSubnet.displayName AS fromSubnet,
+               targetVm.id AS toVm,
+               coalesce(targetVm.displayName, targetVm.id) AS toVmName,
+               path
+        LIMIT 1
+      `,
+      {
+        subnetType: "network_subnet",
+        vmType: "compute_vm",
+        ifaceType: "network_interface",
+        fromSubnetId: `network-subnet:${fromSubnetCidr.toLowerCase()}`,
+        fromSubnetCidr,
+        toVmId,
+        maskPattern,
+        mask,
+      }
+    );
+
+    if (result.records.length === 0) {
+      // Try simpler path: source subnet → target subnet (if same)
+      const simpleResult = await this.runQuery(
+        `
+          MATCH (sourceSubnet:TwinEntity {type: $subnetType})
+          WHERE sourceSubnet.displayName = $fromSubnetCidr
+             OR sourceSubnet.id = $fromSubnetId
+             OR (sourceSubnet.displayName ENDS WITH $maskPattern AND $mask IS NOT NULL)
+          MATCH (targetVm:TwinEntity {type: $vmType, id: $toVmId})
+          MATCH (targetIface:TwinEntity {type: $ifaceType})
+          WHERE targetIface.vmId = targetVm.id
+          MATCH (targetIface)-[:CONNECTS_TO]->(targetSubnet:TwinEntity {type: $subnetType})
+          WHERE targetSubnet.id = sourceSubnet.id
+          RETURN sourceSubnet.displayName AS fromSubnet,
+                 targetVm.id AS toVm,
+                 coalesce(targetVm.displayName, targetVm.id) AS toVmName
+          LIMIT 1
+        `,
+        {
+          subnetType: "network_subnet",
+          vmType: "compute_vm",
+          ifaceType: "network_interface",
+          fromSubnetId: `network-subnet:${fromSubnetCidr.toLowerCase()}`,
+          fromSubnetCidr,
+          toVmId,
+          maskPattern,
+          mask,
+        }
+      );
+
+      if (simpleResult.records.length > 0) {
+        const record = simpleResult.records[0];
+        return {
+          fromSubnet: record.get("fromSubnet") as string,
+          toVm: record.get("toVm") as string,
+          toVmName: record.get("toVmName") as string,
+          path: [
+            {
+              step: 1,
+              entityType: "network_subnet",
+              entityId: `network-subnet:${fromSubnetCidr.toLowerCase()}`,
+              entityName: fromSubnetCidr,
+              relationship: "CONNECTS_TO",
+            },
+            {
+              step: 2,
+              entityType: "compute_vm",
+              entityId: record.get("toVm") as string,
+              entityName: record.get("toVmName") as string,
+              relationship: "HAS_INTERFACE",
+            },
+          ],
+          reachable: true,
+        };
+      }
+
+      return {
+        fromSubnet: fromSubnetCidr,
+        toVm: toVmId,
+        toVmName: toVmId,
+        path: [],
+        reachable: false,
+      };
+    }
+
+    const record = result.records[0];
+    const path = record.get("path");
+    // TODO: Parse Neo4j path object into step array
+    // For now, return simple path
+    return {
+      fromSubnet: record.get("fromSubnet") as string,
+      toVm: record.get("toVm") as string,
+      toVmName: record.get("toVmName") as string,
+      path: [],
+      reachable: true,
+    };
+  }
+
+  /**
+   * Find VMs with internet/WAN exposure.
+   * Looks for VMs in subnets that have ALLOWS rules from WAN-like subnets.
+   */
+  async internetExposedVms(): Promise<Array<{
+    vmId: string;
+    vmName: string;
+    nodeName?: string;
+    subnet: string;
+    exposureRules: number;
+  }>> {
+    const result = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType})
+        MATCH (iface:TwinEntity {type: $ifaceType})
+        WHERE iface.vmId = vm.id
+        MATCH (iface)-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
+        MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
+        WHERE allowRule.direction = 'in' OR allowRule.direction IS NULL
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(node:TwinEntity {type: $nodeType})
+        RETURN DISTINCT vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               node.displayName AS nodeName,
+               subnet.displayName AS subnet,
+               count(DISTINCT allowRule) AS exposureRules
+        ORDER BY exposureRules DESC, vmName
+      `,
+      {
+        vmType: "compute_vm",
+        nodeType: "compute_node",
+        ifaceType: "network_interface",
+        subnetType: "network_subnet",
+        ruleType: "firewall_rule",
+      }
+    );
+
+    return result.records.map((record) => ({
+      vmId: record.get("vmId") as string,
+      vmName: record.get("vmName") as string,
+      nodeName: record.get("nodeName") ?? undefined,
+      subnet: record.get("subnet") as string,
+      exposureRules: this.safeToNumber(record.get("exposureRules")),
     }));
   }
 

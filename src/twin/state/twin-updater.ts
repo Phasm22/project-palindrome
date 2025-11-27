@@ -64,6 +64,7 @@ export class TwinUpdateService {
                 n.nodeName = $nodeName,
                 n.normalizedNodeName = $normalizedNodeName,
                 n.vmId = $vmId,
+                n.vmKind = $vmKind,
                 n.primaryIp = $primaryIp,
                 n.gateway = $gateway,
                 n.cidr = $cidr,
@@ -104,6 +105,7 @@ export class TwinUpdateService {
             destination: props.destination,
             chain: props.chain,
             ruleType: props.ruleType,
+            vmKind: props.vmKind,
           }
         );
       }
@@ -192,6 +194,7 @@ export class TwinUpdateService {
       destination: null,
       chain: null,
       ruleType: null,
+      vmKind: null,
     };
 
     if (entity.type === TwinEntityType.COMPUTE_NODE) {
@@ -210,6 +213,7 @@ export class TwinUpdateService {
         typeof data.nodeId === "string" ? data.nodeId.split(":").pop() ?? null : null;
       props.nodeName = derivedNodeName;
       props.normalizedNodeName = derivedNodeName?.toLowerCase() ?? null;
+      props.vmKind = data.vmKind ?? null;
     }
 
     if (entity.type === TwinEntityType.NETWORK_INTERFACE) {

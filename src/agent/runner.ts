@@ -34,6 +34,13 @@ import {
   rulesBlockingSubnetChain,
   exposureMapChain,
 } from "../reasoning/chains/firewall";
+import { detectExposureIntent, type ExposureIntent } from "../reasoning/detectExposureIntent";
+import {
+  analyzeVmExposureChain,
+  listVmsExposedToSubnetChain,
+  attackPathChain,
+  listInternetExposedVmsChain,
+} from "../reasoning/chains/exposure";
 
 let openaiClient: OpenAI | null = null;
 
@@ -163,6 +170,31 @@ async function executeNetworkIntent(
   }
 }
 
+async function executeExposureIntent(
+  intent: ExposureIntent,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string | null> {
+  try {
+    const toolsMap = new Map(tools.map((t) => [t.metadata.name, t]));
+    switch (intent.type) {
+      case "vm_exposure":
+        return await analyzeVmExposureChain(intent.vmId, toolsMap, session as any);
+      case "vms_exposed_to_subnet":
+        return await listVmsExposedToSubnetChain(intent.subnetCidr, toolsMap, session as any);
+      case "attack_path":
+        return await attackPathChain(intent.fromSubnet, intent.toVmId, toolsMap, session as any);
+      case "internet_exposed":
+        return await listInternetExposedVmsChain(toolsMap, session as any);
+      default:
+        return null;
+    }
+  } catch (error: any) {
+    logger.error(`Exposure reasoning chain failed: ${error.message}`);
+    return null;
+  }
+}
+
 async function executeFirewallIntent(
   intent: FirewallIntent,
   tools: BaseTool[],
@@ -222,9 +254,34 @@ export async function runAgent(
 
   logger.info(`Agent received input: "${userInput}"`);
 
+  const startTime = Date.now();
   // Generate session ID if not provided
-  const sessionId = options.sessionId ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const sessionId = options.sessionId ?? `session-${startTime}-${Math.random().toString(36).slice(2, 9)}`;
   const eventBus = AgentEventBus.getInstance();
+
+  const emitStepEvent = (data: Record<string, any>) => {
+    eventBus.emit({
+      type: "agent:step",
+      sessionId,
+      timestamp: Date.now(),
+      data,
+    });
+  };
+
+  const emitFinalEvent = (text: string, extra: Record<string, any> = {}) => {
+    eventBus.emit({
+      type: "agent:final",
+      sessionId,
+      timestamp: Date.now(),
+      data: {
+        text,
+        totalSteps: extra.totalSteps ?? 0,
+        totalToolCalls: extra.totalToolCalls ?? 0,
+        durationMs: Date.now() - startTime,
+        ...extra,
+      },
+    });
+  };
 
   const session: ToolSession = {
     userId: options.userId ?? "agent-user",
@@ -238,11 +295,25 @@ export async function runAgent(
 
   const tools = loadTools();
 
+  // Check exposure intent first (most specific)
+  const exposureIntent = detectExposureIntent(userInput);
+  if (exposureIntent) {
+    const exposureAnswer = await executeExposureIntent(exposureIntent, tools, session);
+    if (exposureAnswer) {
+      logger.info("Responding via twin-first exposure reasoning chain.");
+      emitStepEvent({ intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
+      emitFinalEvent(exposureAnswer, { intent: exposureIntent.type });
+      return { text: exposureAnswer };
+    }
+  }
+
   const computeIntent = detectComputeIntent(userInput);
   if (computeIntent) {
     const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
     if (twinAnswer) {
       logger.info("Responding via twin-first reasoning chain (no LLM needed).");
+      emitStepEvent({ intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
+      emitFinalEvent(twinAnswer, { intent: computeIntent.type });
       return { text: twinAnswer };
     }
   }
@@ -253,6 +324,8 @@ export async function runAgent(
     const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
     if (firewallAnswer) {
       logger.info("Responding via twin-first firewall reasoning chain.");
+      emitStepEvent({ intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
+      emitFinalEvent(firewallAnswer, { intent: firewallIntent.type });
       return { text: firewallAnswer };
     }
   }
@@ -262,6 +335,8 @@ export async function runAgent(
     const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
     if (networkAnswer) {
       logger.info("Responding via twin-first network reasoning chain.");
+      emitStepEvent({ intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
+      emitFinalEvent(networkAnswer, { intent: networkIntent.type });
       return { text: networkAnswer };
     }
   }
@@ -269,7 +344,6 @@ export async function runAgent(
   const openaiTools = buildToolDefinitions(tools);
   
   // Initialize reasoning trace
-  const startTime = Date.now();
   const reasoningSteps: ReasoningStep[] = [];
   let totalToolCalls = 0;
   
@@ -960,18 +1034,7 @@ export async function runAgent(
       context.addAssistantMessage(finalText);
       
       // Emit agent:final event
-      const durationMs = Date.now() - startTime;
-      eventBus.emit({
-        type: "agent:final",
-        sessionId,
-        timestamp: Date.now(),
-        data: {
-          text: finalText,
-          totalSteps: step + 1,
-          totalToolCalls,
-          durationMs,
-        },
-      });
+      emitFinalEvent(finalText, { totalSteps: step + 1, totalToolCalls });
       
       // Record reasoning trace
       try {

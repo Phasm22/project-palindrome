@@ -36,6 +36,7 @@ export const ComputeVmEntitySchema = BaseTwinEntitySchema.extend({
     agentAvailable: z.boolean().optional(),
     cpuCores: z.number().optional(),
     memoryBytes: z.number().optional(),
+    vmKind: z.enum(["qemu", "lxc"]).optional(),
   }),
 });
 

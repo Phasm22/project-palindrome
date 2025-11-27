@@ -73,6 +73,7 @@ export class ProxmoxVmParser implements Parser<ListVmsResponse> {
   private toEntity(vm: ProxmoxVmRecord, context: ParserContext): TwinEntity {
     const nodeId = normalizeNodeId(vm.node!);
     const vmId = normalizeVmId(vm.node!, vm.vmid);
+    const vmKind = this.normalizeVmKind(vm.type);
 
     return {
       id: vmId,
@@ -91,6 +92,7 @@ export class ProxmoxVmParser implements Parser<ListVmsResponse> {
         agentAvailable: this.normalizeAgent(vm.agent),
         cpuCores: vm.maxcpu ?? vm.cpus,
         memoryBytes: vm.maxmem,
+        vmKind,
       },
     };
   }
@@ -107,6 +109,17 @@ export class ProxmoxVmParser implements Parser<ListVmsResponse> {
     }
     const normalized = agent.toString().toLowerCase();
     return normalized === "1" || normalized === "enabled" || normalized === "true";
+  }
+
+  private normalizeVmKind(type?: string): "qemu" | "lxc" | undefined {
+    if (!type) {
+      return undefined;
+    }
+    const normalized = type.toLowerCase();
+    if (normalized === "qemu" || normalized === "lxc") {
+      return normalized;
+    }
+    return undefined;
   }
 }
 
