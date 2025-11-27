@@ -295,6 +295,41 @@ export async function runAgent(
 
   const tools = loadTools();
 
+  // Helper to record reasoning trace for early returns
+  const recordEarlyReturnTrace = async (answer: string, intent: string, toolCalls: number = 1) => {
+    const durationMs = Date.now() - startTime;
+    try {
+      const traceStore = getReasoningTraceStore();
+      await traceStore.recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: answer,
+        steps: [{
+          step: 1,
+          toolCalls: [{
+            toolName: "twin_query",
+            parameters: { intent },
+            result: { success: true },
+            durationMs,
+          }],
+          decisions: [{
+            type: "tool_choice",
+            description: `Used twin-first reasoning chain for ${intent}`,
+            metadata: { intent, mode: "twin_first" },
+          }],
+        }],
+        totalSteps: 1,
+        totalToolCalls,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record reasoning trace for early return", { error: error.message });
+    }
+  };
+
   // Check exposure intent first (most specific)
   const exposureIntent = detectExposureIntent(userInput);
   if (exposureIntent) {
@@ -303,6 +338,7 @@ export async function runAgent(
       logger.info("Responding via twin-first exposure reasoning chain.");
       emitStepEvent({ intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
       emitFinalEvent(exposureAnswer, { intent: exposureIntent.type });
+      await recordEarlyReturnTrace(exposureAnswer, exposureIntent.type, 1);
       return { text: exposureAnswer };
     }
   }
@@ -314,6 +350,7 @@ export async function runAgent(
       logger.info("Responding via twin-first reasoning chain (no LLM needed).");
       emitStepEvent({ intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
       emitFinalEvent(twinAnswer, { intent: computeIntent.type });
+      await recordEarlyReturnTrace(twinAnswer, computeIntent.type, 1);
       return { text: twinAnswer };
     }
   }
@@ -326,6 +363,7 @@ export async function runAgent(
       logger.info("Responding via twin-first firewall reasoning chain.");
       emitStepEvent({ intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
       emitFinalEvent(firewallAnswer, { intent: firewallIntent.type });
+      await recordEarlyReturnTrace(firewallAnswer, firewallIntent.type, 1);
       return { text: firewallAnswer };
     }
   }
@@ -337,6 +375,7 @@ export async function runAgent(
       logger.info("Responding via twin-first network reasoning chain.");
       emitStepEvent({ intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
       emitFinalEvent(networkAnswer, { intent: networkIntent.type });
+      await recordEarlyReturnTrace(networkAnswer, networkIntent.type, 1);
       return { text: networkAnswer };
     }
   }
@@ -1034,6 +1073,7 @@ export async function runAgent(
       context.addAssistantMessage(finalText);
       
       // Emit agent:final event
+      const durationMs = Date.now() - startTime;
       emitFinalEvent(finalText, { totalSteps: step + 1, totalToolCalls });
       
       // Record reasoning trace

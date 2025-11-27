@@ -66,12 +66,15 @@ VM (compute_vm)
 - ✅ Subnets auto-created
 - ✅ Rules linked to subnets via ALLOWS/BLOCKS
 - ✅ VM → Interface relationships (via vmId property on NetworkInterface)
+- ✅ Interface → Subnet relationships (CONNECTS_TO created by network parsers)
 - ✅ Exposure query implementation (vmExposure, vmsExposedToSubnet, exposurePath, internetExposedVms)
 - ✅ Exposure reasoning chains (analyzeVmExposureChain, listVmsExposedToSubnetChain, attackPathChain, listInternetExposedVmsChain)
 - ✅ Exposure intent detection (detectExposureIntent)
 - ✅ Agent runner integration
-- ✅ End-to-end testing (queries work, need interface→subnet relationships for full exposure analysis)
+- ✅ VM-by-name search across all nodes (`find_vm_by_name` operation)
+- ✅ Reasoning trace recording for all responses (including early returns from reasoning chains)
 - ✅ Twin-first VM listings now default to QEMU-only, with container views still available via `vmKind`, and responses include traceable IDs + twin provenance
+- ✅ Chat UI improvements (structured formatting, clickable trace IDs, better visual hierarchy)
 
 ### Implementation Summary
 
@@ -80,24 +83,30 @@ VM (compute_vm)
 - `src/reasoning/detectExposureIntent.ts` - Intent detection for exposure queries
 
 **Extended Files:**
-- `src/twin/api/twin-query-service.ts` - Added 4 new exposure query methods and vmKind-aware filters for all compute read paths
-- `src/tools/TwinQueryTool.ts` - Added 4 new exposure operations plus support for `vmKind` parameter
-- `src/agent/runner.ts` - Integrated exposure intent detection and routing
+- `src/twin/api/twin-query-service.ts` - Added 4 new exposure query methods, `findVmByName` method, and vmKind-aware filters for all compute read paths
+- `src/tools/TwinQueryTool.ts` - Added 4 new exposure operations, `find_vm_by_name` operation, plus support for `vmKind` parameter
+- `src/agent/runner.ts` - Integrated exposure intent detection, routing, and reasoning trace recording for all responses
 - `src/reasoning/chains/compute.ts` - Human-friendly twin summaries with trace IDs + provenance
 - `src/reasoning/compute-intents.ts` - "List all VMs" now routes to the twin chain automatically
+- `src/agent/system-prompt.ts` - Added `find_vm_by_name` example for VM name queries
+- `dashboard/index.html` - Enhanced chat UI with structured formatting, clickable trace IDs, and improved visual hierarchy
 
 **Query Operations:**
 1. `exposure_vm_analysis` - Full exposure analysis for a specific VM
 2. `exposure_vms_by_subnet` - Find VMs exposed to a subnet
 3. `exposure_path` - Attack path from source subnet to target VM
 4. `exposure_internet_exposed` - List all internet-exposed VMs
+5. `find_vm_by_name` - Search for VMs by name across all nodes (case-insensitive partial match)
 
-**Note:** For full exposure analysis, ensure network ingestion creates `CONNECTS_TO` relationships between interfaces and subnets. The queries are ready and will work once those relationships exist.
+**Recent Improvements (Nov 2025):**
+- Added `find_vm_by_name` operation to enable queries like "Is SentinelZero Running?" that search across all nodes
+- Fixed reasoning trace recording - all agent responses (including early returns from reasoning chains) now record traces
+- Enhanced chat UI with structured VM/node cards, clickable trace IDs, and better visual hierarchy
+- Fixed `durationMs` undefined error in trace recording
 
 ---
 
 ## Phase 5.2 — Attack Path Analysis (Future)
-   P
 ### Goal
 
 Build multi-hop path analysis:

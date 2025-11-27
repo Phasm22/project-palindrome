@@ -786,32 +786,32 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       .filter((node): node is { node: string; [key: string]: any } => Boolean(node?.node))
       .map(async (node) => {
         const nodeName = node.node;
-        try {
-          const statusResult = await client.get(`/nodes/${nodeName}/status`);
+      try {
+        const statusResult = await client.get(`/nodes/${nodeName}/status`);
           const status = statusResult.data?.data || {};
-          return {
-            node: nodeName,
-            status: node.status || status.status,
-            level: node.level,
-            cpu: status.cpu,
-            maxcpu: status.maxcpu,
-            mem: status.mem,
-            maxmem: status.maxmem,
-            uptime: status.uptime,
-          };
+        return {
+          node: nodeName,
+          status: node.status || status.status,
+          level: node.level,
+          cpu: status.cpu,
+          maxcpu: status.maxcpu,
+          mem: status.mem,
+          maxmem: status.maxmem,
+          uptime: status.uptime,
+        };
         } catch {
-          return {
-            node: nodeName,
-            status: node.status,
-            level: node.level,
-            cpu: undefined,
-            maxcpu: undefined,
-            mem: undefined,
-            maxmem: undefined,
-            uptime: undefined,
-          };
-        }
-      });
+        return {
+          node: nodeName,
+        status: node.status,
+        level: node.level,
+          cpu: undefined,
+          maxcpu: undefined,
+          mem: undefined,
+          maxmem: undefined,
+          uptime: undefined,
+        };
+      }
+    });
 
     const enriched = await Promise.all(nodeStatusPromises);
     return enriched.filter(Boolean);

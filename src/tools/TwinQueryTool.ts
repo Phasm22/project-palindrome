@@ -11,6 +11,7 @@ const TwinQueryParams = z.object({
     "vms_by_node",
     "vms_without_agent",
     "stopped_vms_on_node",
+    "find_vm_by_name",
     "network_list_interfaces",
     "network_interfaces_by_node",
     "network_vms_by_subnet",
@@ -34,6 +35,7 @@ const TwinQueryParams = z.object({
       vmId: z.string().optional(),
       fromSubnet: z.string().optional(),
       toVmId: z.string().optional(),
+      vmName: z.string().optional(),
       vmKind: z.enum(["qemu", "lxc", "all"]).optional(),
     })
     .partial()
@@ -75,6 +77,10 @@ export class TwinQueryTool extends BaseTool {
         {
           description: "List VMs on proxBig that are stopped",
           parameters: { operation: "stopped_vms_on_node", params: { nodeName: "proxBig" } },
+        },
+        {
+          description: "Find VM by name (searches across all nodes)",
+          parameters: { operation: "find_vm_by_name", params: { vmName: "SentinelZero" } },
         },
         {
           description: "Show all network interfaces",
@@ -142,6 +148,7 @@ export class TwinQueryTool extends BaseTool {
         "vmId",
         "fromSubnet",
         "toVmId",
+        "vmName",
         "vmKind",
       ] as const;
       const fallbackParams: Record<string, unknown> = {};
@@ -193,6 +200,15 @@ export class TwinQueryTool extends BaseTool {
           const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
           const data = await this.service.stoppedVmsOnNode(nodeName, { vmKind: vmKind ?? undefined });
           return { data: { kind: "vm_list", nodeName, data } };
+        }
+        case "find_vm_by_name": {
+          const vmName = opParams?.vmName;
+          if (!vmName) {
+            return { error: "vmName is required for find_vm_by_name" };
+          }
+          const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
+          const data = await this.service.findVmByName(vmName, { vmKind: vmKind ?? undefined });
+          return { data: { kind: "vm_list", vmName, data } };
         }
         case "network_list_interfaces": {
           const data = await this.service.listInterfaces();

@@ -321,6 +321,53 @@ export class TwinQueryService {
   }
 
   /**
+   * Find VM by name across all nodes (case-insensitive partial match)
+   */
+  async findVmByName(
+    vmName: string,
+    options: { vmKind?: VmKind } = {}
+  ): Promise<ClusterVmSummary[]> {
+    const vmKind = options.vmKind === undefined ? "qemu" : options.vmKind;
+    const result = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType})
+        WHERE toLower(coalesce(vm.displayName, vm.id, "")) CONTAINS toLower($vmName)
+          AND ($vmKind IS NULL OR toLower(coalesce(vm.vmKind, 'qemu')) = toLower($vmKind))
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
+        RETURN vm.id AS id,
+               coalesce(vm.displayName, vm.id) AS name,
+               vm.state AS state,
+               vm.agentAvailable AS agentAvailable,
+               n.displayName AS nodeName,
+               vm.vmKind AS vmKind
+        ORDER BY 
+          CASE 
+            WHEN toLower(coalesce(vm.displayName, vm.id)) = toLower($vmName) THEN 0
+            WHEN toLower(coalesce(vm.displayName, vm.id)) STARTS WITH toLower($vmName) THEN 1
+            ELSE 2
+          END,
+          name
+        LIMIT 10
+      `,
+      {
+        vmName,
+        nodeType: "compute_node",
+        vmType: "compute_vm",
+        vmKind,
+      }
+    );
+
+    return result.records.map((record) => ({
+      id: record.get("id") as string,
+      name: record.get("name") as string,
+      nodeName: record.get("nodeName") ?? undefined,
+      state: record.get("state") ?? undefined,
+      agentAvailable: record.get("agentAvailable") ?? undefined,
+      vmKind: record.get("vmKind") ?? undefined,
+    }));
+  }
+
+  /**
    * List all firewall rules.
    */
   async listFirewallRules(): Promise<Array<{

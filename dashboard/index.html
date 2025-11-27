@@ -404,7 +404,8 @@
   <script>
     const API_URL = "http://localhost:4000";
 
-    function switchTab(tabName, clickedElement) {
+    // Make switchTab globally accessible
+    window.switchTab = function(tabName, clickedElement) {
       // Hide all tabs
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -639,6 +640,7 @@
     let currentEventSource = null;
     let currentSessionId = null;
     let currentResponseId = null;
+    let finalEventTimeout = null;
 
     async function sendChatMessage() {
       const input = document.getElementById('chat-input');
@@ -712,17 +714,23 @@
         currentEventSource.onerror = (error) => {
           console.error('SSE connection error:', error);
           
+          // Clear timeout if connection errors
+          if (finalEventTimeout) {
+            clearTimeout(finalEventTimeout);
+            finalEventTimeout = null;
+          }
+          
           // Check if connection was closed (readyState 2 = CLOSED)
           if (currentEventSource.readyState === EventSource.CLOSED) {
             // Connection closed - check if we have final text
             if (finalText) {
               // We have the final response, update the message
               updateChatMessage(currentResponseId, `
-                <div class="agent-response">
+                <div class="agent-response" style="line-height: 1.6;">
                   ${formatAgentResponse(finalText)}
                 </div>
                 ${toolExecutions.length > 0 ? `
-                  <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; color: #94a3b8; font-size: 0.85em;">
+                  <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
                     Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
                   </div>
                 ` : ''}
@@ -730,8 +738,9 @@
             } else {
               // No final text yet - connection may have timed out
               updateChatMessage(currentResponseId, `
-                <div style="color: #fbbf24; padding: 10px; background: #78350f; border-radius: 4px; margin-top: 10px;">
-                  ⚠️ Connection closed. The agent may still be processing. Try refreshing or asking again.
+                <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24; margin-top: 10px;">
+                  <strong>⚠️ Connection closed</strong><br>
+                  <span style="font-size: 0.9em;">The agent may still be processing. Try refreshing or asking again.</span>
                 </div>
               `);
             }
@@ -747,9 +756,40 @@
           currentEventSource = null;
         };
 
-        // Wait a bit for events, then check if we got a final response
-        setTimeout(() => {
+        // Set a timeout to handle cases where agent:final event might not arrive
+        // This is a fallback for reasoning chains that might not emit the event properly
+        finalEventTimeout = setTimeout(() => {
           if (currentEventSource && finalText) {
+            // We have the final text but event might not have been received
+            // Update the message and close connection
+            updateChatMessage(currentResponseId, `
+              <div class="agent-response" style="line-height: 1.6;">
+                ${formatAgentResponse(finalText)}
+              </div>
+              ${toolExecutions.length > 0 ? `
+                <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
+                  Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
+                </div>
+              ` : ''}
+            `);
+            
+            currentEventSource.close();
+            currentEventSource = null;
+            
+            // Re-enable input
+            input.disabled = false;
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+            input.focus();
+          } else if (currentEventSource && !finalText) {
+            // No final text after 30 seconds - connection might be stuck
+            updateChatMessage(currentResponseId, `
+              <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24;">
+                <strong>⚠️ Response timeout</strong><br>
+                <span style="font-size: 0.9em;">The agent is taking longer than expected. The connection may have timed out. Try asking again.</span>
+              </div>
+            `);
+            
             currentEventSource.close();
             currentEventSource = null;
             
@@ -759,7 +799,8 @@
             sendBtn.textContent = 'Send';
             input.focus();
           }
-        }, 5000);
+          finalEventTimeout = null;
+        }, 30000); // 30 second timeout
 
       } catch (error) {
         // Remove loading indicator
@@ -863,13 +904,17 @@
         case 'agent:final':
           // Parse markdown and convert to styled HTML
           const formattedText = formatAgentResponse(event.data.text || 'No response');
+          const durationSeconds = (event.data.durationMs || 0) / 1000;
           const finalHtml = `
-            <div class="agent-response">
+            <div class="agent-response" style="line-height: 1.6;">
               ${formattedText}
             </div>
             ${toolExecutions.length > 0 ? `
-              <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; color: #94a3b8; font-size: 0.85em;">
-                Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''} in ${(event.data.durationMs || 0) / 1000}s
+              <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em; display: flex; align-items: center; gap: 12px;">
+                <svg style="width: 16px; height: 16px; opacity: 0.7;" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+                <span>Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''} in ${durationSeconds.toFixed(2)}s</span>
               </div>
             ` : ''}
           `;
@@ -883,6 +928,12 @@
           if (currentEventSource) {
             currentEventSource.close();
             currentEventSource = null;
+          }
+          
+          // Clear any pending timeout
+          if (finalEventTimeout) {
+            clearTimeout(finalEventTimeout);
+            finalEventTimeout = null;
           }
           
           // Re-enable input
@@ -912,81 +963,228 @@
       // Split into lines for processing
       const lines = text.split('\n');
       let html = '';
-      let inList = false;
-      let currentList = '';
+      let currentSection = '';
+      let inVmEntry = false;
+      let currentVmHtml = '';
+      let vmEntries = [];
+      
+      // State for parsing structured data
+      let inClusterNodes = false;
+      let inClusterVms = false;
+      let nodeEntries = [];
+      let vmList = [];
       
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
+        const line = lines[i];
+        const trimmed = line.trim();
         
-        // Handle headers (###)
-        if (line.startsWith('### ')) {
-          // Close any open list
-          if (inList) {
-            html += '<ul>' + currentList + '</ul>';
-            currentList = '';
-            inList = false;
+        // Handle section headers (Cluster Nodes:, Cluster VMs:, etc.)
+        if (trimmed.endsWith(':') && !trimmed.startsWith('-')) {
+          // Close previous section
+          if (inClusterNodes && nodeEntries.length > 0) {
+            html += formatClusterNodesSection(nodeEntries);
+            nodeEntries = [];
+          }
+          if (inClusterVms && vmList.length > 0) {
+            html += formatClusterVmsSection(vmList);
+            vmList = [];
           }
           
-          // Parse "### Node: name (IP: x.x.x.x)"
-          const headerMatch = line.match(/^### Node: (.+?) \(IP: (.+?)\)/);
-          if (headerMatch) {
-            html += `<h3>${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
+          const sectionName = trimmed.replace(':', '');
+          if (sectionName === 'Cluster Nodes') {
+            inClusterNodes = true;
+            inClusterVms = false;
+          } else if (sectionName === 'Cluster VMs' || sectionName.includes('VMs')) {
+            inClusterNodes = false;
+            inClusterVms = true;
           } else {
-            // Regular header
-            const headerText = line.replace(/^### /, '');
-            html += `<h3>${escapeHtml(headerText)}</h3>`;
+            inClusterNodes = false;
+            inClusterVms = false;
+            html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em; font-weight: 600;">${escapeHtml(sectionName)}</h3>`;
           }
           continue;
         }
         
-        // Handle list items (- **label**: value)
-        if (line.startsWith('- ')) {
-          if (!inList) {
-            inList = true;
-            currentList = '';
+        // Handle cluster node entries: "- YANG (id=compute-node: yang, vms=5, status=online)"
+        if (inClusterNodes && trimmed.startsWith('- ')) {
+          const nodeMatch = trimmed.match(/^- (.+?) \(id=(.+?), vms=(\d+), status=(.+?)\)/);
+          if (nodeMatch) {
+            const [, name, id, vmCount, status] = nodeMatch;
+            nodeEntries.push({ name: name.trim(), id: id.trim(), vmCount: parseInt(vmCount), status: status.trim() });
+          }
+          continue;
+        }
+        
+        // Handle VM entries: "- opnsense (QEMU VM, running)"
+        if (inClusterVms && trimmed.startsWith('- ') && !trimmed.startsWith('  -')) {
+          // Save previous VM if exists
+          if (inVmEntry && currentVmHtml) {
+            vmList.push(currentVmHtml);
+            currentVmHtml = '';
           }
           
-          // Parse "- **label**: value" or "- label: value"
-          const listMatch = line.match(/^- \*\*(.+?)\*\*:\s*(.+)$/) || line.match(/^- (.+?):\s*(.+)$/);
+          const vmMatch = trimmed.match(/^- (.+?) \((.+?),\s*(.+?)\)/);
+          if (vmMatch) {
+            const [, name, vmType, state] = vmMatch;
+            inVmEntry = true;
+            const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
+            const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
+            currentVmHtml = `
+              <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${typeColor};">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                  <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(name.trim())}</strong>
+                  <span style="background: ${typeColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
+                  <span style="background: ${stateColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(state.trim())}</span>
+                </div>
+            `;
+          }
+          continue;
+        }
+        
+        // Handle VM details: "  - Details: node=proxBig | trace=compute-vm:proxbig:101"
+        if (inVmEntry && trimmed.startsWith('  - Details:')) {
+          const detailsText = trimmed.replace('  - Details:', '').trim();
+          const parts = detailsText.split('|').map(p => p.trim());
+          let detailsHtml = '<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b;">';
+          
+          for (const part of parts) {
+            if (part.startsWith('trace=')) {
+              const traceId = part.replace('trace=', '');
+              detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
+                <span style="color: #94a3b8;">Trace ID:</span> 
+                <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #60a5fa; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer;" 
+                      onclick="navigator.clipboard.writeText('${escapeHtml(traceId)}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
+                      title="Click to copy">${escapeHtml(traceId)}</code>
+              </div>`;
+            } else if (part.startsWith('node=')) {
+              const nodeName = part.replace('node=', '');
+              detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
+                <span style="color: #94a3b8;">Node:</span> 
+                <span style="color: #e2e8f0; font-weight: 500;">${escapeHtml(nodeName)}</span>
+              </div>`;
+            } else {
+              detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em; color: #94a3b8;">${escapeHtml(part)}</div>`;
+            }
+          }
+          detailsHtml += '</div>';
+          currentVmHtml += detailsHtml;
+          continue;
+        }
+        
+        // Handle VM source: "  - Source: Digital twin (Proxmox ingest); agent status unknown."
+        if (inVmEntry && trimmed.startsWith('  - Source:')) {
+          const sourceText = trimmed.replace('  - Source:', '').trim();
+          currentVmHtml += `
+            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b; font-size: 0.8em; color: #64748b; font-style: italic;">
+              <span style="color: #94a3b8;">Source:</span> ${escapeHtml(sourceText)}
+            </div>
+          `;
+          continue;
+        }
+        
+        // Handle tip lines
+        if (trimmed.startsWith('Tip:')) {
+          html += `<div style="margin-top: 16px; padding: 10px; background: #1e3a8a; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 0.875em; color: #bfdbfe;">
+            <strong style="color: #93c5fd;">💡 Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
+          </div>`;
+          continue;
+        }
+        
+        // Handle headers (###)
+        if (trimmed.startsWith('### ')) {
+          if (inVmEntry && currentVmHtml) {
+            vmList.push(currentVmHtml + '</div>');
+            currentVmHtml = '';
+            inVmEntry = false;
+          }
+          
+          const headerMatch = trimmed.match(/^### Node: (.+?) \(IP: (.+?)\)/);
+          if (headerMatch) {
+            html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa;">${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
+          } else {
+            const headerText = trimmed.replace(/^### /, '');
+            html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em;">${escapeHtml(headerText)}</h3>`;
+          }
+          continue;
+        }
+        
+        // Handle regular list items
+        if (trimmed.startsWith('- ') && !inClusterNodes && !inClusterVms) {
+          const listMatch = trimmed.match(/^- \*\*(.+?)\*\*:\s*(.+)$/) || trimmed.match(/^- (.+?):\s*(.+)$/);
           if (listMatch) {
             const label = escapeHtml(listMatch[1]);
             const value = escapeHtml(listMatch[2]);
-            currentList += `<li><span class="temp-label">${label}:</span> <span class="temp-value">${value}</span></li>`;
+            html += `<div style="margin: 6px 0; padding-left: 16px;">
+              <span style="color: #94a3b8; font-weight: 500;">${label}:</span> 
+              <span style="color: #e2e8f0;">${value}</span>
+            </div>`;
           } else {
-            // Fallback for other list formats
-            const listText = escapeHtml(line.replace(/^- /, ''));
-            currentList += `<li>${listText}</li>`;
+            html += `<div style="margin: 6px 0; padding-left: 16px; color: #e2e8f0;">${escapeHtml(trimmed.replace(/^- /, ''))}</div>`;
           }
           continue;
         }
         
-        // Close list if we hit a non-list line
-        if (inList && line) {
-          html += '<ul>' + currentList + '</ul>';
-          currentList = '';
-          inList = false;
-        }
-        
-        // Handle regular text (remove ** and style)
-        if (line) {
-          let processedLine = escapeHtml(line);
-          // Remove ** and style the text
-          processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
-          html += `<p style="margin: 8px 0;">${processedLine}</p>`;
-        } else {
-          // Empty line
-          if (!inList) {
-            html += '<br>';
+        // Handle regular text
+        if (trimmed && !trimmed.startsWith('  -')) {
+          if (inVmEntry && currentVmHtml) {
+            vmList.push(currentVmHtml + '</div>');
+            currentVmHtml = '';
+            inVmEntry = false;
           }
+          
+          let processedLine = escapeHtml(trimmed);
+          processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
+          html += `<p style="margin: 8px 0; color: #cbd5e1; line-height: 1.5;">${processedLine}</p>`;
+        } else if (!trimmed && !inVmEntry) {
+          html += '<br>';
         }
       }
       
-      // Close any remaining list
-      if (inList) {
-        html += '<ul>' + currentList + '</ul>';
+      // Close any open sections
+      if (inClusterNodes && nodeEntries.length > 0) {
+        html += formatClusterNodesSection(nodeEntries);
+      }
+      if (inClusterVms) {
+        if (inVmEntry && currentVmHtml) {
+          vmList.push(currentVmHtml + '</div>');
+        }
+        if (vmList.length > 0) {
+          html += formatClusterVmsSection(vmList);
+        }
       }
       
       return html;
+    }
+    
+    function formatClusterNodesSection(nodes) {
+      if (nodes.length === 0) {
+        return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No nodes discovered in twin.</div>';
+      }
+      
+      let html = '<div style="margin: 12px 0;">';
+      for (const node of nodes) {
+        const statusColor = node.status === 'online' ? '#10b981' : node.status === 'offline' ? '#ef4444' : '#94a3b8';
+        html += `
+          <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid #3b82f6;">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(node.name)}</strong>
+              <span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(node.status)}</span>
+              <span style="color: #94a3b8; font-size: 0.875em;">${node.vmCount} VM${node.vmCount !== 1 ? 's' : ''}</span>
+              <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #64748b; font-family: 'Courier New', monospace; font-size: 0.8em;">${escapeHtml(node.id)}</code>
+            </div>
+          </div>
+        `;
+      }
+      html += '</div>';
+      return html;
+    }
+    
+    function formatClusterVmsSection(vms) {
+      if (vms.length === 0) {
+        return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No VMs discovered in twin.</div>';
+      }
+      
+      return '<div style="margin: 12px 0;">' + vms.join('') + '</div>';
     }
 
     function addChatMessage(role, content, isLoading = false) {
@@ -1000,13 +1198,14 @@
       const messageDiv = document.createElement('div');
       messageDiv.id = messageId;
       messageDiv.style.cssText = `
-        margin-bottom: 12px;
-        padding: 10px 14px;
-        border-radius: 8px;
-        max-width: 75%;
+        margin-bottom: 16px;
+        padding: 14px 16px;
+        border-radius: 10px;
+        max-width: 80%;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         ${role === 'user' 
-          ? 'background: #1e3a8a; margin-left: auto; text-align: right;' 
-          : 'background: #1e293b; margin-right: auto;'}
+          ? 'background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); margin-left: auto; text-align: right; border: 1px solid #3b82f6;' 
+          : 'background: #1e293b; margin-right: auto; border: 1px solid #334155;'}
       `;
 
       if (role === 'user') {
