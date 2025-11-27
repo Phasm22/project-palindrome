@@ -19,6 +19,7 @@
     "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts",
     "pce:ingest-proxmox": "bun run scripts/ingest-proxmox.ts",
     "pce:ingest-network": "bun run scripts/ingest-network.ts",
+    "pce:ingest-firewall": "bun run scripts/ingest-firewall.ts",
     "pce:ingest-all": "bun run scripts/ingest-all.ts",
     "pce:debug-vector": "bun run src/pce/debug-vector.ts",
     "pce:check-indexed": "bun run src/pce/check-indexed.ts",

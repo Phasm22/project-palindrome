@@ -7,3 +7,4 @@ export { GraphIngestionPipeline, type GraphIngestionOptions, type GraphIngestion
 export { ProxmoxIngestionOrchestrator, computeVersionHash, type ProxmoxIngestionOptions, type ProxmoxIngestionResult } from "./proxmox-ingestion";
 export { TopologyIngestionOrchestrator, extractTopologyEntities, type TopologyIngestionResult, type TopologyYaml } from "./topology-ingestion";
 export { NetworkIngestionOrchestrator, type NetworkIngestionOptions } from "./network-ingestion";
+export { FirewallIngestionOrchestrator, type FirewallIngestionOptions } from "./firewall-ingestion";

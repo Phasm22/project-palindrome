@@ -174,6 +174,10 @@ export class NetworkIngestionOrchestrator {
 
   async dispose(): Promise<void> {
     (this.opnsenseTool as any)?.close?.();
+    // Close Neo4j connection
+    if (this.twinUpdater) {
+      await this.twinUpdater.close();
+    }
   }
 }
 

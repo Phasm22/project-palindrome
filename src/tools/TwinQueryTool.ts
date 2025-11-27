@@ -15,12 +15,19 @@ const TwinQueryParams = z.object({
     "network_interfaces_by_node",
     "network_vms_by_subnet",
     "network_reachability",
+    "firewall_list_rules",
+    "firewall_rules_by_chain",
+    "firewall_rules_allowing_subnet",
+    "firewall_rules_blocking_subnet",
+    "firewall_exposure_map",
   ]),
   params: z
     .object({
       nodeName: z.string().optional(),
       subnet: z.string().optional(),
       fromId: z.string().optional(),
+      chain: z.string().optional(),
+      vmId: z.string().optional(),
     })
     .partial()
     .optional(),
@@ -73,6 +80,22 @@ export class TwinQueryTool extends BaseTool {
         {
           description: "Find VMs sharing subnet 172.16.0.0/22",
           parameters: { operation: "network_vms_by_subnet", params: { subnet: "172.16.0.0/22" } },
+        },
+        {
+          description: "List all firewall rules",
+          parameters: { operation: "firewall_list_rules" },
+        },
+        {
+          description: "List firewall rules for interface chain",
+          parameters: { operation: "firewall_rules_by_chain", params: { chain: "chain:em0" } },
+        },
+        {
+          description: "Find rules allowing access to subnet",
+          parameters: { operation: "firewall_rules_allowing_subnet", params: { subnet: "172.16.0.0/22" } },
+        },
+        {
+          description: "Get exposure map for all VMs",
+          parameters: { operation: "firewall_exposure_map" },
         },
       ],
     });
@@ -145,6 +168,39 @@ export class TwinQueryTool extends BaseTool {
           }
           const data = await this.service.reachability(fromId);
           return { data: { kind: "reachability", fromId, data } };
+        }
+        case "firewall_list_rules": {
+          const data = await this.service.listFirewallRules();
+          return { data: { kind: "firewall_rule_list", data } };
+        }
+        case "firewall_rules_by_chain": {
+          const chain = opParams?.chain;
+          if (!chain) {
+            return { error: "chain is required for firewall_rules_by_chain" };
+          }
+          const data = await this.service.firewallRulesByChain(chain);
+          return { data: { kind: "firewall_rule_list", chain, data } };
+        }
+        case "firewall_rules_allowing_subnet": {
+          const subnet = opParams?.subnet;
+          if (!subnet) {
+            return { error: "subnet is required for firewall_rules_allowing_subnet" };
+          }
+          const data = await this.service.rulesAllowingSubnet(subnet);
+          return { data: { kind: "firewall_rule_list", subnet, data } };
+        }
+        case "firewall_rules_blocking_subnet": {
+          const subnet = opParams?.subnet;
+          if (!subnet) {
+            return { error: "subnet is required for firewall_rules_blocking_subnet" };
+          }
+          const data = await this.service.rulesBlockingSubnet(subnet);
+          return { data: { kind: "firewall_rule_list", subnet, data } };
+        }
+        case "firewall_exposure_map": {
+          const vmId = opParams?.vmId;
+          const data = await this.service.exposureMap(vmId);
+          return { data: { kind: "exposure_map", vmId, data } };
         }
         default:
           return { error: `Unsupported operation: ${operation}` };

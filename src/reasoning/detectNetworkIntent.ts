@@ -25,8 +25,10 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
     }
   }
 
+  // Only match CIDR for network intent if it's clearly a network/subnet query
+  // Don't match if it's about firewall rules (those are handled by firewall intent)
   const cidrMatch = userInput.match(CIDR_REGEX);
-  if (cidrMatch) {
+  if (cidrMatch && !userInput.toLowerCase().includes("rule") && !userInput.toLowerCase().includes("allow") && !userInput.toLowerCase().includes("block")) {
     return { type: "vms_by_subnet", subnet: cidrMatch[0] };
   }
 

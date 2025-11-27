@@ -67,7 +67,15 @@ export class TwinUpdateService {
                 n.primaryIp = $primaryIp,
                 n.gateway = $gateway,
                 n.cidr = $cidr,
-                n.ips = $ips
+                n.ips = $ips,
+                n.action = $action,
+                n.direction = $direction,
+                n.interface = $interface,
+                n.protocol = $protocol,
+                n.source = $source,
+                n.destination = $destination,
+                n.chain = $chain,
+                n.ruleType = $ruleType
           `,
           {
             id: entity.id,
@@ -88,6 +96,14 @@ export class TwinUpdateService {
             gateway: props.gateway,
             cidr: props.cidr,
             ips: props.ips,
+            action: props.action,
+            direction: props.direction,
+            interface: props.interface,
+            protocol: props.protocol,
+            source: props.source,
+            destination: props.destination,
+            chain: props.chain,
+            ruleType: props.ruleType,
           }
         );
       }
@@ -103,8 +119,28 @@ export class TwinUpdateService {
 
     const driver = this.graphStore.getDriver();
     const session = driver.session();
+    let created = 0;
+    let skipped = 0;
     try {
       for (const rel of relationships) {
+        // Check if both nodes exist before creating relationship
+        const fromCheck = await session.run(
+          `MATCH (a:TwinEntity {id: $fromId}) RETURN count(a) as count`,
+          { fromId: rel.fromId }
+        );
+        const toCheck = await session.run(
+          `MATCH (b:TwinEntity {id: $toId}) RETURN count(b) as count`,
+          { toId: rel.toId }
+        );
+
+        const fromExists = fromCheck.records[0]?.get("count")?.toNumber() > 0;
+        const toExists = toCheck.records[0]?.get("count")?.toNumber() > 0;
+
+        if (!fromExists || !toExists) {
+          skipped++;
+          continue;
+        }
+
         await session.run(
           `
             MATCH (a:TwinEntity {id: $fromId}), (b:TwinEntity {id: $toId})
@@ -119,6 +155,11 @@ export class TwinUpdateService {
             collectedAt: neo4j.types.DateTime.fromStandardDate(rel.collectedAt),
           }
         );
+        created++;
+      }
+      if (skipped > 0) {
+        const { pceLogger } = await import("../../pce/utils/logger");
+        pceLogger.warn(`Skipped ${skipped} relationships: source or target entity missing`);
       }
     } finally {
       await session.close();
@@ -143,6 +184,14 @@ export class TwinUpdateService {
       gateway: null,
       cidr: null,
       ips: null,
+      action: null,
+      direction: null,
+      interface: null,
+      protocol: null,
+      source: null,
+      destination: null,
+      chain: null,
+      ruleType: null,
     };
 
     if (entity.type === TwinEntityType.COMPUTE_NODE) {
@@ -179,7 +228,24 @@ export class TwinUpdateService {
       props.gateway = data.gateway ?? null;
     }
 
+    if (entity.type === TwinEntityType.FIREWALL_RULE) {
+      props.action = data.action ?? null;
+      props.direction = data.direction ?? null;
+      props.interface = data.interface ?? null;
+      props.protocol = data.protocol ?? null;
+      props.source = data.source ?? null;
+      props.destination = data.destination ?? null;
+      props.chain = data.chain ?? null;
+      props.ruleType = data.ruleType ?? null;
+    }
+
     return props;
+  }
+
+  async close(): Promise<void> {
+    if (this.graphStore) {
+      await this.graphStore.close();
+    }
   }
 }
 

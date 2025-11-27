@@ -5,6 +5,7 @@ export enum TwinEntityType {
   COMPUTE_VM = "compute_vm",
   NETWORK_INTERFACE = "network_interface",
   NETWORK_SUBNET = "network_subnet",
+  FIREWALL_RULE = "firewall_rule",
 }
 
 const BaseTwinEntitySchema = z.object({
@@ -64,11 +65,30 @@ export const NetworkSubnetEntitySchema = BaseTwinEntitySchema.extend({
   }),
 });
 
+export const FirewallRuleEntitySchema = BaseTwinEntitySchema.extend({
+  type: z.literal(TwinEntityType.FIREWALL_RULE),
+  data: z.object({
+    action: z.enum(["pass", "block", "reject", "nat", "rdr"]),
+    direction: z.enum(["in", "out", "any"]).optional(),
+    interface: z.string().nullable().optional(),
+    protocol: z.string().nullable().optional(), // tcp, udp, icmp, etc.
+    source: z.string().nullable().optional(), // IP/CIDR or "any"
+    destination: z.string().nullable().optional(), // IP/CIDR or "any"
+    sourcePort: z.string().nullable().optional(), // port or port range
+    destinationPort: z.string().nullable().optional(), // port or port range
+    flags: z.string().nullable().optional(), // quick, keep state, etc.
+    ruleType: z.enum(["filter", "nat", "rdr"]).default("filter"),
+    chain: z.string().nullable().optional(), // interface-based grouping
+    enabled: z.boolean().default(true),
+  }),
+});
+
 export const TwinEntitySchema = z.union([
   ComputeNodeEntitySchema,
   ComputeVmEntitySchema,
   NetworkInterfaceEntitySchema,
   NetworkSubnetEntitySchema,
+  FirewallRuleEntitySchema,
 ]);
 
 export type TwinEntity = z.infer<typeof TwinEntitySchema>;
@@ -76,4 +96,5 @@ export type ComputeNodeEntity = z.infer<typeof ComputeNodeEntitySchema>;
 export type ComputeVmEntity = z.infer<typeof ComputeVmEntitySchema>;
 export type NetworkInterfaceEntity = z.infer<typeof NetworkInterfaceEntitySchema>;
 export type NetworkSubnetEntity = z.infer<typeof NetworkSubnetEntitySchema>;
+export type FirewallRuleEntity = z.infer<typeof FirewallRuleEntitySchema>;
 

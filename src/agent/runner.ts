@@ -26,6 +26,14 @@ import {
   reachabilityChain,
   vmsBySubnetChain,
 } from "../reasoning/chains/network";
+import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
+import {
+  listFirewallRulesChain,
+  firewallRulesByChainChain,
+  rulesAllowingSubnetChain,
+  rulesBlockingSubnetChain,
+  exposureMapChain,
+} from "../reasoning/chains/firewall";
 
 let openaiClient: OpenAI | null = null;
 
@@ -155,6 +163,32 @@ async function executeNetworkIntent(
   }
 }
 
+async function executeFirewallIntent(
+  intent: FirewallIntent,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string | null> {
+  try {
+    switch (intent.type) {
+      case "list_rules":
+        return await listFirewallRulesChain(tools, session);
+      case "rules_by_chain":
+        return await firewallRulesByChainChain(intent.chain, tools, session);
+      case "rules_allowing_subnet":
+        return await rulesAllowingSubnetChain(intent.subnet, tools, session);
+      case "rules_blocking_subnet":
+        return await rulesBlockingSubnetChain(intent.subnet, tools, session);
+      case "exposure_map":
+        return await exposureMapChain(intent.vmId, tools, session);
+      default:
+        return null;
+    }
+  } catch (error: any) {
+    logger.error(`Firewall reasoning chain failed: ${error.message}`);
+    return null;
+  }
+}
+
 export type AgentRunOptions = {
   stream?: boolean;
   userId?: string;
@@ -210,6 +244,16 @@ export async function runAgent(
     if (twinAnswer) {
       logger.info("Responding via twin-first reasoning chain (no LLM needed).");
       return { text: twinAnswer };
+    }
+  }
+
+  // Check firewall intent BEFORE network intent to avoid CIDR conflicts
+  const firewallIntent = detectFirewallIntent(userInput);
+  if (firewallIntent) {
+    const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
+    if (firewallAnswer) {
+      logger.info("Responding via twin-first firewall reasoning chain.");
+      return { text: firewallAnswer };
     }
   }
 

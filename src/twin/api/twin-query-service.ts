@@ -294,6 +294,228 @@ export class TwinQueryService {
     }));
   }
 
+  /**
+   * List all firewall rules.
+   */
+  async listFirewallRules(): Promise<Array<{
+    id: string;
+    action: string;
+    direction?: string;
+    interface?: string;
+    protocol?: string;
+    source?: string;
+    destination?: string;
+    chain?: string;
+  }>> {
+    const result = await this.runQuery(
+      `
+        MATCH (r:TwinEntity {type: $ruleType})
+        RETURN r.id AS id,
+               r.action AS action,
+               r.direction AS direction,
+               r.interface AS interface,
+               r.protocol AS protocol,
+               r.source AS source,
+               r.destination AS destination,
+               r.chain AS chain
+        ORDER BY r.chain, r.action, r.direction
+      `,
+      { ruleType: "firewall_rule" }
+    );
+
+    return result.records.map((record) => ({
+      id: record.get("id") as string,
+      action: record.get("action") as string,
+      direction: record.get("direction") ?? undefined,
+      interface: record.get("interface") ?? undefined,
+      protocol: record.get("protocol") ?? undefined,
+      source: record.get("source") ?? undefined,
+      destination: record.get("destination") ?? undefined,
+      chain: record.get("chain") ?? undefined,
+    }));
+  }
+
+  /**
+   * List firewall rules by interface/chain.
+   */
+  async firewallRulesByChain(chain: string): Promise<Array<{
+    id: string;
+    action: string;
+    direction?: string;
+    protocol?: string;
+    source?: string;
+    destination?: string;
+  }>> {
+    const result = await this.runQuery(
+      `
+        MATCH (r:TwinEntity {type: $ruleType})
+        WHERE r.chain = $chain
+        RETURN r.id AS id,
+               r.action AS action,
+               r.direction AS direction,
+               r.protocol AS protocol,
+               r.source AS source,
+               r.destination AS destination
+        ORDER BY r.action, r.direction
+      `,
+      { ruleType: "firewall_rule", chain }
+    );
+
+    return result.records.map((record) => ({
+      id: record.get("id") as string,
+      action: record.get("action") as string,
+      direction: record.get("direction") ?? undefined,
+      protocol: record.get("protocol") ?? undefined,
+      source: record.get("source") ?? undefined,
+      destination: record.get("destination") ?? undefined,
+    }));
+  }
+
+  /**
+   * Find rules that ALLOW access to a subnet.
+   * Matches by exact CIDR or by mask pattern (e.g., /22 matches any /22 subnet).
+   */
+  async rulesAllowingSubnet(subnetCidr: string): Promise<Array<{
+    ruleId: string;
+    action: string;
+    direction?: string;
+    protocol?: string;
+    subnetId: string;
+  }>> {
+    const subnetId = `network-subnet:${subnetCidr.toLowerCase()}`;
+    // Extract mask for pattern matching (e.g., "172.16.0.0/22" -> "/22")
+    const maskMatch = subnetCidr.match(/\/(\d+)$/);
+    const mask = maskMatch ? maskMatch[1] : null;
+    
+    const result = await this.runQuery(
+      `
+        MATCH (r:TwinEntity {type: $ruleType})-[:ALLOWS]->(s:TwinEntity {type: $subnetType})
+        WHERE s.id = $subnetId 
+           OR s.displayName = $subnetCidr
+           OR (s.displayName ENDS WITH $maskPattern AND $mask IS NOT NULL)
+           OR (s.id ENDS WITH $maskPattern AND $mask IS NOT NULL)
+        RETURN r.id AS ruleId,
+               r.action AS action,
+               r.direction AS direction,
+               r.protocol AS protocol,
+               s.id AS subnetId,
+               s.displayName AS subnetCidr
+        ORDER BY r.action, r.direction
+      `,
+      {
+        ruleType: "firewall_rule",
+        subnetType: "network_subnet",
+        subnetId,
+        subnetCidr,
+        maskPattern: mask ? `/${mask}` : null,
+        mask,
+      }
+    );
+
+    return result.records.map((record) => ({
+      ruleId: record.get("ruleId") as string,
+      action: record.get("action") as string,
+      direction: record.get("direction") ?? undefined,
+      protocol: record.get("protocol") ?? undefined,
+      subnetId: record.get("subnetId") as string,
+    }));
+  }
+
+  /**
+   * Find rules that BLOCK access to a subnet.
+   * Matches by exact CIDR or by mask pattern (e.g., /22 matches any /22 subnet).
+   */
+  async rulesBlockingSubnet(subnetCidr: string): Promise<Array<{
+    ruleId: string;
+    action: string;
+    direction?: string;
+    protocol?: string;
+    subnetId: string;
+  }>> {
+    const subnetId = `network-subnet:${subnetCidr.toLowerCase()}`;
+    // Extract mask for pattern matching (e.g., "172.16.0.0/22" -> "/22")
+    const maskMatch = subnetCidr.match(/\/(\d+)$/);
+    const mask = maskMatch ? maskMatch[1] : null;
+    
+    const result = await this.runQuery(
+      `
+        MATCH (r:TwinEntity {type: $ruleType})-[:BLOCKS]->(s:TwinEntity {type: $subnetType})
+        WHERE s.id = $subnetId 
+           OR s.displayName = $subnetCidr
+           OR (s.displayName ENDS WITH $maskPattern AND $mask IS NOT NULL)
+           OR (s.id ENDS WITH $maskPattern AND $mask IS NOT NULL)
+        RETURN r.id AS ruleId,
+               r.action AS action,
+               r.direction AS direction,
+               r.protocol AS protocol,
+               s.id AS subnetId,
+               s.displayName AS subnetCidr
+        ORDER BY r.action, r.direction
+      `,
+      {
+        ruleType: "firewall_rule",
+        subnetType: "network_subnet",
+        subnetId,
+        subnetCidr,
+        maskPattern: mask ? `/${mask}` : null,
+        mask,
+      }
+    );
+
+    return result.records.map((record) => ({
+      ruleId: record.get("ruleId") as string,
+      action: record.get("action") as string,
+      direction: record.get("direction") ?? undefined,
+      protocol: record.get("protocol") ?? undefined,
+      subnetId: record.get("subnetId") as string,
+      subnetCidr: record.get("subnetCidr") ?? undefined,
+    }));
+  }
+
+  /**
+   * Get exposure map: which VMs are reachable based on firewall rules and subnet membership.
+   */
+  async exposureMap(vmId?: string): Promise<Array<{
+    vmId: string;
+    vmName: string;
+    subnet: string;
+    allowedBy: string[];
+    blockedBy: string[];
+  }>> {
+    const vmFilter = vmId ? "AND vm.id = $vmId" : "";
+    const result = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType})
+        MATCH (iface:TwinEntity {type: $ifaceType})
+        WHERE iface.vmId = vm.id ${vmFilter}
+        MATCH (iface)-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
+        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(subnet)
+        RETURN vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               subnet.displayName AS subnet,
+               collect(DISTINCT allowRule.id) AS allowedBy,
+               collect(DISTINCT blockRule.id) AS blockedBy
+        ORDER BY vmName
+      `,
+      {
+        vmType: "compute_vm",
+        ifaceType: "network_interface",
+        subnetType: "network_subnet",
+        ruleType: "firewall_rule",
+        ...(vmId ? { vmId } : {}),
+      }
+    );
+
+    return result.records.map((record) => ({
+      vmId: record.get("vmId") as string,
+      vmName: record.get("vmName") as string,
+      subnet: record.get("subnet") as string,
+      allowedBy: (record.get("allowedBy")?.toArray?.() || record.get("allowedBy") || []).filter((x: any) => x),
+      blockedBy: (record.get("blockedBy")?.toArray?.() || record.get("blockedBy") || []).filter((x: any) => x),
+    }));
+  }
+
   private safeToNumber(value: any): number {
     if (value === null || value === undefined) {
       return 0;
