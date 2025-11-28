@@ -21,9 +21,25 @@ interface ClusterVmSummary {
 
 export class TwinQueryService {
   private graphStore: Neo4jGraphStore;
+  private ownsGraphStore: boolean;
 
-  constructor(graphStore: Neo4jGraphStore = new Neo4jGraphStore()) {
-    this.graphStore = graphStore;
+  constructor(graphStore?: Neo4jGraphStore) {
+    if (graphStore) {
+      this.graphStore = graphStore;
+      this.ownsGraphStore = false;
+    } else {
+      this.graphStore = new Neo4jGraphStore();
+      this.ownsGraphStore = true;
+    }
+  }
+
+  async close(): Promise<void> {
+    if (this.ownsGraphStore && this.graphStore) {
+      const driver = this.graphStore.getDriver();
+      if (driver) {
+        await driver.close();
+      }
+    }
   }
 
   private mapInterface(record: neo4j.Record): any {

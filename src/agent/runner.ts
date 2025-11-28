@@ -41,6 +41,7 @@ import {
   attackPathChain,
   listInternetExposedVmsChain,
 } from "../reasoning/chains/exposure";
+import { detectActionIntent } from "../reasoning/action-intents";
 
 let openaiClient: OpenAI | null = null;
 
@@ -329,6 +330,15 @@ export async function runAgent(
       logger.warn("Failed to record reasoning trace for early return", { error: error.message });
     }
   };
+
+  // Check action intent FIRST (before query intents)
+  // This prevents "create VM" from being treated as a query
+  const actionIntent = detectActionIntent(userInput);
+  if (actionIntent) {
+    logger.info("Detected action intent", { intent: actionIntent.type });
+    // Let the LLM handle action execution - don't short-circuit
+    // The LLM will use the action tool with proper parameters
+  }
 
   // Check exposure intent first (most specific)
   const exposureIntent = detectExposureIntent(userInput);

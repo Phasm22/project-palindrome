@@ -9,6 +9,7 @@ import { ProxmoxWriteTool } from "../tools/proxmox/writes";
 import { SSHTool } from "../tools/SSHTool";
 import { MCPOpnsenseTool } from "../tools/MCPOpnsenseTool";
 import { TwinQueryTool } from "../tools/TwinQueryTool";
+import { ActionTool } from "../tools/ActionTool";
 
 export function loadTools(): BaseTool[] {
   return [
@@ -22,6 +23,7 @@ export function loadTools(): BaseTool[] {
     new SSHTool(),
     new MCPOpnsenseTool(),
     new TwinQueryTool(),
+    new ActionTool(),
   ];
 }
 
