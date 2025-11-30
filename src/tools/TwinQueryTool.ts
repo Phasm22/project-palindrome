@@ -12,6 +12,7 @@ const TwinQueryParams = z.object({
     "vms_without_agent",
     "stopped_vms_on_node",
     "find_vm_by_name",
+    "find_vm_by_id",
     "network_list_interfaces",
     "network_interfaces_by_node",
     "network_vms_by_subnet",
@@ -36,6 +37,7 @@ const TwinQueryParams = z.object({
       fromSubnet: z.string().optional(),
       toVmId: z.string().optional(),
       vmName: z.string().optional(),
+      vmId: z.union([z.number(), z.string()]).optional(),
       vmKind: z.enum(["qemu", "lxc", "all"]).optional(),
     })
     .partial()
@@ -81,6 +83,10 @@ export class TwinQueryTool extends BaseTool {
         {
           description: "Find VM by name (searches across all nodes)",
           parameters: { operation: "find_vm_by_name", params: { vmName: "SentinelZero" } },
+        },
+        {
+          description: "Find VM by ID (handles ambiguity when same ID exists on multiple nodes/types)",
+          parameters: { operation: "find_vm_by_id", params: { vmId: 100 } },
         },
         {
           description: "Show all network interfaces",
@@ -209,6 +215,24 @@ export class TwinQueryTool extends BaseTool {
           const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
           const data = await this.service.findVmByName(vmName, { vmKind: vmKind ?? undefined });
           return { data: { kind: "vm_list", vmName, data } };
+        }
+        case "find_vm_by_id": {
+          const vmId = opParams?.vmId;
+          if (vmId === undefined || vmId === null) {
+            return { error: "vmId is required for find_vm_by_id" };
+          }
+          const data = await this.service.findVmById(vmId as number | string);
+          // If multiple VMs found with same ID, indicate ambiguity
+          const isAmbiguous = data.length > 1;
+          return { 
+            data: { 
+              kind: "vm_list", 
+              vmId, 
+              data,
+              ambiguous: isAmbiguous,
+              note: isAmbiguous ? `Multiple VMs found with ID ${vmId} on different nodes/types. All matches shown below.` : undefined
+            } 
+          };
         }
         case "network_list_interfaces": {
           const data = await this.service.listInterfaces();

@@ -97,12 +97,49 @@ export async function generateNodeProfileDocument(
   node: string
 ): Promise<ProxmoxDocument> {
   const tool = new ProxmoxReadOnlyTool();
+  
+  // The tool's execute method will normalize the node name internally
+  // when handling node_status action, which handles case sensitivity
+  // and alternative endpoints correctly
   const statusResult = await tool.execute(
     { action: "node_status", node },
     { toolName: "proxmox_readonly", startedAt: Date.now() }
   );
 
   if (statusResult.error) {
+    // Check if it's a case sensitivity issue (596 or 403/404)
+    const errorMsg = statusResult.error.toString().toLowerCase();
+    if (errorMsg.includes('596') || errorMsg.includes('403') || errorMsg.includes('404')) {
+      // Try to get the actual node name from list_nodes
+      try {
+        const nodesResult = await tool.execute(
+          { action: "list_nodes" },
+          { toolName: "proxmox_readonly", startedAt: Date.now() }
+        );
+        if (!nodesResult.error && nodesResult.data?.nodes) {
+          const nodes = nodesResult.data.nodes;
+          // Find node with case-insensitive match
+          const foundNode = nodes.find(
+            (n: any) => n?.node && n.node.toLowerCase() === node.toLowerCase()
+          );
+          if (foundNode?.node && foundNode.node !== node) {
+            // Retry with the correct case
+            const retryResult = await tool.execute(
+              { action: "node_status", node: foundNode.node },
+              { toolName: "proxmox_readonly", startedAt: Date.now() }
+            );
+            if (!retryResult.error) {
+              // Use the corrected result
+              const status = retryResult.data || {};
+              return buildNodeProfileDocument(node, status);
+            }
+          }
+        }
+      } catch (retryError: any) {
+        // Fall through to original error
+      }
+    }
+    
     throw new Error(
       `Failed to generate node profile: ${statusResult.error}`
     );

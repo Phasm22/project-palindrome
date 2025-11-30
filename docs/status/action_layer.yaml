@@ -121,7 +121,7 @@ action_layer:
             mechanism: "terraform"
             terraform_changes:
               - add_vm_resource_block
-              - wire_to_template_id: 9000
+              - wire_to_template_id: 8001
               - set_cpu_ram_disk
               - attach_network_bridge_vlan
             required_inputs_from_user:

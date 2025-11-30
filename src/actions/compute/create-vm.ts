@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TerraformRunner, TerraformConfig } from "../helpers/terraform-runner";
+import { TerraformRunner, type TerraformConfig } from "../helpers/terraform-runner";
 import { TwinSync } from "../helpers/twin-sync";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
 import { pceLogger as logger } from "../../pce/utils/logger";
@@ -19,7 +19,7 @@ export const CreateVmSchema = z.object({
   vmBridge: z.string().default("vmbr0"),
   datastore: z.string().default("local-lvm"),
   cloudInitDatastore: z.string().optional(), // Optional: defaults to "local" in Terraform
-  templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (defaults to 9000)
+  templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001)
   dryRun: z.boolean().default(false),
 });
 
@@ -43,13 +43,24 @@ export interface CreateVmResult {
 export async function createVm(params: CreateVmParams): Promise<CreateVmResult> {
   const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, datastore, cloudInitDatastore, templateId, dryRun } = params;
 
-  logger.info("Creating VM", { name, node, cores, memory, diskSize, dryRun });
+  // Normalize node name: Proxmox node names are case-sensitive (YANG, yin, etc.)
+  // Convert common lowercase inputs to correct case
+  let normalizedNode = node;
+  const nodeLower = node.toLowerCase();
+  if (nodeLower === "yang") {
+    normalizedNode = "YANG"; // Proxmox uses uppercase YANG
+  } else if (nodeLower === "yin") {
+    normalizedNode = "yin"; // yin is lowercase
+  }
+  // proxBig can be any case, keep as-is
+
+  logger.info("Creating VM", { name, node: normalizedNode, originalNode: node, cores, memory, diskSize, dryRun });
 
   // 0. Validate environment variables (cluster-aware)
-  if (!checkTerraformEnv(node)) {
+  if (!checkTerraformEnv(normalizedNode)) {
     return {
       success: false,
-      message: `Missing required environment variables for terraform operations on node "${node}". Check logs for details.`,
+      message: `Missing required environment variables for terraform operations on node "${normalizedNode}". Check logs for details.`,
     };
   }
 
@@ -58,37 +69,67 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   
   try {
     // Check if node exists
-    const clusterInfo = await twinQuery.describeCluster("all");
+    const clusterInfo = await twinQuery.describeCluster();
     const nodeExists = clusterInfo.nodes.some((n) => 
-      n.name.toLowerCase() === node.toLowerCase()
+      n.name.toLowerCase() === normalizedNode.toLowerCase()
     );
 
     if (!nodeExists) {
       return {
         success: false,
-        message: `Node "${node}" not found in twin. Available nodes: ${clusterInfo.nodes.map(n => n.name).join(", ")}`,
+        message: `Node "${normalizedNode}" not found in twin. Available nodes: ${clusterInfo.nodes.map(n => n.name).join(", ")}`,
       };
     }
 
     // Check if VM already exists
-    const existingVms = await twinQuery.findVmByName(name, "all");
+    // Note: Twin may have stale entries, so we check Proxmox directly via twin
+    // If twin says it exists but Proxmox doesn't, we'll proceed anyway (twin sync will fix it)
+    const existingVms = await twinQuery.findVmByName(name, {});
     if (existingVms.length > 0) {
-      return {
-        success: false,
-        message: `VM "${name}" already exists. Found: ${existingVms.map(vm => `${vm.name} on ${vm.nodeName}`).join(", ")}`,
-      };
+      // Check if any of the VMs are actually on the target node
+      const vmOnTargetNode = existingVms.find(vm => {
+        const vmNode = vm.nodeName?.toLowerCase();
+        const targetNodeLower = normalizedNode.toLowerCase();
+        return vmNode === targetNodeLower || (targetNodeLower === "yang" && vmNode === "yang");
+      });
+      
+      if (vmOnTargetNode) {
+        return {
+          success: false,
+          message: `VM "${name}" already exists on node "${normalizedNode}" according to twin. Found: ${existingVms.map(vm => `${vm.name} on ${vm.nodeName || "unknown"}`).join(", ")}. If the VM was manually deleted, the twin may be stale.`,
+        };
+      }
+      // If VM exists on a different node, that's fine - we can create on this node
+      logger.warn("VM exists on different node, proceeding with creation", { 
+        name, 
+        targetNode: normalizedNode,
+        existingNodes: existingVms.map(vm => vm.nodeName || "unknown")
+      });
     }
   } finally {
     await twinQuery.close();
   }
 
-  // 1.5. Validate template ID if provided (or use default)
-  const finalTemplateId = templateId || 9000;
-  logger.info("Using template ID", { templateId: finalTemplateId, node });
+  // 1.5. Determine template ID (node-specific defaults for cluster nodes)
+  // In Proxmox clusters, VM IDs must be unique across the cluster
+  // yang uses template 8000, yin uses template 8001
+  // Reuse nodeLower from normalization above
+  let defaultTemplateId: number;
+  if (nodeLower === "yang") {
+    defaultTemplateId = 8000;
+  } else if (nodeLower === "yin") {
+    defaultTemplateId = 8001;
+  } else {
+    // proxBig or other nodes default to 8001
+    defaultTemplateId = 8001;
+  }
+  
+  const finalTemplateId = templateId || defaultTemplateId;
+  logger.info("Using template ID", { templateId: finalTemplateId, node: normalizedNode, defaultTemplateId, wasProvided: !!templateId });
 
   // 2. Generate terraform config
   const terraformRunner = new TerraformRunner();
-  terraformRunner.setTargetNode(node); // Set target node for cluster-aware token selection
+  terraformRunner.setTargetNode(normalizedNode); // Set target node for cluster-aware token selection
   
   // Get SSH public key
   let sshKey = sshPublicKey;
@@ -105,13 +146,12 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
 
   // Determine cloud-init datastore based on node
   // yin/yang use "local" for snippets, proxBig uses "snippets" datastore
-  const nodeLower = node.toLowerCase();
   const defaultCloudInitDatastore = (nodeLower === "yin" || nodeLower === "yang") ? "local" : "snippets";
 
   const tfConfig: TerraformConfig = {
     vmConfigs: {
       [name]: {
-        target_node: node,
+        target_node: normalizedNode, // Use normalized node name (uppercase YANG, lowercase yin)
         cores,
         memory,
         disk_size: diskSize,
@@ -130,7 +170,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     return {
       success: planResult.success,
       message: planResult.success
-        ? `Dry-run successful. Would create VM "${name}" on node "${node}"`
+        ? `Dry-run successful. Would create VM "${name}" on node "${normalizedNode}"`
         : `Dry-run failed: ${planResult.stderr}`,
     };
   }
@@ -152,10 +192,16 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     } else if (stderr.includes("timeout") || stderr.includes("Still creating")) {
       errorMessage = `Terraform operation timed out or is taking too long. This may indicate network issues or insufficient permissions. ` +
         `Check the Proxmox API connectivity and token permissions. Original error: ${stderr}`;
-    } else if (stderr.includes("unable to find configuration file for VM") || stderr.includes("template")) {
-      errorMessage = `Template VM ${finalTemplateId} not found on node "${node}". ` +
-        `Please verify that template ${finalTemplateId} exists on ${node}, or specify a different template ID using the templateId parameter. ` +
-        `Original error: ${stderr}`;
+    } else if (stderr.includes("unable to find configuration file for VM") || stderr.includes("template") || stderr.includes("does not exist")) {
+      // Provide helpful error message with node-specific defaults
+      const nodeLower = node.toLowerCase();
+      const suggestedTemplateId = nodeLower === "yang" ? 8000 : nodeLower === "yin" ? 8001 : 8001;
+      errorMessage = `Template VM ${finalTemplateId} not found on node "${normalizedNode}". ` +
+        `In Proxmox clusters, VM IDs must be unique. ` +
+        `Default template IDs: yang=8000, yin=8001, proxBig=8001. ` +
+        `Please verify that template ${finalTemplateId} exists on ${normalizedNode}, or specify a different template ID using the templateId parameter. ` +
+        (finalTemplateId === suggestedTemplateId ? `(Note: ${normalizedNode} defaults to template ${suggestedTemplateId})` : ``) +
+        ` Original error: ${stderr}`;
     }
     
     return {
@@ -176,9 +222,14 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     };
   }
 
-  // 6. Sync to twin
-  const twinSync = new TwinSync();
-  await twinSync.syncTerraformVms(outputs);
+  // 6. Sync to twin (non-blocking - VM is created even if sync fails)
+  try {
+    const twinSync = new TwinSync();
+    await twinSync.syncTerraformVms(outputs);
+  } catch (error: any) {
+    logger.warn("Failed to sync VM to twin (non-critical)", { error: error.message, name });
+    // Don't fail VM creation if twin sync fails
+  }
 
   logger.info("VM created successfully", {
     name,
@@ -193,7 +244,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     vmId: vmInfo.id.toString(),
     hostname: vmInfo.hostname,
     ipAddresses: Array.isArray(vmInfo.ip_addresses) ? vmInfo.ip_addresses : [],
-    message: `VM "${name}" created successfully on node "${node}". Hostname: ${vmInfo.hostname}`,
+    message: `VM "${name}" created successfully on node "${normalizedNode}". Hostname: ${vmInfo.hostname}`,
     terraformOutput: outputs,
   };
 }

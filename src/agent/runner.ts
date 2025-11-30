@@ -18,6 +18,7 @@ import {
   listVmsByNodeChain,
   listVmsWithoutAgentChain,
   listStoppedVmsChain,
+  findVmByIdChain,
 } from "../reasoning/chains/compute";
 import { detectNetworkIntent, type NetworkIntent } from "../reasoning/detectNetworkIntent";
 import {
@@ -138,6 +139,8 @@ async function executeComputeIntent(
         return await listVmsWithoutAgentChain(tools, session);
       case "stopped_vms_on_node":
         return await listStoppedVmsChain(tools, session, intent.nodeName);
+      case "find_vm_by_id":
+        return await findVmByIdChain(tools, session, intent.vmId);
       default:
         return null;
     }
@@ -321,7 +324,7 @@ export async function runAgent(
           }],
         }],
         totalSteps: 1,
-        totalToolCalls,
+        totalToolCalls: toolCalls,
         maxStepsReached: false,
         timestamp: new Date(),
         durationMs,
@@ -396,11 +399,28 @@ export async function runAgent(
   const reasoningSteps: ReasoningStep[] = [];
   let totalToolCalls = 0;
   
-  const ragPayload = await fetchHybridContext(userInput, {
-    baseUrl: options.ragBaseUrl,
-    userId: session.userId,
-    aclGroup: session.aclGroup,
-  });
+  // Skip RAG for trivial queries (greetings, simple questions that don't need context)
+  // This significantly improves response time for simple interactions
+  const isTrivialQuery = (query: string): boolean => {
+    const normalized = query.toLowerCase().trim();
+    const trivialPatterns = [
+      /^(hi|hello|hey|greetings|good (morning|afternoon|evening))[!.]?$/i,
+      /^(thanks?|thank you|thx)[!.]?$/i,
+      /^(bye|goodbye|see you)[!.]?$/i,
+      /^(yes|no|ok|okay|sure|yep|nope)[!.]?$/i,
+      /^(help|what can you do|what do you do)[?]?$/i,
+    ];
+    return trivialPatterns.some(pattern => pattern.test(normalized));
+  };
+  
+  // Only fetch RAG context for non-trivial queries
+  const ragPayload = isTrivialQuery(userInput) 
+    ? null 
+    : await fetchHybridContext(userInput, {
+        baseUrl: options.ragBaseUrl,
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+      });
 
   const ragMessage = ragPayload ? [{ role: "system", content: formatRagSummary(ragPayload) }] : [];
   const MAX_STEPS = 5;

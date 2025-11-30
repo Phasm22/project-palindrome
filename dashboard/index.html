@@ -966,6 +966,7 @@
       let currentSection = '';
       let inVmEntry = false;
       let currentVmHtml = '';
+      let currentVmName = '';
       let vmEntries = [];
       
       // State for parsing structured data
@@ -973,6 +974,7 @@
       let inClusterVms = false;
       let nodeEntries = [];
       let vmList = [];
+      let seenVmNames = new Set(); // Track seen VMs to prevent duplicates
       
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -1018,24 +1020,59 @@
         // Handle VM entries: "- opnsense (QEMU VM, running)"
         if (inClusterVms && trimmed.startsWith('- ') && !trimmed.startsWith('  -')) {
           // Save previous VM if exists
-          if (inVmEntry && currentVmHtml) {
-            vmList.push(currentVmHtml);
+          if (inVmEntry && currentVmHtml && currentVmName) {
+            // Only add if we haven't seen this VM before
+            if (!seenVmNames.has(currentVmName)) {
+              vmList.push(currentVmHtml + '</div>');
+              seenVmNames.add(currentVmName);
+            }
             currentVmHtml = '';
+            currentVmName = '';
           }
           
           const vmMatch = trimmed.match(/^- (.+?) \((.+?),\s*(.+?)\)/);
           if (vmMatch) {
             const [, name, vmType, state] = vmMatch;
+            const vmName = name.trim();
+            
+            // Skip if we've already seen this VM
+            if (seenVmNames.has(vmName)) {
+              inVmEntry = false;
+              continue;
+            }
+            
             inVmEntry = true;
+            currentVmName = vmName;
             const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
             const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
             currentVmHtml = `
-              <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${typeColor};">
+              <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
                 <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                  <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(name.trim())}</strong>
+                  <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(vmName)}</strong>
                   <span style="background: ${typeColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
                   <span style="background: ${stateColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(state.trim())}</span>
                 </div>
+            `;
+          }
+          continue;
+        }
+        
+        // Handle nested VM entries (indented with spaces): "  - windowsVM (QEMU VM, running)"
+        if (inClusterVms && trimmed.startsWith('  - ') && !trimmed.startsWith('    -')) {
+          const nestedVmMatch = trimmed.match(/^  - (.+?) \((.+?),\s*(.+?)\)/);
+          if (nestedVmMatch && inVmEntry && currentVmHtml) {
+            const [, name, vmType, state] = nestedVmMatch;
+            const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
+            const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
+            // Add nested VM as a child
+            currentVmHtml += `
+              <div style="margin-top: 8px; margin-left: 16px; padding: 8px; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 4px; border-left: 2px solid ${typeColor};">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <strong style="color: #cbd5e1; font-size: 0.95em;">${escapeHtml(name.trim())}</strong>
+                  <span style="background: ${typeColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
+                  <span style="background: ${stateColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(state.trim())}</span>
+                </div>
+              </div>
             `;
           }
           continue;
@@ -1092,9 +1129,14 @@
         
         // Handle headers (###)
         if (trimmed.startsWith('### ')) {
-          if (inVmEntry && currentVmHtml) {
-            vmList.push(currentVmHtml + '</div>');
+          if (inVmEntry && currentVmHtml && currentVmName) {
+            // Only add if we haven't seen this VM before
+            if (!seenVmNames.has(currentVmName)) {
+              vmList.push(currentVmHtml + '</div>');
+              seenVmNames.add(currentVmName);
+            }
             currentVmHtml = '';
+            currentVmName = '';
             inVmEntry = false;
           }
           
@@ -1126,9 +1168,14 @@
         
         // Handle regular text
         if (trimmed && !trimmed.startsWith('  -')) {
-          if (inVmEntry && currentVmHtml) {
-            vmList.push(currentVmHtml + '</div>');
+          if (inVmEntry && currentVmHtml && currentVmName) {
+            // Only add if we haven't seen this VM before
+            if (!seenVmNames.has(currentVmName)) {
+              vmList.push(currentVmHtml + '</div>');
+              seenVmNames.add(currentVmName);
+            }
             currentVmHtml = '';
+            currentVmName = '';
             inVmEntry = false;
           }
           
@@ -1145,8 +1192,12 @@
         html += formatClusterNodesSection(nodeEntries);
       }
       if (inClusterVms) {
-        if (inVmEntry && currentVmHtml) {
-          vmList.push(currentVmHtml + '</div>');
+        if (inVmEntry && currentVmHtml && currentVmName) {
+          // Only add if we haven't seen this VM before
+          if (!seenVmNames.has(currentVmName)) {
+            vmList.push(currentVmHtml + '</div>');
+            seenVmNames.add(currentVmName);
+          }
         }
         if (vmList.length > 0) {
           html += formatClusterVmsSection(vmList);

@@ -1,4 +1,5 @@
 import { createVm, CreateVmSchema } from "./compute/create-vm";
+import { destroyVm, DestroyVmSchema } from "./compute/destroy-vm";
 
 /**
  * Action Registry
@@ -59,6 +60,15 @@ actionRegistry.register({
   description: "Create a new VM on a Proxmox node using Terraform",
   schema: CreateVmSchema,
   execute: createVm,
+  requiredTools: ["terraform"],
+  requiredEntities: ["compute_node"],
+});
+
+actionRegistry.register({
+  name: "compute.destroy_vm",
+  description: "Destroy a VM on a Proxmox node using Terraform",
+  schema: DestroyVmSchema,
+  execute: destroyVm,
   requiredTools: ["terraform"],
   requiredEntities: ["compute_node"],
 });

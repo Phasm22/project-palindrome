@@ -82,22 +82,82 @@ export async function listVmsByNodeChain(
   session: ToolSession,
   nodeName: string
 ): Promise<string> {
-  const result = await executeToolCall(
-    {
-      toolName: "twin_query",
-      parameters: { operation: "vms_by_node", params: { nodeName, vmKind: "qemu" } },
-    },
-    tools,
-    session
-  );
+  // Normalize node name (yang -> YANG, yin -> YIN, etc.)
+  const normalizedNode = nodeName.charAt(0).toUpperCase() + nodeName.slice(1).toLowerCase();
+  // Handle special cases
+  const finalNodeName = normalizedNode === "Proxbig" ? "proxBig" : 
+                       normalizedNode === "Yang" ? "YANG" :
+                       normalizedNode === "Yin" ? "YIN" : normalizedNode;
 
-  if (result.error) {
-    throw new Error(result.error);
+  // Query for all VM types (qemu and lxc) to get complete list
+  const [qemuResult, lxcResult] = await Promise.all([
+    executeToolCall(
+      {
+        toolName: "twin_query",
+        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "qemu" } },
+      },
+      tools,
+      session
+    ),
+    executeToolCall(
+      {
+        toolName: "twin_query",
+        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "lxc" } },
+      },
+      tools,
+      session
+    ),
+  ]);
+
+  if (qemuResult.error) {
+    throw new Error(qemuResult.error);
+  }
+  if (lxcResult.error) {
+    throw new Error(lxcResult.error);
   }
 
-  const payload = result.data as any;
-  const vms = payload?.data ?? [];
-  return formatVmList(`VMs on node ${nodeName}:`, vms);
+  const qemuPayload = qemuResult.data as any;
+  const lxcPayload = lxcResult.data as any;
+  const qemuVms = qemuPayload?.data ?? [];
+  const lxcVms = lxcPayload?.data ?? [];
+  
+  // Combine and sort by VM ID
+  const allVms = [...qemuVms, ...lxcVms].sort((a, b) => {
+    const aId = a.id ? parseInt(a.id.split(':').pop() || '0') : 0;
+    const bId = b.id ? parseInt(b.id.split(':').pop() || '0') : 0;
+    return aId - bId;
+  });
+
+  // Format response with VM IDs prominently displayed
+  const lines = [`VM IDs on node ${finalNodeName}:`];
+  if (!allVms.length) {
+    lines.push("- No VMs found in the digital twin for this node.");
+    lines.push("\nNote: The twin may be incomplete. Run Proxmox ingestion to sync all VMs.");
+    return lines.join("\n");
+  }
+
+  // Group by VM ID for clarity
+  for (const vm of allVms) {
+    const label = vm.name || "Unnamed VM";
+    const vmId = vm.id ? vm.id.split(':').pop() : "unknown";
+    const vmType = vm.vmKind === "lxc" ? "LXC container" : "QEMU VM";
+    const state = vm.state ? vm.state : "unknown state";
+    lines.push(`- VM ${vmId}: ${label} (${vmType}, ${state})`);
+    
+    const detailParts = [
+      vm.nodeName ? `node=${vm.nodeName}` : null,
+      `trace=${vm.id ?? "unknown"}`,
+    ].filter(Boolean);
+    if (detailParts.length > 0) {
+      lines.push(`  - Details: ${detailParts.join(" | ")}`);
+    }
+  }
+
+  lines.push(
+    "\nTip: Use twin_query with the trace ID above to retrieve raw fields for auditing."
+  );
+  lines.push("Note: If VMs are missing, the digital twin may need to be synced. Run Proxmox ingestion to update.");
+  return lines.join("\n");
 }
 
 export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolSession): Promise<string> {
@@ -140,5 +200,56 @@ export async function listStoppedVmsChain(
   const payload = result.data as any;
   const vms = payload?.data ?? [];
   return formatVmList(`Stopped VMs on ${nodeName}:`, vms);
+}
+
+export async function findVmByIdChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  vmId: number
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "find_vm_by_id", params: { vmId } },
+    },
+    tools,
+    session
+  );
+
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  const payload = result.data as any;
+  const vms = payload?.data ?? [];
+  const isAmbiguous = payload?.ambiguous === true;
+
+  if (vms.length === 0) {
+    return `VM ${vmId} was not found in the digital twin.`;
+  }
+
+  // For single VM, return simple format
+  if (vms.length === 1) {
+    const vm = vms[0];
+    const label = vm.name || "Unnamed VM";
+    const vmType = vm.vmKind === "lxc" ? "LXC container" : "QEMU VM";
+    const state = vm.state ? vm.state : "unknown";
+    const nodeInfo = vm.nodeName ? ` on ${vm.nodeName}` : "";
+    return `${label} (${vmType}, ${state}${nodeInfo})`;
+  }
+
+  // For multiple VMs, show all matches concisely
+  const lines: string[] = [];
+  lines.push(`VM ${vmId} refers to multiple virtual machines:`);
+  
+  for (const vm of vms) {
+    const label = vm.name || "Unnamed VM";
+    const vmType = vm.vmKind === "lxc" ? "LXC container" : "QEMU VM";
+    const state = vm.state ? vm.state : "unknown";
+    const nodeInfo = vm.nodeName ? ` on ${vm.nodeName}` : "";
+    lines.push(`- ${label} (${vmType}, ${state}${nodeInfo})`);
+  }
+  
+  return lines.join("\n");
 }
 

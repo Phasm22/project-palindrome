@@ -209,18 +209,22 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       case "list_nodes":
         return this.listNodes(client);
 
-      case "node_status":
+      case "node_status": {
         if (!params.node) {
           throw new Error("node parameter required for node_status");
         }
         // Normalize node name and add hint if changed
+        // normalizeNodeName may set this.apiClient if it finds the node in an alternative cluster
         const originalNodeStatus = params.node;
         const normalizedNodeStatus = await this.normalizeNodeName(client, params.node);
-        const statusResult = await this.getNodeStatus(client, normalizedNodeStatus);
+        // Use this.apiClient if it was set during normalization (alternative endpoint), otherwise use the passed client
+        const activeClient = this.apiClient || client;
+        const statusResult = await this.getNodeStatus(activeClient, normalizedNodeStatus);
         if (originalNodeStatus !== normalizedNodeStatus) {
           statusResult.data._hint = `Note: Node name "${originalNodeStatus}" was normalized to "${normalizedNodeStatus}". For future queries, use the exact node name "${normalizedNodeStatus}" or call "list_nodes" first to see available nodes.`;
         }
         return statusResult;
+      }
 
       case "node_storage":
         if (!params.node) {
@@ -287,7 +291,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         }
         return networkResult;
 
-      case "list_vms":
+      case "list_vms": {
         // If node is not provided, use cluster_resources to list all VMs across the cluster
         if (!params.node) {
           return this.listVmsFromCluster(client, params.type);
@@ -350,6 +354,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           // Re-throw if it's not a 403/404
           throw error;
         }
+      }
 
       default:
         throw new Error(`Unknown node action: ${action}`);

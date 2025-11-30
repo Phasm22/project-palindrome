@@ -20,7 +20,7 @@ export interface TerraformConfig {
   vmBridge?: string;
   datastore?: string;
   cloudInitDatastore?: string; // Datastore for cloud-init snippets (defaults to "local" in Terraform)
-  templateId?: number; // Optional: VM template ID to clone from (defaults to 9000)
+  templateId?: number; // Optional: VM template ID to clone from (defaults to 8001)
 }
 
 export interface TerraformResult {
@@ -94,15 +94,22 @@ export class TerraformRunner {
   }
 
   /**
-   * Generate terraform variables file from config
+   * Get the path to the tfvars file
    */
-  private async generateTfVars(config: TerraformConfig): Promise<string> {
-    const tfvarsPath = join(
+  getTfvarsPath(): string {
+    return join(
       process.cwd(),
       "lab-infra",
       "environments",
       `${this.environment}.tfvars`
     );
+  }
+
+  /**
+   * Generate terraform variables file from config
+   */
+  private async generateTfVars(config: TerraformConfig): Promise<string> {
+    const tfvarsPath = this.getTfvarsPath();
 
     // Get SSH public key
     const sshPublicKey = await this.getSshPublicKey(config);
@@ -125,7 +132,7 @@ vm_bridge = "${config.vmBridge || "vmbr0"}"
 use_ssh_agent = true
 ssh_public_key = "${sshPublicKey}"
 cloud_init_datastore = "${config.cloudInitDatastore || "local"}"
-vm_template_id = ${config.templateId || 9000}
+vm_template_id = ${config.templateId || 8001}
 
 vm_configs = {
 ${vmConfigsBlock}
@@ -256,8 +263,9 @@ ${vmConfigsBlock}
 
   /**
    * Execute terraform command
+   * Public for targeted operations like destroy -target
    */
-  private async executeTerraform(
+  async executeTerraform(
     command: string,
     args: string[] = []
   ): Promise<TerraformResult> {
@@ -363,7 +371,7 @@ ${vmConfigsBlock}
 
     // Refresh state and get outputs
     if (result.success) {
-      await this.refresh();
+      await this.refresh(config);
       const outputs = await this.getOutputs();
       result.outputs = outputs;
     }
@@ -391,9 +399,22 @@ ${vmConfigsBlock}
 
   /**
    * Run terraform refresh
+   * Note: refresh needs var-file to avoid prompting for variables
    */
-  async refresh(): Promise<TerraformResult> {
-    return this.executeTerraform("refresh");
+  async refresh(config?: TerraformConfig): Promise<TerraformResult> {
+    if (config) {
+      await this.generateTfVars(config);
+    }
+    const tfvarsPath = join(
+      process.cwd(),
+      "lab-infra",
+      "environments",
+      `${this.environment}.tfvars`
+    );
+    return this.executeTerraform("refresh", [
+      `-var-file="${tfvarsPath}"`,
+      "-input=false",
+    ]);
   }
 
   /**
@@ -408,10 +429,19 @@ ${vmConfigsBlock}
     }
 
     try {
-      const outputs = JSON.parse(result.stdout);
-      return outputs as TerraformOutput;
+      const rawOutputs = JSON.parse(result.stdout);
+      // Terraform outputs are nested: { "output_name": { "value": actual_value } }
+      // Extract the "value" from each output
+      const outputs: TerraformOutput = {};
+      if (rawOutputs.vm_info?.value) {
+        outputs.vm_info = rawOutputs.vm_info.value;
+      }
+      if (rawOutputs.vm_hostnames?.value) {
+        outputs.vm_hostnames = rawOutputs.vm_hostnames.value;
+      }
+      return outputs;
     } catch (error: any) {
-      logger.error("Failed to parse terraform outputs", { error: error.message });
+      logger.error("Failed to parse terraform outputs", { error: error.message, stdout: result.stdout });
       return {};
     }
   }

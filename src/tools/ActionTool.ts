@@ -12,7 +12,8 @@ const ActionParams = z.object({
   params: z.any().describe(
     "Action parameters as an object. " +
     "For compute.create_vm: {name: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, dryRun?: boolean}. " +
-    "templateId is the VM template ID to clone from (defaults to 9000). " +
+    "For compute.destroy_vm: {name: string, node?: string, dryRun?: boolean}. " +
+    "templateId is the VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001). " +
     "Must be an object."
   ),
 });
@@ -80,9 +81,11 @@ export class ActionTool extends BaseTool {
       notes: [
         "Available actions: " + availableActions.map(a => a.name).join(", "),
         "For VM creation, use action: 'compute.create_vm'",
+        "For VM destruction, use action: 'compute.destroy_vm'",
         "Actions use Terraform/Ansible for safe, deterministic operations",
         "Set dryRun: true to preview changes without applying them",
-        "For compute.create_vm: templateId (number, optional) - VM template ID to clone from (defaults to 9000). Required if template doesn't exist on target node."
+        "For compute.create_vm: templateId (number, optional) - VM template ID to clone from. Defaults are node-specific: yang=8000, yin=8001, proxBig=8001. Required if template doesn't exist on target node.",
+        "For compute.destroy_vm: name (string, required) - VM name to destroy. node (string, optional) - Node name for validation. dryRun (boolean, optional) - Preview destruction without executing."
       ]
     });
   }

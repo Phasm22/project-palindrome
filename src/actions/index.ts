@@ -7,6 +7,7 @@
 
 export * from "./registry";
 export * from "./compute/create-vm";
+export * from "./compute/destroy-vm";
 export * from "./helpers/terraform-runner";
 export * from "./helpers/ansible-runner";
 export * from "./helpers/twin-sync";

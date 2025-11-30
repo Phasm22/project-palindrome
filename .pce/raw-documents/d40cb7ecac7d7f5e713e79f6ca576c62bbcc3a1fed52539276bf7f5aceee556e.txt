@@ -1,0 +1,14 @@
+# Node Resource Profile: proxBig
+Generated: 2025-11-30T00:25:55.257Z
+
+## Status
+- Status: unknown
+- Uptime: 1970-03-11T02:49:52.000Z
+
+## CPU
+- Usage: NaN%
+- Cores: N/A
+
+## System
+- Kernel: Linux 6.8.12-11-pve #1 SMP PREEMPT_DYNAMIC PMX 6.8.12-11 (2025-05-22T09:39Z)
+- PVE Version: pve-manager/8.4.1/2a5fa54a8503f96d

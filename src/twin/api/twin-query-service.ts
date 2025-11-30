@@ -1,5 +1,7 @@
 import neo4j from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
+import { ProxmoxClient } from "../../tools/proxmox/client";
+import { pceLogger as logger } from "../../pce/utils/logger";
 
 type VmKind = "qemu" | "lxc" | null;
 
@@ -338,12 +340,15 @@ export class TwinQueryService {
 
   /**
    * Find VM by name across all nodes (case-insensitive partial match)
+   * Verifies VMs exist in Proxmox before returning to avoid stale Neo4j data
    */
   async findVmByName(
     vmName: string,
-    options: { vmKind?: VmKind } = {}
+    options: { vmKind?: VmKind; verifyAgainstProxmox?: boolean } = {}
   ): Promise<ClusterVmSummary[]> {
     const vmKind = options.vmKind === undefined ? "qemu" : options.vmKind;
+    const verifyAgainstProxmox = options.verifyAgainstProxmox !== false; // Default to true
+    
     const result = await this.runQuery(
       `
         MATCH (vm:TwinEntity {type: $vmType})
@@ -373,7 +378,7 @@ export class TwinQueryService {
       }
     );
 
-    return result.records.map((record) => ({
+    const neo4jVms = result.records.map((record) => ({
       id: record.get("id") as string,
       name: record.get("name") as string,
       nodeName: record.get("nodeName") ?? undefined,
@@ -381,6 +386,414 @@ export class TwinQueryService {
       agentAvailable: record.get("agentAvailable") ?? undefined,
       vmKind: record.get("vmKind") ?? undefined,
     }));
+
+    // If no VMs found in Neo4j, return empty array
+    if (neo4jVms.length === 0) {
+      return [];
+    }
+
+    // Verify against Proxmox if enabled (default)
+    if (verifyAgainstProxmox) {
+      try {
+        const verifiedVms = await this.verifyVmsAgainstProxmox(neo4jVms);
+        // If verification returns empty but we had Neo4j results, be lenient and return Neo4j results
+        // This handles cases where verification fails due to timing, API issues, or SSL problems
+        if (verifiedVms.length === 0 && neo4jVms.length > 0) {
+          logger.warn("Verification returned no VMs but Neo4j has results, returning Neo4j results (verification may have failed)", {
+            vmName,
+            neo4jCount: neo4jVms.length,
+          });
+          return neo4jVms;
+        }
+        return verifiedVms;
+      } catch (error: any) {
+        // If verification fails, log warning but return Neo4j results
+        // This allows the system to continue even if Proxmox is unavailable
+        logger.warn("Failed to verify VMs against Proxmox, returning Neo4j results", {
+          error: error.message,
+          vmName,
+          neo4jCount: neo4jVms.length,
+        });
+        return neo4jVms;
+      }
+    }
+
+    return neo4jVms;
+  }
+
+  /**
+   * Find VM by ID across all nodes (handles ambiguity when same ID exists on multiple nodes/types)
+   * Returns all VMs with the matching ID, showing node and type for disambiguation
+   */
+  async findVmById(
+    vmId: number | string,
+    options: { verifyAgainstProxmox?: boolean } = {}
+  ): Promise<ClusterVmSummary[]> {
+    const numericId = typeof vmId === "string" ? parseInt(vmId, 10) : vmId;
+    if (isNaN(numericId)) {
+      return [];
+    }
+
+    const verifyAgainstProxmox = options.verifyAgainstProxmox !== false;
+    
+    // Search for VMs where the ID ends with :{vmId}
+    const result = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType})
+        WHERE vm.id ENDS WITH $vmIdSuffix
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
+        RETURN vm.id AS id,
+               coalesce(vm.displayName, vm.id) AS name,
+               vm.state AS state,
+               vm.agentAvailable AS agentAvailable,
+               n.displayName AS nodeName,
+               vm.vmKind AS vmKind
+        ORDER BY n.displayName, vm.vmKind, name
+      `,
+      {
+        vmIdSuffix: `:${numericId}`,
+        nodeType: "compute_node",
+        vmType: "compute_vm",
+      }
+    );
+
+    const neo4jVms = result.records.map((record) => ({
+      id: record.get("id") as string,
+      name: record.get("name") as string,
+      nodeName: record.get("nodeName") ?? undefined,
+      state: record.get("state") ?? undefined,
+      agentAvailable: record.get("agentAvailable") ?? undefined,
+      vmKind: record.get("vmKind") ?? undefined,
+    }));
+
+    if (neo4jVms.length === 0) {
+      return [];
+    }
+
+    // Deduplicate: if multiple entries have the same ID (node+type+vmId), keep only the first one
+    const seenIds = new Set<string>();
+    const deduplicatedVms = neo4jVms.filter((vm) => {
+      if (seenIds.has(vm.id)) {
+        logger.debug("Deduplicating VM entry", { vmId: numericId, duplicateId: vm.id });
+        return false;
+      }
+      seenIds.add(vm.id);
+      return true;
+    });
+
+    // Verify against Proxmox if enabled
+    if (verifyAgainstProxmox) {
+      try {
+        const verifiedVms = await this.verifyVmsAgainstProxmox(deduplicatedVms);
+        if (verifiedVms.length === 0 && deduplicatedVms.length > 0) {
+          logger.warn("Verification returned no VMs but Neo4j has results, returning Neo4j results", {
+            vmId: numericId,
+            neo4jCount: deduplicatedVms.length,
+          });
+          return deduplicatedVms;
+        }
+        return verifiedVms;
+      } catch (error: any) {
+        logger.warn("Failed to verify VMs against Proxmox, returning Neo4j results", {
+          error: error.message,
+          vmId: numericId,
+        });
+        return deduplicatedVms;
+      }
+    }
+
+    return deduplicatedVms;
+  }
+
+  /**
+   * Verify VMs from Neo4j actually exist in Proxmox
+   * Returns only VMs that exist in Proxmox, filters out stale entries
+   */
+  private async verifyVmsAgainstProxmox(
+    neo4jVms: ClusterVmSummary[]
+  ): Promise<ClusterVmSummary[]> {
+    // Get Proxmox client configuration
+    // Use same approach as ProxmoxReadOnlyBase.getApiConfig()
+    const proxmoxUrl = process.env.PROXMOX_URL;
+    const tokenId = process.env.PROXMOX_TOKEN_ID;
+    let tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
+    
+    // Try to find node-specific token secret based on URL hostname (like readonly tool does)
+    if (proxmoxUrl && tokenSecret) {
+      try {
+        const urlObj = new URL(proxmoxUrl);
+        const hostname = urlObj.hostname.toLowerCase();
+        const nodeName = hostname.split('.')[0].toUpperCase();
+        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
+        if (nodeSpecificSecret) {
+          tokenSecret = nodeSpecificSecret;
+        }
+      } catch {
+        // If URL parsing fails, use default
+      }
+    }
+
+    if (!proxmoxUrl || !tokenId || !tokenSecret) {
+      logger.warn("Proxmox credentials not configured, skipping verification", {
+        hasUrl: !!proxmoxUrl,
+        hasTokenId: !!tokenId,
+        hasTokenSecret: !!tokenSecret,
+      });
+      return neo4jVms; // Return Neo4j results if we can't verify
+    }
+
+    try {
+      const client = new ProxmoxClient({
+        url: proxmoxUrl,
+        tokenId,
+        tokenSecret,
+        verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+      });
+
+      // Get all VMs from Proxmox cluster
+      const resourcesResult = await client.get("/cluster/resources");
+      const proxmoxResources = resourcesResult.data?.data || [];
+      const proxmoxVms = proxmoxResources.filter((r: any) => r.type === "qemu" || r.type === "lxc");
+      
+      logger.debug("Proxmox cluster resources", {
+        totalResources: proxmoxResources.length,
+        vmResources: proxmoxVms.length,
+        sampleVmids: proxmoxVms.slice(0, 10).map((r: any) => ({ vmid: r.vmid, node: r.node, name: r.name })),
+      });
+
+      // Extract VMID from Neo4j VM IDs (format: "compute-vm:node:vmid")
+      const verifiedVms: ClusterVmSummary[] = [];
+      const staleVmIds: string[] = [];
+
+      for (const neo4jVm of neo4jVms) {
+        // Parse VMID from Neo4j ID (format: "compute-vm:node:vmid" or just "vmid")
+        const idParts = neo4jVm.id.split(":");
+        const vmid = idParts.length > 0 ? parseInt(idParts[idParts.length - 1], 10) : null;
+
+        if (!vmid || isNaN(vmid)) {
+          logger.warn("Could not parse VMID from Neo4j ID", { id: neo4jVm.id, name: neo4jVm.name });
+          // If we can't parse VMID, include it anyway (might be a different format)
+          verifiedVms.push(neo4jVm);
+          continue;
+        }
+
+        // Check if VM exists in Proxmox
+        // First, find all resources with matching VMID (only check VMs/containers)
+        const matchingResources = proxmoxVms.filter((r: any) => r.vmid === vmid);
+        
+        if (matchingResources.length === 0) {
+          // VMID doesn't exist in Proxmox at all
+          staleVmIds.push(neo4jVm.id);
+          logger.debug("VM not found in Proxmox (stale Neo4j entry)", {
+            id: neo4jVm.id,
+            name: neo4jVm.name,
+            vmid,
+            nodeName: neo4jVm.nodeName,
+            availableVmids: proxmoxResources
+              .filter((r: any) => r.type === "qemu" || r.type === "lxc")
+              .map((r: any) => ({ vmid: r.vmid, node: r.node, type: r.type }))
+              .slice(0, 10), // Show first 10 for debugging
+          });
+          continue;
+        }
+        
+        // Check if any matching resource matches type and node
+        const vmExists = matchingResources.some((r: any) => {
+          const matchesType = !neo4jVm.vmKind || r.type === neo4jVm.vmKind;
+          // Node matching: be flexible - allow case-insensitive match and handle undefined nodeName
+          const matchesNode = !neo4jVm.nodeName || 
+            !r.node || 
+            r.node?.toLowerCase() === neo4jVm.nodeName.toLowerCase();
+          return matchesType && matchesNode;
+        });
+        
+        if (!vmExists) {
+          // VMID exists but node/type doesn't match - log for debugging
+          logger.debug("VM found in Proxmox but node/type mismatch", {
+            vmid,
+            neo4jNode: neo4jVm.nodeName,
+            proxmoxNodes: matchingResources.map((r: any) => r.node),
+            neo4jType: neo4jVm.vmKind,
+            proxmoxTypes: matchingResources.map((r: any) => r.type),
+          });
+          // Still include it - VMID match is the most important
+          verifiedVms.push(neo4jVm);
+        } else {
+          verifiedVms.push(neo4jVm);
+        }
+
+        if (vmExists) {
+          verifiedVms.push(neo4jVm);
+        } else {
+          staleVmIds.push(neo4jVm.id);
+          logger.debug("VM not found in Proxmox (stale Neo4j entry)", {
+            id: neo4jVm.id,
+            name: neo4jVm.name,
+            vmid,
+            nodeName: neo4jVm.nodeName,
+          });
+        }
+      }
+
+      if (staleVmIds.length > 0) {
+        logger.info("Filtered out stale VMs from Neo4j", {
+          staleCount: staleVmIds.length,
+          verifiedCount: verifiedVms.length,
+          staleIds: staleVmIds,
+        });
+      }
+
+      // Deduplicate verified VMs by ID (in case verification created duplicates)
+      const seenIds = new Set<string>();
+      const deduplicatedVerifiedVms = verifiedVms.filter((vm) => {
+        if (seenIds.has(vm.id)) {
+          logger.debug("Deduplicating verified VM entry", { duplicateId: vm.id, name: vm.name });
+          return false;
+        }
+        seenIds.add(vm.id);
+        return true;
+      });
+
+      return deduplicatedVerifiedVms;
+    } catch (error: any) {
+      logger.error("Error verifying VMs against Proxmox", {
+        error: error.message,
+        vmCount: neo4jVms.length,
+      });
+      // Return Neo4j results if verification fails
+      return neo4jVms;
+    }
+  }
+
+  /**
+   * Clean stale VMs from Neo4j that no longer exist in Proxmox
+   * Returns count of deleted VMs
+   */
+  async cleanStaleVms(): Promise<{ deleted: number; errors: number }> {
+    // Use same approach as ProxmoxReadOnlyBase.getApiConfig()
+    const proxmoxUrl = process.env.PROXMOX_URL;
+    const tokenId = process.env.PROXMOX_TOKEN_ID;
+    let tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
+    
+    // Try to find node-specific token secret based on URL hostname (like readonly tool does)
+    if (proxmoxUrl && tokenSecret) {
+      try {
+        const urlObj = new URL(proxmoxUrl);
+        const hostname = urlObj.hostname.toLowerCase();
+        const nodeName = hostname.split('.')[0].toUpperCase();
+        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
+        if (nodeSpecificSecret) {
+          tokenSecret = nodeSpecificSecret;
+        }
+      } catch {
+        // If URL parsing fails, use default
+      }
+    }
+
+    if (!proxmoxUrl || !tokenId || !tokenSecret) {
+      throw new Error(
+        "Proxmox credentials not configured. Set PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET (or NODE_TOKEN_SECRET for node-specific secret)"
+      );
+    }
+
+    let deleted = 0;
+    let errors = 0;
+
+    try {
+      // Get all VMs from Neo4j
+      const allVmsResult = await this.runQuery(
+        `
+          MATCH (vm:TwinEntity {type: $vmType})
+          OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
+          RETURN vm.id AS id,
+                 coalesce(vm.displayName, vm.id) AS name,
+                 n.displayName AS nodeName,
+                 vm.vmKind AS vmKind
+        `,
+        {
+          vmType: "compute_vm",
+          nodeType: "compute_node",
+        }
+      );
+
+      const neo4jVms = allVmsResult.records.map((record) => ({
+        id: record.get("id") as string,
+        name: record.get("name") as string,
+        nodeName: record.get("nodeName") ?? undefined,
+        vmKind: record.get("vmKind") ?? undefined,
+      }));
+
+      if (neo4jVms.length === 0) {
+        logger.info("No VMs found in Neo4j to clean");
+        return { deleted: 0, errors: 0 };
+      }
+
+      // Get all VMs from Proxmox
+      const client = new ProxmoxClient({
+        url: proxmoxUrl,
+        tokenId,
+        tokenSecret,
+        verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+      });
+
+      const resourcesResult = await client.get("/cluster/resources");
+      const proxmoxResources = resourcesResult.data?.data || [];
+
+      // Find stale VMs
+      const staleVmIds: string[] = [];
+
+      for (const neo4jVm of neo4jVms) {
+        const idParts = neo4jVm.id.split(":");
+        const vmid = idParts.length > 0 ? parseInt(idParts[idParts.length - 1], 10) : null;
+
+        if (!vmid || isNaN(vmid)) {
+          continue; // Skip if we can't parse VMID
+        }
+
+        const vmExists = proxmoxResources.some((r: any) => {
+          const matchesVmid = r.vmid === vmid;
+          const matchesType = !neo4jVm.vmKind || r.type === neo4jVm.vmKind;
+          const matchesNode = !neo4jVm.nodeName || 
+            r.node?.toLowerCase() === neo4jVm.nodeName.toLowerCase();
+          return matchesVmid && matchesType && matchesNode;
+        });
+
+        if (!vmExists) {
+          staleVmIds.push(neo4jVm.id);
+        }
+      }
+
+      // Delete stale VMs from Neo4j
+      if (staleVmIds.length > 0) {
+        logger.info("Deleting stale VMs from Neo4j", { count: staleVmIds.length, ids: staleVmIds });
+
+        for (const staleId of staleVmIds) {
+          try {
+            await this.runQuery(
+              `
+                MATCH (vm:TwinEntity {id: $id})
+                DETACH DELETE vm
+              `,
+              { id: staleId }
+            );
+            deleted++;
+          } catch (error: any) {
+            logger.error("Error deleting stale VM from Neo4j", {
+              id: staleId,
+              error: error.message,
+            });
+            errors++;
+          }
+        }
+      } else {
+        logger.info("No stale VMs found in Neo4j");
+      }
+
+      return { deleted, errors };
+    } catch (error: any) {
+      logger.error("Error cleaning stale VMs", { error: error.message });
+      throw error;
+    }
   }
 
   /**
