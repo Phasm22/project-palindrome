@@ -104,17 +104,31 @@
   - Parameters: node, interface, ip, subnet, gateway
   - Validation: Check IP available, subnet exists, gateway valid
   
-- ❌ `create_dhcp_reservation` - Create DHCP reservation
+- ❌ `create_dhcp_reservation` - Create DHCP reservation (OPTIONAL)
   - Parameters: mac, ip, hostname
   - Validation: Check MAC valid, IP available, not conflicting
+  - Note: Only needed if using DHCP with guaranteed IPs. If using static IPs (cloud-init/Ansible), skip this.
+
+- ❌ `create_dns_record` - Create DNS A/AAAA record (pihole/unbound)
+  - Parameters: hostname, ip, domain (optional, defaults to .prox)
+  - Validation: Check hostname valid, IP valid, no conflicts
+  - Implementation: Pi-hole API or unbound config management
+  - Note: Unbound forwards to pihole, so pihole API is primary interface
+  - **Naming convention**: Use DNS names as primary identifier (e.g., `web-server.prox` instead of IP)
 
 **Implementation Notes:**
 - OPNsense + Proxmox both contribute here
-- Use `opnsense_safewrite` for OPNsense operations
+- Use `opnsense_safewrite` for OPNsense operations (DHCP reservations - optional)
+- Use `pihole_api` or `dns_mcp` tool for DNS operations (HIGH priority)
 - Use `proxmox_write` for Proxmox network config
 - Update twin after successful operations
+- **Recommended workflow**: 
+  - Option A (Static IPs): Create VM → Set static IP (cloud-init/Ansible) → Create DNS record (pihole)
+  - Option B (DHCP with reservations): Create VM → Create DHCP reservation (OPNsense) → Create DNS record (pihole)
 
 **Priority:** HIGH - Needed for "put VM in VLAN 50" type operations
+**DNS Priority:** HIGH - Critical for naming convention-based workflow. DNS names are primary identifier.
+**DHCP Reservation Priority:** LOW - Only needed if using DHCP with guaranteed IPs. Can skip if using static IPs.
 
 ---
 

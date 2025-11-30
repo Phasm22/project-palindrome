@@ -339,32 +339,33 @@ export async function runAgent(
   const actionIntent = detectActionIntent(userInput);
   if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
-    // Let the LLM handle action execution - don't short-circuit
+    // Skip query intents - let the LLM handle action execution
     // The LLM will use the action tool with proper parameters
-  }
-
-  // Check exposure intent first (most specific)
-  const exposureIntent = detectExposureIntent(userInput);
-  if (exposureIntent) {
-    const exposureAnswer = await executeExposureIntent(exposureIntent, tools, session);
-    if (exposureAnswer) {
-      logger.info("Responding via twin-first exposure reasoning chain.");
-      emitStepEvent({ intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
-      emitFinalEvent(exposureAnswer, { intent: exposureIntent.type });
-      await recordEarlyReturnTrace(exposureAnswer, exposureIntent.type, 1);
-      return { text: exposureAnswer };
+  } else {
+    // Only check query intents if no action intent was detected
+    // Check exposure intent first (most specific)
+    const exposureIntent = detectExposureIntent(userInput);
+    if (exposureIntent) {
+      const exposureAnswer = await executeExposureIntent(exposureIntent, tools, session);
+      if (exposureAnswer) {
+        logger.info("Responding via twin-first exposure reasoning chain.");
+        emitStepEvent({ intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitFinalEvent(exposureAnswer, { intent: exposureIntent.type });
+        await recordEarlyReturnTrace(exposureAnswer, exposureIntent.type, 1);
+        return { text: exposureAnswer };
+      }
     }
-  }
 
-  const computeIntent = detectComputeIntent(userInput);
-  if (computeIntent) {
-    const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
-    if (twinAnswer) {
-      logger.info("Responding via twin-first reasoning chain (no LLM needed).");
-      emitStepEvent({ intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
-      emitFinalEvent(twinAnswer, { intent: computeIntent.type });
-      await recordEarlyReturnTrace(twinAnswer, computeIntent.type, 1);
-      return { text: twinAnswer };
+    const computeIntent = detectComputeIntent(userInput);
+    if (computeIntent) {
+      const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
+      if (twinAnswer) {
+        logger.info("Responding via twin-first reasoning chain (no LLM needed).");
+        emitStepEvent({ intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitFinalEvent(twinAnswer, { intent: computeIntent.type });
+        await recordEarlyReturnTrace(twinAnswer, computeIntent.type, 1);
+        return { text: twinAnswer };
+      }
     }
   }
 

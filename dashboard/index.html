@@ -697,6 +697,7 @@
         
         let toolExecutions = [];
         let finalText = '';
+        const currentQuery = message; // Store query for timeout detection
 
         currentEventSource.onmessage = (event) => {
           try {
@@ -782,11 +783,19 @@
             sendBtn.textContent = 'Send';
             input.focus();
           } else if (currentEventSource && !finalText) {
-            // No final text after 30 seconds - connection might be stuck
+            // No final text after timeout - connection might be stuck
+            // Use longer timeout for action operations (VM creation, etc.)
+            const isActionOperation = currentQuery && (
+              currentQuery.toLowerCase().includes('create') ||
+              currentQuery.toLowerCase().includes('destroy') ||
+              currentQuery.toLowerCase().includes('provision')
+            );
+            const timeoutMs = isActionOperation ? 300000 : 60000; // 5 min for actions, 1 min for queries
+            
             updateChatMessage(currentResponseId, `
               <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24;">
                 <strong>⚠️ Response timeout</strong><br>
-                <span style="font-size: 0.9em;">The agent is taking longer than expected. The connection may have timed out. Try asking again.</span>
+                <span style="font-size: 0.9em;">The agent is taking longer than expected (${timeoutMs / 1000}s timeout). The operation may still be running. Check the reasoning traces tab for details.</span>
               </div>
             `);
             
@@ -800,7 +809,15 @@
             input.focus();
           }
           finalEventTimeout = null;
-        }, 30000); // 30 second timeout
+        }, (() => {
+          // Determine timeout based on query type
+          const isActionOperation = message && (
+            message.toLowerCase().includes('create') ||
+            message.toLowerCase().includes('destroy') ||
+            message.toLowerCase().includes('provision')
+          );
+          return isActionOperation ? 300000 : 60000; // 5 min for actions, 1 min for queries
+        })());
 
       } catch (error) {
         // Remove loading indicator

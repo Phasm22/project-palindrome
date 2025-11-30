@@ -69,7 +69,8 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
     return { type: "describe_cluster" };
   }
 
-  if (normalized.includes("all") && (normalized.includes("vm") || normalized.includes("virtual machine"))) {
+  // Match "all VMs" or "all virtual machines" (whole word "all", not substring)
+  if (/\ball\b/.test(normalized) && (normalized.includes("vm") || normalized.includes("virtual machine"))) {
     return { type: "describe_cluster" };
   }
 

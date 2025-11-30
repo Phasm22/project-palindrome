@@ -775,17 +775,17 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "rate(pce_log_error_total[1m])",
-          "legendFormat": "Total Errors",
+          "expr": "rate(pce_log_error_count_total_total[1m])",
+          "legendFormat": "Total Errors (from logger)",
           "refId": "A"
         },
         {
           "expr": "rate(error_count_count[1m])",
-          "legendFormat": "Error Count",
+          "legendFormat": "Error Count (from collector)",
           "refId": "B"
         }
       ],
-      "title": "Error Rate",
+      "title": "Error Rate (may be empty if no errors)",
       "type": "timeseries"
     },
     {
@@ -856,7 +856,7 @@
         "legend": {
           "calcs": [
             "mean",
-            "last"
+            "max"
           ],
           "displayMode": "table",
           "placement": "bottom",
@@ -871,17 +871,17 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "ingestion_throughput_documents_per_min_avg",
-          "legendFormat": "Documents/min",
+          "expr": "query_complexity_node_count_avg",
+          "legendFormat": "Avg Node Count",
           "refId": "A"
         },
         {
-          "expr": "ingestion_throughput_chunks_per_min_avg",
-          "legendFormat": "Chunks/min",
+          "expr": "query_complexity_relationship_depth_avg",
+          "legendFormat": "Avg Relationship Depth",
           "refId": "B"
         }
       ],
-      "title": "Ingestion Throughput",
+      "title": "Query Complexity Metrics",
       "type": "timeseries"
     }
   ],
