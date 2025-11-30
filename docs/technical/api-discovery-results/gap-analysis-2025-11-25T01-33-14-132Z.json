@@ -1,0 +1,288 @@
+[
+  {
+    "service": "proxmox",
+    "discoveredEndpoints": 15,
+    "enabledActions": 17,
+    "missingEndpoints": [
+      {
+        "path": "/nodes/{node}/status",
+        "method": "GET",
+        "category": "node",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/qemu",
+        "method": "GET",
+        "category": "vm",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/lxc",
+        "method": "GET",
+        "category": "container",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/storage",
+        "method": "GET",
+        "category": "storage",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/network",
+        "method": "GET",
+        "category": "network",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/services",
+        "method": "GET",
+        "category": "system",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/tasks",
+        "method": "GET",
+        "category": "system",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes/{node}/disks/list",
+        "method": "GET",
+        "category": "storage",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/version",
+        "method": "GET",
+        "category": "system",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/nodes",
+        "method": "GET",
+        "category": "cluster",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/storage",
+        "method": "GET",
+        "category": "storage",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/access/users",
+        "method": "GET",
+        "category": "access",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/access/roles",
+        "method": "GET",
+        "category": "access",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/access/permissions",
+        "method": "GET",
+        "category": "access",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/network",
+        "method": "GET",
+        "category": "network",
+        "reason": "Discovered but not enabled in tool"
+      }
+    ],
+    "enabledButNotDiscovered": [
+      {
+        "action": "list_nodes",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_resources",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_disks",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "node_network_interfaces",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "list_vms",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_config",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_network",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_snapshots",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_vm_ip",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "get_lxc_config",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "cluster_resources",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "cluster_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "cluster_ceph_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "ha_groups",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "ha_resources",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      }
+    ]
+  },
+  {
+    "service": "opnsense",
+    "discoveredEndpoints": 5,
+    "enabledActions": 20,
+    "missingEndpoints": [
+      {
+        "path": "/api/firewall/alias/get",
+        "method": "GET",
+        "category": "firewall",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/firewall/alias/searchItem",
+        "method": "POST",
+        "category": "firewall",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/dhcpv4/leases/searchLease",
+        "method": "POST",
+        "category": "dhcp",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/diagnostics/interface/getArp",
+        "method": "GET",
+        "category": "diagnostics",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/diagnostics/interface/getRoutes",
+        "method": "GET",
+        "category": "diagnostics",
+        "reason": "Discovered but not enabled in tool"
+      }
+    ],
+    "enabledButNotDiscovered": [
+      {
+        "action": "firewall_rules_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_aliases_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_aliases_get",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_categories_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_states_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interfaces_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interface_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interfaces_vlans_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interfaces_vips_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_health",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_info",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_backups_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_arp_table",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_routing_table",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_interface_statistics",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_system_logs",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "dhcp_leases_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "dhcp_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "dhcp_static_mappings_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      }
+    ]
+  }
+]

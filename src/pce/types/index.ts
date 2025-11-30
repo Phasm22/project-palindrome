@@ -33,6 +33,10 @@ export interface ChunkMetadata {
   timestamp: Date;
   chunkIndex: number;
   totalChunks: number;
+  // Enhanced metadata fields for better filtering and provenance
+  agent_ID?: string; // ID of the agent/process that created this chunk
+  time_series_window?: string; // Time window identifier for time-series data
+  document_version?: string; // Document version identifier (separate from versionHash)
 }
 
 export interface VectorDocument {

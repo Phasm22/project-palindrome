@@ -1,0 +1,23 @@
+# VM Inventory for Node: proxBig
+Generated: 2025-11-24T07:50:37.643Z
+Total VMs: 3 (3 QEMU, 0 LXC)
+
+## VM 101: opnsense
+- Status: running
+- Type: qemu
+- Memory: 14.37 GB / 16 GB
+- CPU Usage: 0.0%
+- Uptime: 1970-03-05T08:54:33.000Z
+
+## VM 9000: ubuntu-2404-template
+- Status: stopped
+- Type: qemu
+- Memory: 0 MB / 2 GB
+- CPU Usage: 0.0%
+
+## VM 100: windowsVM
+- Status: running
+- Type: qemu
+- Memory: 9.05 GB / 10 GB
+- CPU Usage: 0.9%
+- Uptime: 1970-01-01T00:25:09.000Z

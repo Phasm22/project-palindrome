@@ -1,5 +1,4 @@
 import { BaseTool } from "../tools/BaseTool";
-import { GlancesTool } from "../tools/GlancesTool";
 import { RunDiagnosticTool } from "../tools/RunDiagnosticTool";
 import { CreateIncidentTicketTool } from "../tools/CreateIncidentTicketTool";
 import { LookupUserProfileTool } from "../tools/LookupUserProfileTool";
@@ -8,10 +7,12 @@ import { OpnsenseSafeWriteTool } from "../tools/opnsense/writes";
 import { ProxmoxReadOnlyTool } from "../tools/proxmox/readonly";
 import { ProxmoxWriteTool } from "../tools/proxmox/writes";
 import { SSHTool } from "../tools/SSHTool";
+import { MCPOpnsenseTool } from "../tools/MCPOpnsenseTool";
+import { TwinQueryTool } from "../tools/TwinQueryTool";
+import { ActionTool } from "../tools/ActionTool";
 
 export function loadTools(): BaseTool[] {
   return [
-    new GlancesTool(),
     new RunDiagnosticTool(),
     new LookupUserProfileTool(),
     new CreateIncidentTicketTool(),
@@ -20,6 +21,9 @@ export function loadTools(): BaseTool[] {
     new ProxmoxReadOnlyTool(),
     new ProxmoxWriteTool(),
     new SSHTool(),
+    new MCPOpnsenseTool(),
+    new TwinQueryTool(),
+    new ActionTool(),
   ];
 }
 

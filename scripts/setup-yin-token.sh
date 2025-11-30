@@ -1,0 +1,25 @@
+#!/bin/bash
+# Instructions for setting up yin node token
+
+echo "🔧 Setting up Terraform token for yin node"
+echo ""
+echo "The token secret in your .env doesn't match the token on yin node."
+echo ""
+echo "📋 Steps to fix:"
+echo ""
+echo "1. SSH to yin node and create/recreate the token:"
+echo "   ssh yin"
+echo "   pveum user token delete llm@pve llm-agent"
+echo "   pveum user token add llm@pve llm-agent --privsep 0"
+echo ""
+echo "2. Copy the 'value' field from the output (the UUID secret)"
+echo ""
+echo "3. Update your .env file:"
+echo "   PROXMOX_YIN_TF_SECRET=<paste-the-secret-here>"
+echo ""
+echo "4. Test the token:"
+echo "   bash scripts/test-yin-token.sh"
+echo ""
+echo "💡 Note: Each Proxmox node generates its own token secret, even with the same token ID."
+echo "   You need separate secrets for yin, yang, and proxBig."
+

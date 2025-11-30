@@ -36,6 +36,7 @@ export interface JSONSchemaProperty {
   default?: any;
   items?: JSONSchemaProperty;
   properties?: Record<string, JSONSchemaProperty>;
+  additionalProperties?: boolean | JSONSchemaProperty;
 }
 
 /**
@@ -194,6 +195,44 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
       type: "object",
       description: zodType.description,
       properties,
+    };
+  }
+
+  // Handle ZodRecord (z.record())
+  if (zodType._def?.typeName === "ZodRecord" || (zodType as any).constructor?.name === "ZodRecord") {
+    const valueType = zodType._def?.valueType;
+    
+    // For ZodRecord, we need to represent it as an object with additionalProperties
+    // OpenAI doesn't accept "any" type, so we use a more permissive object schema
+    let valueSchema: JSONSchemaProperty;
+    if (valueType) {
+      valueSchema = zodToJsonSchemaProperty(valueType);
+    } else {
+      // Fallback: use a permissive schema that accepts any value type
+      valueSchema = {
+        type: "string", // Default to string, but this is flexible
+        description: "Any value type",
+      };
+    }
+    
+    return {
+      type: "object",
+      description: zodType.description || "Record/object with string keys and any values",
+      additionalProperties: valueSchema,
+    };
+  }
+
+  // Handle z.any() - OpenAI doesn't accept "any", so we use object as a fallback
+  // Check for ZodAny by checking the typeName or constructor name
+  const typeName = zodType._def?.typeName;
+  const constructorName = (zodType as any).constructor?.name;
+  if (typeName === "ZodAny" || constructorName === "ZodAny" || zodType instanceof (z as any).ZodAny) {
+    // For z.any(), we return an object type that accepts any properties
+    // This is the most compatible with OpenAI's schema requirements
+    return {
+      type: "object",
+      description: zodType.description || "Any object/value",
+      additionalProperties: true,
     };
   }
 

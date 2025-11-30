@@ -37,10 +37,10 @@ export interface CreateToolSchemaOptions {
  * @example
  * ```typescript
  * getSchema(): ToolSchema {
- *   return createToolSchema(this, GlancesParams, {
+ *   return createToolSchema(this, RunDiagnosticParams, {
  *     examples: [
- *       { description: "Get all metrics", parameters: { section: "all" } },
- *       { description: "Get CPU metrics", parameters: { section: "cpu" } }
+ *       { description: "Ping a host", parameters: { command: "ping", target: "8.8.8.8" } },
+ *       { description: "Check HTTP status", parameters: { command: "http_check", target: "https://example.com" } }
  *     ]
  *   });
  * }

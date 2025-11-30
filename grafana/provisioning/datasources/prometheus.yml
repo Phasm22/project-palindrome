@@ -1,0 +1,22 @@
+apiVersion: 1
+
+# Delete old/broken datasources
+deleteDatasources:
+  - name: "Palindrome PCE (Direct)"
+  - name: "Prometheus (via Prometheus)"
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    # Both Prometheus and Grafana use host network mode
+    # Access Prometheus at localhost:9090
+    url: http://localhost:9090
+    isDefault: true
+    jsonData:
+      httpMethod: GET
+      queryTimeout: 60s
+      timeInterval: 15s
+    editable: true
+    # Prometheus scrapes from PCE API at localhost:4000 (using host network mode)
+

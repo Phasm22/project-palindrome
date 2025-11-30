@@ -27,6 +27,139 @@ interface ApprovedCommands {
   };
 }
 
+interface SSHConnection {
+  client: Client;
+  host: string;
+  lastUsed: number;
+  inUse: boolean;
+}
+
+class SSHConnectionPool {
+  private connections: Map<string, SSHConnection> = new Map();
+  private maxIdleTime = 30000; // 30 seconds
+  private cleanupInterval: NodeJS.Timeout | null = null;
+
+  constructor() {
+    // Clean up idle connections every 10 seconds
+    this.cleanupInterval = setInterval(() => this.cleanupIdle(), 10000);
+  }
+
+  private cleanupIdle() {
+    const now = Date.now();
+    for (const [key, conn] of this.connections.entries()) {
+      if (!conn.inUse && (now - conn.lastUsed) > this.maxIdleTime) {
+        logger.debug(`Closing idle SSH connection to ${conn.host}`);
+        conn.client.end();
+        this.connections.delete(key);
+      }
+    }
+  }
+
+  async getConnection(
+    host: string,
+    username?: string,
+    privateKey?: string,
+    password?: string
+  ): Promise<Client> {
+    const key = `${host}:${username || 'root'}`;
+    let conn = this.connections.get(key);
+
+    // Reuse existing connection if available and not in use
+    if (conn && !conn.inUse) {
+      // Check if connection is still alive
+      if (conn.client && !conn.client.destroyed) {
+        conn.lastUsed = Date.now();
+        conn.inUse = true;
+        return conn.client;
+      } else {
+        // Connection is dead, remove it
+        this.connections.delete(key);
+      }
+    }
+
+    // Create new connection
+    const client = new Client();
+    const newConn: SSHConnection = {
+      client,
+      host,
+      lastUsed: Date.now(),
+      inUse: true,
+    };
+
+    return new Promise((resolve, reject) => {
+      const connectOptions: any = {
+        host,
+        port: 22,
+        readyTimeout: 10000,
+        username: username || "root",
+      };
+
+      if (privateKey) {
+        connectOptions.privateKey = privateKey;
+      } else if (password) {
+        connectOptions.password = password;
+      } else {
+        const sshKeyPath = process.env.SSH_KEY_PATH || path.join(process.env.HOME || "~", ".ssh/id_ed25519");
+        try {
+          const fs = require("fs");
+          if (fs.existsSync(sshKeyPath)) {
+            connectOptions.privateKey = fs.readFileSync(sshKeyPath);
+          } else {
+            // Fallback to id_rsa
+            const fallbackKeyPath = path.join(process.env.HOME || "~", ".ssh/id_rsa");
+            if (fs.existsSync(fallbackKeyPath)) {
+              connectOptions.privateKey = fs.readFileSync(fallbackKeyPath);
+            }
+          }
+        } catch (e) {
+          // Ignore
+        }
+      }
+
+      client.on("ready", () => {
+        this.connections.set(key, newConn);
+        resolve(client);
+      });
+
+      client.on("error", (err) => {
+        // Don't store failed connections
+        reject(err);
+      });
+
+      client.on("close", () => {
+        // Remove from pool when connection closes
+        if (this.connections.get(key) === newConn) {
+          this.connections.delete(key);
+        }
+      });
+
+      client.connect(connectOptions);
+    });
+  }
+
+  releaseConnection(host: string, username?: string) {
+    const key = `${host}:${username || 'root'}`;
+    const conn = this.connections.get(key);
+    if (conn) {
+      conn.inUse = false;
+      conn.lastUsed = Date.now();
+    }
+  }
+
+  closeAll() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    for (const conn of this.connections.values()) {
+      conn.client.end();
+    }
+    this.connections.clear();
+  }
+}
+
+// Global connection pool
+const sshPool = new SSHConnectionPool();
+
 export class SSHTool extends BaseTool {
   private approvedCommands: ApprovedCommands | null = null;
 
@@ -101,6 +234,86 @@ export class SSHTool extends BaseTool {
     return null;
   }
 
+  /**
+   * Convert temperature values from Celsius to Fahrenheit
+   * Supports both human-readable and JSON formats from sensors command
+   */
+  private convertTemperatureToFahrenheit(output: string, isJson: boolean): string {
+    if (isJson) {
+      // Parse JSON and convert temperature values
+      try {
+        const data = JSON.parse(output);
+        const converted = this.convertJsonTemperatures(data);
+        return JSON.stringify(converted, null, 2);
+      } catch (e) {
+        // If JSON parsing fails, fall back to text conversion
+        return this.convertTextTemperatures(output);
+      }
+    } else {
+      // Convert human-readable format
+      return this.convertTextTemperatures(output);
+    }
+  }
+
+  /**
+   * Convert temperatures in JSON format (sensors -j)
+   */
+  private convertJsonTemperatures(data: any): any {
+    if (typeof data === "object" && data !== null) {
+      if (Array.isArray(data)) {
+        return data.map(item => this.convertJsonTemperatures(item));
+      }
+      
+      const converted: any = {};
+      for (const [key, value] of Object.entries(data)) {
+        if (key === "temp" || key === "temp_input" || key === "temp_max" || key === "temp_crit") {
+          // Temperature value - convert if it's a number
+          if (typeof value === "number") {
+            converted[key] = this.celsiusToFahrenheit(value);
+            converted[`${key}_celsius`] = value; // Keep original in case needed
+          } else if (typeof value === "object" && value !== null) {
+            // Nested temperature object
+            converted[key] = this.convertJsonTemperatures(value);
+          } else {
+            converted[key] = value;
+          }
+        } else if (typeof value === "object" && value !== null) {
+          converted[key] = this.convertJsonTemperatures(value);
+        } else {
+          converted[key] = value;
+        }
+      }
+      return converted;
+    }
+    return data;
+  }
+
+  /**
+   * Convert temperatures in human-readable text format (sensors)
+   */
+  private convertTextTemperatures(output: string): string {
+    // Pattern to match temperature values like: +45.0°C, 45.0°C, -10.0°C
+    // Also matches ranges like: (high = +80.0°C, crit = +100.0°C)
+    const tempPattern = /([+-]?\d+\.?\d*)\s*°C/g;
+    
+    return output.replace(tempPattern, (match, celsiusStr) => {
+      const celsius = parseFloat(celsiusStr);
+      if (isNaN(celsius)) return match;
+      
+      const fahrenheit = this.celsiusToFahrenheit(celsius);
+      // Show Fahrenheit as primary, with Celsius in parentheses
+      const fahrenheitStr = fahrenheit >= 0 ? `+${fahrenheit.toFixed(1)}` : `${fahrenheit.toFixed(1)}`;
+      return `${fahrenheitStr}°F (${match})`;
+    });
+  }
+
+  /**
+   * Convert Celsius to Fahrenheit
+   */
+  private celsiusToFahrenheit(celsius: number): number {
+    return (celsius * 9/5) + 32;
+  }
+
   private getAvailableHosts(): string[] {
     const config = this.loadApprovedCommands();
     const hosts: string[] = [];
@@ -162,6 +375,33 @@ export class SSHTool extends BaseTool {
     return expansions;
   }
 
+  /**
+   * Check if a command matches a template with placeholders
+   * Example: "pvesh get /nodes/yin/qemu" matches "pvesh get /nodes/{node}/qemu"
+   */
+  private matchesPlaceholderTemplate(actualCommand: string, template: string): boolean {
+    // If template has no placeholders, skip (already checked exact match)
+    if (!template.includes("{") || !template.includes("}")) {
+      return false;
+    }
+
+    // Build regex pattern: escape the template first, then replace {placeholder} with (.+)
+    // Step 1: Escape all special regex characters
+    let regexPattern = template.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    
+    // Step 2: Replace escaped \{placeholder\} with (.+)
+    regexPattern = regexPattern.replace(/\\\{[^}]+\\\}/g, "(.+)");
+
+    // Test if actual command matches the pattern
+    try {
+      const regex = new RegExp("^" + regexPattern + "$");
+      return regex.test(actualCommand);
+    } catch (error) {
+      // If regex construction fails, fall back to false
+      return false;
+    }
+  }
+
   private isCommandApproved(host: string, command: string): { approved: boolean; reason?: string; suggestions?: string[]; expandedCommand?: string } {
     const config = this.loadApprovedCommands();
     const resolvedHost = this.resolveHost(host);
@@ -189,12 +429,21 @@ export class SSHTool extends BaseTool {
         const commands = hostConfig.commands[category];
         // Handle both array and object formats from YAML
         const commandList = Array.isArray(commands) ? commands : Object.values(commands);
+        
+        // First try exact match
         if (commandList.includes(expandedCmd)) {
           // If we used an expansion, return the expanded command
           if (expandedCmd !== command) {
             return { approved: true, expandedCommand: expandedCmd };
           }
           return { approved: true };
+        }
+        
+        // Then try placeholder matching (e.g., {node} -> yin, yang, proxBig, etc.)
+        for (const approvedCmd of commandList) {
+          if (this.matchesPlaceholderTemplate(expandedCmd, approvedCmd)) {
+            return { approved: true, expandedCommand: expandedCmd };
+          }
         }
       }
     }
@@ -224,17 +473,26 @@ export class SSHTool extends BaseTool {
     password?: string,
     resolvedHost?: string
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const targetHost = resolvedHost || host;
+    let conn: Client;
+    
+    try {
+      // Get connection from pool
+      conn = await sshPool.getConnection(targetHost, username, privateKey, password);
+    } catch (error) {
+      throw error;
+    }
+
     return new Promise((resolve, reject) => {
-      const conn = new Client();
       let stdout = "";
       let stderr = "";
       let shellStream: any = null;
       let commandExecuted = false;
 
-      conn.on("ready", () => {
+      // Connection is already ready from pool
+      const executeCommand = () => {
         // For Proxmox nodes, use exec for cleaner output
         // For OPNsense, we need shell to navigate the menu
-        const targetHost = resolvedHost || host;
         const useShell = targetHost.includes("172.16.0.1") || 
                         targetHost.includes("opnsense") ||
                         targetHost.includes("radar") ||
@@ -245,7 +503,7 @@ export class SSHTool extends BaseTool {
           // We need to start a shell session and select option 8 (shell)
           conn.shell((err, stream) => {
           if (err) {
-            conn.end();
+            sshPool.releaseConnection(targetHost, username);
             reject(err);
             return;
           }
@@ -353,7 +611,7 @@ export class SSHTool extends BaseTool {
               logger.error("SSH command timeout - no output received");
             }
             stream.end();
-            conn.end();
+            sshPool.releaseConnection(targetHost, username);
             resolve({ 
               stdout: stdout || "Command executed but no output received", 
               stderr, 
@@ -363,7 +621,8 @@ export class SSHTool extends BaseTool {
 
           stream.on("close", () => {
             clearTimeout(timeout);
-            conn.end();
+            // Don't close connection, release it back to pool
+            sshPool.releaseConnection(targetHost, username);
             
             // Process collected output
             // Remove ANSI escape codes and control sequences more aggressively
@@ -475,7 +734,8 @@ export class SSHTool extends BaseTool {
             });
 
             stream.on("close", (code: number) => {
-              conn.end();
+              // Don't close connection, release it back to pool
+              sshPool.releaseConnection(targetHost, username);
               
               // Clean output - remove ANSI codes
               let cleanStdout = stdout
@@ -516,40 +776,19 @@ export class SSHTool extends BaseTool {
             });
           });
         }
-      });
+      };
 
       conn.on("error", (err) => {
+        // Remove connection from pool on error
+        sshPool.releaseConnection(targetHost, username);
         reject(err);
       });
 
-      // Connection options
-      const connectOptions: any = {
-        host,
-        port: 22,
-        readyTimeout: 10000,
-        username: username || "root",
-      };
-
-      // Use SSH key if provided
-      if (privateKey) {
-        connectOptions.privateKey = privateKey;
-      } else if (password) {
-        // Use password authentication
-        connectOptions.password = password;
-      } else {
-        // Default: try to use SSH key from ~/.ssh/id_rsa or environment
-        const sshKeyPath = process.env.SSH_KEY_PATH || path.join(process.env.HOME || "~", ".ssh/id_rsa");
-        try {
-          const fs = require("fs");
-          if (fs.existsSync(sshKeyPath)) {
-            connectOptions.privateKey = fs.readFileSync(sshKeyPath);
-          }
-        } catch (e) {
-          // Ignore
-        }
-      }
-
-      conn.connect(connectOptions);
+      // Execute command immediately since connection is ready
+      // Small delay to ensure connection is fully ready
+      setImmediate(() => {
+        executeCommand();
+      });
     });
   }
 
@@ -600,14 +839,29 @@ export class SSHTool extends BaseTool {
       // Support placeholder substitution in commands (e.g., {vmid} -> actual vmid)
       // This allows commands like "qm guest cmd {vmid} network-get-interfaces"
       let finalCommand = commandToExecute;
-      if (params.vmid && command.includes("{vmid}")) {
+      
+      // Handle {vmid} placeholder
+      if (params.vmid && commandToExecute.includes("{vmid}")) {
         finalCommand = finalCommand.replace(/{vmid}/g, String(params.vmid));
       }
-      if (params.node && command.includes("{node}")) {
-        finalCommand = finalCommand.replace(/{node}/g, params.node);
+      
+      // Handle {node} placeholder
+      // For pvesh commands executed via SSH, {node} should be replaced with $(hostname)
+      // to get the actual Proxmox node name at runtime (not the SSH hostname)
+      // Example: "pvesh get /nodes/{node}/qemu" -> "pvesh get /nodes/$(hostname)/qemu"
+      if (commandToExecute.includes("{node}")) {
+        if (commandToExecute.includes("pvesh")) {
+          // For pvesh commands, use $(hostname) to get the actual Proxmox node name
+          // This works because pvesh on a local node can use the hostname
+          finalCommand = finalCommand.replace(/{node}/g, "$(hostname)");
+        } else if (params.node) {
+          // For other commands, use the provided node parameter if available
+          finalCommand = finalCommand.replace(/{node}/g, params.node);
+        }
       }
+      
       // Also support {hostname} placeholder
-      if (command.includes("{hostname}")) {
+      if (commandToExecute.includes("{hostname}")) {
         // We'll need to get hostname, but for now use resolvedHost
         finalCommand = finalCommand.replace(/{hostname}/g, resolvedHost);
       }
@@ -662,12 +916,18 @@ export class SSHTool extends BaseTool {
         };
       }
 
+      // Convert temperature output to Fahrenheit if this is a sensors command
+      let processedStdout = result.stdout;
+      if (finalCommand.trim().startsWith("sensors")) {
+        processedStdout = this.convertTemperatureToFahrenheit(result.stdout, finalCommand.includes("-j"));
+      }
+
       return {
         data: {
           host: resolvedHost,
           requestedHost: host,
           command,
-          stdout: result.stdout,
+          stdout: processedStdout,
           stderr: result.stderr,
           exitCode: result.exitCode,
         },

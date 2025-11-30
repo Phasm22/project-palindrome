@@ -27,13 +27,19 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
         const urlObj = new URL(url);
         const hostname = urlObj.hostname.toLowerCase();
         // Check for node-specific secrets (e.g., proxbig -> PROXBIG_TOKEN_SECRET)
+        // IMPORTANT: If URL is an IP address, this will extract the first octet (e.g., "172")
+        // which won't match node-specific secrets. Use hostname URLs for proper lookup.
         const nodeName = hostname.split('.')[0].toUpperCase();
         const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
         if (nodeSpecificSecret) {
+          logger.debug(`Using node-specific secret: ${nodeName}_TOKEN_SECRET (extracted from URL hostname: ${hostname})`);
           tokenSecret = nodeSpecificSecret;
+        } else {
+          logger.debug(`No node-specific secret found for ${nodeName}_TOKEN_SECRET, using default PROXMOX_TOKEN_SECRET`);
         }
       } catch {
         // If URL parsing fails, use default
+        logger.debug("URL parsing failed, using default PROXMOX_TOKEN_SECRET");
       }
     }
     

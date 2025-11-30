@@ -1,0 +1,121 @@
+[
+  {
+    "service": "opnsense",
+    "discoveredEndpoints": 5,
+    "enabledActions": 20,
+    "missingEndpoints": [
+      {
+        "path": "/api/firewall/alias/get",
+        "method": "GET",
+        "category": "firewall",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/firewall/alias/searchItem",
+        "method": "POST",
+        "category": "firewall",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/dhcpv4/leases/searchLease",
+        "method": "POST",
+        "category": "dhcp",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/diagnostics/interface/getArp",
+        "method": "GET",
+        "category": "diagnostics",
+        "reason": "Discovered but not enabled in tool"
+      },
+      {
+        "path": "/api/diagnostics/interface/getRoutes",
+        "method": "GET",
+        "category": "diagnostics",
+        "reason": "Discovered but not enabled in tool"
+      }
+    ],
+    "enabledButNotDiscovered": [
+      {
+        "action": "firewall_rules_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_aliases_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_aliases_get",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_categories_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "firewall_states_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interfaces_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interface_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interfaces_vlans_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "interfaces_vips_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_health",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_info",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "system_backups_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_arp_table",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_routing_table",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_interface_statistics",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "diagnostics_system_logs",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "dhcp_leases_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "dhcp_status",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      },
+      {
+        "action": "dhcp_static_mappings_list",
+        "reason": "Enabled in tool but not discovered (may require parameters or be deprecated)"
+      }
+    ]
+  }
+]

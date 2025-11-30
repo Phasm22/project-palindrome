@@ -182,7 +182,7 @@ bun run scripts/run-provenance-audit.ts
 
 **Updated**: `src/cli.ts`
 - `pce` command now uses `runAgent` directly (enables tool calling)
-- `pce-api` command available for legacy API-only mode
+- `pce-api` command available but DEPRECATED (use `agent ask` or `agent pce` instead)
 - Tool calling fully integrated into CLI workflow
 
 ---

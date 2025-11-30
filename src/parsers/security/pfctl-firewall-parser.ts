@@ -1,0 +1,407 @@
+import type { Parser, ParserContext, ParserResult } from "../types";
+import type { TwinEntity, FirewallRuleEntity } from "../../twin/models/entities";
+import type { TwinRelationship } from "../../twin/models/relationships";
+import { TwinEntityType } from "../../twin/models/entities";
+import { TwinRelationshipType } from "../../twin/models/relationships";
+
+/**
+ * Input format from opnsense_readonly firewall_rules_list:
+ * {
+ *   rules: string[],  // pfctl -sr output lines
+ *   nat: string[],    // pfctl -sn output lines
+ *   source: "ssh_pfctl",
+ *   timestamp: string
+ * }
+ */
+interface PfctlInput {
+  rules?: string[];
+  nat?: string[];
+  source?: string;
+  timestamp?: string;
+}
+
+/**
+ * Parses pfctl output into canonical FirewallRule entities.
+ * 
+ * pfctl -sr format examples:
+ *   pass in quick on em0 proto tcp from any to 192.168.1.0/24 port 22
+ *   block in quick on em1 from 10.0.0.0/8 to any
+ *   pass out on em0 from 192.168.1.0/24 to any
+ * 
+ * pfctl -sn format examples:
+ *   nat on em0 from 192.168.1.0/24 to any -> (em0)
+ *   rdr on em0 proto tcp from any to 1.2.3.4 port 80 -> 192.168.1.10 port 8080
+ */
+export class PfctlFirewallParser implements Parser<PfctlInput> {
+  name = "pfctl-firewall-parser";
+  domain = "security";
+
+  async parse(input: PfctlInput, context: ParserContext): Promise<ParserResult> {
+    const entities: TwinEntity[] = [];
+    const relationships: TwinRelationship[] = [];
+
+    // Parse filter rules (pfctl -sr)
+    if (input.rules && Array.isArray(input.rules)) {
+      for (const ruleLine of input.rules) {
+        if (!ruleLine || typeof ruleLine !== "string") continue;
+        const parsed = this.parseFilterRule(ruleLine, context);
+        if (parsed) {
+          entities.push(parsed.entity);
+          if (parsed.relationships) {
+            relationships.push(...parsed.relationships);
+          }
+        }
+      }
+    }
+
+    // Parse NAT rules (pfctl -sn)
+    if (input.nat && Array.isArray(input.nat)) {
+      for (const natLine of input.nat) {
+        if (!natLine || typeof natLine !== "string") continue;
+        const parsed = this.parseNatRule(natLine, context);
+        if (parsed) {
+          entities.push(parsed.entity);
+          if (parsed.relationships) {
+            relationships.push(...parsed.relationships);
+          }
+        }
+      }
+    }
+
+    return { entities, relationships };
+  }
+
+  /**
+   * Parse a filter rule line (pfctl -sr).
+   * Format: [action] [direction] [flags] on [interface] [proto] from [source] to [dest] [port]
+   */
+  private parseFilterRule(
+    line: string,
+    context: ParserContext
+  ): { entity: FirewallRuleEntity; relationships?: TwinRelationship[] } | null {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+
+    // Tokenize: split on whitespace but preserve quoted strings
+    const tokens = this.tokenize(trimmed);
+    if (tokens.length < 3) return null;
+
+    let idx = 0;
+    let action = tokens[idx++];
+    // Handle "block drop" or "block return" - normalize to "block"
+    if (action === "block" && idx < tokens.length && (tokens[idx] === "drop" || tokens[idx] === "return")) {
+      idx++; // Skip "drop" or "return"
+    }
+    if (!["pass", "block", "reject"].includes(action)) return null;
+
+    // Parse direction (optional) - check BEFORE "log" since direction can come before log
+    let direction: "in" | "out" | "any" = "any";
+    if (idx < tokens.length && (tokens[idx] === "in" || tokens[idx] === "out")) {
+      direction = tokens[idx++] as "in" | "out";
+    }
+
+    // Skip "log" if present (can appear after direction)
+    if (idx < tokens.length && tokens[idx] === "log") {
+      idx++;
+    }
+
+    // Parse flags (quick, keep state, etc.)
+    let flags: string | null = null;
+    while (idx < tokens.length && ["quick", "keep", "state"].includes(tokens[idx])) {
+      if (!flags) flags = "";
+      flags += (flags ? " " : "") + tokens[idx++];
+      if (tokens[idx - 1] === "keep" && tokens[idx] === "state") {
+        flags += " " + tokens[idx++];
+      }
+    }
+
+    // Skip "inet" or "inet6" if present
+    if (idx < tokens.length && (tokens[idx] === "inet" || tokens[idx] === "inet6")) {
+      idx++;
+    }
+
+    // Parse "on [interface]" - handle "!" negation prefix
+    let interfaceName: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "on") {
+      idx++;
+      if (idx < tokens.length) {
+        // Handle "! vtnet1" - skip the "!" and take the interface
+        if (tokens[idx] === "!") {
+          idx++;
+        }
+        if (idx < tokens.length) {
+          interfaceName = tokens[idx++];
+        }
+      }
+    }
+
+    // Skip "inet" or "inet6" if present (can appear after interface)
+    if (idx < tokens.length && (tokens[idx] === "inet" || tokens[idx] === "inet6")) {
+      idx++;
+    }
+
+    // Parse protocol
+    let protocol: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "proto") {
+      idx++;
+      if (idx < tokens.length) {
+        protocol = tokens[idx++];
+      }
+    }
+
+    // Parse "from [source]"
+    let source: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "from") {
+      idx++;
+      if (idx < tokens.length) {
+        source = tokens[idx++];
+      }
+    }
+
+    // Parse "to [destination]"
+    let destination: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "to") {
+      idx++;
+      if (idx < tokens.length) {
+        destination = tokens[idx++];
+      }
+    }
+
+    // Parse port (optional)
+    let sourcePort: string | null = null;
+    let destinationPort: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "port") {
+      idx++;
+      if (idx < tokens.length) {
+        const portSpec = tokens[idx++];
+        // Check if it's source or destination port
+        // pfctl doesn't always specify, assume destination unless "from" appears again
+        destinationPort = portSpec;
+      }
+    }
+
+    // Generate rule ID
+    const ruleId = this.normalizeRuleId(interfaceName, action, direction, source, destination, protocol, destinationPort);
+
+    // Determine chain (interface-based grouping)
+    const chain = interfaceName ? `chain:${interfaceName}` : "chain:default";
+
+    const entity: FirewallRuleEntity = {
+      id: ruleId,
+      type: TwinEntityType.FIREWALL_RULE,
+      displayName: `${action} ${direction} on ${interfaceName || "any"}`,
+      source: context.source,
+      collectedAt: context.collectedAt,
+      data: {
+        action: action as "pass" | "block" | "reject",
+        direction,
+        interface: interfaceName,
+        protocol,
+        source,
+        destination,
+        sourcePort,
+        destinationPort,
+        flags,
+        ruleType: "filter",
+        chain,
+        enabled: true,
+      },
+    };
+
+    // Create relationships to interfaces/subnets if we can resolve them
+    const relationships: TwinRelationship[] = [];
+    
+    // Link to interface if we have one
+    if (interfaceName) {
+      const ifaceId = `network-if:opnsense:${interfaceName.toLowerCase()}`;
+      // We'll create the relationship during ingestion when we have the full graph
+    }
+
+    // Link to source subnet if source is a CIDR
+    if (source && this.isCidr(source)) {
+      const subnetId = `network-subnet:${source.toLowerCase()}`;
+      // Relationship will be created during ingestion
+    }
+
+    // Link to destination subnet if destination is a CIDR
+    if (destination && this.isCidr(destination)) {
+      const subnetId = `network-subnet:${destination.toLowerCase()}`;
+      // Relationship will be created during ingestion
+    }
+
+    return { entity, relationships };
+  }
+
+  /**
+   * Parse a NAT rule line (pfctl -sn).
+   * Format: nat on [interface] from [source] to [dest] -> [target]
+   * Format: rdr on [interface] proto [proto] from [source] to [dest] port [port] -> [target] port [port]
+   */
+  private parseNatRule(
+    line: string,
+    context: ParserContext
+  ): { entity: FirewallRuleEntity; relationships?: TwinRelationship[] } | null {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+
+    const tokens = this.tokenize(trimmed);
+    if (tokens.length < 4) return null;
+
+    let idx = 0;
+    const ruleType = tokens[idx++];
+    if (!["nat", "rdr"].includes(ruleType)) return null;
+
+    // Parse "on [interface]"
+    let interfaceName: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "on") {
+      idx++;
+      if (idx < tokens.length) {
+        interfaceName = tokens[idx++];
+      }
+    }
+
+    // Parse protocol (for rdr)
+    let protocol: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "proto") {
+      idx++;
+      if (idx < tokens.length) {
+        protocol = tokens[idx++];
+      }
+    }
+
+    // Parse "from [source]"
+    let source: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "from") {
+      idx++;
+      if (idx < tokens.length) {
+        source = tokens[idx++];
+      }
+    }
+
+    // Parse "to [destination]"
+    let destination: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "to") {
+      idx++;
+      if (idx < tokens.length) {
+        destination = tokens[idx++];
+      }
+    }
+
+    // Parse port (for rdr)
+    let destinationPort: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "port") {
+      idx++;
+      if (idx < tokens.length) {
+        destinationPort = tokens[idx++];
+      }
+    }
+
+    // Parse "-> [target]"
+    let target: string | null = null;
+    if (idx < tokens.length && tokens[idx] === "->") {
+      idx++;
+      if (idx < tokens.length) {
+        target = tokens[idx++];
+        // Remove parentheses if present: (em0) -> em0
+        target = target.replace(/^\(|\)$/g, "");
+      }
+    }
+
+    // Parse target port (for rdr)
+    if (idx < tokens.length && tokens[idx] === "port") {
+      idx++;
+      if (idx < tokens.length) {
+        // This is the target port, not destination port
+        // We'll store it in metadata or a separate field
+      }
+    }
+
+    const ruleId = this.normalizeRuleId(interfaceName, ruleType, "any", source, destination || target, protocol, destinationPort);
+
+    const chain = interfaceName ? `chain:${interfaceName}` : "chain:default";
+
+    const entity: FirewallRuleEntity = {
+      id: ruleId,
+      type: TwinEntityType.FIREWALL_RULE,
+      displayName: `${ruleType} on ${interfaceName || "any"}`,
+      source: context.source,
+      collectedAt: context.collectedAt,
+      data: {
+        action: ruleType === "nat" ? "nat" : "rdr",
+        direction: "any",
+        interface: interfaceName,
+        protocol,
+        source,
+        destination: destination || target,
+        destinationPort,
+        ruleType: ruleType === "nat" ? "nat" : "rdr",
+        chain,
+        enabled: true,
+      },
+    };
+
+    return { entity };
+  }
+
+  /**
+   * Tokenize a pfctl rule line, handling quoted strings and special characters.
+   */
+  private tokenize(line: string): string[] {
+    const tokens: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"' || char === "'") {
+        inQuotes = !inQuotes;
+        continue;
+      }
+      if (!inQuotes && /\s/.test(char)) {
+        if (current) {
+          tokens.push(current);
+          current = "";
+        }
+        continue;
+      }
+      current += char;
+    }
+    if (current) {
+      tokens.push(current);
+    }
+    return tokens;
+  }
+
+  /**
+   * Normalize a rule ID from its components.
+   */
+  private normalizeRuleId(
+    interfaceName: string | null,
+    action: string,
+    direction: string,
+    source: string | null,
+    destination: string | null,
+    protocol: string | null,
+    port: string | null
+  ): string {
+    const parts = [
+      "fw-rule",
+      interfaceName || "any",
+      action,
+      direction,
+      source || "any",
+      destination || "any",
+      protocol || "any",
+      port || "any",
+    ];
+    return parts.join(":").toLowerCase().replace(/[^a-z0-9:._-]/g, "_");
+  }
+
+  /**
+   * Check if a string is a CIDR notation.
+   */
+  private isCidr(str: string): boolean {
+    return /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(str) || /^[0-9a-f:]+::\/\d+$/i.test(str);
+  }
+}
+

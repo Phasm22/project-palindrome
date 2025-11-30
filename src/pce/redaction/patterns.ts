@@ -33,18 +33,9 @@ export const DEFAULT_REDACTION_PATTERNS: RedactionPattern[] = [
     replacement: "[REDACTED_AWS_SECRET_KEY]",
     description: "AWS secret access key",
   },
-  {
-    name: "email",
-    pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
-    replacement: "[REDACTED_EMAIL]",
-    description: "Email addresses",
-  },
-  {
-    name: "ip_address_private",
-    pattern: /\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/g,
-    replacement: "[REDACTED_IP]",
-    description: "Private IP addresses",
-  },
+  // NOTE: Email addresses NOT redacted - not sensitive in infrastructure context
+  // IP addresses NOT redacted - they are the PRIMARY data in infrastructure queries
+  // The LLM needs to see IPs to understand network topology, firewall rules, VM locations, etc.
   {
     name: "password",
     pattern: /(?:password|passwd|pwd)\s*[:=]\s*['"]?([^\s'"]{8,})['"]?/gi,
@@ -74,6 +65,12 @@ export const DEFAULT_REDACTION_PATTERNS: RedactionPattern[] = [
 /**
  * Proxmox-specific redaction patterns
  * TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)
+ * 
+ * NOTE: IP addresses and MAC addresses are NOT redacted - they are the PRIMARY data
+ * in infrastructure queries. The LLM needs to see them to understand network topology,
+ * firewall rules, VM locations, etc. Since the LLM only sees summaries (not raw configs),
+ * and sensitive data (API keys, passwords, tokens) never leaves the network, we can safely
+ * allow infrastructure identifiers through.
  */
 export const PROXMOX_REDACTION_PATTERNS: RedactionPattern[] = [
   {
@@ -83,25 +80,9 @@ export const PROXMOX_REDACTION_PATTERNS: RedactionPattern[] = [
     replacement: "token-[REDACTED]",
     description: "Proxmox API token names (myuser!deploy)",
   },
-  {
-    name: "proxmox_user_realm",
-    // Match user realms AFTER tokens (to catch standalone user@realm that aren't tokens)
-    pattern: /\b[a-zA-Z0-9_\-]+@(?:pam|pve|ldap|ad|openid|oidc|saml)\b/gi,
-    replacement: "user-[REDACTED]",
-    description: "Proxmox user realm identifiers (user@pam, root@pve, automation@ldap)",
-  },
-  {
-    name: "proxmox_mac_address",
-    pattern: /\b(?:[0-9A-Fa-f]{2}[:-]){5}(?:[0-9A-Fa-f]{2})\b/g,
-    replacement: "MAC-[REDACTED]",
-    description: "MAC addresses (AA:BB:CC:DD:EE:FF or AA-BB-CC-DD-EE-FF)",
-  },
-  {
-    name: "proxmox_internal_ips",
-    pattern: /\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3})\b/g,
-    replacement: "IP-[REDACTED]",
-    description: "Internal Proxmox/Storage IPs (Storage VLANs, Ceph backends, corosync networks)",
-  },
+  // NOTE: User realms NOT redacted - not sensitive, just identifies users (user@pam, root@pve)
+  // NOTE: MAC addresses NOT redacted - needed for network topology and VM identification
+  // NOTE: IP addresses NOT redacted - they are the PRIMARY data in infrastructure queries
   {
     name: "proxmox_config_secrets",
     // Match secrets in various formats:
@@ -135,12 +116,16 @@ export const PROXMOX_REDACTION_PATTERNS: RedactionPattern[] = [
 /**
  * Combined redaction patterns including Proxmox-specific patterns
  * Proxmox patterns are added first to take precedence over generic patterns
+ * 
+ * REDACTION PHILOSOPHY:
+ * - Redact truly sensitive data: API keys, passwords, tokens, SSH keys, credit cards
+ * - DO NOT redact infrastructure identifiers: IP addresses, MAC addresses, hostnames
+ * - The LLM only sees summaries (not raw configs), and IPs/MACs are the PRIMARY data
+ * - Sensitive credentials never leave the network anyway (local brain, local graph, local data)
  */
 export const ALL_REDACTION_PATTERNS: RedactionPattern[] = [
   ...PROXMOX_REDACTION_PATTERNS,
-  ...DEFAULT_REDACTION_PATTERNS.filter(
-    // Exclude default private IP pattern since Proxmox pattern covers it
-    (p) => p.name !== "ip_address_private"
-  ),
+  ...DEFAULT_REDACTION_PATTERNS,
+  // Note: No IP address or MAC address redaction - they are essential for infrastructure queries
 ];
 

@@ -347,6 +347,67 @@ export class GraphQueryInterface {
   /**
    * Phase I-B: Find dependency chain (what breaks if entity goes down)
    */
+
+  /**
+   * TL-3.0: Find entities by purpose/role
+   * Query hosts, services, and containers by their role or purpose
+   * Handles attributes stored as JSON string
+   */
+  async findByPurpose(purpose: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (n:Entity)
+      WHERE (n.type = "Host" OR n.type = "Service" OR n.type = "Container")
+        AND toLower(toString(n.attributes)) CONTAINS toLower($purpose)
+      RETURN n
+      LIMIT 100
+    `;
+    return this.executeQuery(cypher, { purpose });
+  }
+
+  /**
+   * TL-3.0: Find entities by architecture
+   * Query entities by network architecture, system architecture, or deployment architecture
+   */
+  async findByArchitecture(architecture: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (n:Entity)
+      WHERE toString(n.attributes) CONTAINS $architecture
+      RETURN n
+      LIMIT 100
+    `;
+    return this.executeQuery(cypher, { architecture });
+  }
+
+  /**
+   * TL-3.0: Find all entities with a specific role
+   * More specific than findByPurpose - exact role match
+   */
+  async findByRole(role: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (n:Entity)
+      WHERE (n.type = "Host" OR n.type = "Service" OR n.type = "Container")
+        AND toString(n.attributes) CONTAINS $role
+      RETURN n
+      LIMIT 100
+    `;
+    return this.executeQuery(cypher, { role });
+  }
+
+  /**
+   * TL-3.0: Find entities by purpose with relationships
+   * Returns entities and their connections for architecture analysis
+   */
+  async findByPurposeWithRelationships(purpose: string): Promise<GraphQueryResult> {
+    const cypher = `
+      MATCH (n:Entity)
+      WHERE (n.type = "Host" OR n.type = "Service" OR n.type = "Container")
+        AND toString(n.attributes) CONTAINS $purpose
+      OPTIONAL MATCH (n)-[r]-(connected:Entity)
+      RETURN n, r, connected
+      LIMIT 100
+    `;
+    return this.executeQuery(cypher, { purpose });
+  }
   async findDependencyChain(entityId: string, maxDepth: number = 10): Promise<GraphQueryResult> {
     const cypher = `
       MATCH path = (entity:Entity {id: $entityId})<-[:DEPENDS_ON*1..${maxDepth}]-(dependent:Entity)

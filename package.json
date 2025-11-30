@@ -18,9 +18,19 @@
     "pce:provenance-audit": "bun run scripts/run-provenance-audit.ts",
     "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts",
     "pce:ingest-proxmox": "bun run scripts/ingest-proxmox.ts",
+    "pce:ingest-network": "bun run scripts/ingest-network.ts",
+    "pce:ingest-firewall": "bun run scripts/ingest-firewall.ts",
+    "pce:ingest-all": "bun run scripts/ingest-all.ts",
     "pce:debug-vector": "bun run src/pce/debug-vector.ts",
     "pce:check-indexed": "bun run src/pce/check-indexed.ts",
-    "opnsense:generate-unified-schema": "bun run src/tools/opnsense/generate-unified-schema.ts"
+    "opnsense:generate-unified-schema": "bun run src/tools/opnsense/generate-unified-schema.ts",
+    "services:start": "./scripts/start-services.sh",
+    "services:stop": "./scripts/stop-services.sh",
+    "services:status": "docker compose ps",
+    "ollama:setup": "./scripts/ollama-setup.sh setup",
+    "ollama:list": "./scripts/ollama-setup.sh list",
+    "ollama:pull": "./scripts/ollama-setup.sh pull",
+    "ollama:test": "./scripts/ollama-setup.sh test"
   },
   "devDependencies": {
     "@types/bun": "latest",

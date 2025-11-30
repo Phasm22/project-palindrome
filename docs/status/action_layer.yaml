@@ -1,0 +1,294 @@
+action_layer:
+  version: 1
+  intent:
+    description: >
+      Provide a safe, Terraform-first automation layer for the homelab, where the LLM
+      plans and generates changes to IaC (Terraform/Ansible), and CI/CD executes them.
+    goals:
+      - Use Terraform as the primary mechanism for creating/updating/destroying VMs/LXCs and infra.
+      - Use Ansible for post-provision configuration and service setup.
+      - Use Proxmox/OPNsense API tools only for read, diagnostics, or tightly-scoped writes.
+      - Keep the Action Layer deterministic, reviewable (PRs), and idempotent.
+    non_goals:
+      - No arbitrary shell commands on hypervisors.
+      - No LLM-driven direct mutation of state without human review.
+      - No “auto-wire everything” across tools without explicit config.
+
+  architecture:
+    components:
+      terraform_stack:
+        description: >
+          Existing Terraform/Proxmox stack as the canonical infra control plane.
+        repo_paths:
+          root: "./terraform"
+          envs: "./environments"
+          examples: "./examples"
+        providers:
+          - name: "bpg/proxmox"
+            version: ">= 0.80.0"
+      ansible_stack:
+        description: >
+          Configuration management and service layer.
+        repo_paths:
+          root: "./ansible"
+          playbooks: "./ansible/playbooks"
+          inventory: "./ansible/inventory.ini"
+      ci_cd_pipeline:
+        description: >
+          GitHub Actions workflows that run terraform plan/apply, ansible-playbook, and checks.
+        repo_paths:
+          workflows: "./.github/workflows/infrastructure.yml"
+      twin_layer:
+        description: >
+          Digital twin (Neo4j) populated by parsers for compute, network, firewall, exposure.
+        responsibilities:
+          - Provide current infra state to the agent (nodes, VMs, interfaces, subnets, rules).
+          - Act as context for planning and validation, not as the executor.
+      llm_agent:
+        description: >
+          Orchestrator that converts natural language into Terraform/Ansible changes + tool calls.
+        responsibilities:
+          - Interpret user intent.
+          - Query the twin for current state.
+          - Generate Terraform/Ansible edits and PRs.
+          - Call read-only tools (Proxmox/OPNsense) for live diagnostics when needed.
+
+  execution_model:
+    flows:
+      terraform_pr_workflow:
+        description: >
+          Main flow for infra changes (VMs, LXCs, network mappings).
+        steps:
+          - user_request: "spin up / change / destroy / rehome / resize"
+          - agent:
+              - interpret_intent_via_reasoning_chains
+              - query_twin_for_current_state
+              - choose_target_env: ["dev", "prod"]
+              - edit_terraform_files:
+                  - main_tf
+                  - env_tfvars
+                  - optionally new modules/examples
+              - run_local_validations_if_available: ["terraform fmt", "terraform validate"]
+              - open_or_update_pull_request
+          - ci_cd:
+              - on_pr: "terraform plan"
+              - post_plan_comment_on_pr: true
+          - human:
+              - review_plan
+              - approve_or_reject
+          - ci_cd:
+              - on_merge_to_main: "terraform apply"
+              - optional_ansible_run: true
+
+      ansible_change_workflow:
+        description: >
+          Used for service-level configuration changes (e.g., Wazuh agent, Docker stack, nginx).
+        steps:
+          - user_request: "install / configure / tweak service"
+          - agent:
+              - query_twin_and_terraform_state_for_hosts
+              - edit_ansible_playbooks_and_inventory
+              - open_pr_with_changes
+          - ci_cd:
+              - run_ansible_lint_or_syntax_check
+              - (optional) dry_run_playbook
+          - human:
+              - review_diff
+              - approve
+          - ci_cd:
+              - run_ansible_playbook_for_target_group
+
+      direct_tool_workflow:
+        description: >
+          Limited, tightly scoped operations using Proxmox/OPNsense tools where IaC is not viable.
+        allowed_use_cases:
+          - diag_vm_ip: "why no IP?", "what bridge?", "is DHCP handing out leases?"
+          - quick_power_ops: "force shutdown this VM", "reset stuck guest"
+          - firewall_safewrite_ops: "temporarily open port X" with revert plan
+        rules:
+          - must_not_change: "Terraform-managed properties without reflecting in IaC"
+          - must_log_in_twin: true
+          - must_be_explained_to_user: true
+
+  operation_catalog:
+    # These are the high-level actions the agent supports, and how they map to Terraform/Ansible.
+    categories:
+
+      compute:
+        description: "VM/LXC lifecycle and sizing."
+        operations:
+          create_vm_from_template:
+            mechanism: "terraform"
+            terraform_changes:
+              - add_vm_resource_block
+              - wire_to_template_id: 8001
+              - set_cpu_ram_disk
+              - attach_network_bridge_vlan
+            required_inputs_from_user:
+              - name
+              - environment: ["dev", "prod"]
+              - sizing_profile: ["tiny", "small", "medium", "large"]
+              - purpose_tag: ["lab", "prod", "experiment"]
+            twin_dependencies:
+              - available_nodes
+              - node_ram_headroom
+              - storage_free_space
+          create_lxc:
+            mechanism: "terraform"
+            notes: "Same as create_vm_from_template, but using container resource."
+          resize_vm:
+            mechanism: "terraform"
+            terraform_changes:
+              - update_cpu_ram_values
+            constraints:
+              - must_consult_twin_for_ram_limits: true
+          destroy_vm:
+            mechanism: "terraform"
+            terraform_changes:
+              - remove_vm_block_or_adjust_count
+          migrate_vm_between_nodes:
+            mechanism: "terraform_or_proxmox_direct"
+            preferred: "terraform (node affinity config)"
+            fallback:
+              tool: "proxmox_write.migrate_vm"
+              constraint: "only when tf modeling is too complex"
+
+      network:
+        description: "Interface, bridge, VLAN mappings (where Terraform supports it)."
+        operations:
+          connect_vm_to_vlan:
+            mechanism: "terraform"
+            terraform_changes:
+              - set_bridge: "vmbr0"
+              - set_vlan_tag: "50"
+            twin_dependencies:
+              - check_vlan_exists_in_opnsense
+          assign_static_ip_via_dhcp_reservation:
+            mechanism: "opnsense_safewrite_or_terraform_if_modeled"
+            required_inputs_from_user:
+              - hostname
+              - desired_ip
+              - subnet
+            twin_dependencies:
+              - dhcp_range
+              - existing_leases
+          open_port_on_firewall:
+            mechanism: "opnsense_safewrite"
+            twin_dependencies:
+              - check_existing_rules
+              - check_exposure_map
+            constraints:
+              - must_show_diff_to_user: true
+              - must_tag_with_source: "palindrome-agent"
+
+      services:
+        description: "Ansible-driven service setup."
+        operations:
+          install_docker_stack:
+            mechanism: "ansible"
+            ansible_changes:
+              - edit_playbook: "playbooks/docker.yml"
+              - extend_inventory_groups
+          configure_wazuh_agent:
+            mechanism: "ansible"
+            twin_dependencies:
+              - list_vms_missing_wazuh_tag
+              - map_to_ansible_inventory
+          setup_nginx_reverse_proxy:
+            mechanism: "ansible"
+            terraform_tie_in:
+              - ensure_vm_exists_and_is_tagged: "proxy"
+
+  integration_points:
+    terraform:
+      files_to_edit:
+        - "./terraform/main.tf"
+        - "./terraform/variables.tf"
+        - "./terraform/outputs.tf"
+        - "./environments/*.tfvars"
+        - "./examples/*.tfvars" # where applicable
+      guardrails:
+        - run_terraform_fmt_before_pr: true
+        - run_terraform_validate_in_ci: true
+        - never_commit_tfstate: true
+        - prefer_remote_state_for_prod: true
+    ansible:
+      files_to_edit:
+        - "./ansible/playbooks/*.yml"
+        - "./ansible/inventory.ini"
+        - "./ansible/group_vars/*.yml"
+      guardrails:
+        - use_ansible_lint_where_possible: true
+        - prefer_idempotent_roles: true
+        - document_new_roles_in_ansible_readme: true
+    tools:
+      proxmox_readonly:
+        usage: "state verification, twin ingestion, troubleshooting"
+      proxmox_write:
+        usage: "narrow, when Terraform cannot model the op cleanly"
+        guardrails:
+          - require_explanation_in_trace: true
+          - avoid_clashing_with_terraform_state: true
+      opnsense_readonly:
+        usage: "DHCP leases, firewall state, interfaces for twin"
+      opnsense_safewrite:
+        usage: "surgical firewall changes under explicit user approval"
+
+  safety_and_invariants:
+    invariants:
+      - source_of_truth_for_infra_is: "terraform"
+      - source_of_truth_for_config_is: "terraform + ansible"
+      - source_of_truth_for_current_state_is: "twin + live_read_tools"
+    safety_rules:
+      - no_out_of_band_mutation_of_proxmox_resources_without_tf_update: true
+      - no_firewall_changes_without_visible_summary_to_user: true
+      - always_reference_twin_before_planning_action: true
+      - always_emit_human_readable_change_summary: true
+    review_model:
+      terraform:
+        require_pr: true
+        require_plan_review: true
+      ansible:
+        require_pr_for_new_roles: true
+        allow_minor_var_changes_via_small_prs: true
+      tool_ops:
+        log_to_twin: true
+        show_user_confirmation_for_destructive_ops: true
+
+  sme_config_dependencies:
+    description: >
+      Fields that must come from you (the SME) to make the Action Layer behave correctly.
+    required_inputs:
+      node_policies:
+        description: "Which nodes are preferred for which workloads, and their RAM/CPU tolerance."
+        examples:
+          - "yin = stable/always-on; yang = experiments; proxBig = heavy CPU."
+      storage_policies:
+        description: "Which datastores to prefer per node, and min free space thresholds."
+      vm_default_profiles:
+        description: "Default templates/sizing (tiny/small/medium/large) and which Terraform vars map to them."
+      network_intent:
+        description: "Meaning of each VLAN, expected gateways, DNS behavior, and which subnets are 'prod' vs 'lab'."
+      naming_conventions:
+        description: "Allowed prefixes, reserved names, palindrome rules, and environment suffixes."
+      risk_tolerance:
+        description: "What is acceptable automation vs. what must always go through a PR and human eyes."
+        keys:
+          auto_apply_dev: bool
+          auto_apply_prod: bool
+          allow_direct_proxmox_write_for_emergencies: bool
+
+  roadmap_alignment:
+    description: >
+      How this Terraform-first Action Layer aligns with the earlier phases.
+    mapping:
+      parser_layer:
+        role: "Spine for state; unchanged. Compute/network/firewall parsers continue feeding the twin."
+      twin_and_exposure:
+        role: "Decision support for planning Terraform/Ansible changes, not simulation engine."
+      reasoning_chains:
+        role: "Intent classification + plan synthesis, then delegate to Terraform/Ansible."
+      future_work:
+        - add_automatic_pr_templates_for_common_operations
+        - add_diff_summarizer_that_explains_terraform_plan_in_plain_english
+        - add_ansible_role_recommendations_based_on_vm_purpose_tags

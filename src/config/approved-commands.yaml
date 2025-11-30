@@ -11,6 +11,8 @@ hosts:
       - "opnsense"
       - "radar"
       - "firewall"
+      - "opnsense.prox"
+      - "OPNsense.prox"
     description: "OPNsense firewall in lab network"
     read_only: true
     commands:
@@ -31,6 +33,11 @@ hosts:
         - "uptime"
         - "free -h"
         - "ps aux | head -20"
+      firewall:
+        - "pfctl -sr"
+        - "pfctl -sn"
+        - "pfctl -si"
+        - "pfctl -sa"
         
   "172.16.0.10":  # prox_big
     hostname: "172.16.0.10"
@@ -57,11 +64,20 @@ hosts:
         - "hostname"
         - "uname -a"
         - "df -h"
+        - "sensors"
+        - "sensors -j"
         - "systemctl status {service}"
         - "systemctl list-units --type=service"
         - "journalctl -u {service} -n 50"
         - "tail -n 100 /var/log/{logfile}"
         - "ps aux | head -20"
+      proxmox:
+        - "pvesh get /nodes/{node}/qemu"
+        - "pvesh get /nodes/{node}/lxc"
+        - "pvesh get /nodes/{node}/status"
+        - "pvesh get /nodes/{node}/qemu --output-format json"
+        - "pvesh get /nodes/{node}/lxc --output-format json"
+        - "pvesh get /nodes/{node}/status --output-format json"
       maintenance:
         - "apt update"
         - "apt list --upgradable"
@@ -97,11 +113,20 @@ hosts:
         - "hostname"
         - "uname -a"
         - "df -h"
+        - "sensors"
+        - "sensors -j"
         - "systemctl status {service}"
         - "systemctl list-units --type=service"
         - "journalctl -u {service} -n 50"
         - "tail -n 100 /var/log/{logfile}"
         - "ps aux | head -20"
+      proxmox:
+        - "pvesh get /nodes/{node}/qemu"
+        - "pvesh get /nodes/{node}/lxc"
+        - "pvesh get /nodes/{node}/status"
+        - "pvesh get /nodes/{node}/qemu --output-format json"
+        - "pvesh get /nodes/{node}/lxc --output-format json"
+        - "pvesh get /nodes/{node}/status --output-format json"
       maintenance:
         - "apt update"
         - "apt list --upgradable"
@@ -119,7 +144,7 @@ hosts:
     aliases:
       - "yang"
       - "yang.prox"
-    description: "Proxmox node - yang (OS-level operations only, use Proxmox tool for VM operations)"
+    description: "Proxmox node - YANG (OS-level operations only, use Proxmox tool for VM operations)"
     username: "opsadmin"
     read_only: true
     commands:
@@ -137,11 +162,20 @@ hosts:
         - "hostname"
         - "uname -a"
         - "df -h"
+        - "sensors"
+        - "sensors -j"
         - "systemctl status {service}"
         - "systemctl list-units --type=service"
         - "journalctl -u {service} -n 50"
         - "tail -n 100 /var/log/{logfile}"
         - "ps aux | head -20"
+      proxmox:
+        - "pvesh get /nodes/{node}/qemu"
+        - "pvesh get /nodes/{node}/lxc"
+        - "pvesh get /nodes/{node}/status"
+        - "pvesh get /nodes/{node}/qemu --output-format json"
+        - "pvesh get /nodes/{node}/lxc --output-format json"
+        - "pvesh get /nodes/{node}/status --output-format json"
       maintenance:
         - "apt update"
         - "apt list --upgradable"

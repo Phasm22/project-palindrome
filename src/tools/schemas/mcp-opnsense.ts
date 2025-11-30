@@ -41,7 +41,7 @@ export const CommonActions = z.enum([
 export const MCPOpnsenseParams = z.object({
   module: OPNsenseModules.describe("OPNsense module (e.g., firewall, system, interfaces)"),
   action: z.string().describe("Action/method to perform. For modules like 'core', this is the method name (e.g., 'systemStatus', 'backupBackups'). For other modules, this is the action name (e.g., 'list_rules', 'search_aliases'). Auto-discovered from MCP server."),
-  parameters: z.record(z.any()).optional().describe("Additional parameters for the action. For 'core' module with 'manage' action, include 'method' parameter (e.g., {method: 'systemStatus'})."),
+  parameters: z.any().optional().describe("Additional parameters for the action as an object. For 'core' module with 'manage' action, include 'method' parameter (e.g., {method: 'systemStatus'})."),
 });
 
 export type MCPOpnsenseParams = z.infer<typeof MCPOpnsenseParams>;

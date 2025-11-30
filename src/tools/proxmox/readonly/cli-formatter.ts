@@ -130,7 +130,7 @@ function formatListOutput(data: any, action: string): string {
 function formatDetailOutput(data: any, action: string): string {
   const lines: string[] = [];
 
-  if (action === "node_status" || action === "node_resources") {
+  if (action === "node_status") {
     lines.push(`Node: ${data.node || "N/A"}`);
     lines.push("─".repeat(80));
     if (data.status_normalized) {
@@ -153,29 +153,79 @@ function formatDetailOutput(data: any, action: string): string {
     }
   } else if (action.startsWith("get_vm_")) {
     lines.push(`VM ${data.vmid || "N/A"} on ${data.node || "N/A"}`);
+    if (data.name) {
+      lines[lines.length - 1] += ` (${data.name})`;
+    }
     lines.push("─".repeat(80));
-    if (data.status_normalized) {
-      lines.push(`Status: ${data.status_normalized}`);
-    }
-    if (data.mem_normalized && data.maxmem_normalized) {
-      lines.push(
-        `Memory: ${data.mem_normalized.value} ${data.mem_normalized.unit} / ${data.maxmem_normalized.value} ${data.maxmem_normalized.unit}`
-      );
-    }
-    if (data.cpu !== undefined) {
-      lines.push(`CPU Usage: ${(data.cpu * 100).toFixed(1)}%`);
-    }
-    if (action === "get_vm_config") {
-      lines.push("\nConfiguration:");
-      for (const [key, value] of Object.entries(data)) {
-        if (!key.startsWith("_") && key !== "node" && key !== "vmid" && key !== "type" && key !== "status" && key !== "mem" && key !== "maxmem" && key !== "cpu") {
-          lines.push(`  ${key}: ${value}`);
+    
+    if (action === "get_vm_ip") {
+      // Special formatting for IP resolution
+      if (data.ip) {
+        lines.push(`IP Address: ${data.ip}`);
+        if (data.source) {
+          lines.push(`Source: ${data.source}`);
+        }
+        if (data.hostname) {
+          lines.push(`Hostname: ${data.hostname}`);
+        }
+        if (data.macs && Array.isArray(data.macs) && data.macs.length > 0) {
+          lines.push(`MAC Addresses: ${data.macs.join(", ")}`);
+        }
+        if (data.resolutionLayers && Array.isArray(data.resolutionLayers) && data.resolutionLayers.length > 0) {
+          lines.push("\nResolution Path:");
+          for (const layer of data.resolutionLayers) {
+            const layerInfo = layer.ip 
+              ? `  Layer ${layer.layer} (${layer.source}): ${layer.ip} - ${layer.method}`
+              : `  Layer ${layer.layer} (${layer.source}): ${layer.method}`;
+            lines.push(layerInfo);
+          }
+        }
+      } else {
+        lines.push("IP Address: Not found");
+        if (data.message) {
+          lines.push(`\n${data.message}`);
+        }
+        if (data.suggestion) {
+          lines.push(`Suggestion: ${data.suggestion}`);
+        }
+        if (data.resolutionLayers && Array.isArray(data.resolutionLayers) && data.resolutionLayers.length > 0) {
+          lines.push("\nResolution Attempts:");
+          for (const layer of data.resolutionLayers) {
+            lines.push(`  Layer ${layer.layer} (${layer.source}): ${layer.method}`);
+          }
         }
       }
-    } else if (action === "get_vm_network" && data.network) {
-      lines.push("\nNetwork Configuration:");
-      for (const [key, value] of Object.entries(data.network)) {
-        lines.push(`  ${key}: ${value}`);
+      if (data.status) {
+        lines.push(`\nVM Status: ${data.status}`);
+      }
+      if (data.note) {
+        lines.push(`\nNote: ${data.note}`);
+      }
+    } else {
+      // Generic VM detail formatting
+      if (data.status_normalized) {
+        lines.push(`Status: ${data.status_normalized}`);
+      }
+      if (data.mem_normalized && data.maxmem_normalized) {
+        lines.push(
+          `Memory: ${data.mem_normalized.value} ${data.mem_normalized.unit} / ${data.maxmem_normalized.value} ${data.maxmem_normalized.unit}`
+        );
+      }
+      if (data.cpu !== undefined) {
+        lines.push(`CPU Usage: ${(data.cpu * 100).toFixed(1)}%`);
+      }
+      if (action === "get_vm_config") {
+        lines.push("\nConfiguration:");
+        for (const [key, value] of Object.entries(data)) {
+          if (!key.startsWith("_") && key !== "node" && key !== "vmid" && key !== "type" && key !== "status" && key !== "mem" && key !== "maxmem" && key !== "cpu") {
+            lines.push(`  ${key}: ${value}`);
+          }
+        }
+      } else if (action === "get_vm_network" && data.network) {
+        lines.push("\nNetwork Configuration:");
+        for (const [key, value] of Object.entries(data.network)) {
+          lines.push(`  ${key}: ${value}`);
+        }
       }
     }
   } else if (action === "cluster_status") {

@@ -16,6 +16,7 @@ import type { DocumentType, ACLGroup } from "../types";
 import { IngestionPipeline, type IngestionOptions } from "./pipeline";
 import { GraphIngestionPipeline, type GraphIngestionOptions } from "./graph-pipeline";
 import { ProxmoxClient, type ProxmoxApiConfig } from "../../tools/proxmox/client";
+import { ProxmoxReadOnlyTool } from "../../tools/proxmox/readonly/proxmox-readonly-tool";
 import {
   generateVmInventoryDocument,
   generateNodeProfileDocument,
@@ -27,6 +28,13 @@ import { pceLogger } from "../utils/logger";
 import type { GraphNode, GraphRelationship } from "../kg/schema/ontology";
 import { NodeType, RelationshipType } from "../kg/schema/ontology";
 import { Neo4jGraphStore } from "../kg/indexation/neo4j-client";
+import {
+  ParserRegistry,
+  ProxmoxNodeParser,
+  ProxmoxVmParser,
+} from "../../parsers";
+import { TwinUpdateService } from "../../twin";
+import type { ExecutionContext } from "../../types/execution";
 
 export interface ProxmoxIngestionOptions {
   aclGroup: ACLGroup;
@@ -92,6 +100,11 @@ export class ProxmoxIngestionOrchestrator {
   private graphStore: Neo4jGraphStore;
   private proxmoxClient: ProxmoxClient;
   private tempDir: string;
+  private parserRegistry: ParserRegistry;
+  private nodeParser: ProxmoxNodeParser;
+  private vmParser: ProxmoxVmParser;
+  private twinUpdater: TwinUpdateService;
+  private proxmoxTool: ProxmoxReadOnlyTool;
 
   constructor(
     vectorPipeline: IngestionPipeline,
@@ -104,6 +117,13 @@ export class ProxmoxIngestionOrchestrator {
     this.graphStore = graphStore;
     this.proxmoxClient = new ProxmoxClient(proxmoxConfig);
     this.tempDir = join(tmpdir(), "pce-proxmox-ingestion");
+    this.parserRegistry = new ParserRegistry();
+    this.nodeParser = new ProxmoxNodeParser();
+    this.vmParser = new ProxmoxVmParser();
+    this.parserRegistry.register(this.nodeParser);
+    this.parserRegistry.register(this.vmParser);
+    this.twinUpdater = new TwinUpdateService(this.graphStore);
+    this.proxmoxTool = new ProxmoxReadOnlyTool();
   }
 
   /**
@@ -408,6 +428,102 @@ export class ProxmoxIngestionOrchestrator {
     }
   }
 
+  private createToolContext(action: string): ExecutionContext {
+    return {
+      toolName: `proxmox_ingestion:${action}`,
+      startedAt: Date.now(),
+    };
+  }
+
+  private async fetchNodeInventory(): Promise<Record<string, any>> {
+    const result = await this.proxmoxTool.execute(
+      { action: "list_nodes" },
+      this.createToolContext("list_nodes")
+    );
+
+    if (result.error) {
+      throw new Error(`Failed to list nodes: ${result.error}`);
+    }
+
+    return result.data || { nodes: [] };
+  }
+
+  private async fetchVmInventory(nodeNames: string[]): Promise<{ vms: any[] }> {
+    const vms: any[] = [];
+
+    await Promise.all(
+      nodeNames.map(async (node) => {
+        const [qemu, lxc] = await Promise.all([
+          this.proxmoxTool.execute(
+            { action: "list_vms", node, type: "qemu" },
+            this.createToolContext(`list_vms:${node}:qemu`)
+          ),
+          this.proxmoxTool.execute(
+            { action: "list_vms", node, type: "lxc" },
+            this.createToolContext(`list_vms:${node}:lxc`)
+          ),
+        ]);
+
+        const results = [qemu, lxc];
+        for (const result of results) {
+          if (result.error) {
+            pceLogger.warn("Failed to fetch VM inventory for node", {
+              node,
+              error: result.error,
+            });
+            continue;
+          }
+          const vmList = result.data?.vms ?? [];
+          vmList.forEach((vm: any) => {
+            if (!vm.node) {
+              vm.node = node;
+            }
+            vms.push(vm);
+          });
+        }
+      })
+    );
+
+    return { vms };
+  }
+
+  private async ingestTwinInventory(): Promise<void> {
+    const collectedAt = new Date();
+    const nodeData = await this.fetchNodeInventory();
+    const nodeResult = await this.nodeParser.parse(nodeData, {
+      source: "proxmox_readonly.list_nodes",
+      collectedAt,
+    });
+
+    const nodeNames = (nodeData.nodes || [])
+      .map((node: any) => node?.node)
+      .filter((name: string | undefined): name is string => Boolean(name));
+
+    const vmData = await this.fetchVmInventory(nodeNames);
+    const vmResult = await this.vmParser.parse(vmData, {
+      source: "proxmox_readonly.list_vms",
+      collectedAt,
+    });
+
+    const entities = [...nodeResult.entities, ...vmResult.entities];
+    const relationships = [
+      ...nodeResult.relationships,
+      ...vmResult.relationships,
+    ];
+
+    if (!entities.length && !relationships.length) {
+      pceLogger.warn("Twin ingestion skipped (no entities or relationships)");
+      return;
+    }
+
+    await this.twinUpdater.initialize();
+    await this.twinUpdater.upsert(entities, relationships);
+    pceLogger.info("Twin ingestion complete", {
+      entities: entities.length,
+      relationships: relationships.length,
+    });
+  }
+
   /**
    * Main ingestion method: Fetch data, generate documents, ingest to both stores
    * TL-2A.6.1: All fetching uses ProxmoxClient for provenance tracking
@@ -431,6 +547,13 @@ export class ProxmoxIngestionOrchestrator {
 
       // Step 3: Ingest to Graph Store
       const graphResult = await this.upsertProxmoxInventoryToGraph(documents, options);
+
+      // Step 3b: Update digital twin
+      try {
+        await this.ingestTwinInventory();
+      } catch (error: any) {
+        pceLogger.warn("Twin ingestion failed", { error: error.message });
+      }
 
       // Step 4: Also ingest via graph pipeline for EDL processing (optional, for text-based extraction)
       const tempFiles: string[] = [];

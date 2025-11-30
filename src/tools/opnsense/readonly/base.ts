@@ -16,7 +16,7 @@ export abstract class OpnsenseReadOnlyBase extends BaseTool {
    * Get API configuration from environment variables
    */
   protected getApiConfig() {
-    const url = process.env.OPNSENSE_URL;
+    const url = (process.env.OPNSENSE_URL || "").trim();
     const key = process.env.OPNSENSE_API_KEY;
     const secret = process.env.OPNSENSE_API_SECRET;
     const verifySsl = process.env.OPNSENSE_VERIFY_SSL !== "false";

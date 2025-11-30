@@ -31,7 +31,6 @@ bun test tests/cli.test.ts
 bun test tests/agent-context.test.ts
 
 # Test tools
-bun test tests/glances.test.ts
 bun test tests/opnsense.test.ts
 bun test tests/ssh.test.ts
 
@@ -42,9 +41,6 @@ bun test tests/runner-mvs.test.ts
 
 ### Test Individual Tools via CLI
 ```bash
-# Test Glances tool
-bun run src/cli.ts glances
-
 # Test OPNsense tool
 bun run src/cli.ts opnsense status
 bun run src/cli.ts opnsense aliases
@@ -173,7 +169,6 @@ bun run lint
 ### Debugging Tool Execution
 ```bash
 # Test tool directly (bypasses LLM)
-bun run src/cli.ts glances
 bun run src/cli.ts opnsense status
 bun run src/cli.ts ssh opnsense "du -sh /*"
 
@@ -444,7 +439,6 @@ bun run src/cli.ts ask "question" 2>&1 | grep "Reasoning step" | wc -l
 | Start REPL | `bun run src/cli.ts repl` |
 | Ask question | `bun run src/cli.ts ask "question"` |
 | Export tools | `bun run export-tools > tools.json` |
-| Test Glances | `bun run src/cli.ts glances` |
 | Test OPNsense | `bun run src/cli.ts opnsense status` |
 | Test SSH | `bun run src/cli.ts ssh opnsense "command"` |
 | View logs | `bun run src/cli.ts ask "q" 2>&1 \| grep "\[info\]"` |

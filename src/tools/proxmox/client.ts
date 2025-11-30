@@ -66,7 +66,16 @@ export class ProxmoxClient {
     });
 
     // Proxmox API token authentication format: PVEAPIToken=user@realm!tokenid=secret
+    // Note: tokenId should already be in format "user@realm!tokenid"
+    // So the final format is: PVEAPIToken=user@realm!tokenid=secret
     const authHeader = `PVEAPIToken=${this.config.tokenId}=${this.config.tokenSecret}`;
+    
+    // Debug: Log which secret is being used (first 4 chars only for security)
+    logger.debug("Proxmox API authentication", {
+      tokenId: this.config.tokenId,
+      secretPrefix: this.config.tokenSecret.substring(0, 4) + "...",
+      headerFormat: "PVEAPIToken=<tokenId>=<secret>",
+    });
 
     this.apiClient = axios.create({
       baseURL,

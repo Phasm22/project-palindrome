@@ -108,11 +108,13 @@ bun src/cli.ts proxmox list-nodes --json
 
 ### Option 2: Agent Queries (LLM + Tools)
 
-Use the `agent pce` command for natural language queries that will automatically use Proxmox tools:
+Use the `agent ask` or `agent pce` command for natural language queries that will automatically use Proxmox tools (both commands are equivalent):
 
 ```bash
 # Simple query - agent will use Proxmox tools automatically
-bun src/cli.ts pce "What nodes are in my Proxmox cluster?"
+agent ask "What nodes are in my Proxmox cluster?"
+# Or use 'pce' (alias for 'ask')
+agent pce "What nodes are in my Proxmox cluster?"
 
 # Query about VM status
 bun src/cli.ts pce "Is VM 101 running? What's its CPU usage?"

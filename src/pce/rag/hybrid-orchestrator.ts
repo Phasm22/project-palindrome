@@ -32,6 +32,11 @@ export interface HybridOrchestratorConfig {
  * Hybrid Orchestrator
  * Coordinates query analysis, parallel retrieval, fusion, and generation
  */
+interface CacheEntry {
+  response: HybridRAGResponse;
+  timestamp: number;
+}
+
 export class HybridOrchestrator {
   private queryAnalyzer: QueryAnalyzer;
   private retrievalService: RetrievalService;
@@ -39,6 +44,8 @@ export class HybridOrchestrator {
   private fusionEngine: FusionEngine;
   private generationService: GenerationService;
   private config: HybridOrchestratorConfig;
+  private cache: Map<string, CacheEntry> = new Map();
+  private cacheTTL = 30000; // 30 seconds for common queries
 
   constructor(
     queryAnalyzer: QueryAnalyzer,
@@ -72,6 +79,26 @@ export class HybridOrchestrator {
         aclGroup: userACLGroup,
       });
 
+      // Check cache for common queries (temperature, status checks, etc.)
+      const cacheKey = `${userQuery.toLowerCase().trim()}:${userACLGroup}`;
+      const cached = this.cache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
+        pceLogger.debug("Cache hit for RAG query", { query: userQuery.slice(0, 50) });
+        return cached.response;
+      }
+
+      // Step 0: Check for exact-match VM/container names before semantic search
+      // This improves recall for queries like "what is vm-123" or "where is container-456"
+      const exactMatchResult = await this.tryExactMatchFallback(userQuery, userACLGroup);
+      if (exactMatchResult) {
+        pceLogger.info("Exact match found, bypassing semantic search", {
+          query: userQuery.slice(0, 100),
+        });
+        // Cache exact match results
+        this.cache.set(cacheKey, { response: exactMatchResult, timestamp: Date.now() });
+        return exactMatchResult;
+      }
+
       // Step 1: Analyze query and determine routing
       const analysis = await this.queryAnalyzer.analyzeQuery(userQuery);
 
@@ -102,6 +129,16 @@ export class HybridOrchestrator {
 
       // Log counters
       pceLogger.logCounters();
+
+      // Cache response for common query patterns (temperature, status, etc.)
+      const isCacheable = this.isCacheableQuery(userQuery);
+      if (isCacheable) {
+        this.cache.set(cacheKey, { response, timestamp: Date.now() });
+        // Clean old cache entries periodically
+        if (this.cache.size > 100) {
+          this.cleanCache();
+        }
+      }
 
       return response;
     } catch (error: any) {
@@ -538,6 +575,148 @@ export class HybridOrchestrator {
         setTimeout(() => reject(new Error("Operation timed out")), timeoutMs)
       ),
     ]);
+  }
+
+  /**
+   * Try exact-match fallback for VM/container names
+   * If query looks like a VM name (e.g., "vm-123", "container-456"), check graph first
+   * Returns response if exact match found, null otherwise
+   */
+  private async tryExactMatchFallback(
+    query: string,
+    aclGroup: ACLGroup
+  ): Promise<HybridRAGResponse | null> {
+    try {
+      // Extract potential VM/container names from query
+      // Patterns: "vm-123", "container-456", "lxc-789", "qemu-101", or just "123" if context suggests VM
+      const vmNamePatterns = [
+        /\b(?:vm|container|lxc|qemu|ct)[-_]?(\d+)\b/gi,
+        /\b(\d{3,})\b/g, // 3+ digit numbers (likely VMIDs)
+      ];
+
+      const potentialVmNames: string[] = [];
+      for (const pattern of vmNamePatterns) {
+        const matches = query.matchAll(pattern);
+        for (const match of matches) {
+          const vmName = match[0].toLowerCase();
+          if (!potentialVmNames.includes(vmName)) {
+            potentialVmNames.push(vmName);
+          }
+        }
+      }
+
+      // If no VM-like patterns found, skip exact match
+      if (potentialVmNames.length === 0) {
+        return null;
+      }
+
+      // Try to find exact matches in graph
+      for (const vmName of potentialVmNames) {
+        try {
+          // Query graph for exact match by name or ID
+          const graphResult = await this.graphRetrieval.retrieve(
+            vmName,
+            "entities",
+            aclGroup
+          );
+
+          // If we found entities, check if any match exactly
+          const exactMatches = graphResult.entities.filter((e: any) => {
+            const entityName = (e.name || e.id || "").toLowerCase();
+            const normalizedVmName = vmName.replace(/[-_]/g, "").toLowerCase();
+            const normalizedEntityName = entityName.replace(/[-_]/g, "").toLowerCase();
+            return (
+              entityName === vmName ||
+              normalizedEntityName === normalizedVmName ||
+              entityName.includes(vmName) ||
+              vmName.includes(entityName)
+            );
+          });
+
+          if (exactMatches.length > 0) {
+            pceLogger.info("Exact match found in graph", {
+              vmName,
+              matches: exactMatches.length,
+            });
+
+            // Build context from exact match
+            // Convert graph entities to structural path format
+            const structuralPaths = exactMatches.map((e: any) => ({
+              entities: [e],
+              relationships: [],
+              score: 1.0, // Exact match = perfect score
+            }));
+
+            const context: HybridContext = {
+              semanticChunks: [],
+              structuralPaths,
+            };
+
+            // Generate response using exact match context
+            const response = await this.generateHybridResponse(query, context);
+
+            return {
+              ...response,
+              queryType: "HYBRID",
+              fallbackMode: "exact_match",
+              context,
+              sTotalScore: 1.0, // Exact match = perfect score
+              fusionMetrics: {
+                vectorResults: 0,
+                graphResults: exactMatches.length,
+                fusedResults: exactMatches.length,
+                prunedResults: exactMatches.length,
+                avgTotalScore: 1.0,
+              },
+            };
+          }
+        } catch (error: any) {
+          // If graph query fails, continue to normal flow
+          pceLogger.debug("Exact match graph query failed, continuing", {
+            vmName,
+            error: error.message,
+          });
+        }
+      }
+
+      // No exact matches found
+      return null;
+    } catch (error: any) {
+      // If exact match check fails, continue to normal flow
+      pceLogger.debug("Exact match fallback failed, continuing", {
+        error: error.message,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Check if query is cacheable (deterministic queries like temperature, status)
+   */
+  private isCacheableQuery(query: string): boolean {
+    const lowerQuery = query.toLowerCase();
+    const cacheablePatterns = [
+      /temperature/i,
+      /temp/i,
+      /status/i,
+      /health/i,
+      /uptime/i,
+      /all nodes/i,
+      /all the nodes/i,
+    ];
+    return cacheablePatterns.some(pattern => pattern.test(lowerQuery));
+  }
+
+  /**
+   * Clean old cache entries
+   */
+  private cleanCache() {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (now - entry.timestamp > this.cacheTTL) {
+        this.cache.delete(key);
+      }
+    }
   }
 }
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ToolSchema } from "../../tool-schema";
 import { createToolSchema } from "../../tool-helpers";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
+import { SSHTool } from "../../SSHTool";
 
 /**
  * Schema for OPNsense read-only tool parameters
@@ -54,37 +55,41 @@ export type OpnsenseReadOnlyParams = z.infer<typeof OpnsenseReadOnlyParams>;
  * Provides comprehensive read-only access to OPNsense state
  */
 export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
+  private sshTool: SSHTool | null = null;
   constructor() {
     super({
       name: "opnsense_readonly",
-      description: "Comprehensive read-only access to OPNsense state (Firewall, Interfaces, System, Diagnostics, DHCP). All operations return structured JSON data.",
+      description: "OPNsense read-only tool. Supports firewall_rules_list (uses SSH internally with pfctl commands), firewall aliases (REST API), and other read-only operations. Note: OPNsense REST API is intentionally incomplete (~20-30% coverage). For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
       categories: ["opnsense", "networking", "firewall", "system"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
     });
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     return createToolSchema(this, OpnsenseReadOnlyParams, {
       examples: [
         {
-          description: "List all firewall rules",
+          description: "List firewall rules (uses SSH internally with pfctl commands)",
           parameters: { action: "firewall_rules_list" },
         },
         {
-          description: "Get system status",
-          parameters: { action: "system_status" },
+          description: "List firewall aliases (REST API works well for aliases)",
+          parameters: { action: "firewall_aliases_list" },
         },
         {
-          description: "Get interface status",
-          parameters: { action: "interface_status", interface_name: "wan" },
+          description: "Get a specific firewall alias",
+          parameters: { action: "firewall_aliases_get", alias_name: "allowed_guest" },
         },
         {
-          description: "List DHCP leases",
-          parameters: { action: "dhcp_leases_list" },
+          description: "List firewall categories",
+          parameters: { action: "firewall_categories_list" },
         },
       ],
       notes: [
+        "firewall_rules_list action uses SSH internally with approved pfctl commands (parallelized for performance).",
+        "Firewall aliases use REST API (good coverage).",
+        "For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
         "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
         "All responses are structured JSON objects for easy parsing and dashboarding.",
         "Internal IP addresses and credentials are automatically sanitized from responses.",
@@ -92,7 +97,7 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     });
   }
 
-  getParameterSchema() {
+  override getParameterSchema() {
     return OpnsenseReadOnlyParams;
   }
 
@@ -293,52 +298,55 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
   // ========== Firewall API Methods ==========
 
   private async getFirewallRules(client: any, limit?: number): Promise<any> {
-    try {
-      // Try POST first (OPNsense API often requires POST for search endpoints)
-      const response = await client.post("/api/firewall/rule/searchRule", {});
-      const rules = response.data?.rows || [];
-      return {
-        action: "firewall_rules_list",
-        count: limit ? Math.min(rules.length, limit) : rules.length,
-        total: rules.length,
-        rules: limit ? rules.slice(0, limit) : rules,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error: any) {
-      // Fallback to GET if POST fails
-      if (error.response?.status === 404 || error.response?.status === 405) {
-        try {
-          const response = await client.get("/api/firewall/rule/searchRule");
-          const rules = response.data?.rows || [];
-          return {
-            action: "firewall_rules_list",
-            count: limit ? Math.min(rules.length, limit) : rules.length,
-            total: rules.length,
-            rules: limit ? rules.slice(0, limit) : rules,
-            timestamp: new Date().toISOString(),
-          };
-        } catch (getError: any) {
-          throw new Error(
-            `OPNsense API endpoint /api/firewall/rule/searchRule is not available. ` +
-            `For firewall rules, you may need to use SSH to query the configuration directly. ` +
-            `Error: ${getError.response?.data?.message || getError.message}`
-          );
-        }
-      }
-      throw error;
-    }
+    // IMPORTANT: OPNsense does NOT expose a firewall rules search/list endpoint in the API.
+    // This is a known limitation across OPNsense 23.x, 24.x, and 25.x.
+    // 
+    // What EXISTS in OPNsense API:
+    // - GET /api/firewall/rule/getRule/{uuid} - Get individual rule by UUID
+    // - POST /api/firewall/rule/setRule/{uuid} - Update rule
+    // - POST /api/firewall/rule/addRule - Create rule
+    // - POST /api/firewall/rule/delRule/{uuid} - Delete rule
+    //
+    // What DOES NOT EXIST:
+    // - /api/firewall/rule/search
+    // - /api/firewall/rule/searchRule
+    // - /api/firewall/rule/list
+    // - /api/firewall/filter/search
+    // - Any "list all rules" or "search rules" endpoint
+    //
+    // Workarounds:
+    // 1. Use MCP Server (recommended) - exposes firewall rules via MCP tools
+    // 2. Parse config file over SSH (current implementation)
+    //
+    // Therefore, we skip API attempts and go directly to SSH fallback.
+    return this.getFirewallRulesViaSSH(limit);
   }
 
   private async getFirewallAliases(client: any, limit?: number): Promise<any> {
-    const response = await client.get("/api/firewall/alias/searchItem");
-    const aliases = response.data?.rows || [];
-    return {
-      action: "firewall_aliases_list",
-      count: limit ? Math.min(aliases.length, limit) : aliases.length,
-      total: aliases.length,
-      aliases: limit ? aliases.slice(0, limit) : aliases,
-      timestamp: new Date().toISOString(),
-    };
+    try {
+      const response = await client.post("/api/firewall/alias/searchItem", {});
+      const aliases = response.data?.rows || [];
+      return {
+        action: "firewall_aliases_list",
+        count: limit ? Math.min(aliases.length, limit) : aliases.length,
+        total: aliases.length,
+        aliases: limit ? aliases.slice(0, limit) : aliases,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error: any) {
+      if (error.response?.status === 405 || error.response?.status === 404) {
+        const response = await client.get("/api/firewall/alias/searchItem");
+        const aliases = response.data?.rows || [];
+        return {
+          action: "firewall_aliases_list",
+          count: limit ? Math.min(aliases.length, limit) : aliases.length,
+          total: aliases.length,
+          aliases: limit ? aliases.slice(0, limit) : aliases,
+          timestamp: new Date().toISOString(),
+        };
+      }
+      throw error;
+    }
   }
 
   private async getFirewallAlias(client: any, aliasName: string): Promise<any> {
@@ -618,6 +626,115 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       count: response.data?.rows?.length || 0,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  private getSshTool(): SSHTool {
+    if (!this.sshTool) {
+      this.sshTool = new SSHTool();
+    }
+    return this.sshTool;
+  }
+
+  private getOpnsenseSshHost(): string {
+    return process.env.OPNSENSE_SSH_HOST || "OPNsense.prox";
+  }
+
+  // This method is no longer used since we skip API attempts entirely for firewall rules,
+  // but kept for potential future use or other endpoints that might need SSH fallback.
+  private shouldFallbackToSshForFirewallRules(error: any): boolean {
+    if (!error) return false;
+    const status = error.response?.status;
+    if (status && [400, 404, 405, 501].includes(status)) {
+      return true;
+    }
+    const message = (error.response?.data?.message || error.message || "").toLowerCase();
+    return message.includes("invalid json") || message.includes("not available");
+  }
+
+  private async getFirewallRulesViaSSH(limit?: number): Promise<any> {
+    const host = this.getOpnsenseSshHost();
+    const sshTool = this.getSshTool();
+    const context = { toolName: this.metadata.name, startedAt: Date.now() };
+    const commands = [
+      { command: "pfctl -sr", key: "rules" },
+      { command: "pfctl -sn", key: "nat" },
+      { command: "pfctl -si", key: "info" },
+      { command: "pfctl -sa", key: "summary" },
+    ];
+
+    // Execute all SSH commands in parallel for better performance
+    const results = await Promise.all(
+      commands.map(({ command, key }) =>
+        sshTool.execute({ host, command }, context).then(
+          (result) => ({ key, result }),
+          (error) => ({ key, result: { error: error.message || String(error) } })
+        )
+      )
+    );
+
+    const sections: Record<string, any> = {};
+    for (const { key, result } of results) {
+      if (result.error) {
+        sections[key] = { error: result.error };
+        continue;
+      }
+      sections[key] = (result.data?.stdout || "").trim();
+    }
+
+    const rulesOutput = typeof sections.rules === "string" ? sections.rules : "";
+    const natOutput = typeof sections.nat === "string" ? sections.nat : "";
+    const infoOutput = typeof sections.info === "string" ? sections.info : "";
+    const summaryValue =
+      typeof sections.summary === "string"
+        ? sections.summary
+        : typeof sections.summary?.error === "string"
+        ? sections.summary.error
+        : null;
+
+    const rules = this.parsePfctlLines(rulesOutput);
+    const natRules = this.parsePfctlLines(natOutput);
+    const info = this.parsePfctlInfoOutput(infoOutput);
+
+    return {
+      action: "firewall_rules_list",
+      source: "ssh_pfctl",
+      timestamp: new Date().toISOString(),
+      count: limit ? Math.min(rules.length, limit) : rules.length,
+      total: rules.length,
+      rules: limit ? rules.slice(0, limit) : rules,
+      nat: natRules,
+      info,
+      summary: summaryValue,
+    };
+  }
+
+  private parsePfctlLines(output: string): string[] {
+    if (!output || typeof output !== "string") {
+      return [];
+    }
+    return output
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+  }
+
+  private parsePfctlInfoOutput(output: string): Array<{ label: string; value: string }> {
+    if (!output || typeof output !== "string") {
+      return [];
+    }
+    return output
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .map(line => {
+        if (!line.includes(":")) {
+          return { label: "info", value: line };
+        }
+        const [labelRaw, ...rest] = line.split(":");
+        const label = (labelRaw ?? "info").trim();
+        const value = rest.join(":").trim();
+        return { label, value };
+      });
   }
 }
 
