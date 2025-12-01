@@ -38,12 +38,31 @@ export class AnsibleRunner {
     extraVars?: Record<string, any>,
     limit?: string
   ): Promise<AnsiblePlaybookResult> {
-    const playbookPath = join(this.ansibleDir, "playbooks", playbook);
+    // Handle both absolute paths and relative paths
+    let playbookPath: string;
+    if (playbook.startsWith("/") || playbook.includes("..")) {
+      // Absolute path or path with .. - use as-is
+      playbookPath = playbook;
+    } else {
+      // Relative path - join with playbooks directory
+      playbookPath = join(this.ansibleDir, "playbooks", playbook);
+    }
     const inventoryPath = join(this.ansibleDir, inventory);
 
+    // Use relative paths since we're running from ansibleDir
+    // playbookPath is absolute, but we need relative to ansibleDir
+    const playbookRelative = playbookPath.startsWith(this.ansibleDir)
+      ? playbookPath.substring(this.ansibleDir.length + 1) // Remove ansibleDir prefix and leading slash
+      : playbookPath;
+    
+    // inventoryPath should also be relative
+    const inventoryRelative = inventoryPath.startsWith(this.ansibleDir)
+      ? inventoryPath.substring(this.ansibleDir.length + 1)
+      : inventory;
+
     const args: string[] = [
-      `-i ${inventoryPath}`,
-      playbookPath,
+      `-i ${inventoryRelative}`,
+      playbookRelative,
     ];
 
     if (extraVars) {

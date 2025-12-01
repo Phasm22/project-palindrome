@@ -2,6 +2,8 @@ import { createVm, CreateVmSchema } from "./compute/create-vm";
 import { destroyVm, DestroyVmSchema } from "./compute/destroy-vm";
 import { createDnsRecord, CreateDnsRecordSchema } from "./network/create-dns-record";
 import { syncDhcpToDns, SyncDhcpToDnsSchema } from "./network/sync-dhcp-to-dns";
+import { bootstrap, BootstrapSchema } from "./services/bootstrap";
+import { installDocker, InstallDockerSchema } from "./services/install-docker";
 
 /**
  * Action Registry
@@ -91,5 +93,23 @@ actionRegistry.register({
   execute: syncDhcpToDns,
   requiredTools: ["opnsense", "pihole"],
   requiredEntities: [],
+});
+
+actionRegistry.register({
+  name: "services.bootstrap",
+  description: "Run Ansible bootstrap playbook (common.yml) on a VM to perform complete system setup (security hardening, Docker, etc.)",
+  schema: BootstrapSchema,
+  execute: bootstrap,
+  requiredTools: ["ansible"],
+  requiredEntities: ["compute_vm"],
+});
+
+actionRegistry.register({
+  name: "services.install_docker",
+  description: "Install Docker CE, Docker Compose, and Portainer on a VM using Ansible",
+  schema: InstallDockerSchema,
+  execute: installDocker,
+  requiredTools: ["ansible"],
+  requiredEntities: ["compute_vm"],
 });
 

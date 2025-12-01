@@ -24,6 +24,7 @@ export const CreateVmSchema = z.object({
   cloudInitDatastore: z.string().optional(), // Optional: defaults to "local" in Terraform
   templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001)
   vmId: z.number().int().positive().optional(), // Optional: Preferred VM ID (will check availability)
+  bootstrap: z.boolean().default(false), // Optional: Run Ansible bootstrap (common.yml) after VM creation
   dryRun: z.boolean().default(false),
 });
 
@@ -78,7 +79,7 @@ function getProxmoxClientConfig(node: string): { url: string; tokenId: string; t
 }
 
 export async function createVm(params: CreateVmParams): Promise<CreateVmResult> {
-  const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, dryRun } = params;
+  const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, bootstrap: shouldBootstrap, dryRun } = params;
 
   // Normalize node name: Proxmox node names are case-sensitive (YANG, yin, etc.)
   // Convert common lowercase inputs to correct case
@@ -140,11 +141,11 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     }
 
     // Check if VM already exists
-    // Note: Twin may have stale entries, so we check Proxmox directly via twin
-    // If twin says it exists but Proxmox doesn't, we'll proceed anyway (twin sync will fix it)
-    const existingVms = await twinQuery.findVmByName(finalName, {});
+    // Use verifyAgainstProxmox: true to filter out stale Neo4j entries
+    // If all VMs are filtered out (stale), proceed with creation
+    const existingVms = await twinQuery.findVmByName(finalName, { verifyAgainstProxmox: true });
     if (existingVms.length > 0) {
-      // Check if any of the VMs are actually on the target node
+      // Check if any of the verified VMs are actually on the target node
       const vmOnTargetNode = existingVms.find(vm => {
         const vmNode = vm.nodeName?.toLowerCase();
         const targetNodeLower = normalizedNode.toLowerCase();
@@ -154,7 +155,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       if (vmOnTargetNode) {
         return {
           success: false,
-          message: `VM "${finalName}" already exists on node "${normalizedNode}" according to twin. Found: ${existingVms.map(vm => `${vm.name} on ${vm.nodeName || "unknown"}`).join(", ")}. If the VM was manually deleted, the twin may be stale.`,
+          message: `VM "${finalName}" already exists on node "${normalizedNode}" according to twin. Found: ${existingVms.map(vm => `${vm.name} on ${vm.nodeName || "unknown"}`).join(", ")}. If the VM was manually deleted, the twin may be stale. Run ingestion to sync the twin.`,
         };
       }
       // If VM exists on a different node, that's fine - we can create on this node
@@ -163,6 +164,17 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
         targetNode: normalizedNode,
         existingNodes: existingVms.map(vm => vm.nodeName || "unknown")
       });
+    } else {
+      // No verified VMs found - check if there were unverified (stale) entries
+      // This helps with the case where verification filtered everything out
+      const unverifiedVms = await twinQuery.findVmByName(finalName, { verifyAgainstProxmox: false });
+      if (unverifiedVms.length > 0) {
+        logger.info("Found stale VM entries in twin (filtered by verification), proceeding with creation", {
+          name: finalName,
+          staleCount: unverifiedVms.length,
+          note: "These VMs don't exist in Proxmox - twin will be updated after creation",
+        });
+      }
     }
   } finally {
     await twinQuery.close();
@@ -383,12 +395,56 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     logger.debug("DNS record creation skipped - PIHOLE_API_KEY not set");
   }
 
+  // 8. Run Ansible bootstrap if requested (non-blocking)
+  let bootstrapResult: any = null;
+  if (shouldBootstrap && !dryRun) {
+    try {
+      logger.info("Bootstrap requested, running Ansible bootstrap", { vmName: finalName });
+      const { bootstrap } = await import("../services/bootstrap");
+      bootstrapResult = await bootstrap({
+        vmName: finalName,
+        playbook: "common.yml",
+        waitForVm: true,
+        timeout: 300,
+        retryOnFailure: true,
+        maxRetries: 2,
+        dryRun: false,
+      });
+
+      if (bootstrapResult.success) {
+        logger.info("Bootstrap completed successfully", {
+          vmName: finalName,
+          tasksChanged: bootstrapResult.tasksChanged,
+          tasksFailed: bootstrapResult.tasksFailed,
+        });
+      } else {
+        logger.warn("Bootstrap failed (non-critical)", {
+          vmName: finalName,
+          errors: bootstrapResult.errors,
+        });
+      }
+    } catch (error: any) {
+      logger.warn("Failed to run bootstrap (non-critical)", {
+        vmName: finalName,
+        error: error.message,
+      });
+      // Don't fail VM creation if bootstrap fails
+    }
+  }
+
+  const bootstrapMessage = bootstrapResult
+    ? bootstrapResult.success
+      ? ` Bootstrap completed: ${bootstrapResult.tasksChanged} task(s) changed.`
+      : ` Bootstrap failed: ${bootstrapResult.message}`
+    : "";
+
   logger.info("VM created successfully", {
     name: finalName,
     node: normalizedNode,
     vmId: vmInfo.id,
     hostname: vmInfo.hostname,
     ipAddresses,
+    bootstrap: shouldBootstrap,
   });
 
   return {
@@ -396,7 +452,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     vmId: vmInfo.id.toString(),
     hostname: vmInfo.hostname,
     ipAddresses,
-    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}${firstIp ? `. DNS record created: ${finalName}.prox → ${firstIp}` : ""}`,
+    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}${firstIp ? `. DNS record created: ${finalName}.prox → ${firstIp}` : ""}.${bootstrapMessage}`,
     terraformOutput: outputs,
   };
 }

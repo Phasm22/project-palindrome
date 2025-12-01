@@ -11,10 +11,12 @@ const ActionParams = z.object({
   action: z.string().describe("Action name (e.g., 'compute.create_vm')"),
   params: z.any().describe(
     "Action parameters as an object. " +
-        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. " +
+        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, bootstrap?: boolean, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. Set bootstrap=true to run Ansible bootstrap after VM creation. " +
         "For compute.destroy_vm: {name?: string, vmId?: number, node?: string, dryRun?: boolean}. Either name or vmId is required. " +
         "For network.create_dns_record: {hostname: string, ip: string, domain?: string, dryRun?: boolean}. Creates DNS A record in Pi-hole. " +
         "For network.sync_dhcp_to_dns: {dryRun?: boolean, domain?: string, updateExisting?: boolean}. Syncs OPNsense DHCP leases to Pi-hole DNS records. " +
+        "For services.bootstrap: {vmName: string, playbook?: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Runs Ansible playbook (default: common.yml) on a VM. " +
+        "For services.install_docker: {vmName: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Installs Docker CE, Docker Compose, and Portainer on a VM. " +
     "templateId is the VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001). " +
     "Must be an object."
   ),
@@ -87,6 +89,44 @@ export class ActionTool extends BaseTool {
               cores: 2,
               memory: 4096,
               diskSize: "20G",
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Create a VM with automatic bootstrap (runs Ansible common.yml after creation)",
+          parameters: {
+            action: "compute.create_vm",
+            params: {
+              node: "YANG",
+              cores: 2,
+              memory: 4096,
+              diskSize: "20G",
+              bootstrap: true,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Bootstrap a VM (run Ansible common.yml playbook)",
+          parameters: {
+            action: "services.bootstrap",
+            params: {
+              vmName: "dad",
+              waitForVm: true,
+              timeout: 300,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Install Docker on a VM",
+          parameters: {
+            action: "services.install_docker",
+            params: {
+              vmName: "dad",
+              waitForVm: true,
+              timeout: 300,
               dryRun: false
             }
           }
