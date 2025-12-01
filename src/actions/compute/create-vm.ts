@@ -5,12 +5,15 @@ import { TwinQueryService } from "../../twin/api/twin-query-service";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { normalizeNodeId } from "../../parsers/compute/helpers";
 import { checkTerraformEnv } from "../helpers/env-validator";
+import { getNextAvailablePalindromeName, getRandomPalindromeName } from "../helpers/palindrome-names";
+import { allocateVmId } from "../helpers/vm-id-allocator";
+import { ProxmoxClient } from "../../tools/proxmox/client";
 
 /**
  * Create VM Action Schema
  */
 export const CreateVmSchema = z.object({
-  name: z.string().min(1, "VM name is required"),
+  name: z.string().optional(), // Optional: will generate palindrome name if not provided
   node: z.string().min(1, "Node name is required"),
   cores: z.number().int().positive().default(2),
   memory: z.number().int().positive().default(4096), // MB
@@ -20,6 +23,7 @@ export const CreateVmSchema = z.object({
   datastore: z.string().default("local-lvm"),
   cloudInitDatastore: z.string().optional(), // Optional: defaults to "local" in Terraform
   templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001)
+  vmId: z.number().int().positive().optional(), // Optional: Preferred VM ID (will check availability)
   dryRun: z.boolean().default(false),
 });
 
@@ -40,8 +44,41 @@ export interface CreateVmResult {
  * Validates using twin, generates terraform config, executes terraform,
  * and syncs results back to twin.
  */
+/**
+ * Get ProxmoxClient config for a specific node
+ */
+function getProxmoxClientConfig(node: string): { url: string; tokenId: string; tokenSecret: string } {
+  const nodeLower = node.toLowerCase();
+  
+  let url: string;
+  let tokenId: string | undefined;
+  let tokenSecret: string | undefined;
+  
+  if (nodeLower === "yin" || nodeLower === "yang") {
+    url = nodeLower === "yin"
+      ? process.env.PROXMOX_YIN_URL || process.env.PROXMOX_URL || ""
+      : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL || "";
+    tokenId = process.env.CLUSTER_TF_TOKEN_ID;
+    if (nodeLower === "yin") {
+      tokenSecret = process.env.PROXMOX_YIN_TF_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
+    } else {
+      tokenSecret = process.env.PROXMOX_YANG_TF_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
+    }
+  } else {
+    url = process.env.PROXMOX_URL || "";
+    tokenId = process.env.CLUSTER_TF_TOKEN_ID || process.env.PROXBIG_TF_TOKEN_ID;
+    tokenSecret = process.env.PROXMOX_PROXBIG_TF_SECRET || process.env.PROXBIG_TF_SECRET || process.env.PROXBIG_TOKEN_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
+  }
+  
+  if (!url || !tokenId || !tokenSecret) {
+    throw new Error(`Missing Proxmox API configuration for node "${node}". Check environment variables.`);
+  }
+  
+  return { url, tokenId, tokenSecret };
+}
+
 export async function createVm(params: CreateVmParams): Promise<CreateVmResult> {
-  const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, datastore, cloudInitDatastore, templateId, dryRun } = params;
+  const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, dryRun } = params;
 
   // Normalize node name: Proxmox node names are case-sensitive (YANG, yin, etc.)
   // Convert common lowercase inputs to correct case
@@ -54,7 +91,28 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   }
   // proxBig can be any case, keep as-is
 
-  logger.info("Creating VM", { name, node: normalizedNode, originalNode: node, cores, memory, diskSize, dryRun });
+  // Generate palindrome name if not provided
+  let finalName = name;
+  if (!finalName || finalName.trim() === "") {
+    try {
+      const twinQuery = new TwinQueryService();
+      const clusterInfo = await twinQuery.describeCluster();
+      const allVmNames = clusterInfo.vms.map(vm => vm.name);
+      await twinQuery.close();
+      
+      finalName = getNextAvailablePalindromeName(allVmNames);
+      logger.info("Generated palindrome name for VM", { name: finalName, node: normalizedNode });
+    } catch (error: any) {
+      // Fallback to random palindrome if twin query fails
+      finalName = getRandomPalindromeName();
+      logger.warn("Failed to get existing VM names, using random palindrome", { 
+        name: finalName, 
+        error: error.message 
+      });
+    }
+  }
+
+  logger.info("Creating VM", { name: finalName, node: normalizedNode, originalNode: node, cores, memory, diskSize, dryRun });
 
   // 0. Validate environment variables (cluster-aware)
   if (!checkTerraformEnv(normalizedNode)) {
@@ -84,7 +142,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     // Check if VM already exists
     // Note: Twin may have stale entries, so we check Proxmox directly via twin
     // If twin says it exists but Proxmox doesn't, we'll proceed anyway (twin sync will fix it)
-    const existingVms = await twinQuery.findVmByName(name, {});
+    const existingVms = await twinQuery.findVmByName(finalName, {});
     if (existingVms.length > 0) {
       // Check if any of the VMs are actually on the target node
       const vmOnTargetNode = existingVms.find(vm => {
@@ -96,12 +154,12 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       if (vmOnTargetNode) {
         return {
           success: false,
-          message: `VM "${name}" already exists on node "${normalizedNode}" according to twin. Found: ${existingVms.map(vm => `${vm.name} on ${vm.nodeName || "unknown"}`).join(", ")}. If the VM was manually deleted, the twin may be stale.`,
+          message: `VM "${finalName}" already exists on node "${normalizedNode}" according to twin. Found: ${existingVms.map(vm => `${vm.name} on ${vm.nodeName || "unknown"}`).join(", ")}. If the VM was manually deleted, the twin may be stale.`,
         };
       }
       // If VM exists on a different node, that's fine - we can create on this node
       logger.warn("VM exists on different node, proceeding with creation", { 
-        name, 
+        name: finalName, 
         targetNode: normalizedNode,
         existingNodes: existingVms.map(vm => vm.nodeName || "unknown")
       });
@@ -127,6 +185,45 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   const finalTemplateId = templateId || defaultTemplateId;
   logger.info("Using template ID", { templateId: finalTemplateId, node: normalizedNode, defaultTemplateId, wasProvided: !!templateId });
 
+  // 1.6. Allocate VM ID from high-number range (9000-9999)
+  let allocatedVmId: number | undefined;
+  try {
+    const proxmoxConfig = getProxmoxClientConfig(normalizedNode);
+    const proxmoxClient = new ProxmoxClient({
+      url: proxmoxConfig.url,
+      tokenId: proxmoxConfig.tokenId,
+      tokenSecret: proxmoxConfig.tokenSecret,
+      verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+    });
+    
+    const allocationResult = await allocateVmId(proxmoxClient, {
+      startId: 9000,
+      endId: 9999,
+      preferredId: preferredVmId,
+      maxAttempts: 100,
+    });
+    
+    if (allocationResult) {
+      allocatedVmId = allocationResult.vmId;
+      logger.info("Allocated VM ID", { 
+        vmId: allocatedVmId, 
+        usedPreferred: allocationResult.usedPreferred,
+        attempts: allocationResult.attempts
+      });
+    } else {
+      logger.warn("Could not allocate VM ID, Terraform will auto-assign", { 
+        preferredId,
+        range: "9000-9999"
+      });
+    }
+  } catch (error: any) {
+    logger.warn("Failed to allocate VM ID, Terraform will auto-assign", { 
+      error: error.message,
+      preferredId
+    });
+    // Continue without allocated ID - Terraform will auto-assign
+  }
+
   // 2. Generate terraform config
   const terraformRunner = new TerraformRunner();
   terraformRunner.setTargetNode(normalizedNode); // Set target node for cluster-aware token selection
@@ -150,11 +247,12 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
 
   const tfConfig: TerraformConfig = {
     vmConfigs: {
-      [name]: {
+      [finalName]: {
         target_node: normalizedNode, // Use normalized node name (uppercase YANG, lowercase yin)
         cores,
         memory,
         disk_size: diskSize,
+        vm_id: allocatedVmId, // Use allocated VM ID, or undefined for auto-assign
       },
     },
     sshPublicKey: sshKey,
@@ -170,13 +268,13 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     return {
       success: planResult.success,
       message: planResult.success
-        ? `Dry-run successful. Would create VM "${name}" on node "${normalizedNode}"`
+        ? `Dry-run successful. Would create VM "${finalName}" on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}`
         : `Dry-run failed: ${planResult.stderr}`,
     };
   }
 
   // 4. Execute terraform
-  logger.info("Executing terraform apply", { name, node });
+  logger.info("Executing terraform apply", { name: finalName, node: normalizedNode, vmId: allocatedVmId });
   const applyResult = await terraformRunner.apply(tfConfig);
 
   if (!applyResult.success) {
@@ -212,7 +310,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
 
   // 5. Get VM info from terraform outputs
   const outputs = await terraformRunner.getOutputs();
-  const vmInfo = outputs.vm_info?.[name];
+  const vmInfo = outputs.vm_info?.[finalName];
 
   if (!vmInfo) {
     return {
@@ -227,24 +325,78 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     const twinSync = new TwinSync();
     await twinSync.syncTerraformVms(outputs);
   } catch (error: any) {
-    logger.warn("Failed to sync VM to twin (non-critical)", { error: error.message, name });
+    logger.warn("Failed to sync VM to twin (non-critical)", { error: error.message, name: finalName });
     // Don't fail VM creation if twin sync fails
   }
 
+  // 7. Create DNS record if IP is available (non-blocking)
+  // Flatten nested arrays and filter out localhost/pending IPs
+  const ipAddresses = Array.isArray(vmInfo.ip_addresses) ? vmInfo.ip_addresses : [];
+  const flattenedIps = ipAddresses
+    .flat(2) // Flatten nested arrays (e.g., [["127.0.0.1"],["172.16.0.37"]] -> ["127.0.0.1", "172.16.0.37"])
+    .filter((ip): ip is string => {
+      if (typeof ip !== "string") return false;
+      if (ip === "IP pending...") return false;
+      if (ip.startsWith("127.")) return false; // Skip localhost
+      if (ip.startsWith("::1")) return false; // Skip IPv6 localhost
+      return true;
+    });
+  const firstIp = flattenedIps.length > 0 ? flattenedIps[0] : null;
+  
+  if (firstIp && (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY)) {
+    try {
+      const { createDnsRecord } = await import("../network/create-dns-record");
+      const dnsResult = await createDnsRecord({
+        hostname: finalName, // VM name (e.g., "test-vm")
+        ip: firstIp,
+        domain: ".prox", // Will create test-vm.prox → IP
+        dryRun: false,
+      });
+      
+      if (dnsResult.success) {
+        logger.info("DNS record created automatically", {
+          hostname: finalName,
+          ip: firstIp,
+          domain: dnsResult.record?.domain,
+        });
+      } else {
+        logger.warn("Failed to create DNS record automatically", {
+          hostname: finalName,
+          ip: firstIp,
+          error: dnsResult.message,
+        });
+      }
+    } catch (error: any) {
+      logger.warn("Failed to create DNS record (non-critical)", {
+        hostname: finalName,
+        ip: firstIp,
+        error: error.message,
+      });
+      // Don't fail VM creation if DNS record creation fails
+    }
+  } else if (!firstIp) {
+    logger.info("DNS record creation skipped - IP not yet available (guest agent may need time)", {
+      hostname: finalName,
+      ipAddresses,
+    });
+  } else if (!process.env.PIHOLE_API_KEY) {
+    logger.debug("DNS record creation skipped - PIHOLE_API_KEY not set");
+  }
+
   logger.info("VM created successfully", {
-    name,
-    node,
+    name: finalName,
+    node: normalizedNode,
     vmId: vmInfo.id,
     hostname: vmInfo.hostname,
-    ipAddresses: vmInfo.ip_addresses,
+    ipAddresses,
   });
 
   return {
     success: true,
     vmId: vmInfo.id.toString(),
     hostname: vmInfo.hostname,
-    ipAddresses: Array.isArray(vmInfo.ip_addresses) ? vmInfo.ip_addresses : [],
-    message: `VM "${name}" created successfully on node "${normalizedNode}". Hostname: ${vmInfo.hostname}`,
+    ipAddresses,
+    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}${firstIp ? `. DNS record created: ${finalName}.prox → ${firstIp}` : ""}`,
     terraformOutput: outputs,
   };
 }

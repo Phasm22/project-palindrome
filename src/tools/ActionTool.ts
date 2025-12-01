@@ -11,8 +11,10 @@ const ActionParams = z.object({
   action: z.string().describe("Action name (e.g., 'compute.create_vm')"),
   params: z.any().describe(
     "Action parameters as an object. " +
-    "For compute.create_vm: {name: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, dryRun?: boolean}. " +
-    "For compute.destroy_vm: {name: string, node?: string, dryRun?: boolean}. " +
+        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. " +
+        "For compute.destroy_vm: {name?: string, vmId?: number, node?: string, dryRun?: boolean}. Either name or vmId is required. " +
+        "For network.create_dns_record: {hostname: string, ip: string, domain?: string, dryRun?: boolean}. Creates DNS A record in Pi-hole. " +
+        "For network.sync_dhcp_to_dns: {dryRun?: boolean, domain?: string, updateExisting?: boolean}. Syncs OPNsense DHCP leases to Pi-hole DNS records. " +
     "templateId is the VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001). " +
     "Must be an object."
   ),
@@ -76,6 +78,19 @@ export class ActionTool extends BaseTool {
             }
           }
         },
+        {
+          description: "Create a VM without specifying a name (palindrome will be auto-generated)",
+          parameters: {
+            action: "compute.create_vm",
+            params: {
+              node: "YANG",
+              cores: 2,
+              memory: 4096,
+              diskSize: "20G",
+              dryRun: false
+            }
+          }
+        },
         ...actionExamples.slice(0, 2) // Include first 2 other actions as examples
       ],
       notes: [
@@ -85,7 +100,9 @@ export class ActionTool extends BaseTool {
         "Actions use Terraform/Ansible for safe, deterministic operations",
         "Set dryRun: true to preview changes without applying them",
         "For compute.create_vm: templateId (number, optional) - VM template ID to clone from. Defaults are node-specific: yang=8000, yin=8001, proxBig=8001. Required if template doesn't exist on target node.",
-        "For compute.destroy_vm: name (string, required) - VM name to destroy. node (string, optional) - Node name for validation. dryRun (boolean, optional) - Preview destruction without executing."
+        "For compute.destroy_vm: name (string, optional) - VM name to destroy. vmId (number, optional) - VM ID to destroy. Either name or vmId is required. node (string, optional) - Node name for validation. dryRun (boolean, optional) - Preview destruction without executing.",
+        "For network.create_dns_record: hostname (string, required) - Hostname (e.g., 'web-server'). ip (string, required) - IPv4 address (e.g., '172.16.50.100'). domain (string, optional, default: '.prox') - Domain suffix to append. dryRun (boolean, optional) - Preview DNS record creation without executing.",
+        "For network.sync_dhcp_to_dns: dryRun (boolean, optional) - Preview sync without creating/updating DNS records. domain (string, optional, default: '.prox') - Domain suffix for DNS records. updateExisting (boolean, optional, default: true) - Update DNS records if IP changed. This action queries OPNsense DHCP leases and creates/updates corresponding DNS records in Pi-hole, bridging the gap between OPNsense DHCP (Unbound) and Pi-hole (forwarder)."
       ]
     });
   }

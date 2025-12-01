@@ -6,9 +6,10 @@
 
 export type ActionIntent =
   | { type: "create_vm"; name: string; node: string }
-  | { type: "destroy_vm"; name: string }
+  | { type: "destroy_vm"; name?: string; vmId?: number }
   | { type: "start_vm"; name: string }
-  | { type: "stop_vm"; name: string };
+  | { type: "stop_vm"; name: string }
+  | { type: "sync_dhcp_to_dns" };
 
 function extractVmName(text: string): string | null {
   // Match patterns like "create VM named X", "create a VM called X", "VM named X"
@@ -21,6 +22,28 @@ function extractVmName(text: string): string | null {
   const createMatch = text.match(/\bcreate\s+(?:a\s+)?(?:vm\s+)?([a-z0-9\-_]+)/i);
   if (createMatch) {
     return createMatch[1];
+  }
+
+  // Match patterns like "destroy X", "delete X", "remove X" where X is a VM name
+  const destroyMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
+  if (destroyMatch) {
+    return destroyMatch[1];
+  }
+
+  return null;
+}
+
+function extractVmId(text: string): number | null {
+  // Match patterns like "vm 104", "vmid 104", "vm id 104", "virtual machine 104"
+  const vmIdMatch = text.match(/\b(?:vm|vmid|vm\s+id|virtual\s+machine)\s+(\d+)/i);
+  if (vmIdMatch) {
+    return parseInt(vmIdMatch[1], 10);
+  }
+
+  // Match standalone numbers after destroy/delete/remove
+  const destroyIdMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?(\d+)/i);
+  if (destroyIdMatch) {
+    return parseInt(destroyIdMatch[1], 10);
   }
 
   return null;
@@ -57,9 +80,15 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
 
   // Destroy/Delete VM
   if (
-    (normalized.includes("destroy") || normalized.includes("delete") || normalized.includes("remove")) &&
-    (normalized.includes("vm") || normalized.includes("virtual machine"))
+    normalized.includes("destroy") || normalized.includes("delete") || normalized.includes("remove")
   ) {
+    // Try to extract VM ID first (more specific)
+    const vmId = extractVmId(userInput);
+    if (vmId) {
+      return { type: "destroy_vm", vmId };
+    }
+    
+    // Fall back to VM name extraction
     const vmName = extractVmName(userInput);
     if (vmName) {
       return { type: "destroy_vm", name: vmName };
@@ -86,6 +115,15 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
     if (vmName) {
       return { type: "stop_vm", name: vmName };
     }
+  }
+
+  // Sync DHCP to DNS
+  if (
+    (normalized.includes("sync") || normalized.includes("update") || normalized.includes("register")) &&
+    (normalized.includes("dhcp") || normalized.includes("lease")) &&
+    (normalized.includes("dns") || normalized.includes("domain"))
+  ) {
+    return { type: "sync_dhcp_to_dns" };
   }
 
   return null;
