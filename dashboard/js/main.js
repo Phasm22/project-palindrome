@@ -40,6 +40,11 @@ window.switchTab = function(tabName, clickedElement) {
   document.getElementById(tabName).classList.add('active');
   
   // Load data for the tab
+  if (tabName === 'overview') {
+    loadExecutionStats();
+    loadClusterStatus();
+    loadSystemHealth();
+  }
   if (tabName === 'executions') loadToolExecutions();
   if (tabName === 'reasoning') loadReasoningTraces();
   if (tabName === 'graph') loadGraph();
@@ -53,10 +58,19 @@ window.switchTab = function(tabName, clickedElement) {
       if (chatInput) chatInput.focus();
     }, 100);
   }
+  
+  // Show/hide floating nav for overview tab
+  const overviewNav = document.getElementById('overview-nav');
+  if (overviewNav) {
+    overviewNav.style.display = tabName === 'overview' ? 'flex' : 'none';
+  }
 };
 
 // Load initial data when page loads
 window.addEventListener('DOMContentLoaded', () => {
+  // Load chat conversations first (default tab)
+  loadConversations();
+  // Load overview data in background
   loadExecutionStats();
   loadClusterStatus();
   loadSystemHealth();

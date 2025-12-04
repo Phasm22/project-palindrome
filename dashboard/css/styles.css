@@ -4,17 +4,28 @@
   box-sizing: border-box;
 }
 
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   background: #0f172a;
   color: #e2e8f0;
   padding: 20px;
   line-height: 1.6;
+  display: flex;
+  flex-direction: column;
 }
 
 .container {
   max-width: 1400px;
   margin: 0 auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 h1 {
@@ -30,6 +41,21 @@ h1 {
   padding: 20px;
   margin-bottom: 20px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Overview tab panels should expand to fit content, not scroll */
+#overview .panel {
+  min-height: auto;
+  overflow: visible;
+}
+
+/* Other tabs can scroll if needed */
+.tab-content:not(#overview) .panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
 }
 
 .panel h2 {
@@ -188,15 +214,58 @@ td {
   background: #3b82f6;
   color: white;
   border: none;
-  padding: 8px 16px;
+  padding: 6px 12px;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.875rem;
-  margin-top: 10px;
+  display: inline-block;
+  margin-left: 10px;
 }
 
 .refresh-btn:hover {
   background: #2563eb;
+}
+
+/* Floating navigation shortcuts */
+.floating-nav {
+  position: fixed;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.floating-nav-btn {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85em;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
+}
+
+.floating-nav-btn:hover {
+  background: #334155;
+  border-color: #3b82f6;
+  transform: translateX(-4px);
+}
+
+.panel h2 {
+  color: #94a3b8;
+  margin-bottom: 15px;
+  font-size: 1.25rem;
+  border-bottom: 1px solid #334155;
+  padding-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 pre {
@@ -230,9 +299,39 @@ pre {
 
 .tab-content {
   display: none;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .tab-content.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
+}
+
+#tool-executions, #reasoning-traces {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Overview tab content should expand, not scroll */
+#overview #execution-stats,
+#overview #cluster-status,
+#overview #system-health {
+  overflow: visible;
+  min-height: auto;
+}
+
+#graph-container {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#rag-results, #query-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 

@@ -14,6 +14,7 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   response?: ApiQueryResponse; // For assistant messages
+  reasoningTraceId?: string; // Link to reasoning trace for assistant messages
 }
 
 export interface Conversation {
@@ -84,6 +85,7 @@ export class ChatHistoryStore {
     try {
       const tableInfo = this.db.prepare("PRAGMA table_info(chat_messages)").all() as any[];
       const hasConversationId = tableInfo.some(col => col.name === "conversation_id");
+      const hasReasoningTraceId = tableInfo.some(col => col.name === "reasoning_trace_id");
       
       if (!hasConversationId) {
         pceLogger.info("Migrating chat_messages table: adding conversation_id column");
@@ -96,10 +98,18 @@ export class ChatHistoryStore {
         // Migrate existing messages to a default conversation
         this.migrateExistingMessages();
       }
+      
+      if (!hasReasoningTraceId) {
+        pceLogger.info("Migrating chat_messages table: adding reasoning_trace_id column");
+        this.db.exec(`
+          ALTER TABLE chat_messages ADD COLUMN reasoning_trace_id TEXT;
+          CREATE INDEX IF NOT EXISTS idx_reasoning_trace_id ON chat_messages(reasoning_trace_id);
+        `);
+      }
     } catch (error: any) {
       // If column already exists, that's fine
       if (!error.message.includes("duplicate column")) {
-        pceLogger.error("Failed to add conversation_id column", { error: error.message });
+        pceLogger.error("Failed to add columns to chat_messages", { error: error.message });
       }
     }
 
@@ -308,8 +318,8 @@ export class ChatHistoryStore {
     const id = crypto.randomUUID();
     const stmt = this.db.prepare(`
       INSERT INTO chat_messages 
-      (id, conversation_id, user_id, acl_group, role, content, response_data, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (id, conversation_id, user_id, acl_group, role, content, response_data, timestamp, reasoning_trace_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     try {
@@ -327,7 +337,8 @@ export class ChatHistoryStore {
         message.role,
         message.content,
         message.response ? JSON.stringify(message.response) : null,
-        message.timestamp.getTime()
+        message.timestamp.getTime(),
+        message.reasoningTraceId || null
       );
       return id;
     } catch (error: any) {
@@ -381,6 +392,7 @@ export class ChatHistoryStore {
         content: row.content,
         timestamp: new Date(row.timestamp),
         response: row.response_data ? JSON.parse(row.response_data) : undefined,
+        reasoningTraceId: row.reasoning_trace_id || undefined,
       }));
     } catch (error: any) {
       pceLogger.error("Failed to get chat history", { error: error.message, filters });

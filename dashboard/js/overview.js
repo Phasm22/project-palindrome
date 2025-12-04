@@ -65,8 +65,122 @@ export async function loadClusterStatus() {
     }
     const data = await response.json();
     
-    document.getElementById('cluster-status').innerHTML = 
-      `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+    // Format cluster status nicely
+    const formatBytes = (bytes) => {
+      if (!bytes) return 'N/A';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let size = bytes;
+      let unitIndex = 0;
+      while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex++;
+      }
+      return `${size.toFixed(2)} ${units[unitIndex]}`;
+    };
+    
+    const formatUptime = (seconds) => {
+      if (!seconds) return 'N/A';
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      if (days > 0) return `${days}d ${hours}h`;
+      if (hours > 0) return `${hours}h ${minutes}m`;
+      return `${minutes}m`;
+    };
+    
+    const html = `
+      <div style="margin-bottom: 20px;">
+        <div class="status-grid">
+          <div class="stat-card">
+            <div class="stat-label">Nodes</div>
+            <div class="stat-value">${data.nodes?.total || 0}</div>
+            <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
+              ${data.nodes?.online || 0} online, ${data.nodes?.offline || 0} offline
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">VMs</div>
+            <div class="stat-value">${data.vms?.total || 0}</div>
+            <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
+              ${data.vms?.running || 0} running, ${data.vms?.stopped || 0} stopped
+            </div>
+          </div>
+          ${data.isCluster ? `
+            <div class="stat-card">
+              <div class="stat-label">Quorum</div>
+              <div class="stat-value">
+                <span class="status-badge ${data.quorum?.quorate ? 'status-success' : 'status-error'}" title="${data.quorum ? `Votes: ${data.quorum.votes || 0}/${data.quorum.expected_votes || 0}` : 'Quorum status unavailable'}">
+                  ${data.quorum?.quorate ? 'OK' : 'No Quorum'}
+                </span>
+              </div>
+              ${data.quorum ? `
+                <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
+                  ${data.quorum.votes || 0}/${data.quorum.expected_votes || 0} votes
+                </div>
+              ` : data.isCluster ? `
+                <div style="font-size: 0.75em; color: #fbbf24; margin-top: 4px;">
+                  Quorum data unavailable
+                </div>
+              ` : ''}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+      
+      ${data.nodes?.list && data.nodes.list.length > 0 ? `
+        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0;">Nodes</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
+          ${data.nodes.list.map(node => `
+            <div style="padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${node.status === 'online' ? '#10b981' : '#ef4444'};">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <strong style="color: #e2e8f0; font-size: 1.1em;">${node.name || 'Unknown'}</strong>
+                <span class="status-badge ${node.status === 'online' ? 'status-success' : 'status-error'}">
+                  ${node.status || 'unknown'}
+                </span>
+              </div>
+              <div style="font-size: 0.875em; color: #94a3b8; line-height: 1.6;">
+                ${node.cpu ? `<div><strong>CPU:</strong> ${(node.cpu * 100).toFixed(1)}%</div>` : ''}
+                ${node.memory ? `<div><strong>Memory:</strong> ${formatBytes(node.memory)}</div>` : ''}
+                ${node.uptime ? `<div><strong>Uptime:</strong> ${formatUptime(node.uptime)}</div>` : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+      
+      ${data.vms?.resources && data.vms.resources.length > 0 ? `
+        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0;">Recent VMs</h3>
+        <div style="max-height: 400px; overflow-y: auto;">
+          <table>
+            <tr>
+              <th>Name</th>
+              <th>Node</th>
+              <th>Status</th>
+              <th>Type</th>
+            </tr>
+            ${data.vms.resources.slice(0, 20).map(vm => `
+              <tr>
+                <td>${vm.name || vm.id || 'Unknown'}</td>
+                <td>${vm.node || 'N/A'}</td>
+                <td>
+                  <span class="status-badge ${vm.status === 'running' ? 'status-success' : vm.status === 'stopped' ? 'status-error' : 'status-warning'}">
+                    ${vm.status || 'unknown'}
+                  </span>
+                </td>
+                <td>${vm.type || 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </table>
+        </div>
+      ` : ''}
+      
+      <details style="margin-top: 20px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px;">
+        <summary style="cursor: pointer; color: #94a3b8; font-size: 0.875em;">Show Raw JSON</summary>
+        <pre style="margin-top: 10px; padding: 10px; background: #1e293b; border-radius: 4px; overflow-x: auto; font-size: 0.75em;">${JSON.stringify(data, null, 2)}</pre>
+      </details>
+    `;
+    
+    document.getElementById('cluster-status').innerHTML = html;
   } catch (error) {
     document.getElementById('cluster-status').innerHTML = 
       `<div class="error">Failed to load cluster status: ${error.message}</div>`;

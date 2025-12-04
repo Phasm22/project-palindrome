@@ -197,7 +197,10 @@ function formatAgentResponse(text) {
     
     if (trimmed.startsWith('Tip:')) {
       html += `<div style="margin-top: 16px; padding: 10px; background: #1e3a8a; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 0.875em; color: #bfdbfe;">
-        <strong style="color: #93c5fd;">💡 Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px; color: #93c5fd;">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+        </svg>
+        <strong style="color: #93c5fd;">Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
       </div>`;
       continue;
     }
@@ -284,7 +287,7 @@ function updateChatMessage(messageId, newContent) {
   }
 }
 
-function addChatMessage(role, content, isLoading = false, messageId = null, dbId = null) {
+function addChatMessage(role, content, isLoading = false, messageId = null, dbId = null, reasoningTraceId = null) {
   const messagesDiv = document.getElementById('chat-messages');
   const msgId = messageId || 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
   
@@ -331,6 +334,53 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     </button>
   ` : '';
 
+  const traceLink = (role === 'assistant' && reasoningTraceId) ? `
+    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; display: flex; align-items: center; gap: 8px; font-size: 0.75em;">
+      <button
+        onclick="navigator.clipboard.writeText('${reasoningTraceId}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
+        style="
+          background: #1e293b;
+          border: 1px solid #334155;
+          color: #94a3b8;
+          padding: 4px 8px;
+          border-radius: 4px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 0.9em;
+        "
+        title="Copy trace ID"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+        </svg>
+        Trace: ${reasoningTraceId.substring(0, 8)}...
+      </button>
+      <button
+        onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
+        style="
+          background: #1e3a8a;
+          border: 1px solid #3b82f6;
+          color: #e2e8f0;
+          padding: 4px 8px;
+          border-radius: 4px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 0.9em;
+        "
+        title="View reasoning trace"
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+        </svg>
+        View Trace
+      </button>
+    </div>
+  ` : '';
+
   if (role === 'user') {
     messageDiv.innerHTML = `
       ${deleteBtn}
@@ -343,6 +393,7 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
         ${isLoading 
           ? `<div style="color: #94a3b8; font-style: italic;">${content}</div>`
           : content}
+        ${traceLink}
       </div>
     `;
   }
@@ -445,6 +496,7 @@ function handleAgentEvent(event, toolExecutions) {
     case 'agent:final':
       const formattedText = formatAgentResponse(event.data.text || 'No response');
       const durationSeconds = (event.data.durationMs || 0) / 1000;
+      const traceId = event.data.traceId;
       
       setTimeout(() => {
         if (currentConversationId) {
@@ -453,6 +505,53 @@ function handleAgentEvent(event, toolExecutions) {
         // Refresh conversation list to update message counts
         loadConversations();
       }, 500);
+      
+      const traceLinkHtml = traceId ? `
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; display: flex; align-items: center; gap: 8px; font-size: 0.75em;">
+          <button
+            onclick="navigator.clipboard.writeText('${traceId}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
+            style="
+              background: #1e293b;
+              border: 1px solid #334155;
+              color: #94a3b8;
+              padding: 4px 8px;
+              border-radius: 4px;
+              cursor: pointer;
+              display: flex;
+              align-items: center;
+              gap: 4px;
+              font-size: 0.9em;
+            "
+            title="Copy trace ID"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+            Trace: ${traceId.substring(0, 8)}...
+          </button>
+          <button
+            onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
+            style="
+              background: #1e3a8a;
+              border: 1px solid #3b82f6;
+              color: #e2e8f0;
+              padding: 4px 8px;
+              border-radius: 4px;
+              cursor: pointer;
+              display: flex;
+              align-items: center;
+              gap: 4px;
+              font-size: 0.9em;
+            "
+            title="View reasoning trace"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+            </svg>
+            View Trace
+          </button>
+        </div>
+      ` : '';
       
       const finalHtml = `
         <div class="agent-response" style="line-height: 1.6;">
@@ -466,6 +565,7 @@ function handleAgentEvent(event, toolExecutions) {
             <span>Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''} in ${durationSeconds.toFixed(2)}s</span>
           </div>
         ` : ''}
+        ${traceLinkHtml}
       `;
       
       updateChatMessage(currentResponseId, finalHtml);
@@ -856,14 +956,14 @@ export async function loadChatHistory(conversationId = null) {
       return;
     }
 
-    messages.forEach(msg => {
-      if (msg.role === 'user') {
-        addChatMessage('user', msg.content, false, null, msg.id);
-      } else {
-        const formattedContent = formatAgentResponse(msg.content);
-        addChatMessage('assistant', formattedContent, false, null, msg.id);
-      }
-    });
+        messages.forEach(msg => {
+          if (msg.role === 'user') {
+            addChatMessage('user', msg.content, false, null, msg.id, null);
+          } else {
+            const formattedContent = formatAgentResponse(msg.content);
+            addChatMessage('assistant', formattedContent, false, null, msg.id, msg.reasoningTraceId || null);
+          }
+        });
 
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
   } catch (error) {

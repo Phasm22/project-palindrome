@@ -314,11 +314,11 @@ export async function runAgent(
   const tools = loadTools();
 
   // Helper to record reasoning trace for early returns
-  const recordEarlyReturnTrace = async (answer: string, intent: string, toolCalls: number = 1) => {
+  const recordEarlyReturnTrace = async (answer: string, intent: string, toolCalls: number = 1): Promise<string | undefined> => {
     const durationMs = Date.now() - startTime;
     try {
       const traceStore = getReasoningTraceStore();
-      await traceStore.recordTrace({
+      const traceId = await traceStore.recordTrace({
         userId: session.userId,
         aclGroup: session.aclGroup,
         userInput,
@@ -343,8 +343,10 @@ export async function runAgent(
         timestamp: new Date(),
         durationMs,
       });
+      return traceId;
     } catch (error: any) {
       logger.warn("Failed to record reasoning trace for early return", { error: error.message });
+      return undefined;
     }
   };
 
@@ -365,8 +367,8 @@ export async function runAgent(
       if (exposureAnswer) {
         logger.info("Responding via twin-first exposure reasoning chain.");
         emitStepEvent({ intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
-        emitFinalEvent(exposureAnswer, { intent: exposureIntent.type });
-        await recordEarlyReturnTrace(exposureAnswer, exposureIntent.type, 1);
+        const traceId = await recordEarlyReturnTrace(exposureAnswer, exposureIntent.type, 1);
+        emitFinalEvent(exposureAnswer, { intent: exposureIntent.type, traceId });
         return { text: exposureAnswer };
       }
     }
@@ -377,8 +379,8 @@ export async function runAgent(
       if (twinAnswer) {
         logger.info("Responding via twin-first reasoning chain (no LLM needed).");
         emitStepEvent({ intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
-        emitFinalEvent(twinAnswer, { intent: computeIntent.type });
-        await recordEarlyReturnTrace(twinAnswer, computeIntent.type, 1);
+        const traceId = await recordEarlyReturnTrace(twinAnswer, computeIntent.type, 1);
+        emitFinalEvent(twinAnswer, { intent: computeIntent.type, traceId });
         return { text: twinAnswer };
       }
     }
@@ -391,8 +393,8 @@ export async function runAgent(
       if (firewallAnswer) {
         logger.info("Responding via twin-first firewall reasoning chain.");
         emitStepEvent({ intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
-        emitFinalEvent(firewallAnswer, { intent: firewallIntent.type });
-        await recordEarlyReturnTrace(firewallAnswer, firewallIntent.type, 1);
+        const traceId = await recordEarlyReturnTrace(firewallAnswer, firewallIntent.type, 1);
+        emitFinalEvent(firewallAnswer, { intent: firewallIntent.type, traceId });
         return { text: firewallAnswer };
       }
     }
@@ -404,8 +406,8 @@ export async function runAgent(
     if (networkAnswer) {
       logger.info("Responding via twin-first network reasoning chain.");
       emitStepEvent({ intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
-      emitFinalEvent(networkAnswer, { intent: networkIntent.type });
-      await recordEarlyReturnTrace(networkAnswer, networkIntent.type, 1);
+      const traceId = await recordEarlyReturnTrace(networkAnswer, networkIntent.type, 1);
+      emitFinalEvent(networkAnswer, { intent: networkIntent.type, traceId });
       return { text: networkAnswer };
     }
   }
@@ -1125,14 +1127,11 @@ export async function runAgent(
       
       context.addAssistantMessage(finalText);
       
-      // Emit agent:final event
-      const durationMs = Date.now() - startTime;
-      emitFinalEvent(finalText, { totalSteps: step + 1, totalToolCalls });
-      
-      // Record reasoning trace
+      // Record reasoning trace first to get trace ID
+      let traceId: string | undefined;
       try {
         const traceStore = getReasoningTraceStore();
-        await traceStore.recordTrace({
+        traceId = await traceStore.recordTrace({
           userId: session.userId,
           aclGroup: session.aclGroup,
           userInput,
@@ -1142,11 +1141,15 @@ export async function runAgent(
           totalToolCalls,
           maxStepsReached: false,
           timestamp: new Date(),
-          durationMs,
+          durationMs: Date.now() - startTime,
         });
       } catch (error: any) {
         logger.warn("Failed to record reasoning trace", { error: error.message });
       }
+      
+      // Emit agent:final event with trace ID
+      const durationMs = Date.now() - startTime;
+      emitFinalEvent(finalText, { totalSteps: step + 1, totalToolCalls, traceId });
       
       return { text: finalText };
     }
@@ -1154,9 +1157,10 @@ export async function runAgent(
 
   // Max steps reached - record trace
   const durationMs = Date.now() - startTime;
+  let traceId: string | undefined;
   try {
     const traceStore = getReasoningTraceStore();
-    await traceStore.recordTrace({
+    traceId = await traceStore.recordTrace({
       userId: session.userId,
       aclGroup: session.aclGroup,
       userInput,
@@ -1171,6 +1175,12 @@ export async function runAgent(
   } catch (error: any) {
     logger.warn("Failed to record reasoning trace", { error: error.message });
   }
+  
+  emitFinalEvent("Max reasoning depth reached. Please try a simpler query.", { 
+    totalSteps: reasoningSteps.length, 
+    totalToolCalls,
+    traceId 
+  });
 
   return { text: "Max reasoning depth reached. Please try a simpler query." };
 }

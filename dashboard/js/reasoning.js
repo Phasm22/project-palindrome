@@ -1,4 +1,5 @@
 import { API_URL } from './utils.js';
+import { addTooltip, createModal } from './ui-helpers.js';
 
 export async function loadReasoningTraces() {
   const element = document.getElementById('reasoning-traces');
@@ -22,7 +23,30 @@ export async function loadReasoningTraces() {
       <div class="panel" style="margin-bottom: 30px; border-left: 3px solid ${trace.maxStepsReached ? '#ef4444' : '#10b981'};">
         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
           <div>
-            <h3 style="margin: 0 0 10px 0; color: #60a5fa;">Trace ${trace.id.slice(0, 8)}</h3>
+            <h3 style="margin: 0 0 10px 0; color: #60a5fa;">
+              Trace ${trace.id.slice(0, 8)}
+              <button 
+                onclick="navigator.clipboard.writeText('${trace.id}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='transparent', 200);"
+                style="
+                  background: transparent;
+                  border: 1px solid #334155;
+                  color: #94a3b8;
+                  padding: 2px 6px;
+                  border-radius: 3px;
+                  cursor: pointer;
+                  margin-left: 8px;
+                  font-size: 0.7em;
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 4px;
+                "
+                title="Copy full trace ID"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                </svg>
+              </button>
+            </h3>
             <div style="font-size: 0.875rem; color: #94a3b8; line-height: 1.6;">
               <div><strong style="color: #e2e8f0;">Input:</strong> <span style="color: #cbd5e1;">${trace.userInput}</span></div>
               <div style="margin-top: 5px;">

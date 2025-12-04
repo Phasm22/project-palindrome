@@ -9,31 +9,57 @@
 </head>
 <body>
   <div class="container">
-    <h1>🔷 Palindrome Dashboard</h1>
+    <h1>
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 8px; color: #60a5fa;">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+      </svg>
+      Palindrome Dashboard
+    </h1>
 
     <div class="tabs">
-      <div class="tab active" onclick="switchTab('overview', this)">Overview</div>
+      <div class="tab active" onclick="switchTab('chat', this)">Chat</div>
+      <div class="tab" onclick="switchTab('overview', this)">Overview</div>
       <div class="tab" onclick="switchTab('executions', this)">Tool Executions</div>
       <div class="tab" onclick="switchTab('reasoning', this)">Reasoning Traces</div>
       <div class="tab" onclick="switchTab('graph', this)">Ontology Graph</div>
       <div class="tab" onclick="switchTab('rag', this)">RAG Diagnostics</div>
       <div class="tab" onclick="switchTab('query', this)">Query</div>
-      <div class="tab" onclick="switchTab('chat', this)">Chat</div>
     </div>
 
     <!-- Overview Tab -->
-    <div id="overview" class="tab-content active">
-      <div class="panel">
+    <div id="overview" class="tab-content" style="overflow-y: auto;">
+      <div class="floating-nav" id="overview-nav" style="display: none;">
+        <button class="floating-nav-btn" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;">
+            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
+          </svg>
+          Stats
+        </button>
+        <button class="floating-nav-btn" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+          </svg>
+          Cluster
+        </button>
+        <button class="floating-nav-btn" onclick="document.getElementById('system-health-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;">
+            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+          </svg>
+          Health
+        </button>
+      </div>
+      
+      <div class="panel" id="execution-stats-section" style="overflow: visible; min-height: auto;">
         <h2>Execution Statistics</h2>
         <div id="execution-stats" class="loading">Loading...</div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="cluster-status-section" style="overflow: visible; min-height: auto;">
         <h2>Cluster Status</h2>
         <div id="cluster-status" class="loading">Loading...</div>
       </div>
 
-      <div class="panel">
+      <div class="panel" id="system-health-section" style="overflow: visible; min-height: auto;">
         <h2>System Health</h2>
         <div id="system-health" class="loading">Loading...</div>
       </div>
@@ -42,8 +68,10 @@
     <!-- Tool Executions Tab -->
     <div id="executions" class="tab-content">
       <div class="panel">
-        <h2>Recent Tool Executions</h2>
-        <button class="refresh-btn" onclick="loadToolExecutions()">Refresh</button>
+        <h2>
+          Recent Tool Executions
+          <button class="refresh-btn" onclick="loadToolExecutions()">Refresh</button>
+        </h2>
         <div id="tool-executions" class="loading">Loading...</div>
       </div>
     </div>
@@ -51,8 +79,10 @@
     <!-- Reasoning Traces Tab -->
     <div id="reasoning" class="tab-content">
       <div class="panel">
-        <h2>Agent Reasoning Traces</h2>
-        <button class="refresh-btn" onclick="loadReasoningTraces()">Refresh</button>
+        <h2>
+          Agent Reasoning Traces
+          <button class="refresh-btn" onclick="loadReasoningTraces()">Refresh</button>
+        </h2>
         <div id="reasoning-traces" class="loading">Loading...</div>
       </div>
     </div>
@@ -60,8 +90,10 @@
     <!-- Ontology Graph Tab -->
     <div id="graph" class="tab-content">
       <div class="panel">
-        <h2>Ontology Graph</h2>
-        <button class="refresh-btn" onclick="loadGraph()">Refresh</button>
+        <h2>
+          Ontology Graph
+          <button class="refresh-btn" onclick="loadGraph()">Refresh</button>
+        </h2>
         <div id="graph-container"></div>
       </div>
     </div>
@@ -70,9 +102,31 @@
     <div id="rag" class="tab-content">
       <div class="panel">
         <h2>RAG Diagnostics</h2>
-        <input type="text" id="rag-query" placeholder="Enter query to test..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
-        <button class="refresh-btn" onclick="testRagQuery()">Test Query</button>
-        <div id="rag-results" class="loading">Enter a query and click Test Query</div>
+        <div style="margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; border-left: 3px solid #8b5cf6;">
+          <p style="margin: 0 0 10px 0; color: #e2e8f0; font-size: 0.95em;">
+            <strong style="color: #8b5cf6;">Purpose:</strong> Test and debug RAG (Retrieval-Augmented Generation) queries to understand how the system retrieves and scores relevant information.
+          </p>
+          <p style="margin: 0; color: #94a3b8; font-size: 0.875em;">
+            Enter a query below to see query type detection, source matching scores, and retrieved chunks.
+          </p>
+        </div>
+        
+        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+          <input 
+            type="text" 
+            id="rag-query" 
+            placeholder="Enter query to test..." 
+            style="flex: 1; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0;"
+            onkeydown="if(event.key === 'Enter') { testRagQuery(); }"
+          >
+          <button class="refresh-btn" onclick="testRagQuery()" style="margin-left: 0;">Test Query</button>
+        </div>
+        
+        <div id="rag-results" style="min-height: 200px;">
+          <div style="color: #94a3b8; text-align: center; padding: 40px;">
+            Enter a query above and click "Test Query" to see RAG diagnostics
+          </div>
+        </div>
       </div>
     </div>
 
@@ -81,10 +135,19 @@
       <div class="panel">
         <h2>Unified Query Interface</h2>
         
+        <div style="margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; border-left: 3px solid #3b82f6;">
+          <p style="margin: 0 0 10px 0; color: #e2e8f0; font-size: 0.95em;">
+            <strong style="color: #3b82f6;">Purpose:</strong> Query the knowledge base using different methods - natural language questions, graph queries, or direct Cypher queries.
+          </p>
+          <p style="margin: 0; color: #94a3b8; font-size: 0.875em;">
+            <strong>RAG:</strong> Ask questions in natural language • <strong>Graph:</strong> Use preset graph queries • <strong>Cypher:</strong> Write custom Neo4j queries
+          </p>
+        </div>
+        
         <!-- Query Type Selector -->
-        <div style="margin-bottom: 15px;">
-          <label style="color: #94a3b8; margin-right: 15px;">Query Type:</label>
-          <select id="query-type" style="padding: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-right: 15px;">
+        <div style="margin-bottom: 20px;">
+          <label style="color: #94a3b8; margin-right: 15px; font-weight: 600;">Query Type:</label>
+          <select id="query-type" style="padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-size: 0.95em; min-width: 200px;">
             <option value="rag">Natural Language (RAG)</option>
             <option value="graph">Graph Query</option>
             <option value="cypher">Cypher Query</option>
@@ -93,15 +156,17 @@
 
         <!-- RAG Query Section -->
         <div id="rag-query-section">
-          <textarea id="query-input" placeholder="Ask a question in natural language..." style="width: 100%; min-height: 100px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; margin-bottom: 10px; resize: vertical;"></textarea>
-          <button class="refresh-btn" onclick="executeQuery()">Query</button>
+          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <textarea id="query-input" placeholder="Ask a question in natural language..." style="flex: 1; min-height: 100px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: inherit; resize: vertical;"></textarea>
+            <button class="refresh-btn" onclick="executeQuery()" style="margin-left: 0; align-self: flex-start; margin-top: 0;">Query</button>
+          </div>
         </div>
 
         <!-- Graph Query Builder -->
         <div id="graph-query-section" style="display: none;">
           <div style="margin-bottom: 15px;">
-            <label style="color: #94a3b8; display: block; margin-bottom: 5px;">Query Type:</label>
-            <select id="graph-query-type" style="width: 100%; padding: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
+            <label style="color: #94a3b8; display: block; margin-bottom: 8px; font-weight: 600;">Graph Query Type:</label>
+            <select id="graph-query-type" style="width: 100%; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 15px;">
               <option value="findByIdOrName">Find by ID or Name</option>
               <option value="findByType">Find by Entity Type</option>
               <option value="findByPurpose">Find by Purpose</option>
@@ -112,15 +177,19 @@
               <option value="findHostedEntities">Find Hosted Entities</option>
             </select>
           </div>
-          <input type="text" id="graph-query-param" placeholder="Enter search term, entity ID, or parameter..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
+          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <input type="text" id="graph-query-param" placeholder="Enter search term, entity ID, or parameter..." style="flex: 1; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0;">
+            <button class="refresh-btn" onclick="executeGraphQuery()" style="margin-left: 0;">Query Graph</button>
+          </div>
           <input type="text" id="graph-query-param2" placeholder="Second parameter (for findPath)..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px; display: none;">
-          <button class="refresh-btn" onclick="executeGraphQuery()">Query Graph</button>
         </div>
 
         <!-- Cypher Query Section -->
         <div id="cypher-query-section" style="display: none;">
-          <textarea id="cypher-input" placeholder="MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50" style="width: 100%; min-height: 150px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; margin-bottom: 10px; resize: vertical;"></textarea>
-          <button class="refresh-btn" onclick="executeCypherQuery()">Execute Cypher</button>
+          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <textarea id="cypher-input" placeholder="MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50" style="flex: 1; min-height: 150px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; resize: vertical;"></textarea>
+            <button class="refresh-btn" onclick="executeCypherQuery()" style="margin-left: 0; align-self: flex-start; margin-top: 0;">Execute</button>
+          </div>
         </div>
 
         <!-- Results -->
@@ -131,8 +200,8 @@
     </div>
 
     <!-- Chat Tab -->
-    <div id="chat" class="tab-content">
-      <div class="panel" style="display: flex; flex-direction: row; height: calc(100vh - 200px); max-height: 800px; gap: 15px;">
+    <div id="chat" class="tab-content active">
+      <div class="panel" style="display: flex; flex-direction: row; gap: 15px; height: 100%;">
         <!-- Conversation Sidebar -->
         <div id="conversation-sidebar" style="width: 250px; display: flex; flex-direction: column; border: 1px solid #334155; border-radius: 4px; background: #0f172a;">
           <div style="padding: 15px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center;">

@@ -621,6 +621,15 @@ export class PceApiServer {
       const clusterStatus = clusterStatusResult.data || {};
       const resources = resourcesResult.data?.resources || [];
 
+      // Determine if this is a cluster or standalone node
+      const isCluster = nodes.length > 1;
+      
+      // Only include quorum for clusters (standalone nodes don't have quorum)
+      let quorum = null;
+      if (isCluster && clusterStatus.quorum) {
+        quorum = clusterStatus.quorum;
+      }
+
       // Aggregate VM statistics
       const runningVms = resources.filter((r: any) => r.status === "running");
       const stoppedVms = resources.filter((r: any) => r.status === "stopped");
@@ -631,7 +640,8 @@ export class PceApiServer {
       const offlineNodes = nodes.filter((n: any) => n.status_normalized === "offline" || n.status === "offline");
 
       return this.jsonResponse(200, {
-        quorum: clusterStatus.quorum || null,
+        isCluster,
+        quorum,
         nodes: {
           total: nodes.length,
           online: onlineNodes.length,
@@ -1182,6 +1192,7 @@ export class PceApiServer {
               role: "assistant",
               content: event.data.text,
               timestamp: new Date(event.timestamp),
+              reasoningTraceId: event.data.traceId,
             });
             
             // Auto-generate conversation title from first user message if still default
