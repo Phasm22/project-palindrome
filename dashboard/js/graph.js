@@ -290,7 +290,7 @@ export async function loadGraph() {
     
     // Initialize Cytoscape after DOM is ready
     setTimeout(() => {
-      initCytoscape(nodes, edges);
+      initCytoscape(nodes, edges, colorPalette);
       setupControls();
       setupSearch();
       setupFilters();
@@ -301,14 +301,12 @@ export async function loadGraph() {
   }
 }
 
-function initCytoscape(nodes, edges) {
+function initCytoscape(nodes, edges, colorPalette) {
   const cyContainer = document.getElementById('cy');
   if (!cyContainer) return;
   
   // Check if cytoscape is loaded
   const cytoscapeLib = getCytoscape();
-  const chromaLib = getChroma();
-  const colorPalette = getColorPalette();
   
   // Destroy existing instance
   if (cy) {
