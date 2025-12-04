@@ -35,7 +35,7 @@ export async function loadGraph() {
   if (!container) return;
   
   // Check if libraries are loaded
-  if (typeof window.Graphology === 'undefined' || typeof window.Sigma === 'undefined') {
+  if (typeof window.graphology === 'undefined' || typeof window.Sigma === 'undefined') {
     container.innerHTML = '<div class="error">Sigma.js or Graphology not loaded. Please refresh the page.</div>';
     return;
   }
@@ -64,7 +64,7 @@ export async function loadGraph() {
     const maxDegree = Math.max(...Object.values(nodeDegrees), 1);
     
     // Create Graphology graph
-    const Graph = window.Graphology;
+    const Graph = window.graphology.Graph || window.graphology;
     graph = new Graph();
     
     // Add nodes
@@ -285,9 +285,9 @@ function initSigma() {
   });
   
   // Run ForceAtlas2 layout
-  const forceAtlas2 = window.graphologyLayoutForceAtlas2;
-  if (forceAtlas2) {
-    const positions = forceAtlas2(graph, {
+  const forceAtlas2 = window.graphologyLayoutForceatlas2 || window.graphologyLayoutForceAtlas2;
+  if (forceAtlas2 && forceAtlas2.default) {
+    const layout = forceAtlas2.default(graph, {
       iterations: 100,
       settings: {
         gravity: 0.5,
@@ -303,12 +303,20 @@ function initSigma() {
     
     // Apply positions
     graph.forEachNode((node, attrs) => {
-      if (positions[node]) {
-        attrs.x = positions[node].x;
-        attrs.y = positions[node].y;
+      const pos = layout[node];
+      if (pos) {
+        attrs.x = pos.x;
+        attrs.y = pos.y;
       }
     });
     
+    sigma.refresh();
+  } else {
+    // Fallback: random layout if ForceAtlas2 not available
+    graph.forEachNode((node, attrs) => {
+      attrs.x = (Math.random() - 0.5) * 2000;
+      attrs.y = (Math.random() - 0.5) * 2000;
+    });
     sigma.refresh();
   }
   
