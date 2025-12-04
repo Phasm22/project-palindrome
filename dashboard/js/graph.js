@@ -285,38 +285,48 @@ function initSigma() {
   });
   
   // Run ForceAtlas2 layout - try multiple possible global names
-  const forceAtlas2 = window.forceAtlas2 || 
-                      window.graphologyLayoutForceatlas2 || 
-                      window.graphologyLayoutForceAtlas2 ||
+  const forceAtlas2 = window.graphologyLayoutForceAtlas2 || 
+                      window.forceAtlas2 || 
+                      window.graphologyLayoutForceatlas2 ||
                       (window.graphologyLayout && window.graphologyLayout.forceAtlas2);
   
   if (forceAtlas2) {
     try {
-      const layoutFn = forceAtlas2.default || forceAtlas2;
-      const positions = layoutFn(graph, {
-        iterations: 100,
-        settings: {
-          gravity: 0.5,
-          scalingRatio: 2,
-          strongGravityMode: false,
-          barnesHutOptimize: true,
-          edgeWeightInfluence: 1,
-          adjustSizes: true,
-          outboundAttractionDistribution: false,
-          linLogMode: false,
-        },
-      });
+      // ForceAtlas2 API: inferSettings and assign
+      const settings = forceAtlas2.inferSettings ? forceAtlas2.inferSettings(graph) : {
+        gravity: 0.5,
+        scalingRatio: 2,
+        strongGravityMode: false,
+        barnesHutOptimize: true,
+        edgeWeightInfluence: 1,
+        adjustSizes: true,
+        outboundAttractionDistribution: false,
+        linLogMode: false,
+      };
       
-      // Apply positions
-      graph.forEachNode((node, attrs) => {
-        const pos = positions[node];
-        if (pos) {
-          attrs.x = pos.x;
-          attrs.y = pos.y;
-        }
-      });
-      
-      sigma.refresh();
+      if (forceAtlas2.assign) {
+        // Use assign method (runs synchronously)
+        forceAtlas2.assign(graph, { settings, iterations: 100 });
+        sigma.refresh();
+      } else {
+        // Fallback: try direct function call
+        const layoutFn = forceAtlas2.default || forceAtlas2;
+        const positions = layoutFn(graph, {
+          iterations: 100,
+          settings: settings,
+        });
+        
+        // Apply positions
+        graph.forEachNode((node, attrs) => {
+          const pos = positions[node];
+          if (pos) {
+            attrs.x = pos.x;
+            attrs.y = pos.y;
+          }
+        });
+        
+        sigma.refresh();
+      }
     } catch (e) {
       console.warn('ForceAtlas2 layout failed, using random layout:', e);
       // Fallback: random layout
@@ -327,6 +337,7 @@ function initSigma() {
       sigma.refresh();
     }
   } else {
+    console.warn('ForceAtlas2 not available, using random layout');
     // Fallback: random layout if ForceAtlas2 not available
     graph.forEachNode((node, attrs) => {
       attrs.x = (Math.random() - 0.5) * 2000;
