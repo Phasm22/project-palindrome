@@ -95,26 +95,32 @@ export async function loadGraph() {
       },
       physics: {
         enabled: true,
-        stabilization: { iterations: 100 },
+        stabilization: { 
+          iterations: 100,
+          fit: true,
+        },
       },
       interaction: {
         hover: true,
         tooltipDelay: 100,
       },
-      // Don't set height/width in options - let the container handle it
+      layout: {
+        improvedLayout: true,
+      },
+      // Explicitly set dimensions to prevent auto-resize
+      configure: {
+        enabled: false,
+      },
     };
     
-    // Create layout with sidebar
-    // Get container height to set fixed size
-    const container = document.getElementById('graph-container');
-    const containerHeight = container ? container.clientHeight : 600;
-    const fixedHeight = Math.max(containerHeight, 600);
+    // Create layout with sidebar - use fixed viewport-based height
+    const fixedHeight = 800; // Fixed pixel height to prevent resizing
     
     const html = `
-      <div class="flex gap-4" style="height: ${fixedHeight}px;">
+      <div class="flex gap-4" style="height: ${fixedHeight}px; overflow: hidden;">
         <!-- Graph Visualization -->
-        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: ${fixedHeight}px; overflow: hidden;">
-          <div id="graph" style="width: 100%; height: ${fixedHeight}px;"></div>
+        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: ${fixedHeight}px; overflow: hidden; position: relative;">
+          <div id="graph" style="width: 100%; height: ${fixedHeight}px; position: absolute; top: 0; left: 0;"></div>
         </div>
         
         <!-- Statistics and Legend Sidebar -->
@@ -194,9 +200,23 @@ export async function loadGraph() {
     setTimeout(() => {
       const graphElement = document.getElementById('graph');
       if (graphElement) {
+        // Ensure element has fixed dimensions before creating network
+        graphElement.style.width = '100%';
+        graphElement.style.height = '800px';
+        graphElement.style.position = 'absolute';
+        graphElement.style.top = '0';
+        graphElement.style.left = '0';
+        
         const network = new vis.Network(graphElement, visData, options);
         
-        // Force resize after initialization to ensure proper sizing
+        // Prevent network from resizing
+        network.on('resize', () => {
+          // Force back to fixed size if it tries to resize
+          graphElement.style.height = '800px';
+          network.setSize('100%', '800px');
+        });
+        
+        // Initial fit
         setTimeout(() => {
           network.fit({
             animation: false,
