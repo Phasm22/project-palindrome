@@ -35,11 +35,21 @@ export async function loadGraph() {
   if (!container) return;
   
   // Check if libraries are loaded - try multiple possible global names
-  const Graph = window.Graph || window.graphology?.Graph || window.graphology;
+  // Graphology can be exposed as window.Graph, window.graphology, or window.graphology.Graph
+  const Graph = window.Graph || (window.graphology && (window.graphology.Graph || window.graphology));
+  // Sigma is exposed as window.Sigma
   const Sigma = window.Sigma;
   
   if (!Graph || !Sigma) {
-    container.innerHTML = '<div class="error">Sigma.js or Graphology not loaded. Please refresh the page. Graph: ' + (Graph ? 'loaded' : 'missing') + ', Sigma: ' + (Sigma ? 'loaded' : 'missing') + '</div>';
+    // Debug: log what's actually available
+    console.error('Library check failed:', {
+      Graph: !!Graph,
+      Sigma: !!Sigma,
+      windowGraph: !!window.Graph,
+      windowGraphology: !!window.graphology,
+      windowSigma: !!window.Sigma
+    });
+    container.innerHTML = '<div class="error p-4 bg-red-900/20 border border-red-500 rounded text-red-300">Sigma.js or Graphology not loaded. Please refresh the page.<br>Graph: ' + (Graph ? 'loaded' : 'missing') + ', Sigma: ' + (Sigma ? 'loaded' : 'missing') + '</div>';
     return;
   }
   
