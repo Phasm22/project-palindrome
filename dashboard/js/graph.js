@@ -79,6 +79,7 @@ export async function loadGraph() {
     const maxDegree = Math.max(...Object.values(nodeDegrees), 1);
     
     // Create Graphology graph
+    // Graph is the constructor class from the exports
     graph = new Graph();
     
     // Add nodes
