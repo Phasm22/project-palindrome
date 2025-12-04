@@ -33,9 +33,11 @@
     "ollama:test": "./scripts/ollama-setup.sh test"
   },
   "devDependencies": {
+    "@tailwindcss/typography": "^0.5.19",
     "@types/bun": "latest",
     "@types/node": "^24.10.1",
     "@vitest/coverage-v8": "^4.0.9",
+    "tailwindcss": "^4.1.17",
     "vitest": "^4.0.9",
     "yaml": "^2.8.1"
   },

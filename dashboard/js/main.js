@@ -23,21 +23,33 @@ window.testRagQuery = testRagQuery;
 // Make switchTab globally accessible
 window.switchTab = function(tabName, clickedElement) {
   // Hide all tabs
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.remove('active', 'text-primary-500', 'border-primary-500');
+    t.classList.add('text-slate-400', 'border-transparent');
+  });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.classList.add('hidden');
+    c.classList.remove('flex', 'flex-col');
+  });
   
   // Show selected tab
   if (clickedElement) {
-    clickedElement.classList.add('active');
+    clickedElement.classList.remove('text-slate-400', 'border-transparent');
+    clickedElement.classList.add('active', 'text-primary-500', 'border-primary-500');
   } else {
     // Fallback: find tab by text content
     document.querySelectorAll('.tab').forEach(t => {
       if (t.textContent.trim().toLowerCase().includes(tabName.toLowerCase())) {
-        t.classList.add('active');
+        t.classList.remove('text-slate-400', 'border-transparent');
+        t.classList.add('active', 'text-primary-500', 'border-primary-500');
       }
     });
   }
-  document.getElementById(tabName).classList.add('active');
+  const tabContent = document.getElementById(tabName);
+  if (tabContent) {
+    tabContent.classList.remove('hidden');
+    tabContent.classList.add('flex', 'flex-col');
+  }
   
   // Load data for the tab
   if (tabName === 'overview') {

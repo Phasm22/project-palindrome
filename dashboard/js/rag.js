@@ -15,7 +15,7 @@ export async function testRagQuery() {
     
     const html = `
       <div style="margin-bottom: 20px;">
-        <h3 style="color: #60a5fa; margin-bottom: 15px;">Query Analysis</h3>
+        <h3 style="color: #f97316; margin-bottom: 15px;">Query Analysis</h3>
         <div class="status-grid">
           <div class="stat-card">
             <div class="stat-label">Query Type</div>
@@ -34,7 +34,7 @@ export async function testRagQuery() {
       
       ${(data.sources || []).length > 0 ? `
         <div style="margin-bottom: 20px;">
-          <h3 style="color: #60a5fa; margin-bottom: 15px;">Top Sources (by relevance score)</h3>
+          <h3 style="color: #f97316; margin-bottom: 15px;">Top Sources (by relevance score)</h3>
           <div style="max-height: 400px; overflow-y: auto;">
             <table>
               <thead>
@@ -45,17 +45,21 @@ export async function testRagQuery() {
                 </tr>
               </thead>
               <tbody>
-                ${(data.sources || []).slice(0, 20).map(s => `
+                ${(data.sources || []).slice(0, 20).map(s => {
+                  const sourcePath = (s.sourcePath || s.chunkId || 'Unknown').split('\n')[0];
+                  const preview = (s.textPreview || '').split('\n')[0];
+                  return `
                   <tr>
-                    <td style="font-family: monospace; font-size: 0.85em;">${s.sourcePath || s.chunkId || 'Unknown'}</td>
+                    <td style="font-family: monospace; font-size: 0.85em; white-space: nowrap;">${sourcePath}</td>
                     <td style="text-align: center;">
                       <span style="background: ${(s.score || 0) > 0.7 ? '#10b981' : (s.score || 0) > 0.4 ? '#f59e0b' : '#ef4444'}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.85em; font-weight: 600;">
                         ${(s.score || 0).toFixed(3)}
                       </span>
                     </td>
-                    <td style="color: #cbd5e1; font-size: 0.9em; max-width: 0; overflow: hidden; text-overflow: ellipsis;" title="${(s.textPreview || '').replace(/"/g, '&quot;')}">${(s.textPreview || '').substring(0, 150)}${(s.textPreview || '').length > 150 ? '...' : ''}</td>
+                    <td style="color: #cbd5e1; font-size: 0.9em; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${preview.replace(/"/g, '&quot;')}">${preview.substring(0, 150)}${preview.length > 150 ? '...' : ''}</td>
                   </tr>
-                `).join('')}
+                `;
+                }).join('')}
               </tbody>
             </table>
           </div>

@@ -26,7 +26,7 @@ function formatClusterNodesSection(nodes) {
   for (const node of nodes) {
     const statusColor = node.status === 'online' ? '#10b981' : node.status === 'offline' ? '#ef4444' : '#94a3b8';
     html += `
-      <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid #3b82f6;">
+      <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid #f97316;">
         <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
           <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(node.name)}</strong>
           <span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(node.status)}</span>
@@ -87,7 +87,7 @@ function formatAgentResponse(text) {
       } else {
         inClusterNodes = false;
         inClusterVms = false;
-        html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em; font-weight: 600;">${escapeHtml(sectionName)}</h3>`;
+        html += `<h3 style="margin: 16px 0 8px 0; color: #f97316; font-size: 1.1em; font-weight: 600;">${escapeHtml(sectionName)}</h3>`;
       }
       continue;
     }
@@ -124,7 +124,7 @@ function formatAgentResponse(text) {
         inVmEntry = true;
         currentVmName = vmName;
         const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-        const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
+        const typeColor = vmType === 'QEMU VM' ? '#f97316' : '#ea580c';
         currentVmHtml = `
           <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
@@ -142,7 +142,7 @@ function formatAgentResponse(text) {
       if (nestedVmMatch && inVmEntry && currentVmHtml) {
         const [, name, vmType, state] = nestedVmMatch;
         const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-        const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
+        const typeColor = vmType === 'QEMU VM' ? '#f97316' : '#ea580c';
         currentVmHtml += `
           <div style="margin-top: 8px; margin-left: 16px; padding: 8px; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 4px; border-left: 2px solid ${typeColor};">
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -166,8 +166,8 @@ function formatAgentResponse(text) {
           const traceId = part.replace('trace=', '');
           detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
             <span style="color: #94a3b8;">Trace ID:</span> 
-            <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #60a5fa; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer;" 
-                  onclick="navigator.clipboard.writeText('${escapeHtml(traceId)}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
+            <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #f97316; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer;" 
+                  onclick="navigator.clipboard.writeText('${escapeHtml(traceId)}'); this.style.background='#f97316'; setTimeout(() => this.style.background='#1e293b', 200);"
                   title="Click to copy">${escapeHtml(traceId)}</code>
           </div>`;
         } else if (part.startsWith('node=')) {
@@ -196,8 +196,8 @@ function formatAgentResponse(text) {
     }
     
     if (trimmed.startsWith('Tip:')) {
-      html += `<div style="margin-top: 16px; padding: 10px; background: #1e3a8a; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 0.875em; color: #bfdbfe;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px; color: #93c5fd;">
+      html += `<div style="margin-top: 16px; padding: 10px; background: #431407; border-left: 3px solid #f97316; border-radius: 4px; font-size: 0.875em; color: #fed7aa;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px; color: #fdba74;">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
         </svg>
         <strong style="color: #93c5fd;">Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
@@ -218,10 +218,10 @@ function formatAgentResponse(text) {
       
       const headerMatch = trimmed.match(/^### Node: (.+?) \(IP: (.+?)\)/);
       if (headerMatch) {
-        html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa;">${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
+        html += `<h3 style="margin: 16px 0 8px 0; color: #f97316;">${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
       } else {
         const headerText = trimmed.replace(/^### /, '');
-        html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em;">${escapeHtml(headerText)}</h3>`;
+        html += `<h3 style="margin: 16px 0 8px 0; color: #f97316; font-size: 1.1em;">${escapeHtml(headerText)}</h3>`;
       }
       continue;
     }
@@ -305,7 +305,7 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     position: relative;
     ${role === 'user' 
-      ? 'background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); margin-left: auto; text-align: right; border: 1px solid #3b82f6;' 
+      ? 'background: linear-gradient(135deg, #7c2d12 0%, #9a3412 100%); margin-left: auto; text-align: right; border: 1px solid #f97316;' 
       : 'background: #1e293b; margin-right: auto; border: 1px solid #334155;'}
   `;
 
@@ -337,7 +337,7 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
   const traceLink = (role === 'assistant' && reasoningTraceId) ? `
     <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; display: flex; align-items: center; gap: 8px; font-size: 0.75em;">
       <button
-        onclick="navigator.clipboard.writeText('${reasoningTraceId}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
+        onclick="navigator.clipboard.writeText('${reasoningTraceId}'); this.style.background='#f97316'; setTimeout(() => this.style.background='#1e293b', 200);"
         style="
           background: #1e293b;
           border: 1px solid #334155;
@@ -360,8 +360,8 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
       <button
         onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
         style="
-          background: #1e3a8a;
-          border: 1px solid #3b82f6;
+          background: #7c2d12;
+          border: 1px solid #f97316;
           color: #e2e8f0;
           padding: 4px 8px;
           border-radius: 4px;
@@ -440,7 +440,7 @@ function handleAgentEvent(event, toolExecutions) {
       
       const toolHtml = `
         <div data-tool-name="${escapeHtml(event.data.toolName)}" style="margin-top: 8px; padding: 8px 10px; background: #1e3a8a; border-radius: 4px; font-size: 0.85em;">
-          <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #60a5fa;"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #f97316;"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
           <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
           ${paramsStr ? `<div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">${escapeHtml(paramsStr)}</div>` : ''}
           <div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">
@@ -818,8 +818,8 @@ export async function loadConversations() {
           margin-bottom: 4px;
           border-radius: 4px;
           cursor: pointer;
-          background: ${currentConversationId === conv.id ? '#1e3a8a' : 'transparent'};
-          border: 1px solid ${currentConversationId === conv.id ? '#3b82f6' : 'transparent'};
+          background: ${currentConversationId === conv.id ? '#7c2d12' : 'transparent'};
+          border: 1px solid ${currentConversationId === conv.id ? '#f97316' : 'transparent'};
           transition: all 0.2s;
           display: flex;
           justify-content: space-between;

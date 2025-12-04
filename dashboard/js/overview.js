@@ -27,23 +27,31 @@ export async function loadExecutionStats() {
         </div>
       </div>
       ${stats.recentErrors && stats.recentErrors.length > 0 ? `
-        <h3 style="margin-top: 20px; color: #ef4444;">Recent Errors</h3>
-        <table>
-          <tr>
-            <th>Tool</th>
-            <th>User</th>
-            <th>Error</th>
-            <th>Time</th>
-          </tr>
-          ${stats.recentErrors.map(e => `
-            <tr>
-              <td>${e.toolName}</td>
-              <td>${e.userId}</td>
-              <td>${e.error || 'Unknown'}</td>
-              <td>${new Date(e.timestamp).toLocaleString()}</td>
-            </tr>
-          `).join('')}
-        </table>
+        <div class="mt-6 pt-6 border-t border-slate-700">
+          <h3 class="text-lg font-semibold mb-4 text-red-400">Recent Errors</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full">
+              <thead>
+                <tr>
+                  <th class="text-left">Tool</th>
+                  <th class="text-left">User</th>
+                  <th class="text-left">Error</th>
+                  <th class="text-left">Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${stats.recentErrors.map(e => `
+                  <tr>
+                    <td class="whitespace-nowrap">${(e.toolName || 'Unknown').split('\n')[0]}</td>
+                    <td class="whitespace-nowrap">${(e.userId || 'Unknown').split('\n')[0]}</td>
+                    <td class="max-w-md truncate" title="${(e.error || 'Unknown').replace(/"/g, '&quot;')}">${(e.error || 'Unknown').split('\n')[0]}</td>
+                    <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
       ` : ''}
     `;
     
@@ -158,18 +166,23 @@ export async function loadClusterStatus() {
               <th>Status</th>
               <th>Type</th>
             </tr>
-            ${data.vms.resources.slice(0, 20).map(vm => `
+            ${data.vms.resources.slice(0, 20).map(vm => {
+              const name = (vm.name || vm.id || 'Unknown').split('\n')[0];
+              const node = (vm.node || 'N/A').split('\n')[0];
+              const type = (vm.type || 'N/A').split('\n')[0];
+              return `
               <tr>
-                <td>${vm.name || vm.id || 'Unknown'}</td>
-                <td>${vm.node || 'N/A'}</td>
+                <td class="whitespace-nowrap">${name}</td>
+                <td class="whitespace-nowrap">${node}</td>
                 <td>
                   <span class="status-badge ${vm.status === 'running' ? 'status-success' : vm.status === 'stopped' ? 'status-error' : 'status-warning'}">
                     ${vm.status || 'unknown'}
                   </span>
                 </td>
-                <td>${vm.type || 'N/A'}</td>
+                <td class="whitespace-nowrap">${type}</td>
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
           </table>
         </div>
       ` : ''}

@@ -1,129 +1,316 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Palindrome Dashboard</title>
   <script src="https://unpkg.com/vis-network@latest/dist/vis-network.min.js"></script>
-  <link rel="stylesheet" href="css/styles.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#fff7ed',
+              100: '#ffedd5',
+              200: '#fed7aa',
+              300: '#fdba74',
+              400: '#fb923c',
+              500: '#f97316',
+              600: '#ea580c',
+              700: '#c2410c',
+              800: '#9a3412',
+              900: '#7c2d12',
+              950: '#431407',
+            },
+          },
+        },
+      },
+    }
+  </script>
+  <style>
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #c2410c;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #ea580c;
+    }
+    
+    /* Utility classes for JS-generated content */
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    
+    .stat-card {
+      background: #0f172a;
+      padding: 1rem;
+      border-radius: 0.5rem;
+      border: 1px solid #334155;
+    }
+    
+    .stat-label {
+      color: #94a3b8;
+      font-size: 0.875rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .stat-value {
+      color: #f97316;
+      font-size: 1.5rem;
+      font-weight: bold;
+    }
+    
+    .agent-thinking {
+      color: #94a3b8;
+      font-style: italic;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.9em;
+    }
+    
+    .agent-response {
+      color: #e2e8f0;
+      line-height: 1.6;
+      font-size: 0.95em;
+    }
+    
+    .agent-response h3 {
+      color: #f97316;
+      font-size: 1.1em;
+      margin-top: 1.25rem;
+      margin-bottom: 0.625rem;
+      font-weight: 600;
+    }
+    
+    .agent-response h3:first-child {
+      margin-top: 0;
+    }
+    
+    .agent-response ul {
+      list-style: none;
+      padding-left: 0;
+      margin: 0.625rem 0;
+    }
+    
+    .agent-response li {
+      padding: 0.25rem 0;
+      color: #cbd5e1;
+    }
+    
+    .agent-response .temp-label {
+      color: #94a3b8;
+      font-weight: 500;
+      display: inline-block;
+      min-width: 180px;
+    }
+    
+    .agent-response .temp-value {
+      color: #e2e8f0;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+    
+    th, td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid #334155;
+    }
+    
+    th {
+      color: #94a3b8;
+      font-weight: 600;
+      background: #0f172a;
+    }
+    
+    td {
+      color: #e2e8f0;
+    }
+    
+    .status-badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    
+    .status-success {
+      background: #10b981;
+      color: white;
+    }
+    
+    .status-error {
+      background: #ef4444;
+      color: white;
+    }
+    
+    .status-warning {
+      background: #f59e0b;
+      color: white;
+    }
+    
+    .loading {
+      color: #94a3b8;
+      text-align: center;
+      padding: 1.25rem;
+    }
+    
+    .error {
+      color: #ef4444;
+      background: #7f1d1d;
+      padding: 0.625rem;
+      border-radius: 0.25rem;
+      margin-top: 0.625rem;
+    }
+    
+    pre {
+      background: #0f172a;
+      padding: 0.625rem;
+      border-radius: 0.25rem;
+      overflow-x: auto;
+      font-size: 0.75rem;
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid #334155;
+    }
+  </style>
 </head>
-<body>
-  <div class="container">
-    <h1>
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 8px; color: #60a5fa;">
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div class="container mx-auto px-6 py-6 max-w-[95%] xl:max-w-[98%] 2xl:max-w-[99%] w-full">
+    <h1 class="text-3xl font-bold mb-8 text-primary-500 flex items-center gap-2">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" class="text-primary-500">
         <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
       </svg>
       Palindrome Dashboard
     </h1>
 
-    <div class="tabs">
-      <div class="tab active" onclick="switchTab('chat', this)">Chat</div>
-      <div class="tab" onclick="switchTab('overview', this)">Overview</div>
-      <div class="tab" onclick="switchTab('executions', this)">Tool Executions</div>
-      <div class="tab" onclick="switchTab('reasoning', this)">Reasoning Traces</div>
-      <div class="tab" onclick="switchTab('graph', this)">Ontology Graph</div>
-      <div class="tab" onclick="switchTab('rag', this)">RAG Diagnostics</div>
-      <div class="tab" onclick="switchTab('query', this)">Query</div>
+    <div class="flex gap-2 mb-6 border-b border-slate-700 overflow-x-auto">
+      <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('chat', this)">Chat</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('overview', this)">Overview</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('executions', this)">Tool Executions</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('reasoning', this)">Reasoning Traces</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('graph', this)">Ontology Graph</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('rag', this)">RAG Diagnostics</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('query', this)">Query</button>
     </div>
 
     <!-- Overview Tab -->
-    <div id="overview" class="tab-content" style="overflow-y: auto;">
-      <div class="floating-nav" id="overview-nav" style="display: none;">
-        <button class="floating-nav-btn" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;">
+    <div id="overview" class="tab-content hidden flex-1 min-h-0 overflow-y-auto">
+      <div class="fixed right-6 top-1/2 -translate-y-1/2 z-50 flex flex-col gap-2" id="overview-nav" style="display: none;">
+        <button class="floating-nav-btn bg-slate-800 border border-slate-700 text-slate-200 px-3 py-2 rounded-lg text-sm transition-all shadow-lg hover:bg-slate-700 hover:border-primary-600 hover:-translate-x-1 whitespace-nowrap flex items-center gap-2" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
           </svg>
           Stats
         </button>
-        <button class="floating-nav-btn" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;">
+        <button class="floating-nav-btn bg-slate-800 border border-slate-700 text-slate-200 px-3 py-2 rounded-lg text-sm transition-all shadow-lg hover:bg-slate-700 hover:border-primary-600 hover:-translate-x-1 whitespace-nowrap flex items-center gap-2" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
           </svg>
           Cluster
         </button>
-        <button class="floating-nav-btn" onclick="document.getElementById('system-health-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px;">
+        <button class="floating-nav-btn bg-slate-800 border border-slate-700 text-slate-200 px-3 py-2 rounded-lg text-sm transition-all shadow-lg hover:bg-slate-700 hover:border-primary-600 hover:-translate-x-1 whitespace-nowrap flex items-center gap-2" onclick="document.getElementById('system-health-section').scrollIntoView({ behavior: 'smooth', block: 'start' });">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
           </svg>
           Health
         </button>
       </div>
       
-      <div class="panel" id="execution-stats-section" style="overflow: visible; min-height: auto;">
-        <h2>Execution Statistics</h2>
-        <div id="execution-stats" class="loading">Loading...</div>
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 mb-6 shadow-lg" id="execution-stats-section">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3">Execution Statistics</h2>
+        <div id="execution-stats" class="text-slate-400 text-center py-5">Loading...</div>
       </div>
 
-      <div class="panel" id="cluster-status-section" style="overflow: visible; min-height: auto;">
-        <h2>Cluster Status</h2>
-        <div id="cluster-status" class="loading">Loading...</div>
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 mb-6 shadow-lg" id="cluster-status-section">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3">Cluster Status</h2>
+        <div id="cluster-status" class="text-slate-400 text-center py-5">Loading...</div>
       </div>
 
-      <div class="panel" id="system-health-section" style="overflow: visible; min-height: auto;">
-        <h2>System Health</h2>
-        <div id="system-health" class="loading">Loading...</div>
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 mb-6 shadow-lg" id="system-health-section">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3">System Health</h2>
+        <div id="system-health" class="text-slate-400 text-center py-5">Loading...</div>
       </div>
     </div>
 
     <!-- Tool Executions Tab -->
-    <div id="executions" class="tab-content">
-      <div class="panel">
-        <h2>
-          Recent Tool Executions
-          <button class="refresh-btn" onclick="loadToolExecutions()">Refresh</button>
+    <div id="executions" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 flex-1 min-h-0 flex flex-col shadow-lg">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3 flex items-center justify-between">
+          <span>Recent Tool Executions</span>
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors" onclick="loadToolExecutions()">Refresh</button>
         </h2>
-        <div id="tool-executions" class="loading">Loading...</div>
+        <div id="tool-executions" class="text-slate-400 text-center py-5 flex-1 overflow-y-auto">Loading...</div>
       </div>
     </div>
 
     <!-- Reasoning Traces Tab -->
-    <div id="reasoning" class="tab-content">
-      <div class="panel">
-        <h2>
-          Agent Reasoning Traces
-          <button class="refresh-btn" onclick="loadReasoningTraces()">Refresh</button>
+    <div id="reasoning" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 flex-1 min-h-0 flex flex-col shadow-lg">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3 flex items-center justify-between">
+          <span>Agent Reasoning Traces</span>
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors" onclick="loadReasoningTraces()">Refresh</button>
         </h2>
-        <div id="reasoning-traces" class="loading">Loading...</div>
+        <div id="reasoning-traces" class="text-slate-400 text-center py-5 flex-1 overflow-y-auto">Loading...</div>
       </div>
     </div>
 
     <!-- Ontology Graph Tab -->
-    <div id="graph" class="tab-content">
-      <div class="panel">
-        <h2>
-          Ontology Graph
-          <button class="refresh-btn" onclick="loadGraph()">Refresh</button>
+    <div id="graph" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 flex-1 min-h-0 flex flex-col shadow-lg">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3 flex items-center justify-between">
+          <span>Ontology Graph</span>
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors" onclick="loadGraph()">Refresh</button>
         </h2>
-        <div id="graph-container"></div>
+        <div id="graph-container" class="flex-1 min-h-[600px] border border-slate-700 rounded-lg bg-slate-950 overflow-hidden"></div>
       </div>
     </div>
 
     <!-- RAG Diagnostics Tab -->
-    <div id="rag" class="tab-content">
-      <div class="panel">
-        <h2>RAG Diagnostics</h2>
-        <div style="margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; border-left: 3px solid #8b5cf6;">
-          <p style="margin: 0 0 10px 0; color: #e2e8f0; font-size: 0.95em;">
-            <strong style="color: #8b5cf6;">Purpose:</strong> Test and debug RAG (Retrieval-Augmented Generation) queries to understand how the system retrieves and scores relevant information.
+    <div id="rag" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 flex-1 min-h-0 flex flex-col shadow-lg">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3">RAG Diagnostics</h2>
+        <div class="mb-5 p-4 bg-slate-950 border border-slate-700 rounded-lg border-l-4 border-l-purple-500">
+          <p class="mb-2 text-slate-200 text-sm">
+            <strong class="text-purple-400">Purpose:</strong> Test and debug RAG (Retrieval-Augmented Generation) queries to understand how the system retrieves and scores relevant information.
           </p>
-          <p style="margin: 0; color: #94a3b8; font-size: 0.875em;">
+          <p class="text-slate-400 text-xs">
             Enter a query below to see query type detection, source matching scores, and retrieved chunks.
           </p>
         </div>
         
-        <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+        <div class="flex gap-3 mb-5">
           <input 
             type="text" 
             id="rag-query" 
             placeholder="Enter query to test..." 
-            style="flex: 1; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0;"
+            class="flex-1 px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             onkeydown="if(event.key === 'Enter') { testRagQuery(); }"
           >
-          <button class="refresh-btn" onclick="testRagQuery()" style="margin-left: 0;">Test Query</button>
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-2 rounded-lg font-medium transition-colors" onclick="testRagQuery()">Test Query</button>
         </div>
         
-        <div id="rag-results" style="min-height: 200px;">
-          <div style="color: #94a3b8; text-align: center; padding: 40px;">
+        <div id="rag-results" class="flex-1 min-h-0 overflow-y-auto">
+          <div class="text-slate-400 text-center py-10">
             Enter a query above and click "Test Query" to see RAG diagnostics
           </div>
         </div>
@@ -131,23 +318,23 @@
     </div>
 
     <!-- Query Tab -->
-    <div id="query" class="tab-content">
-      <div class="panel">
-        <h2>Unified Query Interface</h2>
+    <div id="query" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 flex-1 min-h-0 flex flex-col shadow-lg">
+        <h2 class="text-xl font-semibold mb-4 text-slate-300 border-b border-slate-700 pb-3">Unified Query Interface</h2>
         
-        <div style="margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; border-left: 3px solid #3b82f6;">
-          <p style="margin: 0 0 10px 0; color: #e2e8f0; font-size: 0.95em;">
-            <strong style="color: #3b82f6;">Purpose:</strong> Query the knowledge base using different methods - natural language questions, graph queries, or direct Cypher queries.
+        <div class="mb-5 p-4 bg-slate-950 border border-slate-700 rounded-lg border-l-4 border-l-blue-500">
+          <p class="mb-2 text-slate-200 text-sm">
+            <strong class="text-blue-400">Purpose:</strong> Query the knowledge base using different methods - natural language questions, graph queries, or direct Cypher queries.
           </p>
-          <p style="margin: 0; color: #94a3b8; font-size: 0.875em;">
+          <p class="text-slate-400 text-xs">
             <strong>RAG:</strong> Ask questions in natural language • <strong>Graph:</strong> Use preset graph queries • <strong>Cypher:</strong> Write custom Neo4j queries
           </p>
         </div>
         
         <!-- Query Type Selector -->
-        <div style="margin-bottom: 20px;">
-          <label style="color: #94a3b8; margin-right: 15px; font-weight: 600;">Query Type:</label>
-          <select id="query-type" style="padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-size: 0.95em; min-width: 200px;">
+        <div class="mb-5">
+          <label class="text-slate-400 mr-4 font-semibold">Query Type:</label>
+          <select id="query-type" class="px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 text-sm min-w-[200px] focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
             <option value="rag">Natural Language (RAG)</option>
             <option value="graph">Graph Query</option>
             <option value="cypher">Cypher Query</option>
@@ -156,17 +343,17 @@
 
         <!-- RAG Query Section -->
         <div id="rag-query-section">
-          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-            <textarea id="query-input" placeholder="Ask a question in natural language..." style="flex: 1; min-height: 100px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: inherit; resize: vertical;"></textarea>
-            <button class="refresh-btn" onclick="executeQuery()" style="margin-left: 0; align-self: flex-start; margin-top: 0;">Query</button>
+          <div class="flex gap-3 mb-4">
+            <textarea id="query-input" placeholder="Ask a question in natural language..." class="flex-1 min-h-[100px] px-4 py-3 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 font-sans resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"></textarea>
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-lg font-medium transition-colors self-start" onclick="executeQuery()">Query</button>
           </div>
         </div>
 
         <!-- Graph Query Builder -->
-        <div id="graph-query-section" style="display: none;">
-          <div style="margin-bottom: 15px;">
-            <label style="color: #94a3b8; display: block; margin-bottom: 8px; font-weight: 600;">Graph Query Type:</label>
-            <select id="graph-query-type" style="width: 100%; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 15px;">
+        <div id="graph-query-section" class="hidden">
+          <div class="mb-4">
+            <label class="text-slate-400 block mb-2 font-semibold">Graph Query Type:</label>
+            <select id="graph-query-type" class="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 mb-4 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
               <option value="findByIdOrName">Find by ID or Name</option>
               <option value="findByType">Find by Entity Type</option>
               <option value="findByPurpose">Find by Purpose</option>
@@ -177,50 +364,39 @@
               <option value="findHostedEntities">Find Hosted Entities</option>
             </select>
           </div>
-          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-            <input type="text" id="graph-query-param" placeholder="Enter search term, entity ID, or parameter..." style="flex: 1; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0;">
-            <button class="refresh-btn" onclick="executeGraphQuery()" style="margin-left: 0;">Query Graph</button>
+          <div class="flex gap-3 mb-4">
+            <input type="text" id="graph-query-param" placeholder="Enter search term, entity ID, or parameter..." class="flex-1 px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-2 rounded-lg font-medium transition-colors" onclick="executeGraphQuery()">Query Graph</button>
           </div>
-          <input type="text" id="graph-query-param2" placeholder="Second parameter (for findPath)..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px; display: none;">
+          <input type="text" id="graph-query-param2" placeholder="Second parameter (for findPath)..." class="w-full px-4 py-2 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 mb-3 hidden focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
         </div>
 
         <!-- Cypher Query Section -->
-        <div id="cypher-query-section" style="display: none;">
-          <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-            <textarea id="cypher-input" placeholder="MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50" style="flex: 1; min-height: 150px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; resize: vertical;"></textarea>
-            <button class="refresh-btn" onclick="executeCypherQuery()" style="margin-left: 0; align-self: flex-start; margin-top: 0;">Execute</button>
+        <div id="cypher-query-section" class="hidden">
+          <div class="flex gap-3 mb-4">
+            <textarea id="cypher-input" placeholder="MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50" class="flex-1 min-h-[150px] px-4 py-3 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"></textarea>
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-lg font-medium transition-colors self-start" onclick="executeCypherQuery()">Execute</button>
           </div>
         </div>
 
         <!-- Results -->
-        <div id="query-results" style="margin-top: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; min-height: 200px;">
-          <div style="color: #94a3b8;">Results will appear here...</div>
+        <div id="query-results" class="mt-5 p-4 bg-slate-950 border border-slate-700 rounded-lg flex-1 min-h-[200px] overflow-y-auto">
+          <div class="text-slate-400">Results will appear here...</div>
         </div>
       </div>
     </div>
 
     <!-- Chat Tab -->
-    <div id="chat" class="tab-content active">
-      <div class="panel" style="display: flex; flex-direction: row; gap: 15px; height: 100%;">
+    <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col">
+      <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 flex-1 min-h-0 flex flex-row gap-4 shadow-lg">
         <!-- Conversation Sidebar -->
-        <div id="conversation-sidebar" style="width: 250px; display: flex; flex-direction: column; border: 1px solid #334155; border-radius: 4px; background: #0f172a;">
-          <div style="padding: 15px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin: 0; color: #e2e8f0; font-size: 16px;">Conversations</h3>
+        <div id="conversation-sidebar" class="w-64 flex flex-col border border-slate-700 rounded-lg bg-slate-950">
+          <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+            <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
             <button 
               id="new-conversation-btn"
               onclick="createNewConversation()"
-              style="
-                background: #1e3a8a;
-                border: 1px solid #3b82f6;
-                color: #e2e8f0;
-                padding: 6px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 12px;
-                display: flex;
-                align-items: center;
-                gap: 4px;
-              "
+              class="bg-primary-600 hover:bg-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-lg cursor-pointer text-xs flex items-center gap-1.5 transition-colors"
               title="New conversation"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -229,40 +405,40 @@
               New
             </button>
           </div>
-          <div id="conversation-list" style="flex: 1; overflow-y: auto; padding: 8px;">
-            <div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 14px;">
+          <div id="conversation-list" class="flex-1 overflow-y-auto p-2">
+            <div class="text-slate-400 text-center py-5 text-sm">
               Loading conversations...
             </div>
           </div>
         </div>
         
         <!-- Chat Area -->
-        <div style="flex: 1; display: flex; flex-direction: column;">
-          <h2 style="margin-bottom: 15px;">Chat with Palindrome</h2>
+        <div class="flex-1 flex flex-col min-w-0">
+          <h2 class="mb-4 text-xl font-semibold text-slate-300">Chat with Palindrome</h2>
           
           <!-- Chat Messages Area -->
-          <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; margin-bottom: 15px; min-height: 400px;">
-            <div style="color: #94a3b8; text-align: center; padding: 20px;">
+          <div id="chat-messages" class="flex-1 overflow-y-auto p-4 bg-slate-950 border border-slate-700 rounded-lg mb-4 min-h-[400px]">
+            <div class="text-slate-400 text-center py-10">
               Select a conversation or create a new one to start chatting.
             </div>
           </div>
 
-        <!-- Chat Input Area -->
-        <div style="display: flex; gap: 10px; align-items: flex-end;">
-          <textarea 
-            id="chat-input" 
-            placeholder="Ask me anything about your infrastructure..." 
-            style="flex: 1; min-height: 60px; max-height: 200px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: inherit; resize: vertical;"
-            onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); }"
-          ></textarea>
-          <button 
-            class="refresh-btn" 
-            onclick="sendChatMessage()" 
-            id="chat-send-btn"
-            style="padding: 12px 24px; min-width: 80px;"
-          >
-            Send
-          </button>
+          <!-- Chat Input Area -->
+          <div class="flex gap-3 items-end">
+            <textarea 
+              id="chat-input" 
+              placeholder="Ask me anything about your infrastructure..." 
+              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-950 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-500 font-sans resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); }"
+            ></textarea>
+            <button 
+              class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-lg font-medium transition-colors min-w-[80px]" 
+              onclick="sendChatMessage()" 
+              id="chat-send-btn"
+            >
+              Send
+            </button>
+          </div>
         </div>
       </div>
     </div>

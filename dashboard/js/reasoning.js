@@ -23,10 +23,10 @@ export async function loadReasoningTraces() {
       <div class="panel" style="margin-bottom: 30px; border-left: 3px solid ${trace.maxStepsReached ? '#ef4444' : '#10b981'};">
         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
           <div>
-            <h3 style="margin: 0 0 10px 0; color: #60a5fa;">
+            <h3 style="margin: 0 0 10px 0; color: #f97316;">
               Trace ${trace.id.slice(0, 8)}
               <button 
-                onclick="navigator.clipboard.writeText('${trace.id}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='transparent', 200);"
+                onclick="navigator.clipboard.writeText('${trace.id}'); this.style.background='#f97316'; setTimeout(() => this.style.background='transparent', 200);"
                 style="
                   background: transparent;
                   border: 1px solid #334155;
@@ -70,7 +70,7 @@ export async function loadReasoningTraces() {
           ${trace.steps.map((step, idx) => `
             <div style="margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
               <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                <span style="background: #3b82f6; color: white; padding: 4px 10px; border-radius: 4px; font-weight: 600; margin-right: 10px;">
+                <span style="background: #f97316; color: white; padding: 4px 10px; border-radius: 4px; font-weight: 600; margin-right: 10px;">
                   Step ${step.step}
                 </span>
                 ${step.ragContext ? `
@@ -86,7 +86,7 @@ export async function loadReasoningTraces() {
               </div>
               
               ${step.llmResponse ? `
-                <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #60a5fa;">
+                <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #f97316;">
                   <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">LLM Response</div>
                   <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.875rem;">${step.llmResponse}</div>
                 </div>
@@ -109,7 +109,7 @@ export async function loadReasoningTraces() {
                   ${step.toolCalls.map(tc => `
                     <div style="margin-bottom: 8px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid ${tc.result.success ? '#10b981' : '#ef4444'};">
                       <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                        <span style="color: #60a5fa; font-weight: 600; margin-right: 10px;">${tc.toolName}</span>
+                        <span style="color: #f97316; font-weight: 600; margin-right: 10px;">${tc.toolName}</span>
                         <span class="status-badge ${tc.result.success ? 'status-success' : 'status-error'}" style="margin-right: 10px;">
                           ${tc.result.success ? 'Success' : 'Failed'}
                         </span>
@@ -143,7 +143,7 @@ export async function loadReasoningTraces() {
                       'limit_reached': '#ef4444',
                       'fallback': '#8b5cf6',
                       'tool_choice': '#10b981',
-                      'rag_used': '#3b82f6'
+                      'rag_used': '#f97316'
                     };
                     const color = colors[d.type] || '#94a3b8';
                     return `

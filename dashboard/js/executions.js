@@ -29,47 +29,44 @@ export async function loadToolExecutions() {
           <th>Duration</th>
           <th>Parameters</th>
         </tr>
-        ${data.executions.map((e, idx) => `
+        ${data.executions.map((e, idx) => {
+          const toolName = (e.toolName || 'Unknown').split('\n')[0];
+          const userId = (e.userId || 'Unknown').split('\n')[0];
+          const error = e.error ? (e.error || 'Unknown').split('\n')[0] : null;
+          return `
           <tr>
-            <td>${new Date(e.timestamp).toLocaleString()}</td>
-            <td>
+            <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
+            <td class="whitespace-nowrap">
               <span 
-                data-tooltip="${e.toolName}"
+                data-tooltip="${toolName.replace(/"/g, '&quot;')}"
                 style="cursor: help; border-bottom: 1px dotted #94a3b8;"
               >
-                ${e.toolName}
+                ${toolName}
               </span>
             </td>
-            <td>${e.userId}</td>
+            <td class="whitespace-nowrap">${userId}</td>
             <td>
               <span 
                 class="status-badge ${e.error ? 'status-error' : 'status-success'}"
-                data-tooltip="${e.error ? `Error: ${e.error}` : 'Execution completed successfully'}"
+                data-tooltip="${error ? `Error: ${error.replace(/"/g, '&quot;')}` : 'Execution completed successfully'}"
                 style="cursor: help;"
               >
                 ${e.error ? 'Failed' : 'Success'}
               </span>
             </td>
-            <td>${e.durationMs}ms</td>
+            <td class="whitespace-nowrap">${e.durationMs}ms</td>
             <td>
               <button
                 onclick="showExecutionDetails(${idx})"
-                style="
-                  background: #1e3a8a;
-                  border: 1px solid #3b82f6;
-                  color: #e2e8f0;
-                  padding: 4px 8px;
-                  border-radius: 4px;
-                  cursor: pointer;
-                  font-size: 0.85em;
-                "
+                class="bg-primary-600 hover:bg-primary-700 border border-primary-500 text-white px-3 py-1 rounded text-sm cursor-pointer transition-colors"
                 data-execution-idx="${idx}"
               >
                 View Details
               </button>
             </td>
           </tr>
-        `).join('')}
+        `;
+        }).join('')}
       </table>
     `;
     
