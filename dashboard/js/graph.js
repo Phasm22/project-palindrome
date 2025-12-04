@@ -1,35 +1,53 @@
 import { API_URL } from './utils.js';
 
 // Cytoscape and Chroma are loaded via CDN in HTML
-// Access them from window object
-const cytoscape = window.cytoscape;
-const chroma = window.chroma;
+// Access them from window object with fallback
+function getCytoscape() {
+  if (typeof window !== 'undefined' && window.cytoscape) {
+    return window.cytoscape;
+  }
+  throw new Error('Cytoscape not loaded. Make sure CDN script is included.');
+}
+
+function getChroma() {
+  if (typeof window !== 'undefined' && window.chroma) {
+    return window.chroma;
+  }
+  throw new Error('Chroma not loaded. Make sure CDN script is included.');
+}
 
 // Color palette - burnt orange theme with good contrast
-const colorPalette = {
-  primary: chroma('#f97316'), // Burnt orange
-  primaryLight: chroma('#fb923c'),
-  primaryDark: chroma('#c2410c'),
-  secondary: chroma('#ea580c'),
-  success: chroma('#10b981'),
-  warning: chroma('#f59e0b'),
-  error: chroma('#ef4444'),
-  info: chroma('#3b82f6'),
-  background: chroma('#0f172a'),
-  surface: chroma('#1e293b'),
-  text: chroma('#e2e8f0'),
-  textMuted: chroma('#94a3b8'),
-};
+// Initialize after chroma is loaded
+function getColorPalette() {
+  const chroma = getChroma();
+  return {
+    primary: chroma('#f97316'), // Burnt orange
+    primaryLight: chroma('#fb923c'),
+    primaryDark: chroma('#c2410c'),
+    secondary: chroma('#ea580c'),
+    success: chroma('#10b981'),
+    warning: chroma('#f59e0b'),
+    error: chroma('#ef4444'),
+    info: chroma('#3b82f6'),
+    background: chroma('#0f172a'),
+    surface: chroma('#1e293b'),
+    text: chroma('#e2e8f0'),
+    textMuted: chroma('#94a3b8'),
+  };
+}
 
 // Node type colors
-const nodeTypeColors = {
-  'compute-vm': colorPalette.primary,
-  'compute-node': colorPalette.success,
-  'network': colorPalette.secondary,
-  'service': colorPalette.warning,
-  'storage': colorPalette.error,
-  'unknown': colorPalette.textMuted,
-};
+function getNodeTypeColors() {
+  const palette = getColorPalette();
+  return {
+    'compute-vm': palette.primary,
+    'compute-node': palette.success,
+    'network': palette.secondary,
+    'service': palette.warning,
+    'storage': palette.error,
+    'unknown': palette.textMuted,
+  };
+}
 
 let cy = null; // Cytoscape instance
 let graphData = null; // Store graph data for search/filter
@@ -38,9 +56,20 @@ export async function loadGraph() {
   const container = document.getElementById('graph-container');
   if (!container) return;
   
+  // Check if libraries are loaded
+  try {
+    getCytoscape();
+    getChroma();
+  } catch (error) {
+    container.innerHTML = `<div class="error">${error.message}. Please refresh the page.</div>`;
+    return;
+  }
+  
   container.innerHTML = '<div class="loading">Loading graph...</div>';
   
   try {
+    const colorPalette = getColorPalette();
+    const nodeTypeColors = getNodeTypeColors();
     const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=200`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -277,17 +306,16 @@ function initCytoscape(nodes, edges) {
   if (!cyContainer) return;
   
   // Check if cytoscape is loaded
-  if (!cytoscape || !chroma) {
-    console.error('Cytoscape or Chroma not loaded. Make sure CDN scripts are included.');
-    return;
-  }
+  const cytoscapeLib = getCytoscape();
+  const chromaLib = getChroma();
+  const colorPalette = getColorPalette();
   
   // Destroy existing instance
   if (cy) {
     cy.destroy();
   }
   
-  cy = cytoscape({
+  cy = cytoscapeLib({
     container: cyContainer,
     elements: [...nodes, ...edges],
     style: [
@@ -387,15 +415,16 @@ function initCytoscape(nodes, edges) {
   cy.on('mouseover', 'node', function(evt) {
     const node = evt.target;
     const data = node.data();
+    const palette = getColorPalette();
     const tooltip = document.createElement('div');
     tooltip.className = 'graph-tooltip';
     tooltip.style.cssText = `
       position: absolute;
-      background: ${colorPalette.surface.hex()};
-      color: ${colorPalette.text.hex()};
+      background: ${palette.surface.hex()};
+      color: ${palette.text.hex()};
       padding: 8px 12px;
       border-radius: 6px;
-      border: 1px solid ${colorPalette.primary.alpha(0.5).hex()};
+      border: 1px solid ${palette.primary.alpha(0.5).hex()};
       font-size: 12px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       z-index: 1000;
@@ -405,11 +434,11 @@ function initCytoscape(nodes, edges) {
     `;
     
     let tooltipContent = `<strong>${data.label || data.id}</strong><br>`;
-    tooltipContent += `<span style="color: ${colorPalette.textMuted.hex()}">Type:</span> ${data.type || 'unknown'}<br>`;
-    tooltipContent += `<span style="color: ${colorPalette.textMuted.hex()}">Degree:</span> ${data.degree || 0}<br>`;
-    if (data.id) tooltipContent += `<span style="color: ${colorPalette.textMuted.hex()}">ID:</span> ${data.id}<br>`;
-    if (data.purpose) tooltipContent += `<span style="color: ${colorPalette.textMuted.hex()}">Purpose:</span> ${data.purpose}<br>`;
-    if (data.role) tooltipContent += `<span style="color: ${colorPalette.textMuted.hex()}">Role:</span> ${data.role}<br>`;
+    tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Type:</span> ${data.type || 'unknown'}<br>`;
+    tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Degree:</span> ${data.degree || 0}<br>`;
+    if (data.id) tooltipContent += `<span style="color: ${palette.textMuted.hex()}">ID:</span> ${data.id}<br>`;
+    if (data.purpose) tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Purpose:</span> ${data.purpose}<br>`;
+    if (data.role) tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Role:</span> ${data.role}<br>`;
     
     tooltip.innerHTML = tooltipContent;
     document.body.appendChild(tooltip);
@@ -498,11 +527,12 @@ function setupSearch() {
       matchingNodes.addClass('search-highlight');
       
       // Style for highlighted nodes
+      const palette = getColorPalette();
       cy.style()
         .selector('.search-highlight')
         .style({
           'border-width': 4,
-          'border-color': colorPalette.warning.hex(),
+          'border-color': palette.warning.hex(),
         })
         .update();
       
