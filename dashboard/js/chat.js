@@ -805,7 +805,7 @@ export async function loadConversations() {
     const conversations = result.data || [];
 
     if (conversations.length === 0) {
-      listDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 14px;">No conversations yet. Create a new one to start!</div>';
+      listDiv.innerHTML = '<div class="text-slate-400 text-center py-5 text-sm">No conversations yet. Create a new one to start!</div>';
       return;
     }
 
@@ -834,7 +834,7 @@ export async function loadConversations() {
     }
   } catch (error) {
     console.error('Failed to load conversations:', error);
-    listDiv.innerHTML = '<div style="color: #ef4444; text-align: center; padding: 20px; font-size: 14px;">Failed to load conversations</div>';
+    listDiv.innerHTML = '<div class="text-red-400 text-center py-5 text-sm">Failed to load conversations</div>';
   }
 }
 
