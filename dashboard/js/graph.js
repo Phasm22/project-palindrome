@@ -108,21 +108,27 @@ export async function loadGraph() {
           label: n.name || n.properties?.name || n.id || 'Unknown',
           type: nodeType,
           degree: degree,
+          backgroundColor: color.hex(),
+          width: size,
+          height: size,
+          fontSize: Math.max(12, Math.min(16, size * 0.4)) + 'px',
+          fontWeight: degree > maxDegree * 0.5 ? '600' : '400',
+          borderColor: color.darken(0.3).hex(),
           ...n.properties,
         },
         style: {
-          'background-color': color.hex(),
-          'width': size,
-          'height': size,
+          'background-color': 'data(backgroundColor)',
+          'width': 'data(width)',
+          'height': 'data(height)',
           'label': 'data(label)',
-          'font-size': Math.max(12, Math.min(16, size * 0.4)) + 'px',
+          'font-size': 'data(fontSize)',
           'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          'font-weight': degree > maxDegree * 0.5 ? '600' : '400',
+          'font-weight': 'data(fontWeight)',
           'color': colorPalette.text.hex(),
           'text-outline-color': colorPalette.background.hex(),
           'text-outline-width': 2,
           'border-width': 2,
-          'border-color': color.darken(0.3).hex(),
+          'border-color': 'data(borderColor)',
         },
       };
     });
@@ -338,6 +344,37 @@ function initCytoscape(nodes, edges, colorPalette) {
         },
       },
       {
+        selector: 'node[backgroundColor]',
+        style: {
+          'background-color': 'data(backgroundColor)',
+        },
+      },
+      {
+        selector: 'node[width]',
+        style: {
+          'width': 'data(width)',
+          'height': 'data(height)',
+        },
+      },
+      {
+        selector: 'node[fontSize]',
+        style: {
+          'font-size': 'data(fontSize)',
+        },
+      },
+      {
+        selector: 'node[fontWeight]',
+        style: {
+          'font-weight': 'data(fontWeight)',
+        },
+      },
+      {
+        selector: 'node[borderColor]',
+        style: {
+          'border-color': 'data(borderColor)',
+        },
+      },
+      {
         selector: 'node:selected',
         style: {
           'border-width': 4,
@@ -373,20 +410,20 @@ function initCytoscape(nodes, edges, colorPalette) {
     ],
     layout: {
       name: 'cose',
-      idealEdgeLength: 100,
-      nodeOverlap: 20,
+      idealEdgeLength: 200,
+      nodeOverlap: 30,
       refresh: 1,
       fit: true,
-      padding: 30,
-      randomize: false,
-      componentSpacing: 40,
-      nodeRepulsion: 4500,
-      edgeElasticity: 100,
-      nestingFactor: 5,
-      gravity: 0.25,
-      numIter: 2500,
-      initialTemp: 200,
-      coolingFactor: 0.95,
+      padding: 100,
+      randomize: true,
+      componentSpacing: 100,
+      nodeRepulsion: 8000,
+      edgeElasticity: 200,
+      nestingFactor: 10,
+      gravity: 0.1,
+      numIter: 3000,
+      initialTemp: 400,
+      coolingFactor: 0.98,
       minTemp: 1.0,
       animate: true,
       animationDuration: 1000,
@@ -581,7 +618,8 @@ function setupFilters() {
     el.addEventListener('click', () => {
       const type = el.getAttribute('data-filter-type');
       const nodes = cy.nodes(`[type = "${type}"]`);
-      const edges = cy.edges().connected(nodes);
+      // Get edges connected to these nodes
+      const edges = nodes.connectedEdges();
       
       cy.elements().removeClass('filtered');
       cy.elements().not(nodes).not(edges).addClass('filtered');
