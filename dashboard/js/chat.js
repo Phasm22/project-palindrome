@@ -1,0 +1,902 @@
+import { API_URL, escapeHtml } from './utils.js';
+
+// Chat state
+let currentEventSource = null;
+let currentSessionId = null;
+let currentResponseId = null;
+let finalEventTimeout = null;
+let currentConversationId = null;
+
+// Export conversation ID getter/setter for other modules
+export function getCurrentConversationId() {
+  return currentConversationId;
+}
+
+export function setCurrentConversationId(id) {
+  currentConversationId = id;
+}
+
+// Helper functions
+function formatClusterNodesSection(nodes) {
+  if (nodes.length === 0) {
+    return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No nodes discovered in twin.</div>';
+  }
+  
+  let html = '<div style="margin: 12px 0;">';
+  for (const node of nodes) {
+    const statusColor = node.status === 'online' ? '#10b981' : node.status === 'offline' ? '#ef4444' : '#94a3b8';
+    html += `
+      <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid #3b82f6;">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(node.name)}</strong>
+          <span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(node.status)}</span>
+          <span style="color: #94a3b8; font-size: 0.875em;">${node.vmCount} VM${node.vmCount !== 1 ? 's' : ''}</span>
+          <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #64748b; font-family: 'Courier New', monospace; font-size: 0.8em;">${escapeHtml(node.id)}</code>
+        </div>
+      </div>
+    `;
+  }
+  html += '</div>';
+  return html;
+}
+
+function formatClusterVmsSection(vms) {
+  if (vms.length === 0) {
+    return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No VMs discovered in twin.</div>';
+  }
+  
+  return '<div style="margin: 12px 0;">' + vms.join('') + '</div>';
+}
+
+function formatAgentResponse(text) {
+  if (!text) return '';
+  
+  const lines = text.split('\n');
+  let html = '';
+  let inVmEntry = false;
+  let currentVmHtml = '';
+  let currentVmName = '';
+  
+  let inClusterNodes = false;
+  let inClusterVms = false;
+  let nodeEntries = [];
+  let vmList = [];
+  let seenVmNames = new Set();
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    
+    if (trimmed.endsWith(':') && !trimmed.startsWith('-')) {
+      if (inClusterNodes && nodeEntries.length > 0) {
+        html += formatClusterNodesSection(nodeEntries);
+        nodeEntries = [];
+      }
+      if (inClusterVms && vmList.length > 0) {
+        html += formatClusterVmsSection(vmList);
+        vmList = [];
+      }
+      
+      const sectionName = trimmed.replace(':', '');
+      if (sectionName === 'Cluster Nodes') {
+        inClusterNodes = true;
+        inClusterVms = false;
+      } else if (sectionName === 'Cluster VMs' || sectionName.includes('VMs')) {
+        inClusterNodes = false;
+        inClusterVms = true;
+      } else {
+        inClusterNodes = false;
+        inClusterVms = false;
+        html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em; font-weight: 600;">${escapeHtml(sectionName)}</h3>`;
+      }
+      continue;
+    }
+    
+    if (inClusterNodes && trimmed.startsWith('- ')) {
+      const nodeMatch = trimmed.match(/^- (.+?) \(id=(.+?), vms=(\d+), status=(.+?)\)/);
+      if (nodeMatch) {
+        const [, name, id, vmCount, status] = nodeMatch;
+        nodeEntries.push({ name: name.trim(), id: id.trim(), vmCount: parseInt(vmCount), status: status.trim() });
+      }
+      continue;
+    }
+    
+    if (inClusterVms && trimmed.startsWith('- ') && !trimmed.startsWith('  -')) {
+      if (inVmEntry && currentVmHtml && currentVmName) {
+        if (!seenVmNames.has(currentVmName)) {
+          vmList.push(currentVmHtml + '</div>');
+          seenVmNames.add(currentVmName);
+        }
+        currentVmHtml = '';
+        currentVmName = '';
+      }
+      
+      const vmMatch = trimmed.match(/^- (.+?) \((.+?),\s*(.+?)\)/);
+      if (vmMatch) {
+        const [, name, vmType, state] = vmMatch;
+        const vmName = name.trim();
+        
+        if (seenVmNames.has(vmName)) {
+          inVmEntry = false;
+          continue;
+        }
+        
+        inVmEntry = true;
+        currentVmName = vmName;
+        const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
+        const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
+        currentVmHtml = `
+          <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(vmName)}</strong>
+              <span style="background: ${typeColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
+              <span style="background: ${stateColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(state.trim())}</span>
+            </div>
+        `;
+      }
+      continue;
+    }
+    
+    if (inClusterVms && trimmed.startsWith('  - ') && !trimmed.startsWith('    -')) {
+      const nestedVmMatch = trimmed.match(/^  - (.+?) \((.+?),\s*(.+?)\)/);
+      if (nestedVmMatch && inVmEntry && currentVmHtml) {
+        const [, name, vmType, state] = nestedVmMatch;
+        const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
+        const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
+        currentVmHtml += `
+          <div style="margin-top: 8px; margin-left: 16px; padding: 8px; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 4px; border-left: 2px solid ${typeColor};">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <strong style="color: #cbd5e1; font-size: 0.95em;">${escapeHtml(name.trim())}</strong>
+              <span style="background: ${typeColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
+              <span style="background: ${stateColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(state.trim())}</span>
+            </div>
+          </div>
+        `;
+      }
+      continue;
+    }
+    
+    if (inVmEntry && trimmed.startsWith('  - Details:')) {
+      const detailsText = trimmed.replace('  - Details:', '').trim();
+      const parts = detailsText.split('|').map(p => p.trim());
+      let detailsHtml = '<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b;">';
+      
+      for (const part of parts) {
+        if (part.startsWith('trace=')) {
+          const traceId = part.replace('trace=', '');
+          detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
+            <span style="color: #94a3b8;">Trace ID:</span> 
+            <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #60a5fa; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer;" 
+                  onclick="navigator.clipboard.writeText('${escapeHtml(traceId)}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
+                  title="Click to copy">${escapeHtml(traceId)}</code>
+          </div>`;
+        } else if (part.startsWith('node=')) {
+          const nodeName = part.replace('node=', '');
+          detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
+            <span style="color: #94a3b8;">Node:</span> 
+            <span style="color: #e2e8f0; font-weight: 500;">${escapeHtml(nodeName)}</span>
+          </div>`;
+        } else {
+          detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em; color: #94a3b8;">${escapeHtml(part)}</div>`;
+        }
+      }
+      detailsHtml += '</div>';
+      currentVmHtml += detailsHtml;
+      continue;
+    }
+    
+    if (inVmEntry && trimmed.startsWith('  - Source:')) {
+      const sourceText = trimmed.replace('  - Source:', '').trim();
+      currentVmHtml += `
+        <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b; font-size: 0.8em; color: #64748b; font-style: italic;">
+          <span style="color: #94a3b8;">Source:</span> ${escapeHtml(sourceText)}
+        </div>
+      `;
+      continue;
+    }
+    
+    if (trimmed.startsWith('Tip:')) {
+      html += `<div style="margin-top: 16px; padding: 10px; background: #1e3a8a; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 0.875em; color: #bfdbfe;">
+        <strong style="color: #93c5fd;">💡 Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
+      </div>`;
+      continue;
+    }
+    
+    if (trimmed.startsWith('### ')) {
+      if (inVmEntry && currentVmHtml && currentVmName) {
+        if (!seenVmNames.has(currentVmName)) {
+          vmList.push(currentVmHtml + '</div>');
+          seenVmNames.add(currentVmName);
+        }
+        currentVmHtml = '';
+        currentVmName = '';
+        inVmEntry = false;
+      }
+      
+      const headerMatch = trimmed.match(/^### Node: (.+?) \(IP: (.+?)\)/);
+      if (headerMatch) {
+        html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa;">${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
+      } else {
+        const headerText = trimmed.replace(/^### /, '');
+        html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em;">${escapeHtml(headerText)}</h3>`;
+      }
+      continue;
+    }
+    
+    if (trimmed.startsWith('- ') && !inClusterNodes && !inClusterVms) {
+      const listMatch = trimmed.match(/^- \*\*(.+?)\*\*:\s*(.+)$/) || trimmed.match(/^- (.+?):\s*(.+)$/);
+      if (listMatch) {
+        const label = escapeHtml(listMatch[1]);
+        const value = escapeHtml(listMatch[2]);
+        html += `<div style="margin: 6px 0; padding-left: 16px;">
+          <span style="color: #94a3b8; font-weight: 500;">${label}:</span> 
+          <span style="color: #e2e8f0;">${value}</span>
+        </div>`;
+      } else {
+        html += `<div style="margin: 6px 0; padding-left: 16px; color: #e2e8f0;">${escapeHtml(trimmed.replace(/^- /, ''))}</div>`;
+      }
+      continue;
+    }
+    
+    if (trimmed && !trimmed.startsWith('  -')) {
+      if (inVmEntry && currentVmHtml && currentVmName) {
+        if (!seenVmNames.has(currentVmName)) {
+          vmList.push(currentVmHtml + '</div>');
+          seenVmNames.add(currentVmName);
+        }
+        currentVmHtml = '';
+        currentVmName = '';
+        inVmEntry = false;
+      }
+      
+      let processedLine = escapeHtml(trimmed);
+      processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
+      html += `<p style="margin: 8px 0; color: #cbd5e1; line-height: 1.5;">${processedLine}</p>`;
+    } else if (!trimmed && !inVmEntry) {
+      html += '<br>';
+    }
+  }
+  
+  if (inClusterNodes && nodeEntries.length > 0) {
+    html += formatClusterNodesSection(nodeEntries);
+  }
+  if (inClusterVms) {
+    if (inVmEntry && currentVmHtml && currentVmName) {
+      if (!seenVmNames.has(currentVmName)) {
+        vmList.push(currentVmHtml + '</div>');
+        seenVmNames.add(currentVmName);
+      }
+    }
+    if (vmList.length > 0) {
+      html += formatClusterVmsSection(vmList);
+    }
+  }
+  
+  return html;
+}
+
+function updateChatMessage(messageId, newContent) {
+  const messageDiv = document.getElementById(messageId);
+  if (messageDiv) {
+    messageDiv.innerHTML = newContent;
+    const messagesDiv = document.getElementById('chat-messages');
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  }
+}
+
+function addChatMessage(role, content, isLoading = false, messageId = null, dbId = null) {
+  const messagesDiv = document.getElementById('chat-messages');
+  const msgId = messageId || 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+  
+  const welcomeMsg = messagesDiv.querySelector('div[style*="text-align: center"]');
+  if (welcomeMsg) welcomeMsg.remove();
+
+  const messageDiv = document.createElement('div');
+  messageDiv.id = msgId;
+  messageDiv.dataset.dbId = dbId || '';
+  messageDiv.style.cssText = `
+    margin-bottom: 16px;
+    padding: 14px 16px;
+    border-radius: 10px;
+    max-width: 80%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    position: relative;
+    ${role === 'user' 
+      ? 'background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); margin-left: auto; text-align: right; border: 1px solid #3b82f6;' 
+      : 'background: #1e293b; margin-right: auto; border: 1px solid #334155;'}
+  `;
+
+  const deleteBtn = dbId ? `
+    <button 
+      onclick="window.deleteChatMessage('${dbId}', '${msgId}')" 
+      style="
+        position: absolute;
+        top: 8px;
+        ${role === 'user' ? 'left: 8px;' : 'right: 8px;'}
+        background: rgba(239, 68, 68, 0.2);
+        border: 1px solid rgba(239, 68, 68, 0.4);
+        border-radius: 4px;
+        padding: 4px 8px;
+        cursor: pointer;
+        opacity: 0.6;
+        transition: opacity 0.2s;
+      "
+      onmouseover="this.style.opacity='1'"
+      onmouseout="this.style.opacity='0.6'"
+      title="Delete message"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="color: #ef4444;">
+        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+      </svg>
+    </button>
+  ` : '';
+
+  if (role === 'user') {
+    messageDiv.innerHTML = `
+      ${deleteBtn}
+      <div style="color: #e2e8f0; white-space: pre-wrap; ${dbId ? 'padding-right: 30px;' : ''}">${escapeHtml(content)}</div>
+    `;
+  } else {
+    messageDiv.innerHTML = `
+      ${deleteBtn}
+      <div style="${dbId ? 'padding-right: 30px;' : ''}">
+        ${isLoading 
+          ? `<div style="color: #94a3b8; font-style: italic;">${content}</div>`
+          : content}
+      </div>
+    `;
+  }
+
+  messagesDiv.appendChild(messageDiv);
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+  return msgId;
+}
+
+function removeChatMessage(messageId) {
+  const message = document.getElementById(messageId);
+  if (message) message.remove();
+  
+  const messagesDiv = document.getElementById('chat-messages');
+  if (messagesDiv && messagesDiv.children.length === 0) {
+    messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.</div>';
+  }
+}
+
+function handleAgentEvent(event, toolExecutions) {
+  const messagesDiv = document.getElementById('chat-messages');
+  
+  switch (event.type) {
+    case 'agent:step':
+      updateChatMessage(currentResponseId, 
+        `<div class="agent-thinking">
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+          Reasoning step ${event.data.step}/${event.data.maxSteps}...
+        </div>`);
+      break;
+      
+    case 'tool:start':
+      const toolInfo = {
+        toolName: event.data.toolName,
+        params: event.data.parameters,
+        startTime: Date.now()
+      };
+      toolExecutions.push(toolInfo);
+      
+      const paramsStr = Object.entries(event.data.parameters || {})
+        .map(([k, v]) => `${k}=${typeof v === 'string' ? v.substring(0, 30) : JSON.stringify(v).substring(0, 30)}`)
+        .join(', ');
+      
+      const toolHtml = `
+        <div data-tool-name="${escapeHtml(event.data.toolName)}" style="margin-top: 8px; padding: 8px 10px; background: #1e3a8a; border-radius: 4px; font-size: 0.85em;">
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #60a5fa;"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
+          <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
+          ${paramsStr ? `<div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">${escapeHtml(paramsStr)}</div>` : ''}
+          <div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            Executing...
+          </div>
+        </div>
+      `;
+      
+      const toolMessageDiv = document.getElementById(currentResponseId);
+      if (toolMessageDiv) {
+        const currentContent = toolMessageDiv.innerHTML;
+        toolMessageDiv.innerHTML = currentContent + toolHtml;
+      } else {
+        updateChatMessage(currentResponseId, 
+          `<div class="agent-thinking">
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            Thinking...
+          </div>${toolHtml}`);
+      }
+      break;
+      
+    case 'tool:complete':
+      const tool = toolExecutions.find(t => t.toolName === event.data.toolName);
+      const duration = event.data.durationMs || (tool ? Date.now() - tool.startTime : 0);
+      const statusColor = event.data.success ? '#10b981' : '#ef4444';
+      
+      const completeMessageDiv = document.getElementById(currentResponseId);
+      if (completeMessageDiv) {
+        const toolDivs = completeMessageDiv.querySelectorAll('div[data-tool-name]');
+        const toolDiv = Array.from(toolDivs).find(d => 
+          d.getAttribute('data-tool-name') === event.data.toolName
+        );
+        
+        if (toolDiv) {
+          const successIcon = event.data.success 
+            ? '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #10b981;"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
+            : '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #ef4444;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
+          toolDiv.innerHTML = `
+            ${successIcon}
+            <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
+            <span style="color: ${statusColor}; margin-left: 8px; font-size: 0.9em;">${event.data.success ? 'Completed' : 'Failed'}</span>
+            <div style="color: #94a3b8; margin-top: 4px; font-size: 0.85em;">
+              <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+              ${duration}ms
+            </div>
+            ${event.data.error ? `<div style="color: #ef4444; margin-top: 4px; font-size: 0.85em;">${escapeHtml(event.data.error)}</div>` : ''}
+          `;
+        }
+      }
+      break;
+      
+    case 'agent:final':
+      const formattedText = formatAgentResponse(event.data.text || 'No response');
+      const durationSeconds = (event.data.durationMs || 0) / 1000;
+      
+      setTimeout(() => {
+        if (currentConversationId) {
+          loadChatHistory(currentConversationId);
+        }
+        // Refresh conversation list to update message counts
+        loadConversations();
+      }, 500);
+      
+      const finalHtml = `
+        <div class="agent-response" style="line-height: 1.6;">
+          ${formattedText}
+        </div>
+        ${toolExecutions.length > 0 ? `
+          <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em; display: flex; align-items: center; gap: 12px;">
+            <svg style="width: 16px; height: 16px; opacity: 0.7;" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+            </svg>
+            <span>Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''} in ${durationSeconds.toFixed(2)}s</span>
+          </div>
+        ` : ''}
+      `;
+      
+      updateChatMessage(currentResponseId, finalHtml);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      
+      if (currentEventSource) {
+        currentEventSource.close();
+        currentEventSource = null;
+      }
+      
+      if (finalEventTimeout) {
+        clearTimeout(finalEventTimeout);
+        finalEventTimeout = null;
+      }
+      
+      const input = document.getElementById('chat-input');
+      const sendBtn = document.getElementById('chat-send-btn');
+      input.disabled = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+      input.focus();
+      break;
+  }
+}
+
+// Main chat functions
+export async function sendChatMessage() {
+  const input = document.getElementById('chat-input');
+  const sendBtn = document.getElementById('chat-send-btn');
+  const messagesDiv = document.getElementById('chat-messages');
+  
+  const message = input.value.trim();
+  if (!message) return;
+
+  input.disabled = true;
+  sendBtn.disabled = true;
+  sendBtn.textContent = 'Sending...';
+
+  if (currentEventSource) {
+    currentEventSource.close();
+    currentEventSource = null;
+  }
+
+  addChatMessage('user', message);
+  input.value = '';
+
+  currentResponseId = addChatMessage('assistant', `
+    <div class="agent-thinking">
+      <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+      Thinking...
+    </div>
+  `, true);
+
+  try {
+    if (!currentConversationId) {
+      try {
+        const createResponse = await fetch(`${API_URL}/api/chat/conversations`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: 'dashboard-user' }),
+        });
+        if (createResponse.ok) {
+          const createResult = await createResponse.json();
+          currentConversationId = createResult.data.id;
+          await loadConversations();
+        }
+      } catch (error) {
+        console.error('Failed to create conversation:', error);
+      }
+    }
+
+    const startResponse = await fetch(`${API_URL}/api/agent/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        query: message, 
+        userId: 'dashboard-user', 
+        aclGroup: 'admin',
+        conversationId: currentConversationId
+      })
+    });
+
+    if (!startResponse.ok) {
+      throw new Error(`HTTP ${startResponse.status}: ${startResponse.statusText}`);
+    }
+
+    const startResult = await startResponse.json();
+    currentSessionId = startResult.sessionId;
+    
+    if (startResult.conversationId && !currentConversationId) {
+      currentConversationId = startResult.conversationId;
+      await loadConversations();
+    } else if (currentConversationId) {
+      // Refresh conversation list to update message count even if conversation already exists
+      loadConversations();
+    }
+
+    currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
+    
+    let toolExecutions = [];
+    let finalText = '';
+    const currentQuery = message;
+
+    currentEventSource.onmessage = (event) => {
+      try {
+        const agentEvent = JSON.parse(event.data);
+        handleAgentEvent(agentEvent, toolExecutions);
+        
+        if (agentEvent.type === 'agent:final') {
+          finalText = agentEvent.data.text || '';
+        }
+      } catch (error) {
+        console.error('Error parsing SSE event:', error);
+      }
+    };
+
+    currentEventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+      
+      if (finalEventTimeout) {
+        clearTimeout(finalEventTimeout);
+        finalEventTimeout = null;
+      }
+      
+      if (currentEventSource.readyState === EventSource.CLOSED) {
+        if (finalText) {
+          updateChatMessage(currentResponseId, `
+            <div class="agent-response" style="line-height: 1.6;">
+              ${formatAgentResponse(finalText)}
+            </div>
+            ${toolExecutions.length > 0 ? `
+              <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
+                Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
+              </div>
+            ` : ''}
+          `);
+        } else {
+          updateChatMessage(currentResponseId, `
+            <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24; margin-top: 10px;">
+              <strong>⚠️ Connection closed</strong><br>
+              <span style="font-size: 0.9em;">The agent may still be processing. Try refreshing or asking again.</span>
+            </div>
+          `);
+        }
+        
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        input.focus();
+      }
+      
+      currentEventSource.close();
+      currentEventSource = null;
+    };
+
+    finalEventTimeout = setTimeout(() => {
+      if (currentEventSource && finalText) {
+        updateChatMessage(currentResponseId, `
+          <div class="agent-response" style="line-height: 1.6;">
+            ${formatAgentResponse(finalText)}
+          </div>
+          ${toolExecutions.length > 0 ? `
+            <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
+              Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
+            </div>
+          ` : ''}
+        `);
+        
+        currentEventSource.close();
+        currentEventSource = null;
+        
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        input.focus();
+      } else if (currentEventSource && !finalText) {
+        const isActionOperation = currentQuery && (
+          currentQuery.toLowerCase().includes('create') ||
+          currentQuery.toLowerCase().includes('destroy') ||
+          currentQuery.toLowerCase().includes('provision')
+        );
+        const timeoutMs = isActionOperation ? 300000 : 60000;
+        
+        updateChatMessage(currentResponseId, `
+          <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24;">
+            <strong>⚠️ Response timeout</strong><br>
+            <span style="font-size: 0.9em;">The agent is taking longer than expected (${timeoutMs / 1000}s timeout). The operation may still be running. Check the reasoning traces tab for details.</span>
+          </div>
+        `);
+        
+        currentEventSource.close();
+        currentEventSource = null;
+        
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        input.focus();
+      }
+      finalEventTimeout = null;
+    }, (() => {
+      const isActionOperation = message && (
+        message.toLowerCase().includes('create') ||
+        message.toLowerCase().includes('destroy') ||
+        message.toLowerCase().includes('provision')
+      );
+      return isActionOperation ? 300000 : 60000;
+    })());
+
+  } catch (error) {
+    if (currentResponseId) {
+      removeChatMessage(currentResponseId);
+    }
+    
+    addChatMessage('assistant', `<div style="color: #ef4444;">Error: ${escapeHtml(error.message)}</div>`);
+    
+    input.disabled = false;
+    sendBtn.disabled = false;
+    sendBtn.textContent = 'Send';
+    input.focus();
+  }
+}
+
+export async function loadConversations() {
+  const listDiv = document.getElementById('conversation-list');
+  if (!listDiv) return;
+
+  try {
+    const userId = 'dashboard-user';
+    const response = await fetch(`${API_URL}/api/chat/conversations?userId=${userId}`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    const conversations = result.data || [];
+
+    if (conversations.length === 0) {
+      listDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 14px;">No conversations yet. Create a new one to start!</div>';
+      return;
+    }
+
+    listDiv.innerHTML = conversations.map(conv => `
+      <div 
+        class="conversation-item" 
+        data-conversation-id="${conv.id}"
+        onclick="window.selectConversation('${conv.id}')"
+        style="
+          padding: 12px;
+          margin-bottom: 4px;
+          border-radius: 4px;
+          cursor: pointer;
+          background: ${currentConversationId === conv.id ? '#1e3a8a' : 'transparent'};
+          border: 1px solid ${currentConversationId === conv.id ? '#3b82f6' : 'transparent'};
+          transition: all 0.2s;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        "
+        onmouseover="if (this.dataset.conversationId !== '${currentConversationId}') this.style.background='#1e293b'"
+        onmouseout="if (this.dataset.conversationId !== '${currentConversationId}') this.style.background='transparent'"
+      >
+        <div style="flex: 1; min-width: 0;">
+          <div style="color: #e2e8f0; font-weight: ${currentConversationId === conv.id ? '600' : '400'}; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            ${escapeHtml(conv.title)}
+          </div>
+          <div style="color: #94a3b8; font-size: 12px; margin-top: 4px;">
+            ${conv.messageCount} message${conv.messageCount !== 1 ? 's' : ''}
+          </div>
+        </div>
+        <button
+          onclick="event.stopPropagation(); window.deleteConversation('${conv.id}')"
+          style="
+            background: transparent;
+            border: none;
+            color: #ef4444;
+            cursor: pointer;
+            padding: 4px;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+          "
+          onmouseover="this.style.opacity='1'"
+          onmouseout="this.style.opacity='0.6'"
+          title="Delete conversation"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+          </svg>
+        </button>
+      </div>
+    `).join('');
+
+    if (currentConversationId) {
+      const currentItem = listDiv.querySelector(`[data-conversation-id="${currentConversationId}"]`);
+      if (currentItem) {
+        currentItem.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load conversations:', error);
+    listDiv.innerHTML = '<div style="color: #ef4444; text-align: center; padding: 20px; font-size: 14px;">Failed to load conversations</div>';
+  }
+}
+
+export async function selectConversation(conversationId) {
+  currentConversationId = conversationId;
+  await loadChatHistory(conversationId);
+  loadConversations();
+}
+
+export async function createNewConversation() {
+  try {
+    const userId = 'dashboard-user';
+    const response = await fetch(`${API_URL}/api/chat/conversations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    const newConversationId = result.data.id;
+
+    await selectConversation(newConversationId);
+  } catch (error) {
+    console.error('Failed to create conversation:', error);
+    alert('Failed to create conversation: ' + error.message);
+  }
+}
+
+export async function deleteConversation(conversationId) {
+  if (!confirm('Delete this conversation? All messages will be permanently deleted.')) {
+    return;
+  }
+
+  try {
+    const userId = 'dashboard-user';
+    const response = await fetch(`${API_URL}/api/chat/conversations/${conversationId}?userId=${userId}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    if (currentConversationId === conversationId) {
+      currentConversationId = null;
+      const messagesDiv = document.getElementById('chat-messages');
+      if (messagesDiv) {
+        messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Select a conversation or create a new one to start chatting.</div>';
+      }
+    }
+
+    await loadConversations();
+  } catch (error) {
+    console.error('Failed to delete conversation:', error);
+    alert('Failed to delete conversation: ' + error.message);
+  }
+}
+
+export async function loadChatHistory(conversationId = null) {
+  const messagesDiv = document.getElementById('chat-messages');
+  if (!messagesDiv) return;
+
+  if (!conversationId) {
+    messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Select a conversation or create a new one to start chatting.</div>';
+    return;
+  }
+
+  try {
+    const userId = 'dashboard-user';
+    const response = await fetch(`${API_URL}/api/chat/conversations/${conversationId}/messages?userId=${userId}&limit=100`);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    const messages = result.data || [];
+
+    messagesDiv.innerHTML = '';
+
+    if (messages.length === 0) {
+      messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.</div>';
+      return;
+    }
+
+    messages.forEach(msg => {
+      if (msg.role === 'user') {
+        addChatMessage('user', msg.content, false, null, msg.id);
+      } else {
+        const formattedContent = formatAgentResponse(msg.content);
+        addChatMessage('assistant', formattedContent, false, null, msg.id);
+      }
+    });
+
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  } catch (error) {
+    console.error('Failed to load chat history:', error);
+    messagesDiv.innerHTML = '<div style="color: #ef4444; text-align: center; padding: 20px;">Failed to load messages</div>';
+  }
+}
+
+export async function deleteChatMessage(dbId, messageId) {
+  if (!confirm('Delete this message?')) {
+    return;
+  }
+
+  try {
+    const userId = 'dashboard-user';
+    const response = await fetch(`${API_URL}/api/chat/history/${dbId}?userId=${userId}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    removeChatMessage(messageId);
+  } catch (error) {
+    console.error('Failed to delete message:', error);
+    alert('Failed to delete message: ' + error.message);
+  }
+}
+
+// Make functions globally accessible for onclick handlers
+window.sendChatMessage = sendChatMessage;
+window.selectConversation = selectConversation;
+window.createNewConversation = createNewConversation;
+window.deleteConversation = deleteConversation;
+window.deleteChatMessage = deleteChatMessage;

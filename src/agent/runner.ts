@@ -232,6 +232,7 @@ export type AgentRunOptions = {
   confirmHighRisk?: (info: { toolName: string; parameters: Record<string, any>; risk: string }) => Promise<boolean>;
   ragBaseUrl?: string;
   sessionId?: string; // Optional session ID for event tracking
+  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>; // Previous messages in conversation
 };
 
 function coerceTextContent(content: any): string {
@@ -295,6 +296,19 @@ export async function runAgent(
   const confirmHighRisk = options.confirmHighRisk ?? (async ({ toolName }) => defaultConfirmHighRisk(toolName));
 
   const context = new AgentContext();
+  
+  // Add conversation history to context (if provided)
+  if (options.conversationHistory && options.conversationHistory.length > 0) {
+    for (const msg of options.conversationHistory) {
+      if (msg.role === "user") {
+        context.addUserMessage(msg.content);
+      } else if (msg.role === "assistant") {
+        context.addAssistantMessage(msg.content);
+      }
+    }
+  }
+  
+  // Add current user message
   context.addUserMessage(userInput);
 
   const tools = loadTools();
