@@ -498,7 +498,7 @@ function setupSearch() {
   const searchInput = document.getElementById('node-search');
   const resultsDiv = document.getElementById('search-results');
   
-  if (!searchInput || !resultsDiv) return;
+  if (!searchInput || !resultsDiv || !cy) return;
   
   let searchTimeout;
   searchInput.addEventListener('input', (e) => {
@@ -574,6 +574,8 @@ function setupSearch() {
 }
 
 function setupFilters() {
+  if (!cy) return;
+  
   // Filter by node type
   document.querySelectorAll('[data-filter-type]').forEach(el => {
     el.addEventListener('click', () => {
@@ -630,6 +632,7 @@ function setupFilters() {
   
   // Reset filter on double-click
   document.addEventListener('dblclick', () => {
+    if (!cy) return;
     cy.elements().removeClass('filtered');
     cy.style()
       .selector('.filtered')
