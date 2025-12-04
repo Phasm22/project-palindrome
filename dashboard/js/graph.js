@@ -101,16 +101,20 @@ export async function loadGraph() {
         hover: true,
         tooltipDelay: 100,
       },
-      height: '100%',
-      width: '100%',
+      // Don't set height/width in options - let the container handle it
     };
     
     // Create layout with sidebar
+    // Get container height to set fixed size
+    const container = document.getElementById('graph-container');
+    const containerHeight = container ? container.clientHeight : 600;
+    const fixedHeight = Math.max(containerHeight, 600);
+    
     const html = `
-      <div class="flex gap-4" style="height: calc(100vh - 250px); min-height: 600px;">
+      <div class="flex gap-4" style="height: ${fixedHeight}px;">
         <!-- Graph Visualization -->
-        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: 100%;">
-          <div id="graph" style="width: 100%; height: 100%;"></div>
+        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: ${fixedHeight}px; overflow: hidden;">
+          <div id="graph" style="width: 100%; height: ${fixedHeight}px;"></div>
         </div>
         
         <!-- Statistics and Legend Sidebar -->

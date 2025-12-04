@@ -28,10 +28,15 @@ const watcher = watch(
 );
 
 // Simple file server with auto-reload
-serve({
+const server = serve({
   port: PORT,
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
+    
+    // Handle WebSocket upgrade for /_reload
+    if (url.pathname === "/_reload" && server.upgrade(req)) {
+      return; // WebSocket upgrade handled
+    }
     
     // Handle favicon requests
     if (url.pathname === "/favicon.ico") {
@@ -89,18 +94,13 @@ serve({
   
   websocket: {
     message(ws, message) {},
-    open(ws, req) {
-      // Only accept connections to /_reload path
-      const url = new URL(req.url);
-      if (url.pathname === "/_reload") {
-        connectedClients.add(ws);
-        console.log(`✅ WebSocket client connected for auto-reload`);
-      } else {
-        ws.close();
-      }
+    open(ws) {
+      connectedClients.add(ws);
+      console.log(`✅ WebSocket client connected for auto-reload`);
     },
     close(ws) {
       connectedClients.delete(ws);
+      console.log(`❌ WebSocket client disconnected`);
     },
   },
 });
