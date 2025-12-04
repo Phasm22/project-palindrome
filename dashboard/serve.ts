@@ -33,8 +33,11 @@ serve({
   async fetch(req) {
     const url = new URL(req.url);
     
-    // WebSocket upgrades are handled automatically by Bun when websocket handler is defined
-    // Just let it pass through for /_reload path
+    // Check for WebSocket upgrade request
+    if (req.headers.get("upgrade") === "websocket" && url.pathname === "/_reload") {
+      // Let Bun handle the upgrade automatically via websocket handler
+      return;
+    }
     
     let path = url.pathname === "/" ? "/index.html" : url.pathname;
     
@@ -87,14 +90,8 @@ serve({
   
   websocket: {
     message(ws, message) {},
-    open(ws, req) {
-      // Only accept connections to /_reload path
-      const url = new URL(req.url);
-      if (url.pathname === "/_reload") {
-        connectedClients.add(ws);
-      } else {
-        ws.close();
-      }
+    open(ws) {
+      connectedClients.add(ws);
     },
     close(ws) {
       connectedClients.delete(ws);

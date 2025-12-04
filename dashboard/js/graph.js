@@ -100,15 +100,6 @@ export async function loadGraph() {
       interaction: {
         hover: true,
         tooltipDelay: 100,
-        tooltipStyle: {
-          backgroundColor: '#1e293b',
-          color: '#e2e8f0',
-          border: '1px solid #334155',
-          borderRadius: '6px',
-          padding: '8px 12px',
-          fontSize: '13px',
-          fontFamily: 'inherit',
-        },
       },
       height: '100%',
       width: '100%',
