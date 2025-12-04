@@ -243,18 +243,19 @@ interface AnsibleActionResult {
 
 ### 7. Implementation Phases
 
-#### Phase 1: Core Infrastructure (MVP)
-- [ ] Inventory resolution from VM name
-- [ ] SSH readiness detection
-- [ ] Basic playbook execution wrapper
-- [ ] `services.install_docker` action
-- [ ] `services.bootstrap` action (runs common.yml)
+#### Phase 1: Core Infrastructure (MVP) ✅ COMPLETED
+- [x] Inventory resolution from VM name (`resolveVmToHostname`, `ensureHostnameInInventory`)
+- [x] SSH readiness detection (`waitForSshAccessible`)
+- [x] Basic playbook execution wrapper (`AnsibleRunner`)
+- [x] `services.install_docker` action
+- [x] `services.bootstrap` action (runs common.yml)
+- [x] `bootstrap: true` parameter in `create_vm` action
 
-#### Phase 2: Service Actions
-- [ ] `services.install_nginx`
-- [ ] `services.install_wazuh_agent`
-- [ ] `services.configure_firewall`
-- [ ] `services.set_static_ip`
+#### Phase 2: Service Actions ✅ COMPLETED
+- [x] `services.install_nginx`
+- [ ] `services.install_wazuh_agent` (skipped - resource intensive)
+- [x] `services.configure_firewall`
+- [x] `services.set_static_ip`
 
 #### Phase 3: Advanced Features
 - [ ] Ad-hoc command execution
