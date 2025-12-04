@@ -4,6 +4,9 @@ import { createDnsRecord, CreateDnsRecordSchema } from "./network/create-dns-rec
 import { syncDhcpToDns, SyncDhcpToDnsSchema } from "./network/sync-dhcp-to-dns";
 import { bootstrap, BootstrapSchema } from "./services/bootstrap";
 import { installDocker, InstallDockerSchema } from "./services/install-docker";
+import { installNginx, InstallNginxSchema } from "./services/install-nginx";
+import { configureFirewall, ConfigureFirewallSchema } from "./services/configure-firewall";
+import { setStaticIp, SetStaticIpSchema } from "./services/set-static-ip";
 
 /**
  * Action Registry
@@ -109,6 +112,33 @@ actionRegistry.register({
   description: "Install Docker CE, Docker Compose, and Portainer on a VM using Ansible",
   schema: InstallDockerSchema,
   execute: installDocker,
+  requiredTools: ["ansible"],
+  requiredEntities: ["compute_vm"],
+});
+
+actionRegistry.register({
+  name: "services.install_nginx",
+  description: "Install and configure nginx web server on a VM using Ansible",
+  schema: InstallNginxSchema,
+  execute: installNginx,
+  requiredTools: ["ansible"],
+  requiredEntities: ["compute_vm"],
+});
+
+actionRegistry.register({
+  name: "services.configure_firewall",
+  description: "Configure UFW (Uncomplicated Firewall) rules on a VM using Ansible",
+  schema: ConfigureFirewallSchema,
+  execute: configureFirewall,
+  requiredTools: ["ansible"],
+  requiredEntities: ["compute_vm"],
+});
+
+actionRegistry.register({
+  name: "services.set_static_ip",
+  description: "Configure a static IP address on a VM using netplan via Ansible",
+  schema: SetStaticIpSchema,
+  execute: setStaticIp,
   requiredTools: ["ansible"],
   requiredEntities: ["compute_vm"],
 });

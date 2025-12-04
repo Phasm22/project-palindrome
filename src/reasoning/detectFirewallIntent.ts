@@ -40,7 +40,23 @@ function extractChain(text: string): string | null {
 export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   const normalized = userInput.toLowerCase();
 
-  // Check for firewall-related keywords
+  // Skip if this looks like an action request (configure/setup/allow port on VM)
+  // Action intents are handled separately and take priority
+  const hasActionKeywords = 
+    (normalized.includes("configure") || normalized.includes("setup") || normalized.includes("set")) &&
+    (normalized.includes("firewall") || normalized.includes("port"));
+  
+  const hasAllowPortOnVm = 
+    normalized.includes("allow") && 
+    normalized.includes("port") && 
+    (normalized.includes("on ") || normalized.match(/\b(on|for|to)\s+[a-z0-9\-_]+/i));
+  
+  if (hasActionKeywords || hasAllowPortOnVm) {
+    // This is an action, not a query - let action intent detection handle it
+    return null;
+  }
+
+  // Check for firewall-related keywords (query patterns)
   const hasFirewallKeywords =
     normalized.includes("firewall") ||
     normalized.includes("rule") ||

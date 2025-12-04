@@ -334,13 +334,14 @@ export async function runAgent(
     }
   };
 
-  // Check action intent FIRST (before query intents)
-  // This prevents "create VM" from being treated as a query
+  // Check action intent FIRST (before ALL query intents)
+  // This prevents action requests from being treated as queries
   const actionIntent = detectActionIntent(userInput);
   if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
-    // Skip query intents - let the LLM handle action execution
+    // Skip ALL query intents (including firewall) - let the LLM handle action execution
     // The LLM will use the action tool with proper parameters
+    // For compound requests (e.g., "install nginx and configure firewall"), the LLM will execute sequentially
   } else {
     // Only check query intents if no action intent was detected
     // Check exposure intent first (most specific)
@@ -367,18 +368,19 @@ export async function runAgent(
         return { text: twinAnswer };
       }
     }
-  }
 
-  // Check firewall intent BEFORE network intent to avoid CIDR conflicts
-  const firewallIntent = detectFirewallIntent(userInput);
-  if (firewallIntent) {
-    const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
-    if (firewallAnswer) {
-      logger.info("Responding via twin-first firewall reasoning chain.");
-      emitStepEvent({ intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
-      emitFinalEvent(firewallAnswer, { intent: firewallIntent.type });
-      await recordEarlyReturnTrace(firewallAnswer, firewallIntent.type, 1);
-      return { text: firewallAnswer };
+    // Check firewall QUERY intent (only if no action intent detected)
+    // Action intents like "configure firewall" are handled above
+    const firewallIntent = detectFirewallIntent(userInput);
+    if (firewallIntent) {
+      const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
+      if (firewallAnswer) {
+        logger.info("Responding via twin-first firewall reasoning chain.");
+        emitStepEvent({ intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitFinalEvent(firewallAnswer, { intent: firewallIntent.type });
+        await recordEarlyReturnTrace(firewallAnswer, firewallIntent.type, 1);
+        return { text: firewallAnswer };
+      }
     }
   }
 

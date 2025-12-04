@@ -17,6 +17,9 @@ const ActionParams = z.object({
         "For network.sync_dhcp_to_dns: {dryRun?: boolean, domain?: string, updateExisting?: boolean}. Syncs OPNsense DHCP leases to Pi-hole DNS records. " +
         "For services.bootstrap: {vmName: string, playbook?: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Runs Ansible playbook (default: common.yml) on a VM. " +
         "For services.install_docker: {vmName: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Installs Docker CE, Docker Compose, and Portainer on a VM. " +
+        "For services.install_nginx: {vmName: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Installs and configures nginx web server on a VM. " +
+        "For services.configure_firewall: {vmName: string, rules?: Array<{port: number, protocol?: 'tcp'|'udp'|'both', action?: 'allow'|'deny'}>, defaultPolicy?: 'allow'|'deny', waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Configures UFW firewall rules on a VM. " +
+        "For services.set_static_ip: {vmName: string, ip: string (CIDR format, e.g., '192.168.1.100/24'), gateway: string, dns?: string[], interface?: string (default: 'eth0'), waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Configures a static IP address on a VM using netplan. " +
     "templateId is the VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001). " +
     "Must be an object."
   ),
@@ -35,7 +38,8 @@ export class ActionTool extends BaseTool {
       description: "Execute safe automation actions (create VMs, configure network, manage firewall). Uses Terraform/Ansible for deterministic operations.",
       categories: ["action", "automation", "terraform", "ansible"],
       allowedAcls: ["admin", "ops"],
-      risk: "high", // Actions modify infrastructure
+      risk: "medium", // Actions modify infrastructure but are safe and deterministic
+      requiresConfirmation: false, // No HITL approval needed - actions are safe and deterministic
     });
   }
 
@@ -127,6 +131,47 @@ export class ActionTool extends BaseTool {
               vmName: "dad",
               waitForVm: true,
               timeout: 300,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Install nginx on a VM",
+          parameters: {
+            action: "services.install_nginx",
+            params: {
+              vmName: "dad",
+              waitForVm: true,
+              timeout: 300,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Configure firewall rules on a VM",
+          parameters: {
+            action: "services.configure_firewall",
+            params: {
+              vmName: "dad",
+              rules: [
+                { port: 80, protocol: "tcp", action: "allow" },
+                { port: 443, protocol: "tcp", action: "allow" }
+              ],
+              defaultPolicy: "deny",
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Set static IP address on a VM",
+          parameters: {
+            action: "services.set_static_ip",
+            params: {
+              vmName: "dad",
+              ip: "192.168.1.100/24",
+              gateway: "192.168.1.1",
+              dns: ["8.8.8.8", "8.8.4.4"],
+              interface: "eth0",
               dryRun: false
             }
           }

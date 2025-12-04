@@ -335,9 +335,18 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   // 6. Sync to twin (non-blocking - VM is created even if sync fails)
   try {
     const twinSync = new TwinSync();
-    await twinSync.syncTerraformVms(outputs);
+    const syncResult = await twinSync.syncTerraformVms(outputs);
+    logger.info("VM synced to twin", { 
+      name: finalName, 
+      entities: syncResult.entities, 
+      relationships: syncResult.relationships 
+    });
   } catch (error: any) {
-    logger.warn("Failed to sync VM to twin (non-critical)", { error: error.message, name: finalName });
+    logger.warn("Failed to sync VM to twin (non-critical)", { 
+      error: error.message, 
+      name: finalName,
+      stack: error.stack 
+    });
     // Don't fail VM creation if twin sync fails
   }
 

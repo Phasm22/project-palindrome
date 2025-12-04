@@ -26,7 +26,14 @@ export class AnsibleRunner {
   private ansibleDir: string;
 
   constructor(ansibleDir?: string) {
-    this.ansibleDir = ansibleDir || join(process.cwd(), "lab-infra", "ansible");
+    // Normalize to absolute path
+    if (ansibleDir) {
+      this.ansibleDir = ansibleDir.startsWith("/") 
+        ? ansibleDir 
+        : join(process.cwd(), ansibleDir);
+    } else {
+      this.ansibleDir = join(process.cwd(), "lab-infra", "ansible");
+    }
   }
 
   /**
@@ -122,15 +129,36 @@ export class AnsibleRunner {
     host: string,
     module: string,
     args: Record<string, any>,
-    inventory: string = "inventory.ini"
+    inventory: string = "inventory.ini",
+    become: boolean = true
   ): Promise<AnsibleAdHocResult> {
-    const inventoryPath = join(this.ansibleDir, inventory);
+    // Use relative path since we're running from ansibleDir
+    const inventoryRelative = inventory.startsWith("/") || inventory.includes("..")
+      ? inventory // Absolute path or path with .. - use as-is
+      : inventory; // Relative path - use as-is (relative to ansibleDir)
 
-    const moduleArgs = Object.entries(args)
-      .map(([key, value]) => `${key}=${value}`)
-      .join(" ");
+    // Special handling for command module: pass command directly without parameter name
+    let moduleArgs: string;
+    if (module === "command" && args._raw_params) {
+      // For command module, just pass the command directly
+      moduleArgs = args._raw_params;
+    } else {
+      // For other modules, format as key=value pairs
+      moduleArgs = Object.entries(args)
+        .map(([key, value]) => `${key}=${value}`)
+        .join(" ");
+    }
 
-    const command = `ansible ${host} -i ${inventoryPath} -m ${module} -a "${moduleArgs}"`;
+    const parts = [
+      "ansible",
+      host,
+      `-i ${inventoryRelative}`,
+      become ? "-b" : "",
+      `-m ${module}`,
+      `-a "${moduleArgs}"`,
+    ].filter(Boolean); // Remove empty strings
+    
+    const command = parts.join(" ");
 
     logger.info("Executing ansible ad-hoc command", { command, cwd: this.ansibleDir });
 
