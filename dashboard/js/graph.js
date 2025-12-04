@@ -95,7 +95,7 @@ export async function loadGraph() {
         label: n.name || n.properties?.name || n.id || 'Unknown',
         size: size,
         color: color,
-        type: nodeType,
+        nodeType: nodeType, // Use nodeType instead of type to avoid Sigma.js renderer selection
         degree: degree,
         x: Math.random() * 1000,
         y: Math.random() * 1000,
@@ -568,7 +568,8 @@ function setupFilters() {
       const nodesToShow = new Set();
       
       graph.forEachNode((node, attrs) => {
-        if (attrs.type === type) {
+        const nodeType = attrs.nodeType || attrs.type;
+        if (nodeType === type) {
           nodesToShow.add(node);
           // Add connected nodes
           graph.forEachNeighbor(node, neighbor => {
