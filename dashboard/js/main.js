@@ -20,9 +20,8 @@ window.executeGraphQuery = executeGraphQuery;
 window.executeCypherQuery = executeCypherQuery;
 window.testRagQuery = testRagQuery;
 
-// Make switchTab globally accessible immediately
-(function() {
-  window.switchTab = function(tabName, clickedElement) {
+// Make switchTab globally accessible
+window.switchTab = function(tabName, clickedElement) {
   // Hide all tabs
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.remove('active', 'text-primary-500', 'border-primary-500');
@@ -76,8 +75,8 @@ window.testRagQuery = testRagQuery;
   const overviewNav = document.getElementById('overview-nav');
   if (overviewNav) {
     overviewNav.style.display = tabName === 'overview' ? 'flex' : 'none';
-  };
-})();
+  }
+};
 
 // Load initial data when page loads
 window.addEventListener('DOMContentLoaded', () => {
