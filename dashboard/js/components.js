@@ -108,12 +108,11 @@ export function createConversationItem(conversation, options = {}) {
   } = options;
 
   const item = document.createElement('div');
-  item.className = `flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors mb-2 ${
+  item.className = `flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors mb-2 group ${
     isActive 
       ? 'bg-primary-600/20 border border-primary-500/50 text-primary-500' 
       : 'bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200'
   }`;
-  item.style.borderRadius = '0.5rem'; // Consistent rounded-lg
 
   const content = document.createElement('div');
   content.className = 'flex-1 min-w-0';
