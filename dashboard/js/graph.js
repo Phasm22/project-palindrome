@@ -35,10 +35,10 @@ export async function loadGraph() {
   if (!container) return;
   
   // Check if libraries are loaded - try multiple possible global names
-  // Graphology can be exposed as window.Graph, window.graphology, or window.graphology.Graph
-  const Graph = window.Graph || (window.graphology && (window.graphology.Graph || window.graphology));
-  // Sigma is exposed as window.sigma (lowercase) in v3.0.0-beta.25
-  const Sigma = window.sigma || window.Sigma;
+  // Graphology is exposed as window.Graph (from our UMD build)
+  const Graph = window.Graph;
+  // Sigma is exposed as window.Sigma (uppercase) in the minified build
+  const Sigma = window.Sigma;
   
   if (!Graph || !Sigma) {
     // Debug: log what's actually available
