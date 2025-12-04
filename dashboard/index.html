@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Palindrome Dashboard</title>
   <link rel="stylesheet" href="css/styles.css">
+  <script src="https://unpkg.com/cytoscape@3.33.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/chroma-js@3.2.0/chroma.min.js"></script>
   <style>
     /* Custom scrollbar */
     ::-webkit-scrollbar {
@@ -179,13 +181,13 @@
     </h1>
 
     <div class="flex gap-2 mb-6 border-b border-slate-700 overflow-x-auto">
-      <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('chat', this)">Chat</button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('overview', this)">Overview</button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('executions', this)">Tool Executions</button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('reasoning', this)">Reasoning Traces</button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('graph', this)">Ontology Graph</button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('rag', this)">RAG Diagnostics</button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="switchTab('query', this)">Query</button>
+      <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-colors whitespace-nowrap" onclick="window.switchTab('chat', this)">Chat</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="window.switchTab('overview', this)">Overview</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="window.switchTab('executions', this)">Tool Executions</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="window.switchTab('reasoning', this)">Reasoning Traces</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="window.switchTab('graph', this)">Ontology Graph</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="window.switchTab('rag', this)">RAG Diagnostics</button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-colors whitespace-nowrap" onclick="window.switchTab('query', this)">Query</button>
     </div>
 
     <!-- Overview Tab -->
@@ -365,13 +367,13 @@
     <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col">
       <div class="bg-slate-900 border border-slate-700 rounded-lg p-6 flex-1 min-h-0 flex flex-row gap-4 shadow-lg">
         <!-- Conversation Sidebar -->
-        <div id="conversation-sidebar" class="w-64 flex flex-col border border-slate-700 rounded-lg bg-slate-950">
-          <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+        <div id="conversation-sidebar" class="w-64 flex flex-col border border-slate-700 rounded-lg bg-slate-950 min-w-0 flex-shrink-0">
+          <div class="p-4 border-b border-slate-700 flex justify-between items-center flex-shrink-0">
             <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
             <button 
               id="new-conversation-btn"
-              onclick="createNewConversation()"
-              class="bg-primary-600 hover:bg-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-lg cursor-pointer text-xs flex items-center gap-1.5 transition-colors"
+              onclick="window.createNewConversation()"
+              class="bg-primary-600 hover:bg-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-lg cursor-pointer text-xs flex items-center gap-1.5 transition-colors flex-shrink-0"
               title="New conversation"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -380,7 +382,7 @@
               New
             </button>
           </div>
-          <div id="conversation-list" class="flex-1 overflow-y-auto p-2">
+          <div id="conversation-list" class="flex-1 overflow-y-auto p-2 min-h-0">
             <div class="text-slate-400 text-center py-5 text-sm">
               Loading conversations...
             </div>

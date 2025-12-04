@@ -1,6 +1,9 @@
 import { API_URL } from './utils.js';
-import cytoscape from 'cytoscape';
-import chroma from 'chroma-js';
+
+// Cytoscape and Chroma are loaded via CDN in HTML
+// Access them from window object
+const cytoscape = window.cytoscape;
+const chroma = window.chroma;
 
 // Color palette - burnt orange theme with good contrast
 const colorPalette = {
@@ -272,6 +275,12 @@ export async function loadGraph() {
 function initCytoscape(nodes, edges) {
   const cyContainer = document.getElementById('cy');
   if (!cyContainer) return;
+  
+  // Check if cytoscape is loaded
+  if (!cytoscape || !chroma) {
+    console.error('Cytoscape or Chroma not loaded. Make sure CDN scripts are included.');
+    return;
+  }
   
   // Destroy existing instance
   if (cy) {

@@ -810,45 +810,33 @@ export async function loadConversations() {
 
     listDiv.innerHTML = conversations.map(conv => `
       <div 
-        class="conversation-item" 
+        class="conversation-item mb-2 p-3 rounded-lg cursor-pointer transition-all duration-200 flex items-center gap-3 group" 
         data-conversation-id="${conv.id}"
         onclick="window.selectConversation('${conv.id}')"
         style="
-          padding: 12px;
-          margin-bottom: 4px;
-          border-radius: 4px;
-          cursor: pointer;
           background: ${currentConversationId === conv.id ? '#7c2d12' : 'transparent'};
           border: 1px solid ${currentConversationId === conv.id ? '#f97316' : 'transparent'};
-          transition: all 0.2s;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
         "
-        onmouseover="if (this.dataset.conversationId !== '${currentConversationId}') this.style.background='#1e293b'"
-        onmouseout="if (this.dataset.conversationId !== '${currentConversationId}') this.style.background='transparent'"
+        onmouseover="if (this.dataset.conversationId !== '${currentConversationId}') { this.style.background='#1e293b'; this.style.borderColor='#334155'; }"
+        onmouseout="if (this.dataset.conversationId !== '${currentConversationId}') { this.style.background='transparent'; this.style.borderColor='transparent'; }"
       >
-        <div style="flex: 1; min-width: 0;">
-          <div style="color: #e2e8f0; font-weight: ${currentConversationId === conv.id ? '600' : '400'}; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+        <div class="flex-1 min-w-0">
+          <div class="text-slate-200 font-medium text-sm truncate" style="font-weight: ${currentConversationId === conv.id ? '600' : '400'};">
             ${escapeHtml(conv.title)}
           </div>
-          <div style="color: #94a3b8; font-size: 12px; margin-top: 4px;">
+          <div class="text-slate-400 text-xs mt-1">
             ${conv.messageCount} message${conv.messageCount !== 1 ? 's' : ''}
           </div>
         </div>
         <button
           onclick="event.stopPropagation(); window.deleteConversation('${conv.id}')"
+          class="opacity-0 group-hover:opacity-60 hover:opacity-100 transition-opacity flex-shrink-0 p-1"
           style="
             background: transparent;
             border: none;
             color: #ef4444;
             cursor: pointer;
-            padding: 4px;
-            opacity: 0.6;
-            transition: opacity 0.2s;
           "
-          onmouseover="this.style.opacity='1'"
-          onmouseout="this.style.opacity='0.6'"
           title="Delete conversation"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
