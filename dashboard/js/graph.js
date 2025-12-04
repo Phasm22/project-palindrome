@@ -107,10 +107,10 @@ export async function loadGraph() {
     
     // Create layout with sidebar
     const html = `
-      <div class="flex gap-4 h-full min-h-[600px]">
+      <div class="flex gap-4" style="height: calc(100vh - 250px); min-height: 600px;">
         <!-- Graph Visualization -->
-        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative min-h-[600px]">
-          <div id="graph" class="w-full h-full" style="min-height: 600px;"></div>
+        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: 100%;">
+          <div id="graph" style="width: 100%; height: 100%;"></div>
         </div>
         
         <!-- Statistics and Legend Sidebar -->
@@ -190,7 +190,16 @@ export async function loadGraph() {
     setTimeout(() => {
       const graphElement = document.getElementById('graph');
       if (graphElement) {
-        new vis.Network(graphElement, visData, options);
+        const network = new vis.Network(graphElement, visData, options);
+        
+        // Force resize after initialization to ensure proper sizing
+        setTimeout(() => {
+          network.fit({
+            animation: false,
+            minZoomLevel: 0.1,
+            maxZoomLevel: 2,
+          });
+        }, 200);
       }
     }, 100);
   } catch (error) {
