@@ -1,4 +1,5 @@
 import { API_URL, escapeHtml } from './utils.js';
+import { createConversationItem, createButton } from './components.js';
 
 // Chat state
 let currentEventSource = null;
@@ -808,43 +809,22 @@ export async function loadConversations() {
       return;
     }
 
-    listDiv.innerHTML = conversations.map(conv => `
-      <div 
-        class="conversation-item mb-2 p-3 rounded-lg cursor-pointer transition-all duration-200 flex items-center gap-3 group" 
-        data-conversation-id="${conv.id}"
-        onclick="window.selectConversation('${conv.id}')"
-        style="
-          background: ${currentConversationId === conv.id ? '#7c2d12' : 'transparent'};
-          border: 1px solid ${currentConversationId === conv.id ? '#f97316' : 'transparent'};
-        "
-        onmouseover="if (this.dataset.conversationId !== '${currentConversationId}') { this.style.background='#1e293b'; this.style.borderColor='#334155'; }"
-        onmouseout="if (this.dataset.conversationId !== '${currentConversationId}') { this.style.background='transparent'; this.style.borderColor='transparent'; }"
-      >
-        <div class="flex-1 min-w-0">
-          <div class="text-slate-200 font-medium text-sm truncate" style="font-weight: ${currentConversationId === conv.id ? '600' : '400'};">
-            ${escapeHtml(conv.title)}
-          </div>
-          <div class="text-slate-400 text-xs mt-1">
-            ${conv.messageCount} message${conv.messageCount !== 1 ? 's' : ''}
-          </div>
-        </div>
-        <button
-          onclick="event.stopPropagation(); window.deleteConversation('${conv.id}')"
-          class="opacity-0 group-hover:opacity-60 hover:opacity-100 transition-opacity flex-shrink-0 p-1"
-          style="
-            background: transparent;
-            border: none;
-            color: #ef4444;
-            cursor: pointer;
-          "
-          title="Delete conversation"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-          </svg>
-        </button>
-      </div>
-    `).join('');
+    listDiv.innerHTML = '';
+    conversations.forEach(conv => {
+      const item = createConversationItem(
+        {
+          id: conv.id,
+          title: conv.title,
+          messageCount: conv.messageCount
+        },
+        {
+          isActive: currentConversationId === conv.id,
+          onSelect: (id) => window.selectConversation(id),
+          onDelete: (id) => window.deleteConversation(id)
+        }
+      );
+      listDiv.appendChild(item);
+    });
 
     if (currentConversationId) {
       const currentItem = listDiv.querySelector(`[data-conversation-id="${currentConversationId}"]`);
