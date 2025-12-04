@@ -1,7 +1,5 @@
 #!/usr/bin/env bun
 
-#!/usr/bin/env bun
-
 import { serve } from "bun";
 import { watch } from "node:fs";
 
