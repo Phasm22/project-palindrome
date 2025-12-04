@@ -142,7 +142,6 @@ export function createConversationItem(conversation, options = {}) {
       e.stopPropagation();
       onDelete(conversation.id);
     });
-    item.className += ' group'; // Add group class for hover effects
     item.appendChild(deleteBtn);
   }
 
