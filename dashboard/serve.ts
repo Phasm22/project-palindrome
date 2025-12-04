@@ -33,10 +33,9 @@ serve({
   async fetch(req) {
     const url = new URL(req.url);
     
-    // Check for WebSocket upgrade request
-    if (req.headers.get("upgrade") === "websocket" && url.pathname === "/_reload") {
-      // Let Bun handle the upgrade automatically via websocket handler
-      return;
+    // Handle favicon requests
+    if (url.pathname === "/favicon.ico") {
+      return new Response(null, { status: 204 });
     }
     
     let path = url.pathname === "/" ? "/index.html" : url.pathname;
@@ -90,8 +89,15 @@ serve({
   
   websocket: {
     message(ws, message) {},
-    open(ws) {
-      connectedClients.add(ws);
+    open(ws, req) {
+      // Only accept connections to /_reload path
+      const url = new URL(req.url);
+      if (url.pathname === "/_reload") {
+        connectedClients.add(ws);
+        console.log(`✅ WebSocket client connected for auto-reload`);
+      } else {
+        ws.close();
+      }
     },
     close(ws) {
       connectedClients.delete(ws);
