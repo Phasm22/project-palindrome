@@ -35,8 +35,9 @@ export async function loadGraph() {
   if (!container) return;
   
   // Check if libraries are loaded - try multiple possible global names
-  // Graphology is exposed as window.Graph (from our UMD build)
-  const Graph = window.Graph;
+  // Graphology is exposed as window.graphology (from our UMD build)
+  // It exports Graph as a property
+  const Graph = window.graphology?.Graph || window.Graph;
   // Sigma is exposed as window.Sigma (uppercase) in the minified build
   const Sigma = window.Sigma;
   
