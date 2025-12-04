@@ -283,6 +283,14 @@ function initSigma() {
     sigma = null;
   }
   
+  // Get all unique node types from the graph
+  const nodeTypes = new Set();
+  graph.forEachNode((node, attrs) => {
+    if (attrs.type) {
+      nodeTypes.add(attrs.type);
+    }
+  });
+  
   // Initialize Sigma
   sigma = new Sigma(graph, container, {
     renderLabels: true,
@@ -295,6 +303,10 @@ function initSigma() {
     minCameraRatio: 0.1,
     maxCameraRatio: 10,
     allowInvalidContainer: true,
+    // Register default node renderer for all node types
+    nodeProgramClasses: Object.fromEntries(
+      Array.from(nodeTypes).map(type => [type, Sigma.getNodeProgramImage()])
+    ),
   });
   
   // Run ForceAtlas2 layout - try multiple possible global names
