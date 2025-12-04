@@ -125,7 +125,7 @@ export async function loadGraph() {
     const nodeTypes = {};
     const edgeTypes = {};
     graph.forEachNode((node, attrs) => {
-      const type = attrs.type || 'unknown';
+      const type = attrs.nodeType || attrs.type || 'unknown';
       nodeTypes[type] = (nodeTypes[type] || 0) + 1;
     });
     graph.forEachEdge((edge, attrs) => {
@@ -283,11 +283,19 @@ function initSigma() {
     sigma = null;
   }
   
-  // Get all unique node types from the graph
-  const nodeTypes = new Set();
+  // Remove 'type' attribute from nodes for Sigma.js (it's used for renderer selection)
+  // We'll use 'nodeType' instead for our filtering, but keep 'type' in graph for compatibility
   graph.forEachNode((node, attrs) => {
+    // Sigma.js v3 uses 'type' to select renderers, so we need to either:
+    // 1. Not set 'type' on nodes (use default renderer)
+    // 2. Register renderers for each type
+    // We'll go with option 1 - remove 'type' from node attributes that Sigma sees
+    // But keep it in the graph for our filtering logic
     if (attrs.type) {
-      nodeTypes.add(attrs.type);
+      // Store the type in a different attribute that won't interfere with Sigma
+      graph.setNodeAttribute(node, 'nodeType', attrs.type);
+      // Remove 'type' so Sigma uses default renderer
+      graph.removeNodeAttribute(node, 'type');
     }
   });
   
@@ -303,10 +311,6 @@ function initSigma() {
     minCameraRatio: 0.1,
     maxCameraRatio: 10,
     allowInvalidContainer: true,
-    // Register default node renderer for all node types
-    nodeProgramClasses: Object.fromEntries(
-      Array.from(nodeTypes).map(type => [type, Sigma.getNodeProgramImage()])
-    ),
   });
   
   // Run ForceAtlas2 layout - try multiple possible global names
