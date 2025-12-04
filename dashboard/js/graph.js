@@ -1,75 +1,48 @@
 import { API_URL } from './utils.js';
 
-// Cytoscape and Chroma are loaded via CDN in HTML
-// Access them from window object with fallback
-function getCytoscape() {
-  if (typeof window !== 'undefined' && window.cytoscape) {
-    return window.cytoscape;
-  }
-  throw new Error('Cytoscape not loaded. Make sure CDN script is included.');
-}
-
-function getChroma() {
-  if (typeof window !== 'undefined' && window.chroma) {
-    return window.chroma;
-  }
-  throw new Error('Chroma not loaded. Make sure CDN script is included.');
-}
-
-// Color palette - burnt orange theme with good contrast
-// Initialize after chroma is loaded
-function getColorPalette() {
-  const chroma = getChroma();
-  return {
-    primary: chroma('#f97316'), // Burnt orange
-    primaryLight: chroma('#fb923c'),
-    primaryDark: chroma('#c2410c'),
-    secondary: chroma('#ea580c'),
-    success: chroma('#10b981'),
-    warning: chroma('#f59e0b'),
-    error: chroma('#ef4444'),
-    info: chroma('#3b82f6'),
-    background: chroma('#0f172a'),
-    surface: chroma('#1e293b'),
-    text: chroma('#e2e8f0'),
-    textMuted: chroma('#94a3b8'),
-  };
-}
+// Color palette - burnt orange theme
+const colorPalette = {
+  primary: '#f97316',
+  primaryLight: '#fb923c',
+  primaryDark: '#c2410c',
+  secondary: '#ea580c',
+  success: '#10b981',
+  warning: '#f59e0b',
+  error: '#ef4444',
+  background: '#0f172a',
+  surface: '#1e293b',
+  text: '#e2e8f0',
+  textMuted: '#94a3b8',
+};
 
 // Node type colors
-function getNodeTypeColors() {
-  const palette = getColorPalette();
-  return {
-    'compute-vm': palette.primary,
-    'compute-node': palette.success,
-    'network': palette.secondary,
-    'service': palette.warning,
-    'storage': palette.error,
-    'unknown': palette.textMuted,
-  };
-}
+const nodeTypeColors = {
+  'compute-vm': colorPalette.primary,
+  'compute-node': colorPalette.success,
+  'network': colorPalette.secondary,
+  'service': colorPalette.warning,
+  'storage': colorPalette.error,
+  'entity': colorPalette.primary,
+  'twinentity': colorPalette.secondary,
+  'unknown': colorPalette.textMuted,
+};
 
-let cy = null; // Cytoscape instance
-let graphData = null; // Store graph data for search/filter
+let sigma = null;
+let graph = null;
 
 export async function loadGraph() {
   const container = document.getElementById('graph-container');
   if (!container) return;
   
   // Check if libraries are loaded
-  try {
-    getCytoscape();
-    getChroma();
-  } catch (error) {
-    container.innerHTML = `<div class="error">${error.message}. Please refresh the page.</div>`;
+  if (typeof window.Graphology === 'undefined' || typeof window.Sigma === 'undefined') {
+    container.innerHTML = '<div class="error">Sigma.js or Graphology not loaded. Please refresh the page.</div>';
     return;
   }
   
   container.innerHTML = '<div class="loading">Loading graph...</div>';
   
   try {
-    const colorPalette = getColorPalette();
-    const nodeTypeColors = getNodeTypeColors();
     const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=200`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -81,9 +54,6 @@ export async function loadGraph() {
       return;
     }
     
-    // Store data for search/filter
-    graphData = data;
-    
     // Calculate node degrees for sizing
     const nodeDegrees = {};
     data.relationships.forEach(rel => {
@@ -93,82 +63,63 @@ export async function loadGraph() {
     
     const maxDegree = Math.max(...Object.values(nodeDegrees), 1);
     
-    // Transform data to Cytoscape format
-    const nodes = data.nodes.map(n => {
+    // Create Graphology graph
+    const Graph = window.Graphology;
+    graph = new Graph();
+    
+    // Add nodes
+    data.nodes.forEach(n => {
       const nodeId = n.id || n.properties?.id || Math.random().toString();
       const nodeType = (n.type || n.labels?.[0] || 'unknown').toLowerCase();
       const degree = nodeDegrees[nodeId] || 0;
-      const size = Math.max(20, 20 + (degree / maxDegree) * 40); // Size by degree: 20-60px
+      const size = Math.max(8, Math.min(30, 8 + (degree / maxDegree) * 22)); // Size by degree: 8-30px
       
       const color = nodeTypeColors[nodeType] || nodeTypeColors['unknown'];
       
-      return {
-        data: {
-          id: nodeId,
-          label: n.name || n.properties?.name || n.id || 'Unknown',
-          type: nodeType,
-          degree: degree,
-          backgroundColor: color.hex(),
-          width: size,
-          height: size,
-          fontSize: Math.max(12, Math.min(16, size * 0.4)) + 'px',
-          fontWeight: degree > maxDegree * 0.5 ? '600' : '400',
-          borderColor: color.darken(0.3).hex(),
-          ...n.properties,
-        },
-        style: {
-          'background-color': 'data(backgroundColor)',
-          'width': 'data(width)',
-          'height': 'data(height)',
-          'label': 'data(label)',
-          'font-size': 'data(fontSize)',
-          'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          'font-weight': 'data(fontWeight)',
-          'color': colorPalette.text.hex(),
-          'text-outline-color': colorPalette.background.hex(),
-          'text-outline-width': 2,
-          'border-width': 2,
-          'border-color': 'data(borderColor)',
-        },
-      };
+      graph.addNode(nodeId, {
+        label: n.name || n.properties?.name || n.id || 'Unknown',
+        size: size,
+        color: color,
+        type: nodeType,
+        degree: degree,
+        x: Math.random() * 1000,
+        y: Math.random() * 1000,
+        ...n.properties,
+      });
     });
     
-    const edges = data.relationships.map(r => ({
-      data: {
-        id: `${r.from}-${r.to}-${r.type || 'rel'}`,
-        source: r.from || r.start,
-        target: r.to || r.end,
-        label: r.type || r.properties?.type || '',
-        type: r.type || 'unknown',
-      },
-      style: {
-        'width': 2,
-        'line-color': colorPalette.primary.alpha(0.6).hex(),
-        'target-arrow-color': colorPalette.primary.hex(),
-        'target-arrow-shape': 'triangle',
-        'curve-style': 'bezier',
-        'font-size': '11px',
-        'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        'color': colorPalette.textMuted.hex(),
-        'text-outline-color': colorPalette.background.hex(),
-        'text-outline-width': 1,
-      },
-    }));
+    // Add edges
+    data.relationships.forEach(r => {
+      const from = r.from || r.start;
+      const to = r.to || r.end;
+      if (graph.hasNode(from) && graph.hasNode(to)) {
+        try {
+          graph.addEdge(from, to, {
+            label: r.type || r.properties?.type || '',
+            type: r.type || 'unknown',
+            color: colorPalette.primary,
+            size: 2,
+          });
+        } catch (e) {
+          // Edge might already exist, skip
+        }
+      }
+    });
     
     // Calculate statistics
     const nodeTypes = {};
     const edgeTypes = {};
-    nodes.forEach(n => {
-      const type = n.data.type || 'unknown';
+    graph.forEachNode((node, attrs) => {
+      const type = attrs.type || 'unknown';
       nodeTypes[type] = (nodeTypes[type] || 0) + 1;
     });
-    edges.forEach(e => {
-      const type = e.data.type || 'unknown';
+    graph.forEachEdge((edge, attrs) => {
+      const type = attrs.type || 'unknown';
       edgeTypes[type] = (edgeTypes[type] || 0) + 1;
     });
     
-    const totalNodes = nodes.length;
-    const totalEdges = edges.length;
+    const totalNodes = graph.order;
+    const totalEdges = graph.size;
     const uniqueNodeTypes = Object.keys(nodeTypes).length;
     const uniqueEdgeTypes = Object.keys(edgeTypes).length;
     
@@ -212,7 +163,7 @@ export async function loadGraph() {
             <div id="search-results" class="mt-2 bg-slate-800 border border-slate-600 rounded-lg max-h-48 overflow-y-auto hidden"></div>
           </div>
           
-          <div id="cy" style="width: 100%; height: 100%;"></div>
+          <div id="sigma-container" style="width: 100%; height: 100%;"></div>
         </div>
         
         <!-- Statistics and Legend Sidebar -->
@@ -248,7 +199,7 @@ export async function loadGraph() {
                 const color = nodeTypeColors[type] || nodeTypeColors['unknown'];
                 return `
                 <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-type="${type}">
-                  <div class="w-4 h-4 rounded-full" style="background: ${color.hex()}; border: 2px solid #334155;"></div>
+                  <div class="w-4 h-4 rounded-full" style="background: ${color}; border: 2px solid #334155;"></div>
                   <div class="flex-1 text-slate-200 text-sm">${type}</div>
                   <div class="text-slate-400 text-xs font-semibold">${count}</div>
                 </div>
@@ -263,7 +214,7 @@ export async function loadGraph() {
             <div class="flex flex-col gap-2">
               ${Object.entries(edgeTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => `
                 <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-edge="${type}">
-                  <div class="w-5 h-0.5" style="background: ${colorPalette.primary.hex()};"></div>
+                  <div class="w-5 h-0.5" style="background: ${colorPalette.primary};"></div>
                   <div class="flex-1 text-slate-200 text-sm">${type || 'unnamed'}</div>
                   <div class="text-slate-400 text-xs font-semibold">${count}</div>
                 </div>
@@ -294,9 +245,9 @@ export async function loadGraph() {
     
     container.innerHTML = html;
     
-    // Initialize Cytoscape after DOM is ready
+    // Initialize Sigma after DOM is ready
     setTimeout(() => {
-      initCytoscape(nodes, edges, colorPalette);
+      initSigma();
       setupControls();
       setupSearch();
       setupFilters();
@@ -307,159 +258,72 @@ export async function loadGraph() {
   }
 }
 
-function initCytoscape(nodes, edges, colorPalette) {
-  const cyContainer = document.getElementById('cy');
-  if (!cyContainer) return;
-  
-  // Check if cytoscape is loaded
-  const cytoscapeLib = getCytoscape();
+function initSigma() {
+  const container = document.getElementById('sigma-container');
+  if (!container || !graph) return;
   
   // Destroy existing instance
-  if (cy) {
-    cy.destroy();
+  if (sigma) {
+    sigma.kill();
+    sigma = null;
   }
   
-  cy = cytoscapeLib({
-    container: cyContainer,
-    elements: [...nodes, ...edges],
-    style: [
-      {
-        selector: 'node',
-        style: {
-          'background-color': 'data(backgroundColor)',
-          'width': 'data(width)',
-          'height': 'data(height)',
-          'label': 'data(label)',
-          'font-size': 'data(fontSize)',
-          'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          'font-weight': 'data(fontWeight)',
-          'color': colorPalette.text.hex(),
-          'text-outline-color': colorPalette.background.hex(),
-          'text-outline-width': 2,
-          'border-width': 2,
-          'border-color': 'data(borderColor)',
-          'text-valign': 'center',
-          'text-halign': 'center',
-          'overlay-padding': '6px',
-        },
-      },
-      {
-        selector: 'node[backgroundColor]',
-        style: {
-          'background-color': 'data(backgroundColor)',
-        },
-      },
-      {
-        selector: 'node[width]',
-        style: {
-          'width': 'data(width)',
-          'height': 'data(height)',
-        },
-      },
-      {
-        selector: 'node[fontSize]',
-        style: {
-          'font-size': 'data(fontSize)',
-        },
-      },
-      {
-        selector: 'node[fontWeight]',
-        style: {
-          'font-weight': 'data(fontWeight)',
-        },
-      },
-      {
-        selector: 'node[borderColor]',
-        style: {
-          'border-color': 'data(borderColor)',
-        },
-      },
-      {
-        selector: 'node:selected',
-        style: {
-          'border-width': 4,
-          'border-color': colorPalette.primary.hex(),
-          'background-color': colorPalette.primaryLight.hex(),
-        },
-      },
-      {
-        selector: 'edge',
-        style: {
-          'width': 2,
-          'line-color': colorPalette.primary.alpha(0.6).hex(),
-          'target-arrow-color': colorPalette.primary.hex(),
-          'target-arrow-shape': 'triangle',
-          'curve-style': 'bezier',
-          'label': 'data(label)',
-          'font-size': '11px',
-          'font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          'color': colorPalette.textMuted.hex(),
-          'text-outline-color': colorPalette.background.hex(),
-          'text-outline-width': 1,
-          'text-rotation': 'autorotate',
-          'text-margin-y': -10,
-        },
-      },
-      {
-        selector: 'edge:selected',
-        style: {
-          'width': 4,
-          'line-color': colorPalette.primary.hex(),
-        },
-      },
-    ],
-    layout: {
-      name: 'cose',
-      idealEdgeLength: 200,
-      nodeOverlap: 30,
-      refresh: 1,
-      fit: true,
-      padding: 100,
-      randomize: true,
-      componentSpacing: 100,
-      nodeRepulsion: 8000,
-      edgeElasticity: 200,
-      nestingFactor: 10,
-      gravity: 0.1,
-      numIter: 3000,
-      initialTemp: 400,
-      coolingFactor: 0.98,
-      minTemp: 1.0,
-      animate: true,
-      animationDuration: 1000,
-      animationEasing: 'ease-out',
-    },
-    minZoom: 0.1,
-    maxZoom: 3,
-    wheelSensitivity: 0.2,
+  const Sigma = window.Sigma;
+  
+  // Initialize Sigma
+  sigma = new Sigma(graph, container, {
+    renderLabels: true,
+    labelFont: 'Inter, system-ui, sans-serif',
+    labelSize: 12,
+    labelWeight: 'normal',
+    labelColor: { attribute: 'color', defaultValue: colorPalette.text },
+    defaultNodeColor: colorPalette.primary,
+    defaultEdgeColor: colorPalette.primary,
+    minCameraRatio: 0.1,
+    maxCameraRatio: 10,
+    allowInvalidContainer: true,
   });
   
-  // Smooth animations
-  cy.on('tap', 'node', function(evt) {
-    const node = evt.target;
-    cy.animate({
-      center: { eles: node },
-      zoom: Math.min(cy.zoom() * 1.5, 2),
-    }, {
-      duration: 300,
-      easing: 'ease-out',
+  // Run ForceAtlas2 layout
+  const forceAtlas2 = window.graphologyLayoutForceAtlas2;
+  if (forceAtlas2) {
+    const positions = forceAtlas2(graph, {
+      iterations: 100,
+      settings: {
+        gravity: 0.5,
+        scalingRatio: 2,
+        strongGravityMode: false,
+        barnesHutOptimize: true,
+        edgeWeightInfluence: 1,
+        adjustSizes: true,
+        outboundAttractionDistribution: false,
+        linLogMode: false,
+      },
     });
-  });
+    
+    // Apply positions
+    graph.forEachNode((node, attrs) => {
+      if (positions[node]) {
+        attrs.x = positions[node].x;
+        attrs.y = positions[node].y;
+      }
+    });
+    
+    sigma.refresh();
+  }
   
-  // Tooltip on hover
-  cy.on('mouseover', 'node', function(evt) {
-    const node = evt.target;
-    const data = node.data();
-    const palette = getColorPalette();
+  // Node hover tooltip
+  sigma.on('enterNode', ({ node }) => {
+    const nodeData = graph.getNodeAttributes(node);
     const tooltip = document.createElement('div');
     tooltip.className = 'graph-tooltip';
     tooltip.style.cssText = `
       position: absolute;
-      background: ${palette.surface.hex()};
-      color: ${palette.text.hex()};
+      background: ${colorPalette.surface};
+      color: ${colorPalette.text};
       padding: 8px 12px;
       border-radius: 6px;
-      border: 1px solid ${palette.primary.alpha(0.5).hex()};
+      border: 1px solid ${colorPalette.primary};
       font-size: 12px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       z-index: 1000;
@@ -468,65 +332,73 @@ function initCytoscape(nodes, edges, colorPalette) {
       max-width: 300px;
     `;
     
-    let tooltipContent = `<strong>${data.label || data.id}</strong><br>`;
-    tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Type:</span> ${data.type || 'unknown'}<br>`;
-    tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Degree:</span> ${data.degree || 0}<br>`;
-    if (data.id) tooltipContent += `<span style="color: ${palette.textMuted.hex()}">ID:</span> ${data.id}<br>`;
-    if (data.purpose) tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Purpose:</span> ${data.purpose}<br>`;
-    if (data.role) tooltipContent += `<span style="color: ${palette.textMuted.hex()}">Role:</span> ${data.role}<br>`;
+    let tooltipContent = `<strong>${nodeData.label || node}</strong><br>`;
+    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> ${nodeData.type || 'unknown'}<br>`;
+    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Degree:</span> ${nodeData.degree || 0}<br>`;
+    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> ${nodeData.id}<br>`;
+    if (nodeData.purpose) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Purpose:</span> ${nodeData.purpose}<br>`;
+    if (nodeData.role) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Role:</span> ${nodeData.role}<br>`;
     
     tooltip.innerHTML = tooltipContent;
     document.body.appendChild(tooltip);
     
     const updateTooltip = (e) => {
-      tooltip.style.left = (e.originalEvent.clientX + 10) + 'px';
-      tooltip.style.top = (e.originalEvent.clientY + 10) + 'px';
+      tooltip.style.left = (e.clientX + 10) + 'px';
+      tooltip.style.top = (e.clientY + 10) + 'px';
     };
     
-    cy.on('mousemove', updateTooltip);
-    cy.on('mouseout', 'node', function() {
+    container.addEventListener('mousemove', updateTooltip);
+    sigma.once('leaveNode', () => {
       tooltip.remove();
-      cy.off('mousemove', updateTooltip);
+      container.removeEventListener('mousemove', updateTooltip);
+    });
+  });
+  
+  // Node click to center
+  sigma.on('clickNode', ({ node }) => {
+    const nodePosition = sigma.getNodeDisplayData(node);
+    sigma.getCamera().animate({
+      x: nodePosition.x,
+      y: nodePosition.y,
+      ratio: Math.min(sigma.getCamera().ratio * 0.7, 2),
+    }, {
+      duration: 300,
     });
   });
 }
 
 function setupControls() {
+  if (!sigma) return;
+  
   document.getElementById('zoom-in')?.addEventListener('click', () => {
-    cy.animate({
-      zoom: cy.zoom() * 1.2,
+    const camera = sigma.getCamera();
+    camera.animate({
+      ratio: camera.ratio * 0.8,
     }, {
       duration: 200,
-      easing: 'ease-out',
     });
   });
   
   document.getElementById('zoom-out')?.addEventListener('click', () => {
-    cy.animate({
-      zoom: cy.zoom() * 0.8,
+    const camera = sigma.getCamera();
+    camera.animate({
+      ratio: camera.ratio * 1.25,
     }, {
       duration: 200,
-      easing: 'ease-out',
     });
   });
   
   document.getElementById('zoom-fit')?.addEventListener('click', () => {
-    cy.animate({
-      fit: true,
-      padding: 50,
-    }, {
-      duration: 400,
-      easing: 'ease-out',
-    });
+    sigma.getCamera().animatedReset({ duration: 400 });
   });
   
   document.getElementById('zoom-reset')?.addEventListener('click', () => {
-    cy.animate({
-      center: { x: 0, y: 0 },
-      zoom: 1,
+    sigma.getCamera().animate({
+      x: 0,
+      y: 0,
+      ratio: 1,
     }, {
       duration: 400,
-      easing: 'ease-out',
     });
   });
 }
@@ -535,51 +407,65 @@ function setupSearch() {
   const searchInput = document.getElementById('node-search');
   const resultsDiv = document.getElementById('search-results');
   
-  if (!searchInput || !resultsDiv || !cy) return;
+  if (!searchInput || !resultsDiv || !graph || !sigma) return;
   
   let searchTimeout;
+  let highlightedNodes = new Set();
+  
   searchInput.addEventListener('input', (e) => {
     clearTimeout(searchTimeout);
     const query = e.target.value.toLowerCase().trim();
     
     if (query.length < 2) {
       resultsDiv.classList.add('hidden');
-      cy.elements().removeClass('search-highlight');
+      // Reset highlights
+      highlightedNodes.forEach(node => {
+        graph.setNodeAttribute(node, 'highlighted', false);
+        graph.setNodeAttribute(node, 'color', graph.getNodeAttribute(node, 'originalColor') || nodeTypeColors[graph.getNodeAttribute(node, 'type')] || nodeTypeColors['unknown']);
+      });
+      highlightedNodes.clear();
+      sigma.refresh();
       return;
     }
     
     searchTimeout = setTimeout(() => {
-      const matchingNodes = cy.nodes().filter(node => {
-        const data = node.data();
-        const label = (data.label || '').toLowerCase();
-        const id = (data.id || '').toLowerCase();
-        const type = (data.type || '').toLowerCase();
-        return label.includes(query) || id.includes(query) || type.includes(query);
+      const matchingNodes = [];
+      graph.forEachNode((node, attrs) => {
+        const label = (attrs.label || '').toLowerCase();
+        const id = (node || '').toLowerCase();
+        const type = (attrs.type || '').toLowerCase();
+        if (label.includes(query) || id.includes(query) || type.includes(query)) {
+          matchingNodes.push({ node, attrs });
+        }
       });
       
-      // Highlight matching nodes
-      cy.elements().removeClass('search-highlight');
-      matchingNodes.addClass('search-highlight');
+      // Reset previous highlights
+      highlightedNodes.forEach(node => {
+        graph.setNodeAttribute(node, 'highlighted', false);
+        graph.setNodeAttribute(node, 'color', graph.getNodeAttribute(node, 'originalColor') || nodeTypeColors[graph.getNodeAttribute(node, 'type')] || nodeTypeColors['unknown']);
+      });
+      highlightedNodes.clear();
       
-      // Style for highlighted nodes
-      const palette = getColorPalette();
-      cy.style()
-        .selector('.search-highlight')
-        .style({
-          'border-width': 4,
-          'border-color': palette.warning.hex(),
-        })
-        .update();
+      // Highlight matching nodes
+      matchingNodes.forEach(({ node }) => {
+        if (!graph.getNodeAttribute(node, 'originalColor')) {
+          graph.setNodeAttribute(node, 'originalColor', graph.getNodeAttribute(node, 'color'));
+        }
+        graph.setNodeAttribute(node, 'highlighted', true);
+        graph.setNodeAttribute(node, 'color', colorPalette.warning);
+        highlightedNodes.add(node);
+      });
+      
+      sigma.refresh();
       
       // Show results
       if (matchingNodes.length > 0) {
-        resultsDiv.innerHTML = matchingNodes.map(node => {
-          const data = node.data();
+        resultsDiv.innerHTML = matchingNodes.slice(0, 20).map(({ node, attrs }) => {
           return `
             <div class="p-2 hover:bg-slate-700 cursor-pointer text-slate-200 text-sm border-b border-slate-700" 
-                 data-node-id="${data.id}">
-              <div class="font-medium">${data.label || data.id}</div>
-              <div class="text-xs text-slate-400">${data.type || 'unknown'}</div>
+                 data-node-id="${node}">
+              <div class="font-medium">${attrs.label || node}</div>
+              <div class="text-xs text-slate-400">${attrs.type || 'unknown'}</div>
             </div>
           `;
         }).join('');
@@ -589,16 +475,15 @@ function setupSearch() {
         resultsDiv.querySelectorAll('[data-node-id]').forEach(el => {
           el.addEventListener('click', () => {
             const nodeId = el.getAttribute('data-node-id');
-            const node = cy.getElementById(nodeId);
-            if (node.length > 0) {
-              cy.animate({
-                center: { eles: node },
-                zoom: Math.min(cy.zoom() * 1.5, 2),
+            const nodePosition = sigma.getNodeDisplayData(nodeId);
+            if (nodePosition) {
+              sigma.getCamera().animate({
+                x: nodePosition.x,
+                y: nodePosition.y,
+                ratio: Math.min(sigma.getCamera().ratio * 0.7, 2),
               }, {
                 duration: 400,
-                easing: 'ease-out',
               });
-              node.select();
             }
           });
         });
@@ -611,33 +496,64 @@ function setupSearch() {
 }
 
 function setupFilters() {
-  if (!cy) return;
+  if (!graph || !sigma) return;
   
   // Filter by node type
   document.querySelectorAll('[data-filter-type]').forEach(el => {
     el.addEventListener('click', () => {
       const type = el.getAttribute('data-filter-type');
-      const nodes = cy.nodes(`[type = "${type}"]`);
-      // Get edges connected to these nodes
-      const edges = nodes.connectedEdges();
+      const nodesToShow = new Set();
       
-      cy.elements().removeClass('filtered');
-      cy.elements().not(nodes).not(edges).addClass('filtered');
-      
-      cy.style()
-        .selector('.filtered')
-        .style({
-          'opacity': 0.2,
-        })
-        .update();
-      
-      cy.animate({
-        fit: { eles: nodes },
-        padding: 50,
-      }, {
-        duration: 400,
-        easing: 'ease-out',
+      graph.forEachNode((node, attrs) => {
+        if (attrs.type === type) {
+          nodesToShow.add(node);
+          // Add connected nodes
+          graph.forEachNeighbor(node, neighbor => {
+            nodesToShow.add(neighbor);
+          });
+        }
       });
+      
+      // Hide nodes not in filter
+      graph.forEachNode((node) => {
+        graph.setNodeAttribute(node, 'hidden', !nodesToShow.has(node));
+      });
+      
+      sigma.refresh();
+      
+      // Fit to visible nodes
+      if (nodesToShow.size > 0) {
+        const nodeArray = Array.from(nodesToShow);
+        const positions = nodeArray.map(node => {
+          const pos = sigma.getNodeDisplayData(node);
+          return pos ? { x: pos.x, y: pos.y } : null;
+        }).filter(Boolean);
+        
+        if (positions.length > 0) {
+          const bounds = positions.reduce((acc, pos) => {
+            return {
+              minX: Math.min(acc.minX, pos.x),
+              maxX: Math.max(acc.maxX, pos.x),
+              minY: Math.min(acc.minY, pos.y),
+              maxY: Math.max(acc.maxY, pos.y),
+            };
+          }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+          
+          const centerX = (bounds.minX + bounds.maxX) / 2;
+          const centerY = (bounds.minY + bounds.maxY) / 2;
+          const width = bounds.maxX - bounds.minX;
+          const height = bounds.maxY - bounds.minY;
+          const ratio = Math.max(width, height) / Math.min(sigma.getDimensions().width, sigma.getDimensions().height) * 1.2;
+          
+          sigma.getCamera().animate({
+            x: centerX,
+            y: centerY,
+            ratio: ratio,
+          }, {
+            duration: 400,
+          });
+        }
+      }
     });
   });
   
@@ -645,38 +561,30 @@ function setupFilters() {
   document.querySelectorAll('[data-filter-edge]').forEach(el => {
     el.addEventListener('click', () => {
       const type = el.getAttribute('data-filter-edge');
-      const edges = cy.edges(`[type = "${type}"]`);
-      const nodes = edges.connectedNodes();
+      const nodesToShow = new Set();
       
-      cy.elements().removeClass('filtered');
-      cy.elements().not(nodes).not(edges).addClass('filtered');
-      
-      cy.style()
-        .selector('.filtered')
-        .style({
-          'opacity': 0.2,
-        })
-        .update();
-      
-      cy.animate({
-        fit: { eles: nodes },
-        padding: 50,
-      }, {
-        duration: 400,
-        easing: 'ease-out',
+      graph.forEachEdge((edge, attrs, source, target) => {
+        if (attrs.type === type) {
+          nodesToShow.add(source);
+          nodesToShow.add(target);
+        }
       });
+      
+      // Hide nodes not in filter
+      graph.forEachNode((node) => {
+        graph.setNodeAttribute(node, 'hidden', !nodesToShow.has(node));
+      });
+      
+      sigma.refresh();
     });
   });
   
   // Reset filter on double-click
   document.addEventListener('dblclick', () => {
-    if (!cy) return;
-    cy.elements().removeClass('filtered');
-    cy.style()
-      .selector('.filtered')
-      .style({
-        'opacity': 1,
-      })
-      .update();
+    if (!graph || !sigma) return;
+    graph.forEachNode((node) => {
+      graph.setNodeAttribute(node, 'hidden', false);
+    });
+    sigma.refresh();
   });
 }
