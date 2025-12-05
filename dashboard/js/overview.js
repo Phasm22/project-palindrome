@@ -1,8 +1,13 @@
 import { API_URL, renderResponsiveTable } from './utils.js';
+import { createSkeletonStatsGrid } from './skeletons.js';
 
 export async function loadExecutionStats() {
   const element = document.getElementById('execution-stats');
   if (!element) return;
+  
+  // Show skeleton loader
+  element.innerHTML = '';
+  element.appendChild(createSkeletonStatsGrid(3));
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/execution-stats`);
@@ -28,17 +33,19 @@ export async function loadExecutionStats() {
       </div>
       ${stats.recentErrors && stats.recentErrors.length > 0 ? `
         <div class="mt-4 md:mt-6 pt-4 md:pt-6 border-t border-slate-700">
-          <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4 text-red-400">Recent Errors</h3>
-          ${renderResponsiveTable(
-            ['Tool', 'User', 'Error', 'Time'],
-            stats.recentErrors,
-            (e) => `
-              <td class="whitespace-nowrap">${(e.toolName || 'Unknown').split('\n')[0]}</td>
-              <td class="whitespace-nowrap">${(e.userId || 'Unknown').split('\n')[0]}</td>
-              <td class="max-w-md truncate" title="${(e.error || 'Unknown').replace(/"/g, '&quot;')}">${(e.error || 'Unknown').split('\n')[0]}</td>
-              <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
-            `
-          )}
+          <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4 text-red-400 text-center">Recent Errors</h3>
+          <div class="flex justify-center">
+            ${renderResponsiveTable(
+              ['Tool', 'User', 'Error', 'Time'],
+              stats.recentErrors,
+              (e) => `
+                <td class="whitespace-nowrap">${(e.toolName || 'Unknown').split('\n')[0]}</td>
+                <td class="whitespace-nowrap">${(e.userId || 'Unknown').split('\n')[0]}</td>
+                <td class="max-w-md truncate" title="${(e.error || 'Unknown').replace(/"/g, '&quot;')}">${(e.error || 'Unknown').split('\n')[0]}</td>
+                <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
+              `
+            )}
+          </div>
         </div>
       ` : ''}
     `;
@@ -53,6 +60,10 @@ export async function loadExecutionStats() {
 export async function loadClusterStatus() {
   const element = document.getElementById('cluster-status');
   if (!element) return;
+  
+  // Show skeleton loader
+  element.innerHTML = '';
+  element.appendChild(createSkeletonStatsGrid(3));
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/cluster-status`);
@@ -101,25 +112,6 @@ export async function loadClusterStatus() {
               ${data.vms?.running || 0} running, ${data.vms?.stopped || 0} stopped
             </div>
           </div>
-          ${data.isCluster ? `
-            <div class="stat-card">
-              <div class="stat-label">Quorum</div>
-              <div class="stat-value">
-                <span class="status-badge ${data.quorum?.quorate ? 'status-success' : 'status-error'}" title="${data.quorum ? `Votes: ${data.quorum.votes || 0}/${data.quorum.expected_votes || 0}` : 'Quorum status unavailable'}">
-                  ${data.quorum?.quorate ? 'OK' : 'No Quorum'}
-                </span>
-              </div>
-              ${data.quorum ? `
-                <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
-                  ${data.quorum.votes || 0}/${data.quorum.expected_votes || 0} votes
-                </div>
-              ` : data.isCluster ? `
-                <div style="font-size: 0.75em; color: #fbbf24; margin-top: 4px;">
-                  Quorum data unavailable
-                </div>
-              ` : ''}
-            </div>
-          ` : ''}
         </div>
       </div>
       
@@ -127,7 +119,7 @@ export async function loadClusterStatus() {
         <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0;">Nodes</h3>
         <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
           ${data.nodes.list.map(node => `
-            <div style="padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${node.status === 'online' ? '#10b981' : '#ef4444'};">
+            <div style="padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 2px solid ${node.status === 'online' ? '#10b981' : '#ef4444'};">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                 <strong style="color: #e2e8f0; font-size: 1.1em;">${node.name || 'Unknown'}</strong>
                 <span class="status-badge ${node.status === 'online' ? 'status-success' : 'status-error'}">
@@ -145,8 +137,8 @@ export async function loadClusterStatus() {
       ` : ''}
       
       ${data.vms?.resources && data.vms.resources.length > 0 ? `
-        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0; font-size: 1rem;">Recent VMs</h3>
-        <div style="max-height: 400px; overflow-y: auto;">
+        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0; font-size: 1rem; text-align: center;">Recent VMs</h3>
+        <div style="max-height: 400px; overflow-y: auto; display: flex; justify-content: center;">
           ${renderResponsiveTable(
             ['Name', 'Node', 'Status', 'Type'],
             data.vms.resources.slice(0, 20),
@@ -184,7 +176,12 @@ export async function loadClusterStatus() {
 
 export async function loadSystemHealth() {
   const element = document.getElementById('system-health');
-  if (!element) return;
+  const section = document.getElementById('system-health-section');
+  if (!element || !section) return;
+  
+  // Show skeleton loader
+  element.innerHTML = '';
+  element.appendChild(createSkeletonStatsGrid(4));
   
   try {
     const response = await fetch(`${API_URL}/health`);
@@ -193,9 +190,18 @@ export async function loadSystemHealth() {
     }
     const data = await response.json();
     
+    const dependencies = data.dependencies || {};
+    const entries = Object.entries(dependencies);
+    
+    // If no dependencies or all empty, hide the section
+    if (entries.length === 0 || entries.every(([_, status]) => !status)) {
+      section.style.display = 'none';
+      return;
+    }
+    
     const html = `
       <div class="status-grid">
-        ${Object.entries(data.dependencies || {}).map(([name, status]) => {
+        ${entries.map(([name, status]) => {
           const s = status || {};
           return `
           <div class="stat-card">
@@ -211,10 +217,10 @@ export async function loadSystemHealth() {
       </div>
     `;
     
-    document.getElementById('system-health').innerHTML = html;
+    element.innerHTML = html;
   } catch (error) {
-    document.getElementById('system-health').innerHTML = 
-      `<div class="error">Failed to load system health: ${error.message}</div>`;
+    // Hide section on error too
+    section.style.display = 'none';
   }
 }
 

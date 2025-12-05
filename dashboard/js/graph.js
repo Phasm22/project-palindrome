@@ -55,7 +55,18 @@ export async function loadGraph() {
     return;
   }
   
-  container.innerHTML = '<div class="loading">Loading graph...</div>';
+  // Show skeleton loader
+  container.innerHTML = '';
+  const loader = document.createElement('div');
+  loader.className = 'flex flex-col items-center justify-center h-full gap-4';
+  loader.innerHTML = `
+    <div class="relative w-16 h-16">
+      <div class="absolute inset-0 border-2 border-slate-700 rounded-full"></div>
+      <div class="absolute inset-0 border-2 border-transparent border-t-primary-500 rounded-full"></div>
+    </div>
+    <div class="text-slate-400 text-sm">Loading graph...</div>
+  `;
+  container.appendChild(loader);
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=200`);
@@ -145,25 +156,17 @@ export async function loadGraph() {
         <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: 800px; overflow: hidden; position: relative;">
           <!-- Zoom Controls -->
           <div class="absolute top-4 right-4 z-10 flex flex-col gap-2">
-            <button id="zoom-in" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg" title="Zoom In">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-              </svg>
+            <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Zoom In">
+              <span class="zoom-icon-in"></span>
             </button>
-            <button id="zoom-out" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg" title="Zoom Out">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19 13H5v-2h14v2z"/>
-              </svg>
+            <button id="zoom-out" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Zoom Out">
+              <span class="zoom-icon-out"></span>
             </button>
-            <button id="zoom-fit" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg" title="Fit to Screen">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/>
-              </svg>
+            <button id="zoom-fit" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Fit to Screen">
+              <span class="zoom-icon-fit"></span>
             </button>
-            <button id="zoom-reset" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 px-3 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg" title="Reset View">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
-              </svg>
+            <button id="zoom-reset" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Reset View">
+              <span class="zoom-icon-reset"></span>
             </button>
           </div>
           
@@ -261,11 +264,44 @@ export async function loadGraph() {
     container.innerHTML = html;
     
     // Initialize Sigma after DOM is ready
-    setTimeout(() => {
+    setTimeout(async () => {
+      // Initialize zoom control icons
+      const { createIcon } = await import('./icons.js');
+      document.querySelectorAll('.zoom-icon-in').forEach(el => {
+        const icon = createIcon('ZoomIn', { size: 16, color: 'currentColor' });
+        el.appendChild(icon);
+      });
+      document.querySelectorAll('.zoom-icon-out').forEach(el => {
+        const icon = createIcon('ZoomOut', { size: 16, color: 'currentColor' });
+        el.appendChild(icon);
+      });
+      document.querySelectorAll('.zoom-icon-fit').forEach(el => {
+        const icon = createIcon('Maximize', { size: 16, color: 'currentColor' });
+        el.appendChild(icon);
+      });
+      document.querySelectorAll('.zoom-icon-reset').forEach(el => {
+        const icon = createIcon('RotateCcw', { size: 16, color: 'currentColor' });
+        el.appendChild(icon);
+      });
+      
       initSigma();
       setupControls();
       setupSearch();
       setupFilters();
+      
+      // Animate nodes in
+      if (graph) {
+        graph.forEachNode((node, attrs) => {
+          const originalSize = attrs.size || 8;
+          graph.setNodeAttribute(node, 'size', 0);
+          sigma.refresh();
+          
+          setTimeout(() => {
+            graph.setNodeAttribute(node, 'size', originalSize);
+            sigma.refresh();
+          }, Math.random() * 500);
+        });
+      }
     }, 100);
   } catch (error) {
     container.innerHTML = 
@@ -299,19 +335,41 @@ function initSigma() {
     }
   });
   
-  // Initialize Sigma
+  // Initialize Sigma with enhanced rendering
   sigma = new Sigma(graph, container, {
     renderLabels: true,
     labelFont: 'Inter, system-ui, sans-serif',
     labelSize: 12,
-    labelWeight: 'normal',
+    labelWeight: '600',
     labelColor: { attribute: 'color', defaultValue: colorPalette.text },
     defaultNodeColor: colorPalette.primary,
     defaultEdgeColor: colorPalette.primary,
     minCameraRatio: 0.1,
     maxCameraRatio: 10,
     allowInvalidContainer: true,
+    // Enhanced node rendering
+    nodeReducer: (node, data) => {
+      return {
+        ...data,
+        size: data.size || 8,
+        color: data.color || colorPalette.primary,
+        label: data.label || node,
+      };
+    },
+    // Enhanced edge rendering
+    edgeReducer: (edge, data) => {
+      return {
+        ...data,
+        size: data.size || 2,
+        color: data.color || colorPalette.primary,
+        type: 'line',
+      };
+    },
   });
+  
+  // Add glow effect to nodes on hover
+  let hoveredNode = null;
+  let originalNodeColor = null;
   
   // Run ForceAtlas2 layout - try multiple possible global names
   const forceAtlas2 = window.graphologyLayoutForceAtlas2 || 
@@ -375,32 +433,48 @@ function initSigma() {
     sigma.refresh();
   }
   
-  // Node hover tooltip
+  // Node hover tooltip with glow effect
   sigma.on('enterNode', ({ node }) => {
     const nodeData = graph.getNodeAttributes(node);
+    
+    // Store original color and add glow
+    if (hoveredNode !== node) {
+      if (hoveredNode && originalNodeColor) {
+        graph.setNodeAttribute(hoveredNode, 'color', originalNodeColor);
+      }
+      hoveredNode = node;
+      originalNodeColor = nodeData.color;
+      
+      // Add glow effect by making node brighter and larger
+      graph.setNodeAttribute(node, 'color', colorPalette.warning);
+      graph.setNodeAttribute(node, 'size', (nodeData.size || 8) * 1.3);
+      sigma.refresh();
+    }
+    
     const tooltip = document.createElement('div');
     tooltip.className = 'graph-tooltip';
     tooltip.style.cssText = `
       position: absolute;
-      background: ${colorPalette.surface};
+      background: linear-gradient(135deg, ${colorPalette.surface} 0%, #1e293b 100%);
       color: ${colorPalette.text};
-      padding: 8px 12px;
-      border-radius: 6px;
-      border: 1px solid ${colorPalette.primary};
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 2px solid ${colorPalette.primary};
       font-size: 12px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       z-index: 1000;
       pointer-events: none;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4), 0 0 20px rgba(249, 115, 22, 0.3);
       max-width: 300px;
+      animation: slide-up-fade 0.2s ease-out;
     `;
     
-    let tooltipContent = `<strong>${nodeData.label || node}</strong><br>`;
-    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> ${nodeData.type || 'unknown'}<br>`;
-    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Degree:</span> ${nodeData.degree || 0}<br>`;
-    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> ${nodeData.id}<br>`;
-    if (nodeData.purpose) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Purpose:</span> ${nodeData.purpose}<br>`;
-    if (nodeData.role) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Role:</span> ${nodeData.role}<br>`;
+    let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${nodeData.label || node}</strong><br>`;
+    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${nodeData.type || 'unknown'}</span><br>`;
+    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Degree:</span> <span style="color: ${colorPalette.text}">${nodeData.degree || 0}</span><br>`;
+    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}">${nodeData.id}</span><br>`;
+    if (nodeData.purpose) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Purpose:</span> <span style="color: ${colorPalette.text}">${nodeData.purpose}</span><br>`;
+    if (nodeData.role) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Role:</span> <span style="color: ${colorPalette.text}">${nodeData.role}</span><br>`;
     
     tooltip.innerHTML = tooltipContent;
     document.body.appendChild(tooltip);
@@ -412,20 +486,47 @@ function initSigma() {
     
     container.addEventListener('mousemove', updateTooltip);
     sigma.once('leaveNode', () => {
+      // Restore original node appearance
+      if (hoveredNode && originalNodeColor) {
+        const nodeData = graph.getNodeAttributes(hoveredNode);
+        graph.setNodeAttribute(hoveredNode, 'color', originalNodeColor);
+        graph.setNodeAttribute(hoveredNode, 'size', (nodeData.size || 8) / 1.3);
+        sigma.refresh();
+        hoveredNode = null;
+        originalNodeColor = null;
+      }
       tooltip.remove();
       container.removeEventListener('mousemove', updateTooltip);
     });
   });
   
-  // Node click to center
+  // Node click to center with pulse animation
   sigma.on('clickNode', ({ node }) => {
+    const nodeData = graph.getNodeAttributes(node);
+    const originalSize = nodeData.size || 8;
+    
+    // Pulse animation
+    graph.setNodeAttribute(node, 'size', originalSize * 1.5);
+    sigma.refresh();
+    
+    setTimeout(() => {
+      graph.setNodeAttribute(node, 'size', originalSize * 1.2);
+      sigma.refresh();
+      
+      setTimeout(() => {
+        graph.setNodeAttribute(node, 'size', originalSize);
+        sigma.refresh();
+      }, 150);
+    }, 150);
+    
     const nodePosition = sigma.getNodeDisplayData(node);
     sigma.getCamera().animate({
       x: nodePosition.x,
       y: nodePosition.y,
       ratio: Math.min(sigma.getCamera().ratio * 0.7, 2),
     }, {
-      duration: 300,
+      duration: 400,
+      easing: 'quadraticOut',
     });
   });
 }

@@ -3,8 +3,10 @@
  * Centralized component library for consistent styling across the dashboard
  */
 
+import { createIcon, createIconWithText } from './icons.js';
+
 /**
- * Button component - consistent styling for all buttons
+ * Button component - consistent styling for all buttons with enhanced effects
  */
 export function createButton(text, options = {}) {
   const {
@@ -14,19 +16,20 @@ export function createButton(text, options = {}) {
     disabled = false,
     className = '',
     icon = null,
+    iconName = null, // Use iconName for Lucide icons
     type = 'button'
   } = options;
 
-  const baseClasses = 'font-medium transition-colors cursor-pointer rounded-lg border';
+  const baseClasses = 'relative font-semibold transition-all duration-200 cursor-pointer rounded-xl border overflow-hidden';
   const sizeClasses = {
     sm: 'px-3 py-1.5 text-sm',
-    md: 'px-4 py-2 text-base',
-    lg: 'px-6 py-3 text-lg'
+    md: 'px-6 py-3 text-base',
+    lg: 'px-8 py-4 text-lg'
   };
   const variantClasses = {
-    primary: 'bg-primary-600 hover:bg-primary-700 text-white border-primary-600 hover:border-primary-700',
-    secondary: 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600 hover:border-slate-500',
-    danger: 'bg-red-600 hover:bg-red-700 text-white border-red-600 hover:border-red-700',
+    primary: 'bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white border-primary-600 hover:border-primary-700 shadow-lg shadow-primary-500/50 hover:shadow-xl hover:shadow-primary-500/70 hover:scale-105 active:scale-95',
+    secondary: 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600 hover:border-slate-500 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95',
+    danger: 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white border-red-600 hover:border-red-700 shadow-lg shadow-red-600/50 hover:shadow-xl hover:shadow-red-600/70 hover:scale-105 active:scale-95',
     ghost: 'bg-transparent hover:bg-slate-800 text-slate-300 hover:text-slate-200 border-transparent hover:border-slate-600'
   };
 
@@ -35,52 +38,88 @@ export function createButton(text, options = {}) {
   const button = document.createElement('button');
   button.type = type;
   button.className = classes;
-  button.textContent = text;
-  if (disabled) button.disabled = true;
-  if (onClick) button.addEventListener('click', onClick);
-
-  if (icon) {
+  
+  // Add shimmer overlay for primary buttons
+  if (variant === 'primary' && !disabled) {
+    const shimmer = document.createElement('span');
+    shimmer.className = 'absolute inset-0 bg-white/10 opacity-0 hover:opacity-100 transition-opacity duration-200 rounded-xl';
+    button.appendChild(shimmer);
+  }
+  
+  const content = document.createElement('span');
+  content.className = 'relative z-10 flex items-center justify-center gap-2';
+  
+  if (iconName) {
+    const iconEl = createIcon(iconName, { size: size === 'sm' ? 16 : size === 'lg' ? 24 : 20 });
+    content.appendChild(iconEl);
+  } else if (icon) {
     const iconEl = document.createElement('span');
     iconEl.innerHTML = icon;
-    iconEl.className = 'inline-block mr-2';
-    button.insertBefore(iconEl, button.firstChild);
+    iconEl.className = 'inline-block';
+    content.appendChild(iconEl);
   }
+  
+  if (text) {
+    const textEl = document.createElement('span');
+    textEl.textContent = text;
+    content.appendChild(textEl);
+  }
+  
+  button.appendChild(content);
+  
+  if (disabled) button.disabled = true;
+  if (onClick) button.addEventListener('click', onClick);
 
   return button;
 }
 
 /**
- * Card component - consistent card styling
+ * Card component - consistent card styling with elevation and hover effects
  */
 export function createCard(content, options = {}) {
   const {
-    padding = 'p-4',
+    padding = 'p-6',
     className = '',
     header = null,
-    footer = null
+    footer = null,
+    elevated = true
   } = options;
 
   const card = document.createElement('div');
-  card.className = `bg-slate-950 border border-slate-700 rounded-lg ${padding} ${className}`;
+  const baseClasses = `group relative bg-gradient-to-br from-slate-900 to-slate-800 border-2 border-slate-700 rounded-2xl ${padding} transition-all duration-300`;
+  const elevatedClasses = elevated ? 'card-elevated hover:border-primary-500/50' : '';
+  card.className = `${baseClasses} ${elevatedClasses} ${className}`;
+
+  // Add gradient overlay on hover
+  if (elevated) {
+    const overlay = document.createElement('div');
+    overlay.className = 'absolute inset-0 bg-gradient-to-br from-primary-500/5 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none';
+    card.appendChild(overlay);
+  }
+
+  const contentWrapper = document.createElement('div');
+  contentWrapper.className = 'relative z-10';
 
   if (header) {
     const headerEl = document.createElement('div');
     headerEl.className = 'mb-4 pb-3 border-b border-slate-700';
     if (typeof header === 'string') {
       headerEl.textContent = header;
-      headerEl.className += ' text-slate-200 font-semibold text-base';
+      headerEl.className += ' text-slate-200 font-semibold text-lg';
     } else {
       headerEl.appendChild(header);
     }
-    card.appendChild(headerEl);
+    contentWrapper.appendChild(headerEl);
   }
 
   if (typeof content === 'string') {
-    card.innerHTML = content;
+    const contentDiv = document.createElement('div');
+    contentDiv.innerHTML = content;
+    contentWrapper.appendChild(contentDiv);
   } else if (content instanceof Node) {
-    card.appendChild(content);
+    contentWrapper.appendChild(content);
   } else {
-    card.appendChild(content);
+    contentWrapper.appendChild(content);
   }
 
   if (footer) {
@@ -91,10 +130,47 @@ export function createCard(content, options = {}) {
     } else {
       footerEl.appendChild(footer);
     }
-    card.appendChild(footerEl);
+    contentWrapper.appendChild(footerEl);
   }
 
+  card.appendChild(contentWrapper);
+
   return card;
+}
+
+/**
+ * Create a skeleton loading card
+ */
+export function createSkeletonCard(options = {}) {
+  const { lines = 3, className = '' } = options;
+  const card = document.createElement('div');
+  card.className = `bg-gradient-to-br from-slate-900 to-slate-800 border-2 border-slate-700 rounded-2xl p-6 ${className}`;
+  
+  const skeletonLines = Array.from({ length: lines }, (_, i) => {
+    const line = document.createElement('div');
+    line.className = `h-4 skeleton rounded-lg mb-3 ${i === 0 ? 'w-3/4' : i === lines - 1 ? 'w-1/2' : 'w-full'}`;
+    return line;
+  });
+  
+  skeletonLines.forEach(line => card.appendChild(line));
+  return card;
+}
+
+/**
+ * Create a skeleton spinner
+ */
+export function createSkeletonSpinner(options = {}) {
+  const { size = 48, className = '' } = options;
+  const container = document.createElement('div');
+  container.className = `relative flex items-center justify-center ${className}`;
+  container.style.width = `${size}px`;
+  container.style.height = `${size}px`;
+  
+  const spinner = document.createElement('div');
+  spinner.className = 'absolute inset-0 border-2 border-slate-700 border-t-primary-500 rounded-full';
+  container.appendChild(spinner);
+  
+  return container;
 }
 
 /**
@@ -232,30 +308,47 @@ export function createSection(title, content, options = {}) {
 }
 
 /**
- * Badge component - consistent badge styling
+ * Badge component - consistent badge styling with gradients and pulse
  */
 export function createBadge(text, options = {}) {
   const {
     variant = 'default', // 'default', 'success', 'warning', 'error', 'info'
-    size = 'sm'
+    size = 'sm',
+    pulse = false,
+    icon = null
   } = options;
 
   const sizeClasses = {
-    sm: 'px-2 py-0.5 text-xs',
-    md: 'px-2.5 py-1 text-sm'
+    sm: 'px-3 py-1.5 text-xs',
+    md: 'px-3 py-1.5 text-sm'
   };
 
   const variantClasses = {
-    default: 'bg-slate-800 text-slate-300 border-slate-600',
-    success: 'bg-green-900/30 text-green-400 border-green-700',
-    warning: 'bg-yellow-900/30 text-yellow-400 border-yellow-700',
-    error: 'bg-red-900/30 text-red-400 border-red-700',
-    info: 'bg-blue-900/30 text-blue-400 border-blue-700'
+    default: 'bg-gradient-to-r from-slate-800 to-slate-700 text-slate-300 border-slate-600 shadow-lg',
+    success: 'bg-gradient-to-r from-green-500 to-emerald-500 text-white border-green-600 shadow-lg shadow-green-500/50',
+    warning: 'bg-gradient-to-r from-yellow-500 to-amber-500 text-white border-yellow-600 shadow-lg shadow-yellow-500/50',
+    error: 'bg-gradient-to-r from-red-500 to-red-600 text-white border-red-600 shadow-lg shadow-red-500/50',
+    info: 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white border-blue-600 shadow-lg shadow-blue-500/50'
   };
 
   const badge = document.createElement('span');
-  badge.className = `inline-flex items-center font-medium rounded border ${sizeClasses[size]} ${variantClasses[variant]}`;
-  badge.textContent = text;
+  const pulseClass = pulse ? 'status-badge-pulse animate-pulse-glow' : '';
+  badge.className = `inline-flex items-center gap-1.5 font-medium rounded-full border ${sizeClasses[size]} ${variantClasses[variant]} ${pulseClass}`;
+  
+  if (pulse) {
+    const dot = document.createElement('span');
+    dot.className = 'w-2 h-2 bg-white rounded-full animate-pulse';
+    badge.appendChild(dot);
+  }
+  
+  if (icon) {
+    const iconEl = typeof icon === 'string' ? createIcon(icon, { size: size === 'sm' ? 12 : 16 }) : icon;
+    badge.appendChild(iconEl);
+  }
+  
+  const textEl = document.createElement('span');
+  textEl.textContent = text;
+  badge.appendChild(textEl);
 
   return badge;
 }

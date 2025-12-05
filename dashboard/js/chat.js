@@ -27,7 +27,7 @@ function formatClusterNodesSection(nodes) {
   for (const node of nodes) {
     const statusColor = node.status === 'online' ? '#10b981' : node.status === 'offline' ? '#ef4444' : '#94a3b8';
     html += `
-      <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid #f97316;">
+      <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 2px solid #f97316;">
         <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
           <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(node.name)}</strong>
           <span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(node.status)}</span>
@@ -127,7 +127,7 @@ function formatAgentResponse(text) {
         const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
         const typeColor = vmType === 'QEMU VM' ? '#f97316' : '#ea580c';
         currentVmHtml = `
-          <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
+          <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 2px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
               <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(vmName)}</strong>
               <span style="background: ${typeColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
@@ -197,7 +197,7 @@ function formatAgentResponse(text) {
     }
     
     if (trimmed.startsWith('Tip:')) {
-      html += `<div style="margin-top: 16px; padding: 10px; background: #431407; border-left: 3px solid #f97316; border-radius: 4px; font-size: 0.875em; color: #fed7aa;">
+      html += `<div style="margin-top: 16px; padding: 10px; background: #431407; border-left: 2px solid #f97316; border-radius: 4px; font-size: 0.875em; color: #fed7aa;">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px; color: #fdba74;">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
         </svg>
@@ -705,7 +705,7 @@ export async function sendChatMessage() {
           `);
         } else {
           updateChatMessage(currentResponseId, `
-            <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24; margin-top: 10px;">
+            <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 2px solid #fbbf24; margin-top: 10px;">
               <strong>⚠️ Connection closed</strong><br>
               <span style="font-size: 0.9em;">The agent may still be processing. Try refreshing or asking again.</span>
             </div>
@@ -751,7 +751,7 @@ export async function sendChatMessage() {
         const timeoutMs = isActionOperation ? 300000 : 60000;
         
         updateChatMessage(currentResponseId, `
-          <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24;">
+          <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 2px solid #fbbf24;">
             <strong>⚠️ Response timeout</strong><br>
             <span style="font-size: 0.9em;">The agent is taking longer than expected (${timeoutMs / 1000}s timeout). The operation may still be running. Check the reasoning traces tab for details.</span>
           </div>
@@ -791,7 +791,8 @@ export async function sendChatMessage() {
 
 export async function loadConversations() {
   const listDiv = document.getElementById('conversation-list');
-  if (!listDiv) return;
+  const listDivMobile = document.getElementById('conversation-list-mobile');
+  if (!listDiv && !listDivMobile) return;
 
   try {
     const userId = 'dashboard-user';
@@ -804,37 +805,48 @@ export async function loadConversations() {
     const result = await response.json();
     const conversations = result.data || [];
 
+    const emptyMessage = '<div class="text-slate-400 text-center py-5 text-sm">No conversations yet. Create a new one to start!</div>';
+    
     if (conversations.length === 0) {
-      listDiv.innerHTML = '<div class="text-slate-400 text-center py-5 text-sm">No conversations yet. Create a new one to start!</div>';
+      if (listDiv) listDiv.innerHTML = emptyMessage;
+      if (listDivMobile) listDivMobile.innerHTML = emptyMessage;
       return;
     }
 
-    listDiv.innerHTML = '';
-    conversations.forEach(conv => {
-      const item = createConversationItem(
-        {
-          id: conv.id,
-          title: conv.title,
-          messageCount: conv.messageCount
-        },
-        {
-          isActive: currentConversationId === conv.id,
-          onSelect: (id) => window.selectConversation(id),
-          onDelete: (id) => window.deleteConversation(id)
-        }
-      );
-      listDiv.appendChild(item);
-    });
+    const renderList = (container) => {
+      if (!container) return;
+      container.innerHTML = '';
+      conversations.forEach(conv => {
+        const item = createConversationItem(
+          {
+            id: conv.id,
+            title: conv.title,
+            messageCount: conv.messageCount
+          },
+          {
+            isActive: currentConversationId === conv.id,
+            onSelect: (id) => window.selectConversation(id),
+            onDelete: (id) => window.deleteConversation(id)
+          }
+        );
+        container.appendChild(item);
+      });
 
-    if (currentConversationId) {
-      const currentItem = listDiv.querySelector(`[data-conversation-id="${currentConversationId}"]`);
-      if (currentItem) {
-        currentItem.scrollIntoView({ block: 'nearest' });
+      if (currentConversationId) {
+        const currentItem = container.querySelector(`[data-conversation-id="${currentConversationId}"]`);
+        if (currentItem) {
+          currentItem.scrollIntoView({ block: 'nearest' });
+        }
       }
-    }
+    };
+
+    renderList(listDiv);
+    renderList(listDivMobile);
   } catch (error) {
     console.error('Failed to load conversations:', error);
-    listDiv.innerHTML = '<div class="text-red-400 text-center py-5 text-sm">Failed to load conversations</div>';
+    const errorMessage = '<div class="text-red-400 text-center py-5 text-sm">Failed to load conversations</div>';
+    if (listDiv) listDiv.innerHTML = errorMessage;
+    if (listDivMobile) listDivMobile.innerHTML = errorMessage;
   }
 }
 

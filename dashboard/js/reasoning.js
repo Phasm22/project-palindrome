@@ -1,11 +1,14 @@
 import { API_URL } from './utils.js';
 import { addTooltip, createModal } from './ui-helpers.js';
+import { createSkeletonLoader } from './skeletons.js';
 
 export async function loadReasoningTraces() {
   const element = document.getElementById('reasoning-traces');
   if (!element) return;
   
-  element.innerHTML = '<div class="loading">Loading...</div>';
+  // Show skeleton loader
+  element.innerHTML = '';
+  element.appendChild(createSkeletonLoader('Loading reasoning traces...'));
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/reasoning-traces?limit=20`);
@@ -20,7 +23,7 @@ export async function loadReasoningTraces() {
     }
     
     const html = data.traces.map(trace => `
-      <div class="panel" style="margin-bottom: 30px; border-left: 3px solid ${trace.maxStepsReached ? '#ef4444' : '#10b981'};">
+      <div class="panel" style="margin-bottom: 30px; border-left: 2px solid ${trace.maxStepsReached ? '#ef4444' : '#10b981'};">
         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
           <div>
             <h3 style="margin: 0 0 10px 0; color: #f97316;">
@@ -86,14 +89,14 @@ export async function loadReasoningTraces() {
               </div>
               
               ${step.llmResponse ? `
-                <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #f97316;">
+                <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 2px solid #f97316;">
                   <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">LLM Response</div>
                   <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.875rem;">${step.llmResponse}</div>
                 </div>
               ` : ''}
               
               ${step.ragContext ? `
-                <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #8b5cf6;">
+                <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 2px solid #8b5cf6;">
                   <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">RAG Context</div>
                   <div style="color: #e2e8f0; font-size: 0.875rem;">
                     <div><strong>Type:</strong> ${step.ragContext.queryType}</div>
@@ -107,7 +110,7 @@ export async function loadReasoningTraces() {
                 <div style="margin-bottom: 10px;">
                   <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Tool Calls</div>
                   ${step.toolCalls.map(tc => `
-                    <div style="margin-bottom: 8px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid ${tc.result.success ? '#10b981' : '#ef4444'};">
+                    <div style="margin-bottom: 8px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 2px solid ${tc.result.success ? '#10b981' : '#ef4444'};">
                       <div style="display: flex; align-items: center; margin-bottom: 5px;">
                         <span style="color: #f97316; font-weight: 600; margin-right: 10px;">${tc.toolName}</span>
                         <span class="status-badge ${tc.result.success ? 'status-success' : 'status-error'}" style="margin-right: 10px;">
@@ -147,7 +150,7 @@ export async function loadReasoningTraces() {
                     };
                     const color = colors[d.type] || '#94a3b8';
                     return `
-                    <div style="margin-bottom: 5px; padding: 6px 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid ${color};">
+                    <div style="margin-bottom: 5px; padding: 6px 10px; background: #1e293b; border-radius: 4px; border-left: 2px solid ${color};">
                       <span style="color: ${color}; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; margin-right: 8px;">${d.type.replace('_', ' ')}</span>
                       <span style="color: #e2e8f0; font-size: 0.875rem;">${d.description}</span>
                     </div>
@@ -160,7 +163,7 @@ export async function loadReasoningTraces() {
         </div>
         
         ${trace.finalResponse ? `
-          <div style="margin-top: 20px; padding: 15px; background: #1e293b; border-radius: 6px; border-left: 3px solid #10b981;">
+          <div style="margin-top: 20px; padding: 15px; background: #1e293b; border-radius: 6px; border-left: 2px solid #10b981;">
             <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;">Final Response</div>
             <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace;">${trace.finalResponse}</div>
           </div>

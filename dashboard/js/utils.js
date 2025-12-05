@@ -35,7 +35,7 @@ export function renderResponsiveTable(headers, rows, rowRenderer) {
   
   const tableHtml = `
     <div class="table-responsive">
-      <table class="w-full">
+      <table class="w-full mx-auto">
         <thead>
           <tr>
             ${headers.map(h => `<th class="text-left">${h}</th>`).join('')}

@@ -1,11 +1,14 @@
 import { API_URL, renderResponsiveTable } from './utils.js';
 import { addTooltip, createModal } from './ui-helpers.js';
+import { createSkeletonLoader, createSkeletonTableRows } from './skeletons.js';
 
 export async function loadToolExecutions() {
   const element = document.getElementById('tool-executions');
   if (!element) return;
   
-  element.innerHTML = '<div class="loading">Loading...</div>';
+  // Show skeleton loader
+  element.innerHTML = '';
+  element.appendChild(createSkeletonLoader('Loading executions...'));
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/tool-executions?limit=50`);

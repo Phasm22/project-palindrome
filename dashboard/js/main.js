@@ -22,33 +22,86 @@ window.testRagQuery = testRagQuery;
 
 // Make switchTab globally accessible
 window.switchTab = function(tabName, clickedElement) {
-  // Hide all tabs
+  // Get the target tab content first
+  const targetTabContent = document.getElementById(tabName);
+  
+  // Update tab button states
   document.querySelectorAll('.tab').forEach(t => {
-    t.classList.remove('active', 'text-primary-500', 'border-primary-500');
-    t.classList.add('text-slate-400', 'border-transparent');
-  });
-  document.querySelectorAll('.tab-content').forEach(c => {
-    c.classList.add('hidden');
-    c.classList.remove('flex', 'flex-col');
+    t.classList.remove('active', 'text-primary-500', 'border-primary-500', 'font-semibold');
+    t.classList.add('text-slate-400', 'border-transparent', 'font-medium');
   });
   
-  // Show selected tab
+  // Show selected tab button
   if (clickedElement) {
-    clickedElement.classList.remove('text-slate-400', 'border-transparent');
-    clickedElement.classList.add('active', 'text-primary-500', 'border-primary-500');
+    clickedElement.classList.remove('text-slate-400', 'border-transparent', 'font-medium');
+    clickedElement.classList.add('active', 'text-primary-500', 'border-primary-500', 'font-semibold');
   } else {
     // Fallback: find tab by text content
     document.querySelectorAll('.tab').forEach(t => {
       if (t.textContent.trim().toLowerCase().includes(tabName.toLowerCase())) {
-        t.classList.remove('text-slate-400', 'border-transparent');
-        t.classList.add('active', 'text-primary-500', 'border-primary-500');
+        t.classList.remove('text-slate-400', 'border-transparent', 'font-medium');
+        t.classList.add('active', 'text-primary-500', 'border-primary-500', 'font-semibold');
       }
     });
   }
-  const tabContent = document.getElementById(tabName);
-  if (tabContent) {
-    tabContent.classList.remove('hidden');
-    tabContent.classList.add('flex', 'flex-col');
+  
+  // Hide all tab contents except the target
+  document.querySelectorAll('.tab-content').forEach(c => {
+    if (c !== targetTabContent) {
+      // Only hide if it's currently visible
+      if (!c.classList.contains('hidden')) {
+        c.style.transition = 'opacity 0.2s ease-out, transform 0.2s ease-out';
+        c.style.opacity = '0';
+        c.style.transform = 'translateY(10px)';
+        setTimeout(() => {
+          c.classList.add('hidden');
+          c.classList.remove('flex', 'flex-col');
+          // Reset styles after hiding
+          c.style.opacity = '';
+          c.style.transform = '';
+          c.style.transition = '';
+        }, 200);
+      } else {
+        // Already hidden, just make sure it stays hidden
+        c.classList.add('hidden');
+        c.classList.remove('flex', 'flex-col');
+      }
+    }
+  });
+  
+  // Show target tab content
+  if (targetTabContent) {
+    const wasHidden = targetTabContent.classList.contains('hidden');
+    
+    // Remove hidden class and add flex classes first
+    targetTabContent.classList.remove('hidden');
+    targetTabContent.classList.add('flex', 'flex-col');
+    
+    // Only animate if it was previously hidden
+    if (wasHidden) {
+      // Set initial state for animation
+      targetTabContent.style.opacity = '0';
+      targetTabContent.style.transform = 'translateY(10px)';
+      targetTabContent.style.transition = 'opacity 0.3s ease-out, transform 0.3s ease-out';
+      
+      // Force a reflow to ensure the initial state is applied
+      targetTabContent.offsetHeight;
+      
+      // Animate in
+      requestAnimationFrame(() => {
+        targetTabContent.style.opacity = '1';
+        targetTabContent.style.transform = 'translateY(0)';
+        
+        // Clean up styles after animation completes
+        setTimeout(() => {
+          targetTabContent.style.transition = '';
+        }, 300);
+      });
+    } else {
+      // Already visible, just ensure it's fully opaque
+      targetTabContent.style.opacity = '1';
+      targetTabContent.style.transform = 'translateY(0)';
+    }
   }
   
   // Load data for the tab
@@ -66,9 +119,9 @@ window.switchTab = function(tabName, clickedElement) {
     loadConversations();
     // Close sidebar on mobile when switching to chat (if open)
     if (window.innerWidth < 768) {
-      const sidebar = document.getElementById('conversation-sidebar');
+      const sidebarMobile = document.getElementById('conversation-sidebar-mobile');
       const backdrop = document.getElementById('sidebar-backdrop');
-      if (sidebar && !sidebar.classList.contains('hidden')) {
+      if (sidebarMobile && !sidebarMobile.classList.contains('hidden')) {
         window.toggleSidebar();
       }
     }
@@ -100,32 +153,154 @@ window.switchTab = function(tabName, clickedElement) {
 
 // Mobile tab switching function
 window.switchTabMobile = function(tabName) {
+  // Force state sync
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+  const targetTab = document.getElementById(tabName);
+  if (targetTab) {
+    targetTab.classList.remove('hidden');
+  }
+  
+  // Sync mobile selector
+  const mobileSelect = document.getElementById('mobile-tab-select');
+  if (mobileSelect) {
+    mobileSelect.value = tabName;
+  }
+  
+  // Also update desktop tabs
   window.switchTab(tabName, null);
 };
 
 // Sidebar toggle function
 window.toggleSidebar = function() {
-  const sidebar = document.getElementById('conversation-sidebar');
+  const sidebarMobile = document.getElementById('conversation-sidebar-mobile');
   const backdrop = document.getElementById('sidebar-backdrop');
   
-  if (sidebar && backdrop) {
-    const isHidden = sidebar.classList.contains('hidden');
+  if (sidebarMobile && backdrop) {
+    const isHidden = sidebarMobile.classList.contains('hidden');
     if (isHidden) {
-      sidebar.classList.remove('hidden');
-      sidebar.classList.add('flex');
+      sidebarMobile.classList.remove('hidden');
+      sidebarMobile.classList.add('flex');
       backdrop.classList.remove('hidden');
-      document.body.style.overflow = 'hidden'; // Prevent body scroll
+      // Lock body scroll on mobile
+      document.body.classList.add('overflow-hidden');
     } else {
-      sidebar.classList.add('hidden');
-      sidebar.classList.remove('flex');
+      sidebarMobile.classList.add('hidden');
+      sidebarMobile.classList.remove('flex');
       backdrop.classList.add('hidden');
-      document.body.style.overflow = ''; // Restore body scroll
+      // Restore body scroll
+      document.body.classList.remove('overflow-hidden');
     }
   }
 };
 
 // Load initial data when page loads
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+  // Initialize icons
+  const { createIcon } = await import('./icons.js');
+  
+  // Header icon
+  const headerIcon = document.getElementById('header-icon');
+  if (headerIcon) {
+    const icon = createIcon('Clock', { size: 24, color: '#f97316', animation: 'pulse' });
+    headerIcon.appendChild(icon);
+  }
+  
+  // Refresh icons
+  const refreshIcons = ['refresh-icon-executions', 'refresh-icon-reasoning', 'refresh-icon-graph'];
+  refreshIcons.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      const icon = createIcon('RefreshCw', { size: 16, color: 'currentColor' });
+      el.appendChild(icon);
+    }
+  });
+  
+  // Menu icon
+  const menuIcon = document.getElementById('menu-icon');
+  if (menuIcon) {
+    const icon = createIcon('Menu', { size: 20, color: 'currentColor' });
+    menuIcon.appendChild(icon);
+  }
+  
+  // Plus icon
+  const plusIcon = document.getElementById('plus-icon');
+  if (plusIcon) {
+    const icon = createIcon('Plus', { size: 14, color: 'currentColor' });
+    plusIcon.appendChild(icon);
+  }
+  
+  const plusIconMobile = document.getElementById('plus-icon-mobile');
+  if (plusIconMobile) {
+    const icon = createIcon('Plus', { size: 14, color: 'currentColor' });
+    plusIconMobile.appendChild(icon);
+  }
+  
+  // Send icon
+  const sendIcon = document.getElementById('send-icon');
+  if (sendIcon) {
+    const icon = createIcon('Send', { size: 18, color: 'currentColor' });
+    sendIcon.appendChild(icon);
+  }
+  
+  // Navigation icons for overview
+  const navIconStats = document.getElementById('nav-icon-stats');
+  if (navIconStats) {
+    const icon = createIcon('BarChart3', { size: 20, color: '#f97316' });
+    navIconStats.appendChild(icon);
+  }
+  
+  const navIconCluster = document.getElementById('nav-icon-cluster');
+  if (navIconCluster) {
+    const icon = createIcon('Server', { size: 20, color: '#f97316' });
+    navIconCluster.appendChild(icon);
+  }
+  
+  // Mobile navigation icons
+  const navIconStatsMobile = document.getElementById('nav-icon-stats-mobile');
+  if (navIconStatsMobile) {
+    const icon = createIcon('BarChart3', { size: 20, color: '#f97316' });
+    navIconStatsMobile.appendChild(icon);
+  }
+  
+  const navIconClusterMobile = document.getElementById('nav-icon-cluster-mobile');
+  if (navIconClusterMobile) {
+    const icon = createIcon('Server', { size: 20, color: '#f97316' });
+    navIconClusterMobile.appendChild(icon);
+  }
+  
+  // Add page load animations only for visible elements
+  document.querySelectorAll('.tab-content').forEach((el) => {
+    // Only animate visible tab content (chat tab by default)
+    if (!el.classList.contains('hidden')) {
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(20px)';
+      setTimeout(() => {
+        el.style.transition = 'opacity 0.5s ease-out, transform 0.5s ease-out';
+        el.style.opacity = '1';
+        el.style.transform = 'translateY(0)';
+        // Clean up after animation
+        setTimeout(() => {
+          el.style.transition = '';
+        }, 500);
+      }, 100);
+    }
+  });
+  
+  // Animate cards with stagger
+  document.querySelectorAll('.card-elevated').forEach((el, idx) => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(20px)';
+    setTimeout(() => {
+      el.style.transition = 'opacity 0.5s ease-out, transform 0.5s ease-out';
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0)';
+      // Clean up after animation
+      setTimeout(() => {
+        el.style.transition = '';
+      }, 500);
+    }, idx * 50 + 200);
+  });
+  
   // Load chat conversations first (default tab)
   loadConversations();
   // Load overview data in background
