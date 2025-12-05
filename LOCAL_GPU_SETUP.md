@@ -1,127 +1,229 @@
-# Local GPU Setup for 4070Ti
+# Local GPU Setup - Sovereign AI Control Plane
 
-## Overview
+## Philosophy
 
-With your 4070Ti (16GB VRAM), you can run:
-- ✅ **Local Embeddings** - Much faster, no API costs, perfect for high-volume ingestion
-- ✅ **Local LLMs** - For RAG generation, entity extraction, and potentially agent reasoning
-- ⚠️ **Hybrid Approach** - Keep OpenAI for complex tool calling, use local for everything else
+**Goal:** Build a sovereign, inspectable, failure-tolerant AI control plane that happens to be cheap.
 
-## Recommended Setup: Ollama
+**Principles:**
+- **Sovereignty:** No vendor lock-in, full control over models and data
+- **Inspectability:** Can see exactly what's happening, debug easily
+- **Failure Tolerance:** Graceful degradation, automatic fallbacks
+- **Simplicity:** Solo operator-friendly, avoid over-engineering
+- **Cost:** Nice side effect, not the primary goal
 
-Ollama is the easiest way to run local models with OpenAI-compatible API.
+## Current Status ✅
 
-### 1. Install Ollama
+**Hardware:** RTX 4070 Ti SUPER (16GB VRAM) - Currently using ~5% (820MB/16GB)
+**Models Installed:**
+- `nomic-embed-text` (274MB) - Embeddings, 768 dimensions
+- `mistral:7b` (4.4GB) - RAG generation
+- `llama3.1:8b` (4.9GB) - Entity extraction, instruction following
 
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
+**Ollama:** Running in Docker with GPU support
+**Configuration:** ✅ Local models enabled (`EMBEDDINGS_PROVIDER=local`, `LLM_PROVIDER=local`)
 
-### 2. Pull Models
+## Simple Model Strategy (Solo Operator)
 
-```bash
-# For embeddings (384 dimensions - compatible with many models)
-ollama pull bge-small-en-v1.5
+**Keep it simple:** One model per task, automatic fallbacks.
 
-# For LLM inference (good for RAG generation)
-ollama pull llama3.2:3b        # Fast, good for simple tasks
-ollama pull llama3.1:8b        # Better quality, still fits in 16GB
-ollama pull mistral:7b         # Excellent for RAG
-ollama pull qwen2.5:7b         # Great tool calling support
+### Current Setup (Works Well)
 
-# For embeddings with 1536 dimensions (matching OpenAI)
-ollama pull nomic-embed-text   # 768 dim, but very good
-# Or use sentence-transformers directly
-```
+1. **Embeddings** → `nomic-embed-text` (274MB)
+   - Always available, fast
+   - Falls back to OpenAI if Ollama down
 
-### 3. Start Ollama Service
+2. **RAG Generation** → `mistral:7b` (4.4GB)
+   - Good quality, handles most queries
+   - Falls back to OpenAI if needed
 
-```bash
-ollama serve
-# Runs on http://localhost:11434
-```
+3. **Entity Extraction** → `llama3.1:8b` (4.9GB)
+   - Use when needed, or fallback to OpenAI
 
-## Alternative: Direct Model Serving
+**Total GPU Usage:** ~9.5GB when all loaded (leaves 6.5GB for host)
 
-### Option A: vLLM (Fastest inference)
+**Failure Tolerance:** All services have automatic OpenAI fallback - system keeps working even if Ollama fails.
 
-```bash
-pip install vllm
-vllm serve mistralai/Mistral-7B-Instruct-v0.2 --port 8000
-```
+## Recommended Setup
 
-### Option B: llama.cpp (Most efficient)
+### 1. Ollama is Already Running
 
 ```bash
-# Install llama.cpp
-git clone https://github.com/ggerganov/llama.cpp
-cd llama.cpp
-make
-
-# Download model and run server
-./server -m models/mistral-7b-instruct.gguf --port 8080
+docker compose up -d ollama
 ```
 
-### Option C: Sentence Transformers (For embeddings)
+### 2. Pull Additional Models (Optional)
 
 ```bash
-pip install sentence-transformers
-# Use in code directly - no server needed
+# For better tool calling (recommended)
+docker exec ollama ollama pull qwen2.5:7b
+
+# For faster embeddings (alternative)
+docker exec ollama ollama pull bge-base-en-v1.5  # 768 dim, better quality
 ```
 
-## Implementation Strategy
+## Configuration (Simple & Reliable)
 
-### Phase 1: Local Embeddings (Easiest Win)
+### Docker Config (Current - Good Balance)
 
-**Benefits:**
-- No API costs
-- Much faster (local GPU)
-- No rate limits
-- Works great with 4070Ti
+```yaml
+environment:
+  - OLLAMA_MAX_LOADED_MODELS=3   # Keep 3 models warm
+  - OLLAMA_KEEP_ALIVE=24h        # Keep models loaded (faster responses)
+  - OLLAMA_NUM_PARALLEL=4        # Handle 4 requests at once
+  - OLLAMA_FLASH_ATTENTION=1     # Memory optimization
+```
 
-**Models to consider:**
-- `BAAI/bge-small-en-v1.5` (384 dim) - Fast, good quality
-- `BAAI/bge-base-en-v1.5` (768 dim) - Better quality
-- `sentence-transformers/all-MiniLM-L6-v2` (384 dim) - Very fast
-- `intfloat/e5-small-v2` (384 dim) - Good for retrieval
+**Why this works:**
+- Models stay loaded = faster responses
+- Leaves plenty of GPU for host use
+- Automatic fallback to OpenAI if Ollama fails
 
-**Note:** You're using 1536 dim (OpenAI). You can:
-1. Switch to 384/768 dim models (may need to re-index)
-2. Use `BAAI/bge-large-en-v1.5` (1024 dim) - closer match
-3. Keep 1536 and use a model that supports it
+### Environment Variables
 
-### Phase 2: Local LLM for RAG Generation
+Add to `.env`:
 
-Replace `GenerationService` to use Ollama instead of OpenAI.
+```bash
+# Use local models
+EMBEDDINGS_PROVIDER=local
+LOCAL_EMBED_MODEL=nomic-embed-text
 
-**Models that work well:**
-- `llama3.1:8b` - Good balance
-- `mistral:7b` - Excellent for RAG
-- `qwen2.5:7b` - Great instruction following
+# RAG generation
+LLM_PROVIDER=local
+LOCAL_LLM_MODEL=mistral:7b
 
-### Phase 3: Local LLM for Entity Extraction
+# Entity extraction (if implemented)
+ENTITY_EXTRACTION_MODEL=llama3.1:8b
 
-Replace EDL extractor to use local model.
+# Agent reasoning (future)
+AGENT_MODEL=qwen2.5:7b
 
-### Phase 4: Hybrid Agent (Optional)
+OLLAMA_BASE_URL=http://localhost:11434
+```
 
-Keep OpenAI for complex tool calling, use local for simpler reasoning.
+## Failure Tolerance & Inspectability
 
-## Cost Savings Estimate
+### Current Implementation
 
-**Current (OpenAI):**
-- Embeddings: ~$0.02 per 1M tokens
-- GPT-4o-mini: ~$0.15/$0.60 per 1M tokens (input/output)
+✅ **Embeddings:** Local with OpenAI fallback (`EmbeddingService`)  
+✅ **RAG Generation:** Local with OpenAI fallback (`GenerationService`)  
+✅ **Agent Reasoning:** OpenAI (reliable, good tool calling)
 
-**With Local:**
-- Embeddings: $0 (electricity only)
-- LLM: $0 (electricity only)
+**How it works:**
+- Try local first (fast, free, inspectable)
+- Fallback to OpenAI if local fails (reliable, always works)
+- All failures are logged and visible
 
-**For high-volume ingestion, this saves significant money!**
+**Inspectability:**
+- Check Ollama: `docker logs ollama`
+- Check GPU: `nvidia-smi`
+- Check models: `docker exec ollama ollama ps`
+- All requests logged in PCE API logs
 
-## Next Steps
+## GPU Memory Management
 
-1. Install Ollama
-2. Test local embeddings
-3. Update `EmbeddingService` to support local models
-4. Gradually migrate other services
+**Current:** ~820MB used (5% of 16GB)  
+**With 3 models loaded:** ~9.5GB (59% of 16GB)  
+**Headroom:** ~6.5GB for host use + overhead ✅
+
+**To keep host responsive:**
+- Limit `OLLAMA_NUM_PARALLEL=4` (current)
+- Use CPU pinning (already configured: cores 4-15)
+- Monitor with: `nvidia-smi`
+
+## What's Working (Keep It Simple)
+
+### ✅ Core Services (DONE)
+- **Embeddings:** Local with OpenAI fallback
+- **RAG Generation:** Local with OpenAI fallback
+- **Agent Reasoning:** OpenAI (reliable, good tool calling)
+
+**Why this works:**
+- Most queries use local (fast, inspectable, free)
+- Complex queries use OpenAI (reliable, proven)
+- System never breaks (automatic fallbacks)
+- Easy to debug (all logs visible)
+
+### Optional Enhancements (Only If Needed)
+
+**Entity Extraction:** Could use local, but OpenAI works fine for now
+- **When to add:** If you're doing high-volume extraction and want to inspect it
+- **Otherwise:** Keep using OpenAI, it's reliable
+
+**Agent Reasoning:** Could use local, but OpenAI is better for tool calling
+- **When to add:** If you want full sovereignty and don't mind occasional failures
+- **Otherwise:** Keep using OpenAI for agent, it's more reliable
+
+## Benefits (Beyond Cost)
+
+**Sovereignty:**
+- Your data never leaves your machine (embeddings, RAG)
+- Can inspect exactly what models are doing
+- No vendor lock-in, can switch anytime
+
+**Inspectability:**
+- See all model inputs/outputs in logs
+- Debug failures easily (local logs vs API black box)
+- Understand what the system is actually doing
+
+**Failure Tolerance:**
+- Ollama down? Falls back to OpenAI automatically
+- Model fails? Falls back gracefully
+- System keeps working even when components fail
+
+**Cost (Nice Side Effect):**
+- Embeddings: Free (vs $0.02/1M tokens)
+- RAG: Free (vs $0.15/1M tokens)
+- **Savings:** Negligible at current scale (~$0.49/month actual OpenAI usage)
+- **Meaningful savings:** Only under sustained multi-million-token daily workloads
+- **But that's not why we do this** - sovereignty and inspectability are the real goals
+
+## Quick Start
+
+✅ **Already configured!** Local models are enabled with automatic fallbacks.
+
+**To verify everything works:**
+
+1. **Check Ollama is running:**
+   ```bash
+   docker ps | grep ollama
+   docker logs ollama --tail 20
+   ```
+
+2. **Test local models:**
+   ```bash
+   # Test embeddings (should use local)
+   curl http://localhost:4000/api/query -d '{"query": "test"}'
+   
+   # Check logs to see if local or OpenAI was used
+   ```
+
+3. **Monitor system health:**
+   ```bash
+   # GPU usage
+   nvidia-smi
+   
+   # Ollama models loaded
+   docker exec ollama ollama ps
+   
+   # System logs
+   docker logs ollama --tail 50
+   ```
+
+## Maintenance (Solo Operator Friendly)
+
+**Daily:** Nothing needed - system runs itself
+
+**Weekly:** Check logs if something seems off
+```bash
+docker logs ollama --tail 100 | grep -i error
+```
+
+**Monthly:** Update models if needed
+```bash
+docker exec ollama ollama pull mistral:7b  # Gets latest version
+```
+
+**If something breaks:**
+1. Check Ollama: `docker logs ollama`
+2. System falls back to OpenAI automatically
+3. Fix when convenient, no urgency

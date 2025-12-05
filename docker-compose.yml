@@ -55,7 +55,8 @@ services:
       - NEO4J_dbms_memory_heap_max__size=4G
       # Page cache: 6GB (for graph data on NVMe - fast access)
       - NEO4J_dbms_memory_pagecache_size=6G
-      # Transaction log: 256MB (sufficient for NVMe write speed)
+      # Transaction log: 256MB size retention (prevents log growth)
+      # Note: Neo4j doesn't support combining size and time in one policy
       - NEO4J_dbms_tx__log_rotation_retention__policy=256M size
       # JVM tuning for AMD Ryzen (Zen 5 architecture)
       # Use G1GC for balanced performance (ZGC requires Java 11+ and has different flags)
@@ -112,10 +113,13 @@ services:
       # Ollama performance tuning for AMD Ryzen 7 9700X
       # Use all available CPU cores for token generation (16 threads)
       - OLLAMA_NUM_PARALLEL=4
-      - OLLAMA_MAX_LOADED_MODELS=2
+      # With 16GB VRAM, can keep 3 models loaded (embeddings + 2 LLMs)
+      # Leaves ~6.5GB for host use + overhead
+      - OLLAMA_MAX_LOADED_MODELS=3
       # Flash Attention optimization (if supported by model)
       - OLLAMA_FLASH_ATTENTION=1
-      # Keep models in GPU memory (16GB allows 1-2 7B models)
+      # Keep models in GPU memory for faster inference
+      # 16GB allows: embeddings (274MB) + mistral:7b (4.4GB) + llama3.1:8b (4.9GB) = ~9.5GB
       - OLLAMA_KEEP_ALIVE=24h
       # NVMe optimization: use fast storage for model cache
       - OLLAMA_MODELS=/root/.ollama/models
@@ -159,6 +163,9 @@ services:
       # NVMe optimization: faster TSDB writes
       - '--storage.tsdb.wal-compression'
       - '--storage.tsdb.max-block-duration=2h'
+      # Retention policy: keep 30 days of metrics (prevents indefinite growth)
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=10GB'
     restart: unless-stopped
     deploy:
       resources:

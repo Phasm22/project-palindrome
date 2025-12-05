@@ -92,7 +92,7 @@ export async function loadGraph() {
       const color = nodeTypeColors[nodeType] || nodeTypeColors['unknown'];
       
       graph.addNode(nodeId, {
-        label: n.name || n.properties?.name || n.id || 'Unknown',
+      label: n.name || n.properties?.name || n.id || 'Unknown',
         size: size,
         color: color,
         nodeType: nodeType, // Use nodeType instead of type to avoid Sigma.js renderer selection
@@ -110,7 +110,7 @@ export async function loadGraph() {
       if (graph.hasNode(from) && graph.hasNode(to)) {
         try {
           graph.addEdge(from, to, {
-            label: r.type || r.properties?.type || '',
+      label: r.type || r.properties?.type || '',
             type: r.type || 'unknown',
             color: colorPalette.primary,
             size: 2,

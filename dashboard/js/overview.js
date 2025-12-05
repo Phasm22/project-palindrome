@@ -1,4 +1,4 @@
-import { API_URL } from './utils.js';
+import { API_URL, renderResponsiveTable } from './utils.js';
 
 export async function loadExecutionStats() {
   const element = document.getElementById('execution-stats');
@@ -27,30 +27,18 @@ export async function loadExecutionStats() {
         </div>
       </div>
       ${stats.recentErrors && stats.recentErrors.length > 0 ? `
-        <div class="mt-6 pt-6 border-t border-slate-700">
-          <h3 class="text-lg font-semibold mb-4 text-red-400">Recent Errors</h3>
-          <div class="overflow-x-auto">
-            <table class="w-full">
-              <thead>
-                <tr>
-                  <th class="text-left">Tool</th>
-                  <th class="text-left">User</th>
-                  <th class="text-left">Error</th>
-                  <th class="text-left">Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${stats.recentErrors.map(e => `
-                  <tr>
-                    <td class="whitespace-nowrap">${(e.toolName || 'Unknown').split('\n')[0]}</td>
-                    <td class="whitespace-nowrap">${(e.userId || 'Unknown').split('\n')[0]}</td>
-                    <td class="max-w-md truncate" title="${(e.error || 'Unknown').replace(/"/g, '&quot;')}">${(e.error || 'Unknown').split('\n')[0]}</td>
-                    <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
+        <div class="mt-4 md:mt-6 pt-4 md:pt-6 border-t border-slate-700">
+          <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4 text-red-400">Recent Errors</h3>
+          ${renderResponsiveTable(
+            ['Tool', 'User', 'Error', 'Time'],
+            stats.recentErrors,
+            (e) => `
+              <td class="whitespace-nowrap">${(e.toolName || 'Unknown').split('\n')[0]}</td>
+              <td class="whitespace-nowrap">${(e.userId || 'Unknown').split('\n')[0]}</td>
+              <td class="max-w-md truncate" title="${(e.error || 'Unknown').replace(/"/g, '&quot;')}">${(e.error || 'Unknown').split('\n')[0]}</td>
+              <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
+            `
+          )}
         </div>
       ` : ''}
     `;
@@ -157,21 +145,16 @@ export async function loadClusterStatus() {
       ` : ''}
       
       ${data.vms?.resources && data.vms.resources.length > 0 ? `
-        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0;">Recent VMs</h3>
+        <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0; font-size: 1rem;">Recent VMs</h3>
         <div style="max-height: 400px; overflow-y: auto;">
-          <table>
-            <tr>
-              <th>Name</th>
-              <th>Node</th>
-              <th>Status</th>
-              <th>Type</th>
-            </tr>
-            ${data.vms.resources.slice(0, 20).map(vm => {
+          ${renderResponsiveTable(
+            ['Name', 'Node', 'Status', 'Type'],
+            data.vms.resources.slice(0, 20),
+            (vm) => {
               const name = (vm.name || vm.id || 'Unknown').split('\n')[0];
               const node = (vm.node || 'N/A').split('\n')[0];
               const type = (vm.type || 'N/A').split('\n')[0];
               return `
-              <tr>
                 <td class="whitespace-nowrap">${name}</td>
                 <td class="whitespace-nowrap">${node}</td>
                 <td>
@@ -180,10 +163,9 @@ export async function loadClusterStatus() {
                   </span>
                 </td>
                 <td class="whitespace-nowrap">${type}</td>
-              </tr>
-            `;
-            }).join('')}
-          </table>
+              `;
+            }
+          )}
         </div>
       ` : ''}
       

@@ -1,4 +1,4 @@
-import { API_URL } from './utils.js';
+import { API_URL, renderResponsiveTable } from './utils.js';
 import { addTooltip, createModal } from './ui-helpers.js';
 
 export async function loadToolExecutions() {
@@ -19,56 +19,46 @@ export async function loadToolExecutions() {
       return;
     }
     
-    const html = `
-      <table>
-        <tr>
-          <th>Timestamp</th>
-          <th>Tool</th>
-          <th>User</th>
-          <th>Status</th>
-          <th>Duration</th>
-          <th>Parameters</th>
-        </tr>
-        ${data.executions.map((e, idx) => {
-          const toolName = (e.toolName || 'Unknown').split('\n')[0];
-          const userId = (e.userId || 'Unknown').split('\n')[0];
-          const error = e.error ? (e.error || 'Unknown').split('\n')[0] : null;
-          return `
-          <tr>
-            <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
-            <td class="whitespace-nowrap">
-              <span 
-                data-tooltip="${toolName.replace(/"/g, '&quot;')}"
-                style="cursor: help; border-bottom: 1px dotted #94a3b8;"
-              >
-                ${toolName}
-              </span>
-            </td>
-            <td class="whitespace-nowrap">${userId}</td>
-            <td>
-              <span 
-                class="status-badge ${e.error ? 'status-error' : 'status-success'}"
-                data-tooltip="${error ? `Error: ${error.replace(/"/g, '&quot;')}` : 'Execution completed successfully'}"
-                style="cursor: help;"
-              >
-                ${e.error ? 'Failed' : 'Success'}
-              </span>
-            </td>
-            <td class="whitespace-nowrap">${e.durationMs}ms</td>
-            <td>
-              <button
-                onclick="showExecutionDetails(${idx})"
-                class="bg-primary-600 hover:bg-primary-700 border border-primary-500 text-white px-3 py-1 rounded text-sm cursor-pointer transition-colors"
-                data-execution-idx="${idx}"
-              >
-                View Details
-              </button>
-            </td>
-          </tr>
+    const html = renderResponsiveTable(
+      ['Timestamp', 'Tool', 'User', 'Status', 'Duration', 'Parameters'],
+      data.executions,
+      (e, idx) => {
+        const toolName = (e.toolName || 'Unknown').split('\n')[0];
+        const userId = (e.userId || 'Unknown').split('\n')[0];
+        const error = e.error ? (e.error || 'Unknown').split('\n')[0] : null;
+        return `
+          <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
+          <td class="whitespace-nowrap">
+            <span 
+              data-tooltip="${toolName.replace(/"/g, '&quot;')}"
+              style="cursor: help; border-bottom: 1px dotted #94a3b8;"
+            >
+              ${toolName}
+            </span>
+          </td>
+          <td class="whitespace-nowrap">${userId}</td>
+          <td>
+            <span 
+              class="status-badge ${e.error ? 'status-error' : 'status-success'}"
+              data-tooltip="${error ? `Error: ${error.replace(/"/g, '&quot;')}` : 'Execution completed successfully'}"
+              style="cursor: help;"
+            >
+              ${e.error ? 'Failed' : 'Success'}
+            </span>
+          </td>
+          <td class="whitespace-nowrap">${e.durationMs}ms</td>
+          <td>
+            <button
+              onclick="showExecutionDetails(${idx})"
+              class="bg-primary-600 hover:bg-primary-700 border border-primary-500 text-white px-3 py-2 rounded text-sm cursor-pointer transition-colors min-h-[44px] md:min-h-0"
+              data-execution-idx="${idx}"
+            >
+              View Details
+            </button>
+          </td>
         `;
-        }).join('')}
-      </table>
-    `;
+      }
+    );
     
     document.getElementById('tool-executions').innerHTML = html;
     
