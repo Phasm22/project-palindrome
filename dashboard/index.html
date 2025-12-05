@@ -13,258 +13,6 @@
     import { createIcon } from './js/icons.js';
     window.createIcon = createIcon;
   </script>
-  <style>
-    /* Custom scrollbar */
-    ::-webkit-scrollbar {
-      width: 8px;
-      height: 8px;
-    }
-    ::-webkit-scrollbar-track {
-      background: #0f172a;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: #c2410c;
-      border-radius: 4px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-      background: #ea580c;
-    }
-    
-    /* Utility classes for JS-generated content */
-    .status-grid {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 0.75rem;
-      margin-top: 1rem;
-    }
-    
-    @media (min-width: 640px) {
-      .status-grid {
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 1rem;
-      }
-    }
-    
-    @media (min-width: 768px) {
-      .status-grid {
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      }
-    }
-    
-    .stat-card {
-      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-      padding: 1.5rem;
-      border-radius: 1rem;
-      border: 2px solid #475569;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      position: relative;
-      overflow: hidden;
-    }
-    
-    .stat-card::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(135deg, rgba(249, 115, 22, 0.05) 0%, transparent 100%);
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-    
-    .stat-card:hover {
-      border-color: rgba(249, 115, 22, 0.7);
-      transform: translateY(-2px);
-      box-shadow: 0 4px 6px rgba(0,0,0,0.4), 0 15px 40px rgba(0,0,0,0.3), 0 0 20px rgba(249, 115, 22, 0.2);
-    }
-    
-    .stat-card:hover::before {
-      opacity: 1;
-    }
-    
-    .stat-label {
-      color: #cbd5e1;
-      font-size: 0.875rem;
-      font-weight: 500;
-      margin-bottom: 0.5rem;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    }
-    
-    .stat-value {
-      background: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-      font-size: 1.75rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-    }
-    
-    .agent-thinking {
-      color: #94a3b8;
-      font-style: italic;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.9em;
-    }
-    
-    .agent-response {
-      color: #e2e8f0;
-      line-height: 1.6;
-      font-size: 0.95em;
-    }
-    
-    .agent-response h3 {
-      color: #f97316;
-      font-size: 1.1em;
-      margin-top: 1.25rem;
-      margin-bottom: 0.625rem;
-      font-weight: 600;
-    }
-    
-    .agent-response h3:first-child {
-      margin-top: 0;
-    }
-    
-    .agent-response ul {
-      list-style: none;
-      padding-left: 0;
-      margin: 0.625rem 0;
-    }
-    
-    .agent-response li {
-      padding: 0.25rem 0;
-      color: #cbd5e1;
-    }
-    
-    .agent-response .temp-label {
-      color: #94a3b8;
-      font-weight: 500;
-      display: inline-block;
-      min-width: 120px;
-    }
-    
-    @media (min-width: 768px) {
-      .agent-response .temp-label {
-        min-width: 180px;
-      }
-    }
-    
-    .agent-response .temp-value {
-      color: #e2e8f0;
-    }
-    
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 1rem;
-    }
-    
-    th, td {
-      padding: 0.5rem;
-      text-align: left;
-      border-bottom: 1px solid #334155;
-    }
-    
-    @media (min-width: 768px) {
-      th, td {
-        padding: 0.75rem;
-      }
-    }
-    
-    th {
-      color: #94a3b8;
-      font-weight: 600;
-      background: #0f172a;
-    }
-    
-    td {
-      color: #e2e8f0;
-    }
-    
-    /* Mobile: Hide table, show cards instead */
-    @media (max-width: 767px) {
-      .table-responsive {
-        display: none;
-      }
-    }
-    
-    @media (min-width: 768px) {
-      .table-responsive {
-        display: table;
-      }
-      .card-responsive {
-        display: none;
-      }
-    }
-    
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.375rem;
-      padding: 0.5rem 0.875rem;
-      border-radius: 9999px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      border: 2px solid transparent;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      transition: all 0.2s;
-    }
-    
-    .status-success {
-      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-      color: white;
-      border-color: rgba(16, 185, 129, 0.3);
-      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
-    }
-    
-    .status-success::before {
-      content: '';
-      width: 0.5rem;
-      height: 0.5rem;
-      background: white;
-      border-radius: 50%;
-      animation: pulse 2s ease-in-out infinite;
-    }
-    
-    .status-error {
-      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-      color: white;
-      border-color: rgba(239, 68, 68, 0.3);
-      box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
-    }
-    
-    .status-warning {
-      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-      color: white;
-      border-color: rgba(245, 158, 11, 0.3);
-      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
-    }
-    
-    .loading {
-      color: #94a3b8;
-      text-align: center;
-      padding: 1.25rem;
-    }
-    
-    .error {
-      color: #ef4444;
-      background: #7f1d1d;
-      padding: 0.625rem;
-      border-radius: 0.25rem;
-      margin-top: 0.625rem;
-    }
-    
-    pre {
-      background: #0f172a;
-      padding: 0.625rem;
-      border-radius: 0.25rem;
-      overflow-x: auto;
-      font-size: 0.75rem;
-      max-height: 200px;
-      overflow-y: auto;
-      border: 1px solid #334155;
-    }
-  </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
   <div class="mx-auto max-w-7xl px-4 md:px-6 py-6">
@@ -288,41 +36,41 @@
     </div>
 
     <!-- Desktop: Horizontal tabs -->
-    <div class="hidden md:flex gap-2 mb-6 border-b-4 border-slate-600 overflow-x-auto">
-      <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)">
+    <div class="hidden md:flex gap-2 mb-6 border-b-4 border-slate-600 overflow-x-auto" role="tablist" aria-label="Dashboard tabs">
+      <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
         <span class="relative z-10">Chat</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
       </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)">
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
         <span class="relative z-10">Overview</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
       </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)">
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
         <span class="relative z-10">Tool Executions</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
       </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)">
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
         <span class="relative z-10">Reasoning Traces</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
       </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)">
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
         <span class="relative z-10">Ontology Graph</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
       </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)">
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
         <span class="relative z-10">RAG Diagnostics</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
       </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)">
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
         <span class="relative z-10">Query</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
       </button>
     </div>
 
     <!-- Overview Tab -->
-    <div id="overview" class="tab-content hidden flex flex-col">
+    <div id="overview" class="tab-content hidden flex flex-col" role="tabpanel" aria-labelledby="overview-tab" aria-hidden="true">
       <!-- Mobile: Bottom-fixed nav - icons only with glow -->
-      <div class="md:hidden fixed bottom-4 left-4 right-4 z-50 flex gap-3 justify-center" id="overview-nav-mobile" style="display: none;">
+      <div class="md:hidden fixed bottom-4 left-4 right-4 z-50 flex gap-3 justify-center pb-safe" id="overview-nav-mobile" style="display: none; padding-bottom: max(1rem, env(safe-area-inset-bottom));">
         <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));">
           <span id="nav-icon-stats-mobile"></span>
         </button>
@@ -331,7 +79,7 @@
         </button>
       </div>
       <!-- Desktop: Right-side floating nav - icons only with glow -->
-      <div class="hidden md:flex fixed right-4 bottom-24 z-50 flex-col gap-3" id="overview-nav" style="display: none;">
+      <div class="hidden md:flex fixed right-4 bottom-24 z-50 flex-col gap-3 pr-safe" id="overview-nav" style="display: none; padding-right: max(1rem, env(safe-area-inset-right));">
         <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));">
           <span id="nav-icon-stats"></span>
         </button>
@@ -357,7 +105,7 @@
     </div>
 
     <!-- Tool Executions Tab -->
-    <div id="executions" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+    <div id="executions" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="executions-tab" aria-hidden="true">
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Recent Tool Executions</span>
@@ -373,7 +121,7 @@
     </div>
 
     <!-- Reasoning Traces Tab -->
-    <div id="reasoning" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+    <div id="reasoning" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="reasoning-tab" aria-hidden="true">
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Agent Reasoning Traces</span>
@@ -389,7 +137,7 @@
     </div>
 
     <!-- Ontology Graph Tab -->
-    <div id="graph" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+    <div id="graph" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="graph-tab" aria-hidden="true">
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Ontology Graph</span>
@@ -405,7 +153,7 @@
     </div>
 
     <!-- RAG Diagnostics Tab -->
-    <div id="rag" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+    <div id="rag" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="rag-tab" aria-hidden="true">
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">RAG Diagnostics</h2>
         <div class="mb-6 p-4 bg-slate-950 rounded-lg border-l-4 border-l-purple-500">
@@ -437,7 +185,7 @@
     </div>
 
     <!-- Query Tab -->
-    <div id="query" class="tab-content hidden flex-1 min-h-0 flex flex-col">
+    <div id="query" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="query-tab" aria-hidden="true">
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">Unified Query Interface</h2>
         
@@ -506,7 +254,7 @@
     </div>
 
     <!-- Chat Tab -->
-    <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col">
+    <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="chat-tab" aria-hidden="false">
       <!-- Mobile: Hamburger button to toggle sidebar -->
       <button id="sidebar-toggle" class="md:hidden mb-4 bg-gradient-to-r from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:bg-slate-700 hover:border-primary-500 hover:scale-105 active:scale-95 flex items-center gap-2 min-h-[44px]" onclick="window.toggleSidebar()">
         <span id="menu-icon"></span>
@@ -595,7 +343,7 @@
           </div>
 
         <!-- Chat Input Area -->
-          <div class="sticky bottom-0 bg-slate-900 pt-2 flex gap-2 md:gap-3 items-end">
+          <div class="sticky bottom-0 bg-slate-900 pt-2 flex gap-2 md:gap-3 items-end pb-safe" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom));">
           <textarea 
             id="chat-input" 
             placeholder="Ask me anything about your infrastructure..." 

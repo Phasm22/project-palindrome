@@ -151,9 +151,9 @@ export async function loadGraph() {
     
     // Create layout HTML
     const html = `
-      <div class="flex gap-4" style="height: 800px;">
+      <div class="flex flex-col md:flex-row gap-4 min-h-0">
         <!-- Graph Visualization -->
-        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: 800px; overflow: hidden; position: relative;">
+        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative min-h-[50vh] md:min-h-[70vh]" style="overflow: hidden; position: relative;">
           <!-- Zoom Controls -->
           <div class="absolute top-4 right-4 z-10 flex flex-col gap-2">
             <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Zoom In">
@@ -185,7 +185,7 @@ export async function loadGraph() {
         </div>
         
         <!-- Statistics and Legend Sidebar -->
-        <div class="w-80 flex flex-col gap-4 overflow-y-auto" style="max-height: 800px;">
+        <div class="w-full md:w-80 flex flex-col gap-4 overflow-y-auto md:max-h-[70vh]">
           <!-- Statistics Panel -->
           <div class="bg-slate-950 border border-slate-700 rounded-lg p-4">
             <h3 class="m-0 mb-4 text-slate-200 text-base font-semibold">Statistics</h3>
@@ -263,8 +263,17 @@ export async function loadGraph() {
     
     container.innerHTML = html;
     
-    // Initialize Sigma after DOM is ready
-    setTimeout(async () => {
+    // Initialize Sigma after DOM is ready and measured
+    const initGraph = async () => {
+      // Wait for container to be measured
+      await new Promise(resolve => {
+        if (container.offsetWidth > 0 && container.offsetHeight > 0) {
+          resolve();
+        } else {
+          requestAnimationFrame(resolve);
+        }
+      });
+      
       // Initialize zoom control icons
       const { createIcon } = await import('./icons.js');
       document.querySelectorAll('.zoom-icon-in').forEach(el => {
@@ -289,6 +298,31 @@ export async function loadGraph() {
       setupSearch();
       setupFilters();
       
+      // Set up ResizeObserver for container changes
+      if (window.ResizeObserver && container) {
+        const resizeObserver = new ResizeObserver(() => {
+          if (sigma) {
+            const dpr = window.devicePixelRatio || 1;
+            sigma.setSetting('pixelRatio', dpr);
+            sigma.refresh();
+          }
+        });
+        resizeObserver.observe(container);
+        // Store observer for cleanup
+        window.graphResizeObserver = resizeObserver;
+      }
+      
+      // Handle orientation changes
+      window.addEventListener('orientationchange', () => {
+        setTimeout(() => {
+          if (sigma) {
+            const dpr = window.devicePixelRatio || 1;
+            sigma.setSetting('pixelRatio', dpr);
+            sigma.refresh();
+          }
+        }, 100);
+      });
+      
       // Animate nodes in
       if (graph) {
         graph.forEachNode((node, attrs) => {
@@ -302,7 +336,12 @@ export async function loadGraph() {
           }, Math.random() * 500);
         });
       }
-    }, 100);
+    };
+    
+    // Use requestAnimationFrame for better timing
+    requestAnimationFrame(() => {
+      initGraph();
+    });
   } catch (error) {
     container.innerHTML = 
       `<div class="error">Failed to load graph: ${error.message}</div>`;
@@ -335,7 +374,10 @@ function initSigma() {
     }
   });
   
-  // Initialize Sigma with enhanced rendering
+  // Get device pixel ratio for high-DPI displays
+  const dpr = window.devicePixelRatio || 1;
+  
+  // Initialize Sigma with enhanced rendering and DPR awareness
   sigma = new Sigma(graph, container, {
     renderLabels: true,
     labelFont: 'Inter, system-ui, sans-serif',
@@ -347,6 +389,7 @@ function initSigma() {
     minCameraRatio: 0.1,
     maxCameraRatio: 10,
     allowInvalidContainer: true,
+    pixelRatio: dpr,
     // Enhanced node rendering
     nodeReducer: (node, data) => {
       return {

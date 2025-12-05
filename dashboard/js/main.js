@@ -25,29 +25,30 @@ window.switchTab = function(tabName, clickedElement) {
   // Get the target tab content first
   const targetTabContent = document.getElementById(tabName);
   
-  // Update tab button states
+  // Update tab button states with ARIA
   document.querySelectorAll('.tab').forEach(t => {
     t.classList.remove('active', 'text-primary-500', 'border-primary-500', 'font-semibold');
     t.classList.add('text-slate-400', 'border-transparent', 'font-medium');
+    t.setAttribute('aria-selected', 'false');
+    t.setAttribute('tabindex', '-1');
   });
   
-  // Show selected tab button
-  if (clickedElement) {
-    clickedElement.classList.remove('text-slate-400', 'border-transparent', 'font-medium');
-    clickedElement.classList.add('active', 'text-primary-500', 'border-primary-500', 'font-semibold');
-  } else {
-    // Fallback: find tab by text content
-    document.querySelectorAll('.tab').forEach(t => {
-      if (t.textContent.trim().toLowerCase().includes(tabName.toLowerCase())) {
-        t.classList.remove('text-slate-400', 'border-transparent', 'font-medium');
-        t.classList.add('active', 'text-primary-500', 'border-primary-500', 'font-semibold');
-      }
-    });
+  // Show selected tab button with ARIA
+  const activeTab = clickedElement || Array.from(document.querySelectorAll('.tab')).find(t => 
+    t.textContent.trim().toLowerCase().includes(tabName.toLowerCase())
+  );
+  
+  if (activeTab) {
+    activeTab.classList.remove('text-slate-400', 'border-transparent', 'font-medium');
+    activeTab.classList.add('active', 'text-primary-500', 'border-primary-500', 'font-semibold');
+    activeTab.setAttribute('aria-selected', 'true');
+    activeTab.setAttribute('tabindex', '0');
   }
   
-  // Hide all tab contents except the target
+  // Hide all tab contents except the target with ARIA
   document.querySelectorAll('.tab-content').forEach(c => {
     if (c !== targetTabContent) {
+      c.setAttribute('aria-hidden', 'true');
       // Only hide if it's currently visible
       if (!c.classList.contains('hidden')) {
         c.style.transition = 'opacity 0.2s ease-out, transform 0.2s ease-out';
@@ -69,13 +70,14 @@ window.switchTab = function(tabName, clickedElement) {
     }
   });
   
-  // Show target tab content
+  // Show target tab content with ARIA
   if (targetTabContent) {
     const wasHidden = targetTabContent.classList.contains('hidden');
     
     // Remove hidden class and add flex classes first
     targetTabContent.classList.remove('hidden');
     targetTabContent.classList.add('flex', 'flex-col');
+    targetTabContent.setAttribute('aria-hidden', 'false');
     
     // Only animate if it was previously hidden
     if (wasHidden) {
