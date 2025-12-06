@@ -1,328 +1,199 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Palindrome Dashboard</title>
-  <script src="https://unpkg.com/vis-network@latest/dist/vis-network.min.js"></script>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      padding: 20px;
-      line-height: 1.6;
-    }
-
-    .container {
-      max-width: 1400px;
-      margin: 0 auto;
-    }
-
-    h1 {
-      color: #60a5fa;
-      margin-bottom: 30px;
-      font-size: 2rem;
-    }
-
-    .panel {
-      background: #1e293b;
-      border: 1px solid #334155;
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 20px;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-
-    .panel h2 {
-      color: #94a3b8;
-      margin-bottom: 15px;
-      font-size: 1.25rem;
-      border-bottom: 1px solid #334155;
-      padding-bottom: 10px;
-    }
-
-    .status-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 15px;
-      margin-top: 15px;
-    }
-
-    .stat-card {
-      background: #0f172a;
-      padding: 15px;
-      border-radius: 6px;
-      border: 1px solid #334155;
-    }
-
-    .stat-label {
-      color: #94a3b8;
-      font-size: 0.875rem;
-      margin-bottom: 5px;
-    }
-
-    .stat-value {
-      color: #60a5fa;
-      font-size: 1.5rem;
-      font-weight: bold;
-    }
-
-    .agent-thinking {
-      color: #94a3b8;
-      font-style: italic;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.9em;
-    }
-
-    .icon {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      vertical-align: middle;
-      margin-right: 6px;
-    }
-
-    .agent-response {
-      color: #e2e8f0;
-      line-height: 1.6;
-      font-size: 0.95em;
-    }
-
-    .agent-response h3 {
-      color: #60a5fa;
-      font-size: 1.1em;
-      margin-top: 20px;
-      margin-bottom: 10px;
-      font-weight: 600;
-    }
-
-    .agent-response h3:first-child {
-      margin-top: 0;
-    }
-
-    .agent-response ul {
-      list-style: none;
-      padding-left: 0;
-      margin: 10px 0;
-    }
-
-    .agent-response li {
-      padding: 4px 0;
-      color: #cbd5e1;
-    }
-
-    .agent-response .temp-label {
-      color: #94a3b8;
-      font-weight: 500;
-      display: inline-block;
-      min-width: 180px;
-    }
-
-    .agent-response .temp-value {
-      color: #e2e8f0;
-    }
-
-    #graph {
-      height: 600px;
-      border: 1px solid #334155;
-      border-radius: 6px;
-      background: #0f172a;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 15px;
-    }
-
-    th, td {
-      padding: 12px;
-      text-align: left;
-      border-bottom: 1px solid #334155;
-    }
-
-    th {
-      color: #94a3b8;
-      font-weight: 600;
-      background: #0f172a;
-    }
-
-    td {
-      color: #e2e8f0;
-    }
-
-    .status-badge {
-      display: inline-block;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-
-    .status-success {
-      background: #10b981;
-      color: white;
-    }
-
-    .status-error {
-      background: #ef4444;
-      color: white;
-    }
-
-    .loading {
-      color: #94a3b8;
-      text-align: center;
-      padding: 20px;
-    }
-
-    .error {
-      color: #ef4444;
-      background: #7f1d1d;
-      padding: 10px;
-      border-radius: 4px;
-      margin-top: 10px;
-    }
-
-    .refresh-btn {
-      background: #3b82f6;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 0.875rem;
-      margin-top: 10px;
-    }
-
-    .refresh-btn:hover {
-      background: #2563eb;
-    }
-
-    pre {
-      background: #0f172a;
-      padding: 10px;
-      border-radius: 4px;
-      overflow-x: auto;
-      font-size: 0.75rem;
-      max-height: 200px;
-      overflow-y: auto;
-    }
-
-    .tabs {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 20px;
-      border-bottom: 1px solid #334155;
-    }
-
-    .tab {
-      padding: 10px 20px;
-      cursor: pointer;
-      color: #94a3b8;
-      border-bottom: 2px solid transparent;
-    }
-
-    .tab.active {
-      color: #60a5fa;
-      border-bottom-color: #60a5fa;
-    }
-
-    .tab-content {
-      display: none;
-    }
-
-    .tab-content.active {
-      display: block;
-    }
-  </style>
+  <link rel="icon" type="image/png" href="assets/images/logo.png" onerror="this.href='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔷</text></svg>';">
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="lib/graphology.umd.js"></script>
+  <script src="lib/graphology-layout-forceatlas2.umd.js"></script>
+  <script src="lib/sigma.min.js"></script>
+  <script type="module">
+    // Import icon utilities for use in HTML
+    import { createIcon } from './js/icons.js';
+    window.createIcon = createIcon;
+  </script>
 </head>
-<body>
-  <div class="container">
-    <h1>🔷 Palindrome Dashboard</h1>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div class="mx-auto max-w-7xl px-4 md:px-6 py-6">
+    <h1 class="text-2xl md:text-3xl lg:text-4xl font-title-bold mb-4 md:mb-8 flex items-center gap-3 animate-slide-up">
+      <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-12 md:h-12 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
+      <span id="header-icon-fallback" class="text-primary-500 w-8 h-8 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
+      <span class="hidden sm:inline text-gradient-shimmer">Palindrome Dashboard</span>
+      <span class="sm:hidden text-gradient-shimmer">Dashboard</span>
+    </h1>
 
-    <div class="tabs">
-      <div class="tab active" onclick="switchTab('overview', this)">Overview</div>
-      <div class="tab" onclick="switchTab('executions', this)">Tool Executions</div>
-      <div class="tab" onclick="switchTab('reasoning', this)">Reasoning Traces</div>
-      <div class="tab" onclick="switchTab('graph', this)">Ontology Graph</div>
-      <div class="tab" onclick="switchTab('rag', this)">RAG Diagnostics</div>
-      <div class="tab" onclick="switchTab('query', this)">Query</div>
-      <div class="tab" onclick="switchTab('chat', this)">Chat</div>
+    <!-- Mobile: Dropdown menu for tabs -->
+    <div class="md:hidden mb-4" id="mobile-tab-dropdown-container"></div>
+
+    <!-- Desktop: Horizontal tabs -->
+    <div class="hidden md:flex gap-2 mb-6 border-b-4 border-slate-600 overflow-x-auto" role="tablist" aria-label="Dashboard tabs">
+      <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
+        <span class="relative z-10">Chat</span>
+        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+      </button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
+        <span class="relative z-10">Overview</span>
+        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+      </button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
+        <span class="relative z-10">Tool Executions</span>
+        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+      </button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
+        <span class="relative z-10">Reasoning Traces</span>
+        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+      </button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
+        <span class="relative z-10">Ontology Graph</span>
+        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+      </button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
+        <span class="relative z-10">RAG Diagnostics</span>
+        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+      </button>
+      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
+        <span class="relative z-10">Query</span>
+        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+      </button>
     </div>
 
     <!-- Overview Tab -->
-    <div id="overview" class="tab-content active">
-      <div class="panel">
-        <h2>Execution Statistics</h2>
-        <div id="execution-stats" class="loading">Loading...</div>
+    <div id="overview" class="tab-content hidden flex flex-col" role="tabpanel" aria-labelledby="overview-tab" aria-hidden="true">
+      <!-- Mobile: Bottom-fixed nav - icons only with glow -->
+      <div class="md:hidden fixed bottom-4 left-4 right-4 z-50 flex gap-3 justify-center pb-safe" id="overview-nav-mobile" style="display: none; padding-bottom: max(1rem, env(safe-area-inset-bottom));">
+        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats">
+          <span id="nav-icon-stats-mobile"></span>
+        </button>
+        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster">
+          <span id="nav-icon-cluster-mobile"></span>
+        </button>
+      </div>
+      <!-- Desktop: Right-side floating nav - icons only with glow -->
+      <div class="hidden md:flex fixed right-4 bottom-24 z-50 flex-col gap-3 pr-safe" id="overview-nav" style="display: none; padding-right: max(1rem, env(safe-area-inset-right));">
+        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats">
+          <span id="nav-icon-stats"></span>
+        </button>
+        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster">
+          <span id="nav-icon-cluster"></span>
+        </button>
+      </div>
+      
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 mb-6 overflow-y-auto max-h-[calc(100dvh-220px)] md:max-h-none" id="execution-stats-section">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">Execution Statistics</h2>
+        <div id="execution-stats" class="text-slate-400 text-center py-6"></div>
       </div>
 
-      <div class="panel">
-        <h2>Cluster Status</h2>
-        <div id="cluster-status" class="loading">Loading...</div>
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 mb-6 overflow-y-auto max-h-[calc(100dvh-220px)] md:max-h-none" id="cluster-status-section">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">Cluster Status</h2>
+        <div id="cluster-status" class="text-slate-400 text-center py-6"></div>
       </div>
 
-      <div class="panel">
-        <h2>System Health</h2>
-        <div id="system-health" class="loading">Loading...</div>
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 mb-6 overflow-y-auto max-h-[calc(100dvh-220px)] md:max-h-none" id="system-health-section">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">System Health</h2>
+        <div id="system-health" class="text-slate-400 text-center py-6"></div>
       </div>
     </div>
 
     <!-- Tool Executions Tab -->
-    <div id="executions" class="tab-content">
-      <div class="panel">
-        <h2>Recent Tool Executions</h2>
-        <button class="refresh-btn" onclick="loadToolExecutions()">Refresh</button>
-        <div id="tool-executions" class="loading">Loading...</div>
+    <div id="executions" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="executions-tab" aria-hidden="true">
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
+          <span>Recent Tool Executions</span>
+          <button class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadToolExecutions()">
+            <span class="flex items-center justify-center gap-2">
+              <span id="refresh-icon-executions"></span>
+              Refresh
+            </span>
+          </button>
+        </h2>
+        <div id="tool-executions" class="text-slate-400 text-center py-6 flex-1 overflow-y-auto"></div>
       </div>
     </div>
 
     <!-- Reasoning Traces Tab -->
-    <div id="reasoning" class="tab-content">
-      <div class="panel">
-        <h2>Agent Reasoning Traces</h2>
-        <button class="refresh-btn" onclick="loadReasoningTraces()">Refresh</button>
-        <div id="reasoning-traces" class="loading">Loading...</div>
+    <div id="reasoning" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="reasoning-tab" aria-hidden="true">
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
+          <span>Agent Reasoning Traces</span>
+          <button class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadReasoningTraces()">
+            <span class="flex items-center justify-center gap-2">
+              <span id="refresh-icon-reasoning"></span>
+              Refresh
+            </span>
+          </button>
+        </h2>
+        <div id="reasoning-traces" class="text-slate-400 text-center py-6 flex-1 overflow-y-auto"></div>
       </div>
     </div>
 
     <!-- Ontology Graph Tab -->
-    <div id="graph" class="tab-content">
-      <div class="panel">
-        <h2>Ontology Graph</h2>
-        <button class="refresh-btn" onclick="loadGraph()">Refresh</button>
-        <div id="graph-container"></div>
+    <div id="graph" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="graph-tab" aria-hidden="true">
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
+          <span>Ontology Graph</span>
+          <button class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadGraph()">
+            <span class="flex items-center justify-center gap-2">
+              <span id="refresh-icon-graph"></span>
+              Refresh
+            </span>
+          </button>
+        </h2>
+        <div id="graph-container" class="w-full rounded-xl bg-slate-950 overflow-hidden shadow-inner" style="position: relative; min-height: 400px;"></div>
       </div>
     </div>
 
     <!-- RAG Diagnostics Tab -->
-    <div id="rag" class="tab-content">
-      <div class="panel">
-        <h2>RAG Diagnostics</h2>
-        <input type="text" id="rag-query" placeholder="Enter query to test..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
-        <button class="refresh-btn" onclick="testRagQuery()">Test Query</button>
-        <div id="rag-results" class="loading">Enter a query and click Test Query</div>
+    <div id="rag" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="rag-tab" aria-hidden="true">
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">RAG Diagnostics</h2>
+        <div class="mb-6 p-4 bg-slate-950 rounded-lg border-l-4 border-l-purple-500">
+          <p class="mb-2 text-slate-200 text-xs md:text-sm">
+            <strong class="text-purple-400">Purpose:</strong> Test and debug RAG (Retrieval-Augmented Generation) queries to understand how the system retrieves and scores relevant information.
+          </p>
+          <p class="text-slate-400 text-xs">
+            Enter a query below to see query type detection, source matching scores, and retrieved chunks.
+          </p>
+        </div>
+        
+        <div class="flex flex-col sm:flex-row gap-3 mb-6">
+          <input 
+            type="text" 
+            id="rag-query" 
+            placeholder="Enter query to test..." 
+            class="flex-1 px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base"
+            onkeydown="if(event.key === 'Enter') { testRagQuery(); }"
+          >
+          <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-lg font-medium transition-colors min-h-[44px] sm:min-h-0" onclick="testRagQuery()">Test Query</button>
+        </div>
+        
+        <div id="rag-results" class="flex-1 min-h-0 overflow-y-auto">
+          <div class="text-slate-400 text-center py-6">
+            Enter a query above and click "Test Query" to see RAG diagnostics
+          </div>
+        </div>
       </div>
     </div>
 
     <!-- Query Tab -->
-    <div id="query" class="tab-content">
-      <div class="panel">
-        <h2>Unified Query Interface</h2>
+    <div id="query" class="tab-content hidden flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="query-tab" aria-hidden="true">
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
+        <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">Unified Query Interface</h2>
+        
+        <div class="mb-6 p-4 bg-slate-950 rounded-lg border-l-4 border-l-blue-500">
+          <p class="mb-2 text-slate-200 text-xs md:text-sm">
+            <strong class="text-blue-400">Purpose:</strong> Query the knowledge base using different methods - natural language questions, graph queries, or direct Cypher queries.
+          </p>
+          <p class="text-slate-400 text-xs">
+            <strong>RAG:</strong> Ask questions in natural language • <strong>Graph:</strong> Use preset graph queries • <strong>Cypher:</strong> Write custom Neo4j queries
+          </p>
+        </div>
         
         <!-- Query Type Selector -->
-        <div style="margin-bottom: 15px;">
-          <label style="color: #94a3b8; margin-right: 15px;">Query Type:</label>
-          <select id="query-type" style="padding: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-right: 15px;">
+        <div class="mb-6">
+          <label class="text-slate-400 block mb-2 md:inline md:mr-4 font-semibold">Query Type:</label>
+          <select id="query-type" class="w-full md:w-auto md:min-w-[200px] px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 text-base md:text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
             <option value="rag">Natural Language (RAG)</option>
             <option value="graph">Graph Query</option>
             <option value="cypher">Cypher Query</option>
@@ -331,15 +202,17 @@
 
         <!-- RAG Query Section -->
         <div id="rag-query-section">
-          <textarea id="query-input" placeholder="Ask a question in natural language..." style="width: 100%; min-height: 100px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; margin-bottom: 10px; resize: vertical;"></textarea>
-          <button class="refresh-btn" onclick="executeQuery()">Query</button>
+          <div class="flex flex-col sm:flex-row gap-3 mb-6">
+            <textarea id="query-input" placeholder="Ask a question in natural language..." class="flex-1 min-h-[100px] px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 placeholder-slate-500 font-sans resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base"></textarea>
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-lg font-medium transition-colors self-start sm:self-start min-h-[44px] sm:min-h-0" onclick="executeQuery()">Query</button>
+          </div>
         </div>
 
         <!-- Graph Query Builder -->
-        <div id="graph-query-section" style="display: none;">
-          <div style="margin-bottom: 15px;">
-            <label style="color: #94a3b8; display: block; margin-bottom: 5px;">Query Type:</label>
-            <select id="graph-query-type" style="width: 100%; padding: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
+        <div id="graph-query-section" class="hidden">
+          <div class="mb-6">
+            <label class="text-slate-400 block mb-2 font-semibold">Graph Query Type:</label>
+            <select id="graph-query-type" class="w-full px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 mb-4 text-base focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
               <option value="findByIdOrName">Find by ID or Name</option>
               <option value="findByType">Find by Entity Type</option>
               <option value="findByPurpose">Find by Purpose</option>
@@ -350,1408 +223,140 @@
               <option value="findHostedEntities">Find Hosted Entities</option>
             </select>
           </div>
-          <input type="text" id="graph-query-param" placeholder="Enter search term, entity ID, or parameter..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px;">
-          <input type="text" id="graph-query-param2" placeholder="Second parameter (for findPath)..." style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; margin-bottom: 10px; display: none;">
-          <button class="refresh-btn" onclick="executeGraphQuery()">Query Graph</button>
+          <div class="flex flex-col sm:flex-row gap-3 mb-6">
+            <input type="text" id="graph-query-param" placeholder="Enter search term, entity ID, or parameter..." class="flex-1 px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 placeholder-slate-500 text-base focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-lg font-medium transition-colors min-h-[44px] sm:min-h-0" onclick="executeGraphQuery()">Query Graph</button>
+          </div>
+          <input type="text" id="graph-query-param2" placeholder="Second parameter (for findPath)..." class="w-full px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 placeholder-slate-500 mb-6 text-base hidden focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent">
         </div>
 
         <!-- Cypher Query Section -->
-        <div id="cypher-query-section" style="display: none;">
-          <textarea id="cypher-input" placeholder="MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50" style="width: 100%; min-height: 150px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: monospace; margin-bottom: 10px; resize: vertical;"></textarea>
-          <button class="refresh-btn" onclick="executeCypherQuery()">Execute Cypher</button>
+        <div id="cypher-query-section" class="hidden">
+          <div class="flex flex-col sm:flex-row gap-3 mb-6">
+            <textarea id="cypher-input" placeholder="MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 50" class="flex-1 min-h-[150px] px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 placeholder-slate-500 font-mono resize-y text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"></textarea>
+            <button class="bg-primary-600 hover:bg-primary-700 text-white px-6 py-3 rounded-lg font-medium transition-colors self-start sm:self-start min-h-[44px] sm:min-h-0" onclick="executeCypherQuery()">Execute</button>
+          </div>
         </div>
 
         <!-- Results -->
-        <div id="query-results" style="margin-top: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; min-height: 200px;">
-          <div style="color: #94a3b8;">Results will appear here...</div>
+        <div id="query-results" class="mt-6 p-6 bg-slate-950 rounded-lg flex-1 min-h-[200px] overflow-y-auto">
+          <div class="text-slate-400">Results will appear here...</div>
         </div>
       </div>
     </div>
 
     <!-- Chat Tab -->
-    <div id="chat" class="tab-content">
-      <div class="panel" style="display: flex; flex-direction: column; height: calc(100vh - 200px); max-height: 800px;">
-        <h2 style="margin-bottom: 15px;">Chat with Palindrome</h2>
-        
-        <!-- Chat Messages Area -->
-        <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; margin-bottom: 15px; min-height: 400px;">
-          <div style="color: #94a3b8; text-align: center; padding: 20px;">
-            Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.
+    <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="chat-tab" aria-hidden="false">
+      <!-- Mobile: Hamburger button to toggle sidebar -->
+      <button id="sidebar-toggle" class="md:hidden mb-4 bg-gradient-to-r from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:bg-slate-700 hover:border-primary-500 hover:scale-105 active:scale-95 flex items-center gap-2 min-h-[44px]" onclick="window.toggleSidebar()">
+        <span id="menu-icon"></span>
+        Conversations
+      </button>
+      
+      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col md:flex-row gap-6">
+        <!-- Conversation Sidebar - Mobile: absolute overlay, Desktop: normal flow -->
+        <div id="conversation-sidebar" class="hidden md:flex md:w-64 flex-col rounded-lg bg-slate-950 min-w-0 flex-shrink-0">
+          <div class="p-4 border-b-2 border-slate-600 flex justify-between items-center flex-shrink-0">
+            <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
+            <div class="flex items-center gap-2">
+              <button 
+                id="sidebar-close"
+                class="md:hidden bg-slate-800 hover:bg-slate-700 text-slate-200 p-1.5 rounded cursor-pointer transition-colors"
+                onclick="window.toggleSidebar()"
+                title="Close sidebar"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                </svg>
+              </button>
+              <button 
+                id="new-conversation-btn"
+                onclick="window.createNewConversation()"
+                class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
+                title="New conversation"
+              >
+                <span id="plus-icon"></span>
+                <span class="hidden sm:inline">New</span>
+              </button>
+            </div>
+          </div>
+          <div id="conversation-list" class="flex-1 overflow-y-auto p-4 min-h-0">
+            <div class="text-slate-400 text-center py-5 text-sm">
+              Loading conversations...
+            </div>
           </div>
         </div>
+        
+        <!-- Mobile: Overlay backdrop when sidebar is open -->
+        <div id="sidebar-backdrop" class="md:hidden fixed inset-0 bg-black bg-opacity-50 z-40 hidden" onclick="window.toggleSidebar()" aria-hidden="true"></div>
+        
+        <!-- Mobile: Sidebar overlay -->
+        <div id="conversation-sidebar-mobile" class="md:hidden fixed inset-0 z-50 flex flex-col bg-slate-950 hidden" role="dialog" aria-modal="true" aria-label="Conversations" aria-hidden="true">
+          <div class="p-4 border-b-2 border-slate-600 flex justify-between items-center">
+            <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
+            <div class="flex items-center gap-2">
+              <button 
+                id="new-conversation-btn-mobile"
+                onclick="window.createNewConversation()"
+                class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
+                title="New conversation"
+              >
+                <span id="plus-icon-mobile"></span>
+                <span>New</span>
+              </button>
+              <button 
+                id="sidebar-close-mobile"
+                class="bg-slate-800 hover:bg-slate-700 text-slate-200 p-1.5 rounded cursor-pointer transition-colors"
+                onclick="window.toggleSidebar()"
+                title="Close sidebar"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div id="conversation-list-mobile" class="flex-1 overflow-y-auto p-4 min-h-0">
+            <div class="text-slate-400 text-center py-5 text-sm">
+              Loading conversations...
+            </div>
+          </div>
+        </div>
+        
+        <!-- Chat Area -->
+        <div class="flex-1 flex flex-col min-w-0">
+          <h2 class="mb-4 text-xl md:text-2xl font-title text-slate-100">Chat with Palindrome</h2>
+          <div class="mb-4 border-t border-slate-600/70"></div>
+          
+          <!-- Chat Messages Area -->
+          <div id="chat-messages" class="flex-1 overflow-y-auto px-4 py-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-xl mb-4 min-h-[300px] md:min-h-[400px] relative" style="background-image: repeating-linear-gradient(0deg, transparent, transparent 20px, rgba(15, 23, 42, 0.3) 20px, rgba(15, 23, 42, 0.3) 21px);">
+            <div class="text-slate-400 text-center py-6 text-sm">
+              Select a conversation or create a new one to start chatting.
+            </div>
+          </div>
 
-        <!-- Chat Input Area -->
-        <div style="display: flex; gap: 10px; align-items: flex-end;">
-          <textarea 
-            id="chat-input" 
-            placeholder="Ask me anything about your infrastructure..." 
-            style="flex: 1; min-height: 60px; max-height: 200px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #e2e8f0; font-family: inherit; resize: vertical;"
-            onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); }"
-          ></textarea>
-          <button 
-            class="refresh-btn" 
-            onclick="sendChatMessage()" 
-            id="chat-send-btn"
-            style="padding: 12px 24px; min-width: 80px;"
-          >
-            Send
-          </button>
+          <!-- Chat Input Area - Separate from messages area -->
+          <div class="flex gap-2 md:gap-3 items-end pb-safe" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom));">
+            <textarea 
+              id="chat-input" 
+              placeholder="Ask me anything about your infrastructure..." 
+              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-800 border-2 border-slate-600 rounded-xl text-slate-200 placeholder-slate-500 font-sans resize-none md:resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base"
+              onkeydown="handleChatInputKeydown(event)"
+            ></textarea>
+            <button 
+              class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 md:px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 min-w-[70px] md:min-w-[80px] min-h-[44px] flex items-center justify-center gap-2" 
+              onclick="sendChatMessage()" 
+              id="chat-send-btn"
+            >
+              <span id="send-icon"></span>
+              <span>Send</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
-  <script>
-    const API_URL = "http://localhost:4000";
-
-    // Make switchTab globally accessible
-    window.switchTab = function(tabName, clickedElement) {
-      // Hide all tabs
-      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-      
-      // Show selected tab
-      if (clickedElement) {
-        clickedElement.classList.add('active');
-      } else {
-        // Fallback: find tab by text content
-        document.querySelectorAll('.tab').forEach(t => {
-          if (t.textContent.trim().toLowerCase().includes(tabName.toLowerCase())) {
-            t.classList.add('active');
-          }
-        });
-      }
-      document.getElementById(tabName).classList.add('active');
-      
-      // Load data for the tab
-      if (tabName === 'executions') loadToolExecutions();
-      if (tabName === 'reasoning') loadReasoningTraces();
-      if (tabName === 'graph') loadGraph();
-      if (tabName === 'query') setupQueryInterface();
-      if (tabName === 'chat') {
-        // Focus chat input when switching to chat tab
-        setTimeout(() => {
-          const chatInput = document.getElementById('chat-input');
-          if (chatInput) chatInput.focus();
-        }, 100);
-      }
-    }
-
-    // Setup query interface
-    function setupQueryInterface() {
-      const queryTypeSelect = document.getElementById('query-type');
-      if (!queryTypeSelect) return;
-
-      // Handle query type change
-      queryTypeSelect.addEventListener('change', function() {
-        const type = this.value;
-        document.getElementById('rag-query-section').style.display = type === 'rag' ? 'block' : 'none';
-        document.getElementById('graph-query-section').style.display = type === 'graph' ? 'block' : 'none';
-        document.getElementById('cypher-query-section').style.display = type === 'cypher' ? 'block' : 'none';
-      });
-
-      // Handle graph query type change (for findPath second param)
-      const graphQueryType = document.getElementById('graph-query-type');
-      if (graphQueryType) {
-        graphQueryType.addEventListener('change', function() {
-          const param2Input = document.getElementById('graph-query-param2');
-          if (param2Input) {
-            param2Input.style.display = this.value === 'findPath' ? 'block' : 'none';
-          }
-        });
-      }
-    }
-
-    // Execute RAG query
-    async function executeQuery() {
-      const query = document.getElementById('query-input').value;
-      if (!query) {
-        alert('Please enter a query');
-        return;
-      }
-
-      const resultsDiv = document.getElementById('query-results');
-      resultsDiv.innerHTML = '<div class="loading">Querying...</div>';
-
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/query/rag`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, userId: 'dashboard-user', aclGroup: 'admin' })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        const data = result.data || result;
-
-        let html = '<h3 style="color: #60a5fa; margin-bottom: 15px;">Answer</h3>';
-        html += `<div style="color: #e2e8f0; margin-bottom: 20px; padding: 15px; background: #1e293b; border-radius: 4px;">${data.answer || 'No answer provided'}</div>`;
-
-        if (data.sources && data.sources.length > 0) {
-          html += '<h3 style="color: #60a5fa; margin-bottom: 15px;">Sources</h3>';
-          html += '<table><thead><tr><th>Source</th><th>Score</th><th>Preview</th></tr></thead><tbody>';
-          data.sources.forEach(source => {
-            html += `<tr>
-              <td>${source.sourcePath || source.chunkId || 'Unknown'}</td>
-              <td>${(source.score || 0).toFixed(4)}</td>
-              <td>${(source.text || '').substring(0, 100)}...</td>
-            </tr>`;
-          });
-          html += '</tbody></table>';
-        }
-
-        if (data.sTotalScore !== null && data.sTotalScore !== undefined) {
-          html += `<div style="margin-top: 15px; color: #94a3b8;">Total Score: ${data.sTotalScore.toFixed(4)}</div>`;
-        }
-
-        resultsDiv.innerHTML = html;
-      } catch (error) {
-        resultsDiv.innerHTML = `<div class="error">Failed to execute query: ${error.message}</div>`;
-      }
-    }
-
-    // Execute graph query
-    async function executeGraphQuery() {
-      const queryType = document.getElementById('graph-query-type').value;
-      const param = document.getElementById('graph-query-param').value;
-      const param2 = document.getElementById('graph-query-param2').value;
-
-      if (!param) {
-        alert('Please enter a parameter');
-        return;
-      }
-
-      const resultsDiv = document.getElementById('query-results');
-      resultsDiv.innerHTML = '<div class="loading">Querying graph...</div>';
-
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/query/graph`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queryType, param, param2: param2 || undefined })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        const data = result.data || result;
-
-        let html = '<h3 style="color: #60a5fa; margin-bottom: 15px;">Graph Query Results</h3>';
-        html += `<div style="color: #94a3b8; margin-bottom: 15px;">Found ${data.nodes?.length || 0} nodes, ${data.relationships?.length || 0} relationships</div>`;
-
-        if (data.nodes && data.nodes.length > 0) {
-          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Nodes</h4>';
-          html += '<table><thead><tr><th>ID</th><th>Type</th><th>Attributes</th></tr></thead><tbody>';
-          data.nodes.slice(0, 50).forEach(node => {
-            html += `<tr>
-              <td>${node.id || 'N/A'}</td>
-              <td>${node.type || 'N/A'}</td>
-              <td><pre style="max-width: 400px; overflow: auto; font-size: 0.85em;">${JSON.stringify(node.attributes || {}, null, 2)}</pre></td>
-            </tr>`;
-          });
-          html += '</tbody></table>';
-        }
-
-        if (data.relationships && data.relationships.length > 0) {
-          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Relationships</h4>';
-          html += '<table><thead><tr><th>From</th><th>Type</th><th>To</th></tr></thead><tbody>';
-          data.relationships.slice(0, 50).forEach(rel => {
-            html += `<tr>
-              <td>${rel.from || 'N/A'}</td>
-              <td>${rel.type || 'N/A'}</td>
-              <td>${rel.to || 'N/A'}</td>
-            </tr>`;
-          });
-          html += '</tbody></table>';
-        }
-
-        resultsDiv.innerHTML = html;
-      } catch (error) {
-        resultsDiv.innerHTML = `<div class="error">Failed to execute graph query: ${error.message}</div>`;
-      }
-    }
-
-    // Execute Cypher query
-    async function executeCypherQuery() {
-      const cypher = document.getElementById('cypher-input').value;
-      if (!cypher) {
-        alert('Please enter a Cypher query');
-        return;
-      }
-
-      const resultsDiv = document.getElementById('query-results');
-      resultsDiv.innerHTML = '<div class="loading">Executing Cypher query...</div>';
-
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/query/cypher`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cypher, limit: 100 })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        const data = result.data || result;
-
-        let html = '<h3 style="color: #60a5fa; margin-bottom: 15px;">Cypher Query Results</h3>';
-        html += `<div style="color: #94a3b8; margin-bottom: 15px;">Found ${data.nodes?.length || 0} nodes, ${data.relationships?.length || 0} relationships</div>`;
-
-        if (data.nodes && data.nodes.length > 0) {
-          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Nodes</h4>';
-          html += '<table><thead><tr><th>ID</th><th>Type</th><th>Attributes</th></tr></thead><tbody>';
-          data.nodes.slice(0, 100).forEach(node => {
-            html += `<tr>
-              <td>${node.id || 'N/A'}</td>
-              <td>${node.type || 'N/A'}</td>
-              <td><pre style="max-width: 400px; overflow: auto; font-size: 0.85em;">${JSON.stringify(node.attributes || {}, null, 2)}</pre></td>
-            </tr>`;
-          });
-          html += '</tbody></table>';
-        }
-
-        if (data.relationships && data.relationships.length > 0) {
-          html += '<h4 style="color: #94a3b8; margin-top: 20px;">Relationships</h4>';
-          html += '<table><thead><tr><th>From</th><th>Type</th><th>To</th></tr></thead><tbody>';
-          data.relationships.slice(0, 100).forEach(rel => {
-            html += `<tr>
-              <td>${rel.from || 'N/A'}</td>
-              <td>${rel.type || 'N/A'}</td>
-              <td>${rel.to || 'N/A'}</td>
-            </tr>`;
-          });
-          html += '</tbody></table>';
-        }
-
-        resultsDiv.innerHTML = html;
-      } catch (error) {
-        resultsDiv.innerHTML = `<div class="error">Failed to execute Cypher query: ${error.message}</div>`;
-      }
-    }
-
-    // Chat functionality with agent streaming
-    let currentEventSource = null;
-    let currentSessionId = null;
-    let currentResponseId = null;
-    let finalEventTimeout = null;
-
-    async function sendChatMessage() {
-      const input = document.getElementById('chat-input');
-      const sendBtn = document.getElementById('chat-send-btn');
-      const messagesDiv = document.getElementById('chat-messages');
-      
-      const message = input.value.trim();
-      if (!message) return;
-
-      // Disable input and button
-      input.disabled = true;
-      sendBtn.disabled = true;
-      sendBtn.textContent = 'Sending...';
-
-      // Close any existing SSE connection
-      if (currentEventSource) {
-        currentEventSource.close();
-        currentEventSource = null;
-      }
-
-      // Add user message to chat
-      addChatMessage('user', message);
-      input.value = '';
-
-      // Add loading indicator for agent response
-      currentResponseId = addChatMessage('assistant', `
-        <div class="agent-thinking">
-          <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-          Thinking...
-        </div>
-      `, true);
-
-      try {
-        // Start agent execution
-        const startResponse = await fetch(`${API_URL}/api/agent/query`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            query: message, 
-            userId: 'dashboard-user', 
-            aclGroup: 'admin' 
-          })
-        });
-
-        if (!startResponse.ok) {
-          throw new Error(`HTTP ${startResponse.status}: ${startResponse.statusText}`);
-        }
-
-        const startResult = await startResponse.json();
-        currentSessionId = startResult.sessionId;
-
-        // Connect to SSE stream
-        currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
-        
-        let toolExecutions = [];
-        let finalText = '';
-        const currentQuery = message; // Store query for timeout detection
-
-        currentEventSource.onmessage = (event) => {
-          try {
-            const agentEvent = JSON.parse(event.data);
-            handleAgentEvent(agentEvent, toolExecutions);
-            
-            if (agentEvent.type === 'agent:final') {
-              finalText = agentEvent.data.text || '';
-            }
-          } catch (error) {
-            console.error('Error parsing SSE event:', error);
-          }
-        };
-
-        currentEventSource.onerror = (error) => {
-          console.error('SSE connection error:', error);
-          
-          // Clear timeout if connection errors
-          if (finalEventTimeout) {
-            clearTimeout(finalEventTimeout);
-            finalEventTimeout = null;
-          }
-          
-          // Check if connection was closed (readyState 2 = CLOSED)
-          if (currentEventSource.readyState === EventSource.CLOSED) {
-            // Connection closed - check if we have final text
-            if (finalText) {
-              // We have the final response, update the message
-              updateChatMessage(currentResponseId, `
-                <div class="agent-response" style="line-height: 1.6;">
-                  ${formatAgentResponse(finalText)}
-                </div>
-                ${toolExecutions.length > 0 ? `
-                  <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
-                    Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
-                  </div>
-                ` : ''}
-              `);
-            } else {
-              // No final text yet - connection may have timed out
-              updateChatMessage(currentResponseId, `
-                <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24; margin-top: 10px;">
-                  <strong>⚠️ Connection closed</strong><br>
-                  <span style="font-size: 0.9em;">The agent may still be processing. Try refreshing or asking again.</span>
-                </div>
-              `);
-            }
-            
-            // Re-enable input
-            input.disabled = false;
-            sendBtn.disabled = false;
-            sendBtn.textContent = 'Send';
-            input.focus();
-          }
-          
-          currentEventSource.close();
-          currentEventSource = null;
-        };
-
-        // Set a timeout to handle cases where agent:final event might not arrive
-        // This is a fallback for reasoning chains that might not emit the event properly
-        finalEventTimeout = setTimeout(() => {
-          if (currentEventSource && finalText) {
-            // We have the final text but event might not have been received
-            // Update the message and close connection
-            updateChatMessage(currentResponseId, `
-              <div class="agent-response" style="line-height: 1.6;">
-                ${formatAgentResponse(finalText)}
-              </div>
-              ${toolExecutions.length > 0 ? `
-                <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
-                  Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
-                </div>
-              ` : ''}
-            `);
-            
-            currentEventSource.close();
-            currentEventSource = null;
-            
-            // Re-enable input
-            input.disabled = false;
-            sendBtn.disabled = false;
-            sendBtn.textContent = 'Send';
-            input.focus();
-          } else if (currentEventSource && !finalText) {
-            // No final text after timeout - connection might be stuck
-            // Use longer timeout for action operations (VM creation, etc.)
-            const isActionOperation = currentQuery && (
-              currentQuery.toLowerCase().includes('create') ||
-              currentQuery.toLowerCase().includes('destroy') ||
-              currentQuery.toLowerCase().includes('provision')
-            );
-            const timeoutMs = isActionOperation ? 300000 : 60000; // 5 min for actions, 1 min for queries
-            
-            updateChatMessage(currentResponseId, `
-              <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 3px solid #fbbf24;">
-                <strong>⚠️ Response timeout</strong><br>
-                <span style="font-size: 0.9em;">The agent is taking longer than expected (${timeoutMs / 1000}s timeout). The operation may still be running. Check the reasoning traces tab for details.</span>
-              </div>
-            `);
-            
-            currentEventSource.close();
-            currentEventSource = null;
-            
-            // Re-enable input
-            input.disabled = false;
-            sendBtn.disabled = false;
-            sendBtn.textContent = 'Send';
-            input.focus();
-          }
-          finalEventTimeout = null;
-        }, (() => {
-          // Determine timeout based on query type
-          const isActionOperation = message && (
-            message.toLowerCase().includes('create') ||
-            message.toLowerCase().includes('destroy') ||
-            message.toLowerCase().includes('provision')
-          );
-          return isActionOperation ? 300000 : 60000; // 5 min for actions, 1 min for queries
-        })());
-
-      } catch (error) {
-        // Remove loading indicator
-        if (currentResponseId) {
-          removeChatMessage(currentResponseId);
-        }
-        
-        // Add error message
-        addChatMessage('assistant', `<div style="color: #ef4444;">Error: ${escapeHtml(error.message)}</div>`);
-        
-        // Re-enable input and button
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
-      }
-    }
-
-    function handleAgentEvent(event, toolExecutions) {
-      const messagesDiv = document.getElementById('chat-messages');
-      
-      switch (event.type) {
-        case 'agent:step':
-          updateChatMessage(currentResponseId, 
-            `<div class="agent-thinking">
-              <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-              Reasoning step ${event.data.step}/${event.data.maxSteps}...
-            </div>`);
-          break;
-          
-        case 'tool:start':
-          const toolInfo = {
-            toolName: event.data.toolName,
-            params: event.data.parameters,
-            startTime: Date.now()
-          };
-          toolExecutions.push(toolInfo);
-          
-          const paramsStr = Object.entries(event.data.parameters || {})
-            .map(([k, v]) => `${k}=${typeof v === 'string' ? v.substring(0, 30) : JSON.stringify(v).substring(0, 30)}`)
-            .join(', ');
-          
-          const toolHtml = `
-            <div data-tool-name="${escapeHtml(event.data.toolName)}" style="margin-top: 8px; padding: 8px 10px; background: #1e3a8a; border-radius: 4px; font-size: 0.85em;">
-              <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #60a5fa;"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
-              <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
-              ${paramsStr ? `<div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">${escapeHtml(paramsStr)}</div>` : ''}
-              <div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">
-                <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-                Executing...
-              </div>
-            </div>
-          `;
-          
-          // Append tool execution to current message
-          const toolMessageDiv = document.getElementById(currentResponseId);
-          if (toolMessageDiv) {
-            const currentContent = toolMessageDiv.innerHTML;
-            toolMessageDiv.innerHTML = currentContent + toolHtml;
-          } else {
-            updateChatMessage(currentResponseId, 
-              `<div class="agent-thinking">
-                <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-                Thinking...
-              </div>${toolHtml}`);
-          }
-          break;
-          
-        case 'tool:complete':
-          const tool = toolExecutions.find(t => t.toolName === event.data.toolName);
-          const duration = event.data.durationMs || (tool ? Date.now() - tool.startTime : 0);
-          const statusIcon = event.data.success ? '✅' : '❌';
-          const statusColor = event.data.success ? '#10b981' : '#ef4444';
-          
-          // Find and update the tool execution div
-          const completeMessageDiv = document.getElementById(currentResponseId);
-          if (completeMessageDiv) {
-            const toolDivs = completeMessageDiv.querySelectorAll('div[data-tool-name]');
-            const toolDiv = Array.from(toolDivs).find(d => 
-              d.getAttribute('data-tool-name') === event.data.toolName
-            );
-            
-            if (toolDiv) {
-              const successIcon = event.data.success 
-                ? '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #10b981;"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
-                : '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #ef4444;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
-              toolDiv.innerHTML = `
-                ${successIcon}
-                <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
-                <span style="color: ${statusColor}; margin-left: 8px; font-size: 0.9em;">${event.data.success ? 'Completed' : 'Failed'}</span>
-                <div style="color: #94a3b8; margin-top: 4px; font-size: 0.85em;">
-                  <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
-                  ${duration}ms
-                </div>
-                ${event.data.error ? `<div style="color: #ef4444; margin-top: 4px; font-size: 0.85em;">${escapeHtml(event.data.error)}</div>` : ''}
-              `;
-            }
-          }
-          break;
-          
-        case 'agent:final':
-          // Parse markdown and convert to styled HTML
-          const formattedText = formatAgentResponse(event.data.text || 'No response');
-          const durationSeconds = (event.data.durationMs || 0) / 1000;
-          const finalHtml = `
-            <div class="agent-response" style="line-height: 1.6;">
-              ${formattedText}
-            </div>
-            ${toolExecutions.length > 0 ? `
-              <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em; display: flex; align-items: center; gap: 12px;">
-                <svg style="width: 16px; height: 16px; opacity: 0.7;" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                </svg>
-                <span>Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''} in ${durationSeconds.toFixed(2)}s</span>
-              </div>
-            ` : ''}
-          `;
-          
-          updateChatMessage(currentResponseId, finalHtml);
-          
-          // Scroll to bottom
-          messagesDiv.scrollTop = messagesDiv.scrollHeight;
-          
-          // Close SSE connection
-          if (currentEventSource) {
-            currentEventSource.close();
-            currentEventSource = null;
-          }
-          
-          // Clear any pending timeout
-          if (finalEventTimeout) {
-            clearTimeout(finalEventTimeout);
-            finalEventTimeout = null;
-          }
-          
-          // Re-enable input
-          const input = document.getElementById('chat-input');
-          const sendBtn = document.getElementById('chat-send-btn');
-          input.disabled = false;
-          sendBtn.disabled = false;
-          sendBtn.textContent = 'Send';
-          input.focus();
-          break;
-      }
-    }
-
-    function updateChatMessage(messageId, newContent) {
-      const messageDiv = document.getElementById(messageId);
-      if (messageDiv) {
-        messageDiv.innerHTML = newContent;
-        // Scroll to bottom
-        const messagesDiv = document.getElementById('chat-messages');
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-      }
-    }
-
-    function formatAgentResponse(text) {
-      if (!text) return '';
-      
-      // Split into lines for processing
-      const lines = text.split('\n');
-      let html = '';
-      let currentSection = '';
-      let inVmEntry = false;
-      let currentVmHtml = '';
-      let currentVmName = '';
-      let vmEntries = [];
-      
-      // State for parsing structured data
-      let inClusterNodes = false;
-      let inClusterVms = false;
-      let nodeEntries = [];
-      let vmList = [];
-      let seenVmNames = new Set(); // Track seen VMs to prevent duplicates
-      
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const trimmed = line.trim();
-        
-        // Handle section headers (Cluster Nodes:, Cluster VMs:, etc.)
-        if (trimmed.endsWith(':') && !trimmed.startsWith('-')) {
-          // Close previous section
-          if (inClusterNodes && nodeEntries.length > 0) {
-            html += formatClusterNodesSection(nodeEntries);
-            nodeEntries = [];
-          }
-          if (inClusterVms && vmList.length > 0) {
-            html += formatClusterVmsSection(vmList);
-            vmList = [];
-          }
-          
-          const sectionName = trimmed.replace(':', '');
-          if (sectionName === 'Cluster Nodes') {
-            inClusterNodes = true;
-            inClusterVms = false;
-          } else if (sectionName === 'Cluster VMs' || sectionName.includes('VMs')) {
-            inClusterNodes = false;
-            inClusterVms = true;
-          } else {
-            inClusterNodes = false;
-            inClusterVms = false;
-            html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em; font-weight: 600;">${escapeHtml(sectionName)}</h3>`;
-          }
-          continue;
-        }
-        
-        // Handle cluster node entries: "- YANG (id=compute-node: yang, vms=5, status=online)"
-        if (inClusterNodes && trimmed.startsWith('- ')) {
-          const nodeMatch = trimmed.match(/^- (.+?) \(id=(.+?), vms=(\d+), status=(.+?)\)/);
-          if (nodeMatch) {
-            const [, name, id, vmCount, status] = nodeMatch;
-            nodeEntries.push({ name: name.trim(), id: id.trim(), vmCount: parseInt(vmCount), status: status.trim() });
-          }
-          continue;
-        }
-        
-        // Handle VM entries: "- opnsense (QEMU VM, running)"
-        if (inClusterVms && trimmed.startsWith('- ') && !trimmed.startsWith('  -')) {
-          // Save previous VM if exists
-          if (inVmEntry && currentVmHtml && currentVmName) {
-            // Only add if we haven't seen this VM before
-            if (!seenVmNames.has(currentVmName)) {
-              vmList.push(currentVmHtml + '</div>');
-              seenVmNames.add(currentVmName);
-            }
-            currentVmHtml = '';
-            currentVmName = '';
-          }
-          
-          const vmMatch = trimmed.match(/^- (.+?) \((.+?),\s*(.+?)\)/);
-          if (vmMatch) {
-            const [, name, vmType, state] = vmMatch;
-            const vmName = name.trim();
-            
-            // Skip if we've already seen this VM
-            if (seenVmNames.has(vmName)) {
-              inVmEntry = false;
-              continue;
-            }
-            
-            inVmEntry = true;
-            currentVmName = vmName;
-            const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-            const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
-            currentVmHtml = `
-              <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                  <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(vmName)}</strong>
-                  <span style="background: ${typeColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
-                  <span style="background: ${stateColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(state.trim())}</span>
-                </div>
-            `;
-          }
-          continue;
-        }
-        
-        // Handle nested VM entries (indented with spaces): "  - windowsVM (QEMU VM, running)"
-        if (inClusterVms && trimmed.startsWith('  - ') && !trimmed.startsWith('    -')) {
-          const nestedVmMatch = trimmed.match(/^  - (.+?) \((.+?),\s*(.+?)\)/);
-          if (nestedVmMatch && inVmEntry && currentVmHtml) {
-            const [, name, vmType, state] = nestedVmMatch;
-            const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-            const typeColor = vmType === 'QEMU VM' ? '#3b82f6' : '#8b5cf6';
-            // Add nested VM as a child
-            currentVmHtml += `
-              <div style="margin-top: 8px; margin-left: 16px; padding: 8px; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 4px; border-left: 2px solid ${typeColor};">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <strong style="color: #cbd5e1; font-size: 0.95em;">${escapeHtml(name.trim())}</strong>
-                  <span style="background: ${typeColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
-                  <span style="background: ${stateColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(state.trim())}</span>
-                </div>
-              </div>
-            `;
-          }
-          continue;
-        }
-        
-        // Handle VM details: "  - Details: node=proxBig | trace=compute-vm:proxbig:101"
-        if (inVmEntry && trimmed.startsWith('  - Details:')) {
-          const detailsText = trimmed.replace('  - Details:', '').trim();
-          const parts = detailsText.split('|').map(p => p.trim());
-          let detailsHtml = '<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b;">';
-          
-          for (const part of parts) {
-            if (part.startsWith('trace=')) {
-              const traceId = part.replace('trace=', '');
-              detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
-                <span style="color: #94a3b8;">Trace ID:</span> 
-                <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #60a5fa; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer;" 
-                      onclick="navigator.clipboard.writeText('${escapeHtml(traceId)}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
-                      title="Click to copy">${escapeHtml(traceId)}</code>
-              </div>`;
-            } else if (part.startsWith('node=')) {
-              const nodeName = part.replace('node=', '');
-              detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
-                <span style="color: #94a3b8;">Node:</span> 
-                <span style="color: #e2e8f0; font-weight: 500;">${escapeHtml(nodeName)}</span>
-              </div>`;
-            } else {
-              detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em; color: #94a3b8;">${escapeHtml(part)}</div>`;
-            }
-          }
-          detailsHtml += '</div>';
-          currentVmHtml += detailsHtml;
-          continue;
-        }
-        
-        // Handle VM source: "  - Source: Digital twin (Proxmox ingest); agent status unknown."
-        if (inVmEntry && trimmed.startsWith('  - Source:')) {
-          const sourceText = trimmed.replace('  - Source:', '').trim();
-          currentVmHtml += `
-            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b; font-size: 0.8em; color: #64748b; font-style: italic;">
-              <span style="color: #94a3b8;">Source:</span> ${escapeHtml(sourceText)}
-            </div>
-          `;
-          continue;
-        }
-        
-        // Handle tip lines
-        if (trimmed.startsWith('Tip:')) {
-          html += `<div style="margin-top: 16px; padding: 10px; background: #1e3a8a; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 0.875em; color: #bfdbfe;">
-            <strong style="color: #93c5fd;">💡 Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
-          </div>`;
-          continue;
-        }
-        
-        // Handle headers (###)
-        if (trimmed.startsWith('### ')) {
-          if (inVmEntry && currentVmHtml && currentVmName) {
-            // Only add if we haven't seen this VM before
-            if (!seenVmNames.has(currentVmName)) {
-              vmList.push(currentVmHtml + '</div>');
-              seenVmNames.add(currentVmName);
-            }
-            currentVmHtml = '';
-            currentVmName = '';
-            inVmEntry = false;
-          }
-          
-          const headerMatch = trimmed.match(/^### Node: (.+?) \(IP: (.+?)\)/);
-          if (headerMatch) {
-            html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa;">${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
-          } else {
-            const headerText = trimmed.replace(/^### /, '');
-            html += `<h3 style="margin: 16px 0 8px 0; color: #60a5fa; font-size: 1.1em;">${escapeHtml(headerText)}</h3>`;
-          }
-          continue;
-        }
-        
-        // Handle regular list items
-        if (trimmed.startsWith('- ') && !inClusterNodes && !inClusterVms) {
-          const listMatch = trimmed.match(/^- \*\*(.+?)\*\*:\s*(.+)$/) || trimmed.match(/^- (.+?):\s*(.+)$/);
-          if (listMatch) {
-            const label = escapeHtml(listMatch[1]);
-            const value = escapeHtml(listMatch[2]);
-            html += `<div style="margin: 6px 0; padding-left: 16px;">
-              <span style="color: #94a3b8; font-weight: 500;">${label}:</span> 
-              <span style="color: #e2e8f0;">${value}</span>
-            </div>`;
-          } else {
-            html += `<div style="margin: 6px 0; padding-left: 16px; color: #e2e8f0;">${escapeHtml(trimmed.replace(/^- /, ''))}</div>`;
-          }
-          continue;
-        }
-        
-        // Handle regular text
-        if (trimmed && !trimmed.startsWith('  -')) {
-          if (inVmEntry && currentVmHtml && currentVmName) {
-            // Only add if we haven't seen this VM before
-            if (!seenVmNames.has(currentVmName)) {
-              vmList.push(currentVmHtml + '</div>');
-              seenVmNames.add(currentVmName);
-            }
-            currentVmHtml = '';
-            currentVmName = '';
-            inVmEntry = false;
-          }
-          
-          let processedLine = escapeHtml(trimmed);
-          processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
-          html += `<p style="margin: 8px 0; color: #cbd5e1; line-height: 1.5;">${processedLine}</p>`;
-        } else if (!trimmed && !inVmEntry) {
-          html += '<br>';
-        }
-      }
-      
-      // Close any open sections
-      if (inClusterNodes && nodeEntries.length > 0) {
-        html += formatClusterNodesSection(nodeEntries);
-      }
-      if (inClusterVms) {
-        if (inVmEntry && currentVmHtml && currentVmName) {
-          // Only add if we haven't seen this VM before
-          if (!seenVmNames.has(currentVmName)) {
-            vmList.push(currentVmHtml + '</div>');
-            seenVmNames.add(currentVmName);
-          }
-        }
-        if (vmList.length > 0) {
-          html += formatClusterVmsSection(vmList);
-        }
-      }
-      
-      return html;
-    }
-    
-    function formatClusterNodesSection(nodes) {
-      if (nodes.length === 0) {
-        return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No nodes discovered in twin.</div>';
-      }
-      
-      let html = '<div style="margin: 12px 0;">';
-      for (const node of nodes) {
-        const statusColor = node.status === 'online' ? '#10b981' : node.status === 'offline' ? '#ef4444' : '#94a3b8';
-        html += `
-          <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 3px solid #3b82f6;">
-            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-              <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(node.name)}</strong>
-              <span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(node.status)}</span>
-              <span style="color: #94a3b8; font-size: 0.875em;">${node.vmCount} VM${node.vmCount !== 1 ? 's' : ''}</span>
-              <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #64748b; font-family: 'Courier New', monospace; font-size: 0.8em;">${escapeHtml(node.id)}</code>
-            </div>
-          </div>
-        `;
-      }
-      html += '</div>';
-      return html;
-    }
-    
-    function formatClusterVmsSection(vms) {
-      if (vms.length === 0) {
-        return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No VMs discovered in twin.</div>';
-      }
-      
-      return '<div style="margin: 12px 0;">' + vms.join('') + '</div>';
-    }
-
-    function addChatMessage(role, content, isLoading = false) {
-      const messagesDiv = document.getElementById('chat-messages');
-      const messageId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-      
-      // Remove welcome message if it exists
-      const welcomeMsg = messagesDiv.querySelector('div[style*="text-align: center"]');
-      if (welcomeMsg) welcomeMsg.remove();
-
-      const messageDiv = document.createElement('div');
-      messageDiv.id = messageId;
-      messageDiv.style.cssText = `
-        margin-bottom: 16px;
-        padding: 14px 16px;
-        border-radius: 10px;
-        max-width: 80%;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        ${role === 'user' 
-          ? 'background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%); margin-left: auto; text-align: right; border: 1px solid #3b82f6;' 
-          : 'background: #1e293b; margin-right: auto; border: 1px solid #334155;'}
-      `;
-
-      if (role === 'user') {
-        messageDiv.innerHTML = `<div style="color: #e2e8f0; white-space: pre-wrap;">${escapeHtml(content)}</div>`;
-      } else {
-        messageDiv.innerHTML = isLoading 
-          ? `<div style="color: #94a3b8; font-style: italic;">${content}</div>`
-          : content;
-      }
-
-      messagesDiv.appendChild(messageDiv);
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
-
-      return messageId;
-    }
-
-    function removeChatMessage(messageId) {
-      const message = document.getElementById(messageId);
-      if (message) message.remove();
-    }
-
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    async function loadExecutionStats() {
-      const element = document.getElementById('execution-stats');
-      if (!element) return;
-      
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/execution-stats`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const stats = await response.json();
-        
-        const html = `
-          <div class="status-grid">
-            <div class="stat-card">
-              <div class="stat-label">Total Executions</div>
-              <div class="stat-value">${stats.total || 0}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Error Rate</div>
-              <div class="stat-value">${((stats.errorRate || 0) * 100).toFixed(1)}%</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Avg Duration</div>
-              <div class="stat-value">${Math.round(stats.avgDurationMs || 0)}ms</div>
-            </div>
-          </div>
-          ${stats.recentErrors && stats.recentErrors.length > 0 ? `
-            <h3 style="margin-top: 20px; color: #ef4444;">Recent Errors</h3>
-            <table>
-              <tr>
-                <th>Tool</th>
-                <th>User</th>
-                <th>Error</th>
-                <th>Time</th>
-              </tr>
-              ${stats.recentErrors.map(e => `
-                <tr>
-                  <td>${e.toolName}</td>
-                  <td>${e.userId}</td>
-                  <td>${e.error || 'Unknown'}</td>
-                  <td>${new Date(e.timestamp).toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </table>
-          ` : ''}
-        `;
-        
-        document.getElementById('execution-stats').innerHTML = html;
-      } catch (error) {
-        document.getElementById('execution-stats').innerHTML = 
-          `<div class="error">Failed to load execution stats: ${error.message}</div>`;
-      }
-    }
-
-    async function loadToolExecutions() {
-      const element = document.getElementById('tool-executions');
-      if (!element) return;
-      
-      element.innerHTML = '<div class="loading">Loading...</div>';
-      
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/tool-executions?limit=50`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const data = await response.json();
-        
-        if (!data.executions || data.executions.length === 0) {
-          document.getElementById('tool-executions').innerHTML = '<p>No tool executions found.</p>';
-          return;
-        }
-        
-        const html = `
-          <table>
-            <tr>
-              <th>Timestamp</th>
-              <th>Tool</th>
-              <th>User</th>
-              <th>Status</th>
-              <th>Duration</th>
-              <th>Parameters</th>
-            </tr>
-            ${data.executions.map(e => `
-              <tr>
-                <td>${new Date(e.timestamp).toLocaleString()}</td>
-                <td>${e.toolName}</td>
-                <td>${e.userId}</td>
-                <td>
-                  <span class="status-badge ${e.error ? 'status-error' : 'status-success'}">
-                    ${e.error ? 'Failed' : 'Success'}
-                  </span>
-                </td>
-                <td>${e.durationMs}ms</td>
-                <td><pre>${JSON.stringify(e.parameters, null, 2).slice(0, 100)}...</pre></td>
-              </tr>
-            `).join('')}
-          </table>
-        `;
-        
-        document.getElementById('tool-executions').innerHTML = html;
-      } catch (error) {
-        document.getElementById('tool-executions').innerHTML = 
-          `<div class="error">Failed to load tool executions: ${error.message}</div>`;
-      }
-    }
-
-    async function loadClusterStatus() {
-      const element = document.getElementById('cluster-status');
-      if (!element) return;
-      
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/cluster-status`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const data = await response.json();
-        
-        document.getElementById('cluster-status').innerHTML = 
-          `<pre>${JSON.stringify(data, null, 2)}</pre>`;
-      } catch (error) {
-        document.getElementById('cluster-status').innerHTML = 
-          `<div class="error">Failed to load cluster status: ${error.message}</div>`;
-      }
-    }
-
-    async function loadSystemHealth() {
-      const element = document.getElementById('system-health');
-      if (!element) return;
-      
-      try {
-        const response = await fetch(`${API_URL}/health`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const data = await response.json();
-        
-        const html = `
-          <div class="status-grid">
-            ${Object.entries(data.dependencies || {}).map(([name, status]) => {
-              const s = status || {};
-              return `
-              <div class="stat-card">
-                <div class="stat-label">${name}</div>
-                <div class="stat-value">
-                  <span class="status-badge ${s.healthy ? 'status-success' : 'status-error'}">
-                    ${s.healthy ? 'Healthy' : 'Unhealthy'}
-                  </span>
-                </div>
-              </div>
-            `;
-            }).join('')}
-          </div>
-        `;
-        
-        document.getElementById('system-health').innerHTML = html;
-      } catch (error) {
-        document.getElementById('system-health').innerHTML = 
-          `<div class="error">Failed to load system health: ${error.message}</div>`;
-      }
-    }
-
-    async function loadGraph() {
-      const container = document.getElementById('graph-container');
-      if (!container) return;
-      
-      container.innerHTML = '<div class="loading">Loading graph...</div>';
-      
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=100`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const data = await response.json();
-        
-        if (!data.nodes || data.nodes.length === 0) {
-          document.getElementById('graph-container').innerHTML = 
-            '<p>No graph data available. The ontology graph may be empty.</p>';
-          return;
-        }
-        
-        const nodes = data.nodes.map(n => ({
-          id: n.id || n.properties?.id || Math.random().toString(),
-          label: n.name || n.properties?.name || n.id || 'Unknown',
-          group: n.type || n.labels?.[0] || 'unknown',
-          title: JSON.stringify(n, null, 2),
-        }));
-        
-        const edges = data.relationships.map(r => ({
-          from: r.from || r.start,
-          to: r.to || r.end,
-          label: r.type || r.properties?.type || '',
-          arrows: 'to',
-        }));
-        
-        const visData = { nodes, edges };
-        const options = {
-          nodes: {
-            shape: 'dot',
-            size: 16,
-            font: { color: '#e2e8f0' },
-            borderWidth: 2,
-          },
-          edges: {
-            arrows: { to: { enabled: true } },
-            color: { color: '#60a5fa' },
-            font: { color: '#94a3b8', size: 12 },
-          },
-          physics: {
-            enabled: true,
-            stabilization: { iterations: 100 },
-          },
-          interaction: {
-            hover: true,
-            tooltipDelay: 100,
-          },
-        };
-        
-        const container = document.getElementById('graph-container');
-        container.innerHTML = '<div id="graph"></div>';
-        new vis.Network(document.getElementById('graph'), visData, options);
-      } catch (error) {
-        document.getElementById('graph-container').innerHTML = 
-          `<div class="error">Failed to load graph: ${error.message}</div>`;
-      }
-    }
-
-    async function loadReasoningTraces() {
-      const element = document.getElementById('reasoning-traces');
-      if (!element) return;
-      
-      element.innerHTML = '<div class="loading">Loading...</div>';
-      
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/reasoning-traces?limit=20`);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const data = await response.json();
-        
-        if (!data.traces || data.traces.length === 0) {
-          element.innerHTML = '<p>No reasoning traces found.</p>';
-          return;
-        }
-        
-        const html = data.traces.map(trace => `
-          <div class="panel" style="margin-bottom: 30px; border-left: 3px solid ${trace.maxStepsReached ? '#ef4444' : '#10b981'};">
-            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
-              <div>
-                <h3 style="margin: 0 0 10px 0; color: #60a5fa;">Trace ${trace.id.slice(0, 8)}</h3>
-                <div style="font-size: 0.875rem; color: #94a3b8; line-height: 1.6;">
-                  <div><strong style="color: #e2e8f0;">Input:</strong> <span style="color: #cbd5e1;">${trace.userInput}</span></div>
-                  <div style="margin-top: 5px;">
-                    <span style="margin-right: 15px;"><strong>User:</strong> ${trace.userId}</span>
-                    <span style="margin-right: 15px;"><strong>ACL:</strong> ${trace.aclGroup}</span>
-                    <span style="margin-right: 15px;"><strong>Steps:</strong> ${trace.totalSteps}</span>
-                    <span style="margin-right: 15px;"><strong>Tools:</strong> ${trace.totalToolCalls}</span>
-                    <span><strong>Duration:</strong> ${trace.durationMs}ms</span>
-                  </div>
-                  <div style="margin-top: 5px;">
-                    <span class="status-badge ${trace.maxStepsReached ? 'status-error' : 'status-success'}" style="margin-right: 10px;">
-                      ${trace.maxStepsReached ? 'Max Steps Reached' : 'Completed'}
-                    </span>
-                    <span style="color: #94a3b8;">${new Date(trace.timestamp).toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <div style="margin-top: 20px;">
-              ${trace.steps.map((step, idx) => `
-                <div style="margin-bottom: 20px; padding: 15px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
-                  <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                    <span style="background: #3b82f6; color: white; padding: 4px 10px; border-radius: 4px; font-weight: 600; margin-right: 10px;">
-                      Step ${step.step}
-                    </span>
-                    ${step.ragContext ? `
-                      <span style="background: #8b5cf6; color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; margin-right: 10px;">
-                        RAG: ${step.ragContext.queryType}
-                      </span>
-                    ` : ''}
-                    ${step.toolCalls.length > 0 ? `
-                      <span style="background: #10b981; color: white; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem;">
-                        ${step.toolCalls.length} tool${step.toolCalls.length > 1 ? 's' : ''}
-                      </span>
-                    ` : ''}
-                  </div>
-                  
-                  ${step.llmResponse ? `
-                    <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #60a5fa;">
-                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">LLM Response</div>
-                      <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.875rem;">${step.llmResponse}</div>
-                    </div>
-                  ` : ''}
-                  
-                  ${step.ragContext ? `
-                    <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #8b5cf6;">
-                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">RAG Context</div>
-                      <div style="color: #e2e8f0; font-size: 0.875rem;">
-                        <div><strong>Type:</strong> ${step.ragContext.queryType}</div>
-                        <div><strong>Score:</strong> ${(step.ragContext.sTotalScore || 0).toFixed(3)}</div>
-                        <div><strong>Sources:</strong> ${step.ragContext.sourcesCount}</div>
-                      </div>
-                    </div>
-                  ` : ''}
-                  
-                  ${step.toolCalls.length > 0 ? `
-                    <div style="margin-bottom: 10px;">
-                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Tool Calls</div>
-                      ${step.toolCalls.map(tc => `
-                        <div style="margin-bottom: 8px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid ${tc.result.success ? '#10b981' : '#ef4444'};">
-                          <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                            <span style="color: #60a5fa; font-weight: 600; margin-right: 10px;">${tc.toolName}</span>
-                            <span class="status-badge ${tc.result.success ? 'status-success' : 'status-error'}" style="margin-right: 10px;">
-                              ${tc.result.success ? 'Success' : 'Failed'}
-                            </span>
-                            <span style="color: #94a3b8; font-size: 0.75rem;">${tc.durationMs}ms</span>
-                          </div>
-                          <div style="margin-top: 5px;">
-                            <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 3px;">Parameters:</div>
-                            <pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; margin: 0;">${JSON.stringify(tc.parameters, null, 2)}</pre>
-                          </div>
-                          ${tc.result.error ? `
-                            <div style="margin-top: 5px; color: #ef4444; font-size: 0.875rem;">
-                              <strong>Error:</strong> ${tc.result.error}
-                            </div>
-                          ` : tc.result.dataPreview ? `
-                            <div style="margin-top: 5px;">
-                              <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 3px;">Result Preview:</div>
-                              <pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; margin: 0; max-height: 100px; overflow-y: auto;">${tc.result.dataPreview}</pre>
-                            </div>
-                          ` : ''}
-                        </div>
-                      `).join('')}
-                    </div>
-                  ` : ''}
-                  
-                  ${step.decisions.length > 0 ? `
-                    <div style="margin-top: 10px;">
-                      <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Decisions</div>
-                      ${step.decisions.map(d => {
-                        const colors = {
-                          'duplicate_detected': '#f59e0b',
-                          'limit_reached': '#ef4444',
-                          'fallback': '#8b5cf6',
-                          'tool_choice': '#10b981',
-                          'rag_used': '#3b82f6'
-                        };
-                        const color = colors[d.type] || '#94a3b8';
-                        return `
-                        <div style="margin-bottom: 5px; padding: 6px 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid ${color};">
-                          <span style="color: ${color}; font-weight: 600; font-size: 0.75rem; text-transform: uppercase; margin-right: 8px;">${d.type.replace('_', ' ')}</span>
-                          <span style="color: #e2e8f0; font-size: 0.875rem;">${d.description}</span>
-                        </div>
-                      `;
-                      }).join('')}
-                    </div>
-                  ` : ''}
-                </div>
-              `).join('')}
-            </div>
-            
-            ${trace.finalResponse ? `
-              <div style="margin-top: 20px; padding: 15px; background: #1e293b; border-radius: 6px; border-left: 3px solid #10b981;">
-                <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;">Final Response</div>
-                <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace;">${trace.finalResponse}</div>
-              </div>
-            ` : ''}
-          </div>
-        `).join('');
-        
-        element.innerHTML = html;
-      } catch (error) {
-        element.innerHTML = 
-          `<div class="error">Failed to load reasoning traces: ${error.message}</div>`;
-      }
-    }
-
-    async function testRagQuery() {
-      const query = document.getElementById('rag-query').value;
-      if (!query) {
-        alert('Please enter a query');
-        return;
-      }
-      
-      document.getElementById('rag-results').innerHTML = '<div class="loading">Testing query...</div>';
-      
-      try {
-        const response = await fetch(`${API_URL}/api/dashboard/rag-diagnostics?query=${encodeURIComponent(query)}&aclGroup=admin`);
-        const data = await response.json();
-        
-        const html = `
-          <h3>Query Results</h3>
-          <div class="status-grid">
-            <div class="stat-card">
-              <div class="stat-label">Query Type</div>
-              <div class="stat-value">${data.queryType || 'Unknown'}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Total Score</div>
-              <div class="stat-value">${(data.sTotalScore || 0).toFixed(3)}</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Sources Found</div>
-              <div class="stat-value">${data.sources?.length || 0}</div>
-            </div>
-          </div>
-          
-          <h3 style="margin-top: 20px;">Top Sources</h3>
-          <table>
-            <tr>
-              <th>Source</th>
-              <th>Score</th>
-              <th>Preview</th>
-            </tr>
-            ${(data.sources || []).slice(0, 10).map(s => `
-              <tr>
-                <td>${s.sourcePath || s.chunkId || 'Unknown'}</td>
-                <td>${(s.score || 0).toFixed(3)}</td>
-                <td>${s.textPreview || ''}</td>
-              </tr>
-            `).join('')}
-          </table>
-          
-          <h3 style="margin-top: 20px;">Full Response</h3>
-          <pre>${JSON.stringify(data, null, 2)}</pre>
-        `;
-        
-        document.getElementById('rag-results').innerHTML = html;
-      } catch (error) {
-        document.getElementById('rag-results').innerHTML = 
-          `<div class="error">Failed to test query: ${error.message}</div>`;
-      }
-    }
-
-    // Load initial data when page loads
-    window.addEventListener('DOMContentLoaded', () => {
-      loadExecutionStats();
-      loadClusterStatus();
-      loadSystemHealth();
-    });
-    
-    // Auto-refresh every 30 seconds
-    setInterval(() => {
-      const overviewTab = document.getElementById('overview');
-      if (overviewTab && overviewTab.classList.contains('active')) {
-        loadExecutionStats();
-        loadClusterStatus();
-        loadSystemHealth();
-      }
-    }, 30000);
-  </script>
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>
-

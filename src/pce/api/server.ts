@@ -11,6 +11,7 @@ import { EmbeddingService, QdrantVectorStore } from "../vector";
 import type { ApiHistoryPayload, ApiQueryResponse, DependencyHealthCheck, HealthPayload, MetricsPayload } from "./types";
 import { ApiRateLimiter, type RateLimitConfig } from "./rate-limiter";
 import { ContextHistoryStore } from "./history-store";
+import { ChatHistoryStore } from "./chat-history-store";
 import { transformHybridContext } from "./context-transformer";
 import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
@@ -43,6 +44,7 @@ export interface PceApiServerDependencies {
     query: (query: string, aclGroup: ACLGroup) => Promise<HybridRAGResponse>;
   };
   historyStore?: ContextHistoryStore;
+  chatHistoryStore?: ChatHistoryStore;
   metricsCollector?: MetricsCollector;
   queryMetrics?: QueryMetrics;
   errorMetrics?: ErrorMetrics;
@@ -55,6 +57,7 @@ export class PceApiServer {
   private options: Required<PceApiServerOptions>;
   private orchestrator: PceApiServerDependencies["orchestrator"];
   private historyStore: ContextHistoryStore;
+  private chatHistoryStore: ChatHistoryStore;
   private metricsCollector: MetricsCollector;
   private queryMetrics: QueryMetrics;
   private errorMetrics: ErrorMetrics;
@@ -75,6 +78,7 @@ export class PceApiServer {
 
     this.orchestrator = deps.orchestrator;
     this.historyStore = deps.historyStore ?? new ContextHistoryStore(this.options.historyLimit);
+    this.chatHistoryStore = deps.chatHistoryStore ?? new ChatHistoryStore();
     this.metricsCollector = deps.metricsCollector ?? new MetricsCollector();
     this.ownsMetricsCollector = !deps.metricsCollector;
     this.queryMetrics = deps.queryMetrics ?? new QueryMetrics(this.metricsCollector);
@@ -224,6 +228,36 @@ export class PceApiServer {
     // Agent query endpoint (triggers agent with tool calling)
     if (req.method === "POST" && url.pathname === "/api/agent/query") {
       return await this.handleAgentQuery(req);
+    }
+
+    // Chat history endpoints
+    if (req.method === "GET" && url.pathname === "/api/chat/history") {
+      return await this.handleGetChatHistory(req);
+    }
+
+    if (req.method === "DELETE" && url.pathname.startsWith("/api/chat/history/") && !url.pathname.includes("/conversations/")) {
+      return await this.handleDeleteChatMessage(req, url);
+    }
+
+    // Conversation endpoints
+    if (req.method === "GET" && url.pathname === "/api/chat/conversations") {
+      return await this.handleGetConversations(req);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/chat/conversations") {
+      return await this.handleCreateConversation(req);
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/api/chat/conversations/") && url.pathname.endsWith("/messages")) {
+      return await this.handleGetConversationMessages(req, url);
+    }
+
+    if (req.method === "DELETE" && url.pathname.startsWith("/api/chat/conversations/") && !url.pathname.endsWith("/messages")) {
+      return await this.handleDeleteConversation(req, url);
+    }
+
+    if (req.method === "PATCH" && url.pathname.startsWith("/api/chat/conversations/")) {
+      return await this.handleUpdateConversationTitle(req, url);
     }
 
     return this.jsonResponse(404, { error: "Not Found" });
@@ -587,6 +621,15 @@ export class PceApiServer {
       const clusterStatus = clusterStatusResult.data || {};
       const resources = resourcesResult.data?.resources || [];
 
+      // Determine if this is a cluster or standalone node
+      const isCluster = nodes.length > 1;
+      
+      // Only include quorum for clusters (standalone nodes don't have quorum)
+      let quorum = null;
+      if (isCluster && clusterStatus.quorum) {
+        quorum = clusterStatus.quorum;
+      }
+
       // Aggregate VM statistics
       const runningVms = resources.filter((r: any) => r.status === "running");
       const stoppedVms = resources.filter((r: any) => r.status === "stopped");
@@ -597,7 +640,8 @@ export class PceApiServer {
       const offlineNodes = nodes.filter((n: any) => n.status_normalized === "offline" || n.status === "offline");
 
       return this.jsonResponse(200, {
-        quorum: clusterStatus.quorum || null,
+        isCluster,
+        quorum,
         nodes: {
           total: nodes.length,
           online: onlineNodes.length,
@@ -1089,21 +1133,108 @@ export class PceApiServer {
       const userId = body.userId || "dashboard-user";
       const aclGroup = (body.aclGroup || "admin") as ACLGroup;
       const sessionId = body.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const conversationId = body.conversationId || null;
+
+      // Get or create conversation
+      let activeConversationId = conversationId;
+      if (!activeConversationId) {
+        // Create new conversation
+        try {
+          activeConversationId = await this.chatHistoryStore.createConversation(userId);
+        } catch (error: any) {
+          pceLogger.warn("Failed to create conversation", { error: error.message });
+        }
+      }
+
+      // Load conversation history for context
+      let conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
+      if (activeConversationId) {
+        try {
+          const messages = await this.chatHistoryStore.getHistory({
+            conversationId: activeConversationId,
+            userId,
+            limit: 50, // Last 50 messages for context
+          });
+          conversationHistory = messages.map(msg => ({
+            role: msg.role,
+            content: msg.content,
+          }));
+        } catch (error: any) {
+          pceLogger.warn("Failed to load conversation history", { error: error.message });
+        }
+      }
+
+      // Save user message to chat history
+      if (activeConversationId) {
+        try {
+          await this.chatHistoryStore.saveMessage({
+            conversationId: activeConversationId,
+            userId,
+            aclGroup,
+            role: "user",
+            content: body.query,
+            timestamp: new Date(),
+          });
+        } catch (error: any) {
+          pceLogger.warn("Failed to save user message to chat history", { error: error.message });
+        }
+      }
+
+      // Subscribe to agent:final event to save assistant response
+      const eventBus = AgentEventBus.getInstance();
+      const unsubscribe = eventBus.onType("agent:final", async (event: AgentEvent) => {
+        if (event.sessionId === sessionId && event.data?.text && activeConversationId) {
+          try {
+            await this.chatHistoryStore.saveMessage({
+              conversationId: activeConversationId,
+              userId,
+              aclGroup,
+              role: "assistant",
+              content: event.data.text,
+              timestamp: new Date(event.timestamp),
+              reasoningTraceId: event.data.traceId,
+            });
+            
+            // Auto-generate conversation title from first user message if still default
+            const conv = await this.chatHistoryStore.getConversation(activeConversationId);
+            if (conv && conv.title.startsWith("Chat ")) {
+              // Generate title from first user message (first 50 chars)
+              const firstMessages = await this.chatHistoryStore.getHistory({
+                conversationId: activeConversationId,
+                limit: 1,
+              });
+              if (firstMessages.length > 0 && firstMessages[0].role === "user") {
+                const title = firstMessages[0].content.substring(0, 50).trim();
+                if (title) {
+                  await this.chatHistoryStore.updateConversationTitle(activeConversationId, title);
+                }
+              }
+            }
+          } catch (error: any) {
+            pceLogger.warn("Failed to save assistant message to chat history", { error: error.message });
+          }
+          unsubscribe();
+        }
+      });
 
       // Start agent execution in background (non-blocking)
+      // Pass conversation history as context
       runAgent(body.query, {
         userId,
         aclGroup,
         ragBaseUrl: `http://localhost:${this.options.port}`,
         sessionId,
+        conversationHistory, // Pass history to agent
       }).catch((error: any) => {
         pceLogger.error("Agent execution error", { error: error.message, sessionId });
+        unsubscribe();
       });
 
-      // Return immediately with sessionId so client can connect to SSE stream
+      // Return immediately with sessionId and conversationId so client can connect to SSE stream
       return this.jsonResponse(200, {
         success: true,
         sessionId,
+        conversationId: activeConversationId,
         message: "Agent query started. Connect to /api/agent/stream?sessionId=" + sessionId + " to receive events.",
       });
     } catch (error: any) {
@@ -1195,6 +1326,194 @@ export class PceApiServer {
         "X-Accel-Buffering": "no", // Disable nginx buffering
       },
     });
+  }
+
+  /**
+   * Handle GET /api/chat/history - Get chat history for a user
+   */
+  private async handleGetChatHistory(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId") || "dashboard-user";
+      const limit = parseInt(url.searchParams.get("limit") || "100");
+      const offset = parseInt(url.searchParams.get("offset") || "0");
+
+      const messages = await this.chatHistoryStore.getHistory({
+        userId,
+        limit,
+        offset,
+      });
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: messages,
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to get chat history", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle DELETE /api/chat/history/:id - Delete a chat message
+   */
+  private async handleDeleteChatMessage(req: Request, url: URL): Promise<Response> {
+    try {
+      const messageId = url.pathname.split("/").pop();
+      if (!messageId) {
+        return this.jsonResponse(400, { error: "Message ID is required" });
+      }
+
+      // Optional: Get userId from query params to ensure user can only delete their own messages
+      const userId = url.searchParams.get("userId") || undefined;
+
+      const deleted = await this.chatHistoryStore.deleteMessage(messageId, userId);
+      
+      if (!deleted) {
+        return this.jsonResponse(404, { error: "Message not found" });
+      }
+
+      return this.jsonResponse(200, {
+        success: true,
+        message: "Message deleted",
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to delete chat message", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle GET /api/chat/conversations - Get all conversations for a user
+   */
+  private async handleGetConversations(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId") || "dashboard-user";
+      const limit = parseInt(url.searchParams.get("limit") || "50");
+
+      const conversations = await this.chatHistoryStore.getConversations(userId, limit);
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: conversations,
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to get conversations", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle POST /api/chat/conversations - Create a new conversation
+   */
+  private async handleCreateConversation(req: Request): Promise<Response> {
+    try {
+      const body = (await req.json()) as { userId: string; title?: string };
+      const userId = body.userId || "dashboard-user";
+
+      const conversationId = await this.chatHistoryStore.createConversation(userId, body.title);
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: { id: conversationId },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to create conversation", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle GET /api/chat/conversations/:id/messages - Get messages for a conversation
+   */
+  private async handleGetConversationMessages(req: Request, url: URL): Promise<Response> {
+    try {
+      const conversationId = url.pathname.split("/")[4]; // /api/chat/conversations/{id}/messages
+      if (!conversationId) {
+        return this.jsonResponse(400, { error: "Conversation ID is required" });
+      }
+
+      const userId = url.searchParams.get("userId") || "dashboard-user";
+      const limit = parseInt(url.searchParams.get("limit") || "100");
+      const offset = parseInt(url.searchParams.get("offset") || "0");
+
+      const messages = await this.chatHistoryStore.getHistory({
+        conversationId,
+        userId,
+        limit,
+        offset,
+      });
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: messages,
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to get conversation messages", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle DELETE /api/chat/conversations/:id - Delete a conversation
+   */
+  private async handleDeleteConversation(req: Request, url: URL): Promise<Response> {
+    try {
+      const conversationId = url.pathname.split("/")[4]; // /api/chat/conversations/{id}
+      if (!conversationId) {
+        return this.jsonResponse(400, { error: "Conversation ID is required" });
+      }
+
+      const userId = url.searchParams.get("userId") || undefined;
+
+      const deleted = await this.chatHistoryStore.deleteConversation(conversationId, userId);
+      
+      if (!deleted) {
+        return this.jsonResponse(404, { error: "Conversation not found" });
+      }
+
+      return this.jsonResponse(200, {
+        success: true,
+        message: "Conversation deleted",
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to delete conversation", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle PATCH /api/chat/conversations/:id - Update conversation title
+   */
+  private async handleUpdateConversationTitle(req: Request, url: URL): Promise<Response> {
+    try {
+      const conversationId = url.pathname.split("/")[4]; // /api/chat/conversations/{id}
+      if (!conversationId) {
+        return this.jsonResponse(400, { error: "Conversation ID is required" });
+      }
+
+      const body = (await req.json()) as { title: string };
+      if (!body.title) {
+        return this.jsonResponse(400, { error: "Title is required" });
+      }
+
+      const userId = url.searchParams.get("userId") || undefined;
+
+      const updated = await this.chatHistoryStore.updateConversationTitle(conversationId, body.title, userId);
+      
+      if (!updated) {
+        return this.jsonResponse(404, { error: "Conversation not found" });
+      }
+
+      return this.jsonResponse(200, {
+        success: true,
+        message: "Conversation title updated",
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to update conversation title", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
   }
 }
 

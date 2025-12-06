@@ -9,7 +9,10 @@ export type ActionIntent =
   | { type: "destroy_vm"; name?: string; vmId?: number }
   | { type: "start_vm"; name: string }
   | { type: "stop_vm"; name: string }
-  | { type: "sync_dhcp_to_dns" };
+  | { type: "sync_dhcp_to_dns" }
+  | { type: "install_service"; service: string; vmName: string }
+  | { type: "configure_firewall"; vmName: string }
+  | { type: "set_static_ip"; vmName: string; ip?: string; gateway?: string };
 
 function extractVmName(text: string): string | null {
   // Match patterns like "create VM named X", "create a VM called X", "VM named X"
@@ -126,6 +129,75 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
     return { type: "sync_dhcp_to_dns" };
   }
 
+  // Install service (nginx, docker, etc.)
+  if (
+    (normalized.includes("install") || normalized.includes("setup") || normalized.includes("add")) &&
+    (normalized.includes("nginx") || normalized.includes("docker") || normalized.includes("service"))
+  ) {
+    const vmName = extractVmName(userInput) || extractVmNameFromContext(userInput);
+    if (vmName) {
+      let service = "unknown";
+      if (normalized.includes("nginx")) service = "nginx";
+      else if (normalized.includes("docker")) service = "docker";
+      
+      return { type: "install_service", service, vmName };
+    }
+  }
+
+  // Configure firewall (action, not query)
+  // Match patterns like "configure firewall", "setup firewall", "allow port", "open port"
+  // Priority: Check for action keywords first (configure/setup/allow/open) before query keywords
+  const hasActionKeyword = 
+    normalized.includes("configure") || 
+    normalized.includes("setup") || 
+    normalized.includes("set") ||
+    normalized.includes("allow") ||
+    normalized.includes("open");
+  
+  const hasFirewallKeyword = 
+    normalized.includes("firewall") || 
+    normalized.includes("ufw") ||
+    normalized.includes("port");
+  
+  if (hasActionKeyword && hasFirewallKeyword) {
+    const vmName = extractVmName(userInput) || extractVmNameFromContext(userInput);
+    if (vmName) {
+      return { type: "configure_firewall", vmName };
+    }
+  }
+
+  // Set static IP
+  if (
+    (normalized.includes("set") || normalized.includes("configure") || normalized.includes("assign")) &&
+    (normalized.includes("static") || normalized.includes("ip") || normalized.includes("address"))
+  ) {
+    const vmName = extractVmName(userInput) || extractVmNameFromContext(userInput);
+    if (vmName) {
+      // Try to extract IP and gateway if provided
+      const ipMatch = userInput.match(/\b(\d+\.\d+\.\d+\.\d+\/\d+)\b/);
+      const gatewayMatch = userInput.match(/\bgateway\s+(\d+\.\d+\.\d+\.\d+)\b/i);
+      
+      return {
+        type: "set_static_ip",
+        vmName,
+        ip: ipMatch ? ipMatch[1] : undefined,
+        gateway: gatewayMatch ? gatewayMatch[1] : undefined,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract VM name from context (e.g., "install nginx on aha")
+ */
+function extractVmNameFromContext(text: string): string | null {
+  // Match patterns like "on X", "for X", "to X" where X is a VM name
+  const onMatch = text.match(/\b(?:on|for|to)\s+([a-z0-9\-_]+)/i);
+  if (onMatch) {
+    return onMatch[1];
+  }
   return null;
 }
 

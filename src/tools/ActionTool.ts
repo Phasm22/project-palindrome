@@ -11,10 +11,15 @@ const ActionParams = z.object({
   action: z.string().describe("Action name (e.g., 'compute.create_vm')"),
   params: z.any().describe(
     "Action parameters as an object. " +
-        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. " +
+        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, bootstrap?: boolean, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. Set bootstrap=true to run Ansible bootstrap after VM creation. " +
         "For compute.destroy_vm: {name?: string, vmId?: number, node?: string, dryRun?: boolean}. Either name or vmId is required. " +
         "For network.create_dns_record: {hostname: string, ip: string, domain?: string, dryRun?: boolean}. Creates DNS A record in Pi-hole. " +
         "For network.sync_dhcp_to_dns: {dryRun?: boolean, domain?: string, updateExisting?: boolean}. Syncs OPNsense DHCP leases to Pi-hole DNS records. " +
+        "For services.bootstrap: {vmName: string, playbook?: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Runs Ansible playbook (default: common.yml) on a VM. " +
+        "For services.install_docker: {vmName: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Installs Docker CE, Docker Compose, and Portainer on a VM. " +
+        "For services.install_nginx: {vmName: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Installs and configures nginx web server on a VM. " +
+        "For services.configure_firewall: {vmName: string, rules?: Array<{port: number, protocol?: 'tcp'|'udp'|'both', action?: 'allow'|'deny'}>, defaultPolicy?: 'allow'|'deny', waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Configures UFW firewall rules on a VM. " +
+        "For services.set_static_ip: {vmName: string, ip: string (CIDR format, e.g., '192.168.1.100/24'), gateway: string, dns?: string[], interface?: string (default: 'eth0'), waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Configures a static IP address on a VM using netplan. " +
     "templateId is the VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001). " +
     "Must be an object."
   ),
@@ -33,7 +38,8 @@ export class ActionTool extends BaseTool {
       description: "Execute safe automation actions (create VMs, configure network, manage firewall). Uses Terraform/Ansible for deterministic operations.",
       categories: ["action", "automation", "terraform", "ansible"],
       allowedAcls: ["admin", "ops"],
-      risk: "high", // Actions modify infrastructure
+      risk: "medium", // Actions modify infrastructure but are safe and deterministic
+      requiresConfirmation: false, // No HITL approval needed - actions are safe and deterministic
     });
   }
 
@@ -87,6 +93,85 @@ export class ActionTool extends BaseTool {
               cores: 2,
               memory: 4096,
               diskSize: "20G",
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Create a VM with automatic bootstrap (runs Ansible common.yml after creation)",
+          parameters: {
+            action: "compute.create_vm",
+            params: {
+              node: "YANG",
+              cores: 2,
+              memory: 4096,
+              diskSize: "20G",
+              bootstrap: true,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Bootstrap a VM (run Ansible common.yml playbook)",
+          parameters: {
+            action: "services.bootstrap",
+            params: {
+              vmName: "dad",
+              waitForVm: true,
+              timeout: 300,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Install Docker on a VM",
+          parameters: {
+            action: "services.install_docker",
+            params: {
+              vmName: "dad",
+              waitForVm: true,
+              timeout: 300,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Install nginx on a VM",
+          parameters: {
+            action: "services.install_nginx",
+            params: {
+              vmName: "dad",
+              waitForVm: true,
+              timeout: 300,
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Configure firewall rules on a VM",
+          parameters: {
+            action: "services.configure_firewall",
+            params: {
+              vmName: "dad",
+              rules: [
+                { port: 80, protocol: "tcp", action: "allow" },
+                { port: 443, protocol: "tcp", action: "allow" }
+              ],
+              defaultPolicy: "deny",
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Set static IP address on a VM",
+          parameters: {
+            action: "services.set_static_ip",
+            params: {
+              vmName: "dad",
+              ip: "192.168.1.100/24",
+              gateway: "192.168.1.1",
+              dns: ["8.8.8.8", "8.8.4.4"],
+              interface: "eth0",
               dryRun: false
             }
           }

@@ -107,7 +107,7 @@ export class ReasoningTraceStore {
     `);
   }
 
-  async recordTrace(trace: Omit<ReasoningTrace, "id">): Promise<void> {
+  async recordTrace(trace: Omit<ReasoningTrace, "id">): Promise<string> {
     const id = crypto.randomUUID();
     const stmt = this.db.prepare(`
       INSERT INTO reasoning_traces 
@@ -136,6 +136,8 @@ export class ReasoningTraceStore {
         totalSteps: trace.totalSteps,
         totalToolCalls: trace.totalToolCalls,
       });
+      
+      return id;
     } catch (error: any) {
       pceLogger.error("Failed to record reasoning trace", {
         error: error.message,
