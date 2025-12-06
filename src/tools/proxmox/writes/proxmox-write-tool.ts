@@ -6,6 +6,9 @@ import { pceLogger as logger } from "../../../pce/utils/logger";
 import { createToolSchema } from "../../tool-helpers";
 import type { ToolSchema } from "../../tool-schema";
 
+// Alternative client for multi-cluster support
+let alternativeClient: ProxmoxClient | null = null;
+
 /**
  * Proxmox Write Tool Parameters Schema
  */
@@ -102,7 +105,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         required: ["action", "node", "vmid"],
       },
       allowedAcls: ["admin", "ops"], // Write operations restricted to admin/ops
-      requiresConfirmation: true, // All write operations require HIL
+      requiresConfirmation: false, // HIL disabled - safe write operations with dry-run and pre-write state capture
       risk: "medium", // Controlled write operations (destroy_vm handled separately)
     });
   }
@@ -219,6 +222,45 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
   };
 
   /**
+   * Known node → endpoint map so we can query alternate clusters directly.
+   * This enables write operations on nodes in separate Proxmox instances.
+   */
+  private static readonly NODE_ENDPOINT_MAP: Record<string, string> = {
+    proxbig: "https://proxBig.prox:8006",
+    yin: "https://yin.prox:8006",
+    yang: "https://yang.prox:8006",
+  };
+
+  private static normalizeNodeKey(name: string): string {
+    return name.toLowerCase().replace(/[_-]/g, "");
+  }
+
+  /**
+   * Get alternative Proxmox endpoints to try when a node isn't found in the primary cluster
+   * Returns array of endpoint configs based on node name patterns
+   */
+  private getAlternativeEndpoints(nodeName: string): Array<{ url: string; tokenId?: string; tokenSecret?: string }> {
+    const endpoints: Array<{ url: string; tokenId?: string; tokenSecret?: string }> = [];
+    const normalizedName = ProxmoxWriteTool.normalizeNodeKey(nodeName);
+    
+    const endpoint = ProxmoxWriteTool.NODE_ENDPOINT_MAP[normalizedName];
+    if (endpoint) {
+      // Try to get node-specific credentials
+      const nodeNameUpper = normalizedName.toUpperCase().replace(/[_-]/g, '');
+      const tokenId = process.env.PROXMOX_TOKEN_ID || process.env[`${nodeNameUpper}_TOKEN_ID`];
+      const tokenSecret = process.env.PROXMOX_TOKEN_SECRET || process.env[`${nodeNameUpper}_TOKEN_SECRET`];
+      
+      endpoints.push({
+        url: endpoint,
+        tokenId: tokenId || undefined,
+        tokenSecret: tokenSecret || undefined,
+      });
+    }
+    
+    return endpoints;
+  }
+
+  /**
    * Normalize node name by validating FIRST, then using fuzzy matching
    * This prevents 403 errors from trying non-existent node names
    * 
@@ -228,7 +270,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
    * 3. Try exact case-insensitive match
    * 4. Try fuzzy match (ignoring underscores/hyphens/case)
    * 5. Check if it matches PROXMOX_URL hostname (for standalone nodes)
-   * 6. Return normalized name or throw helpful error
+   * 6. Try alternative endpoints for multi-cluster support
+   * 7. Return normalized name or throw helpful error
    */
   private async normalizeNodeName(
     client: ProxmoxClient,
@@ -322,7 +365,61 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       }
     }
 
-    // Step 6: Node not found - throw helpful error with available nodes
+    // Step 6: Node not found in primary cluster - try alternative endpoints
+    const alternativeEndpoints = this.getAlternativeEndpoints(nodeName);
+    for (const altEndpoint of alternativeEndpoints) {
+      try {
+        logger.debug(`Trying alternative Proxmox endpoint for node "${nodeName}": ${altEndpoint.url}`);
+        // Get credentials - prefer node-specific, fallback to default
+        const normalizedNameForCreds = nodeName.toLowerCase().replace(/[_-]/g, '');
+        const nodeNameUpper = normalizedNameForCreds.toUpperCase();
+        const tokenId = altEndpoint.tokenId || process.env.PROXMOX_TOKEN_ID;
+        const tokenSecret = altEndpoint.tokenSecret || process.env[`${nodeNameUpper}_TOKEN_SECRET`] || process.env.PROXMOX_TOKEN_SECRET;
+        const verifySsl = process.env.PROXMOX_VERIFY_SSL !== 'false';
+        
+        if (!tokenId || !tokenSecret) {
+          logger.debug(`Skipping alternative endpoint ${altEndpoint.url}: missing credentials`);
+          continue;
+        }
+        
+        const altClient = new ProxmoxClient({
+          url: altEndpoint.url,
+          tokenId,
+          tokenSecret,
+          verifySsl,
+        });
+        
+        const result = await altClient.get("/nodes");
+        let nodes: any[] = [];
+        if (result?.data?.data) {
+          nodes = Array.isArray(result.data.data) ? result.data.data : [];
+        } else if (Array.isArray(result?.data)) {
+          nodes = result.data;
+        }
+        
+        // Try to find the node in this alternative cluster
+        const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
+        const searchNormalized = normalizeForMatch(nodeName);
+        const normalized = nodes.find(
+          (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
+        );
+        
+        if (normalized?.node) {
+          logger.info(`Found node "${nodeName}" in alternative cluster: ${altEndpoint.url} (normalized to "${normalized.node}")`);
+          // Store the alternative client for use in subsequent API calls
+          alternativeClient = altClient;
+          return normalized.node;
+        } else {
+          logger.debug(`Node "${nodeName}" not found in alternative cluster ${altEndpoint.url}. Found nodes: ${nodes.map((n: any) => n?.node).filter(Boolean).join(", ") || "none"}`);
+        }
+      } catch (altError: any) {
+        const statusCode = altError?.response?.status;
+        logger.debug(`Alternative endpoint ${altEndpoint.url} failed: ${altError.message}${statusCode ? ` (HTTP ${statusCode})` : ''}`);
+        // Continue to next endpoint
+      }
+    }
+
+    // Step 7: Node not found in any cluster - throw helpful error
     try {
       const result = await client.get("/nodes");
       // Handle various response structures defensively
@@ -333,14 +430,14 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         nodes = result.data;
       }
       const availableNodes = nodes.filter((n: any) => n?.node).map((n: any) => n.node).join(", ");
-      const errorMsg = `Node "${nodeName}" not found in cluster. Available nodes: ${availableNodes || "none"}. ` +
-        `If "${nodeName}" is a standalone node, ensure PROXMOX_URL points to that node. ` +
+      const errorMsg = `Node "${nodeName}" not found in any accessible cluster. Available nodes in primary cluster: ${availableNodes || "none"}. ` +
+        `If "${nodeName}" is in a different cluster, ensure the appropriate PROXMOX_URL and credentials are configured. ` +
         `Current PROXMOX_URL: ${proxmoxUrl || "not set"}`;
       logger.warn(errorMsg);
       throw new Error(errorMsg);
     } catch (error: any) {
       // If we can't even list nodes, throw a simpler error
-      if (error.message.includes("not found in cluster")) {
+      if (error.message.includes("not found")) {
         throw error;
       }
       throw new Error(`Node "${nodeName}" not found and could not validate against cluster. ${error.message}`);
@@ -356,6 +453,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Reset alternative client before normalization
+    alternativeClient = null;
+    
     // Normalize node name for all actions
     if (params.node) {
       params.node = await this.normalizeNodeName(client, params.node);
@@ -364,24 +464,27 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       params.targetNode = await this.normalizeNodeName(client, params.targetNode);
     }
     
+    // Use alternative client if it was set during normalization (multi-cluster support)
+    const activeClient = alternativeClient || client;
+    
     switch (action) {
       case "start_vm":
-        return this.startVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
+        return this.startVm(activeClient, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "stop_vm":
-        return this.stopVm(client, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
+        return this.stopVm(activeClient, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
       case "shutdown_vm":
-        return this.shutdownVm(client, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
+        return this.shutdownVm(activeClient, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
       case "reboot_vm":
-        return this.rebootVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
+        return this.rebootVm(activeClient, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "reset_vm":
-        return this.resetVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
+        return this.resetVm(activeClient, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "create_snapshot":
         // Snapshots only available for QEMU VMs
         if (params.type === "lxc") {
           throw new Error("Snapshot operations are not available for LXC containers");
         }
         return this.createSnapshot(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           params.snapshotName!,
@@ -393,7 +496,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           throw new Error("Snapshot operations are not available for LXC containers");
         }
         return this.rollbackSnapshot(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           params.snapshotName!,
@@ -405,7 +508,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           throw new Error("Clone operation is not available for LXC containers");
         }
         return this.cloneVm(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           params.newVmid!,
@@ -420,12 +523,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         if (!migrateType) {
           try {
             // Try qemu first
-            await this.getVmStatus(client, params.node!, params.vmid!, "qemu");
+            await this.getVmStatus(activeClient, params.node!, params.vmid!, "qemu");
             migrateType = "qemu";
           } catch {
             // Try lxc if qemu fails
             try {
-              await this.getVmStatus(client, params.node!, params.vmid!, "lxc");
+              await this.getVmStatus(activeClient, params.node!, params.vmid!, "lxc");
               migrateType = "lxc";
             } catch {
               throw new Error(`Could not determine VM type for VMID ${params.vmid} on node ${params.node}. Please specify type parameter.`);
@@ -433,7 +536,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           }
         }
         return this.migrateVm(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           migrateType,
@@ -446,12 +549,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         if (!destroyType) {
           try {
             // Try qemu first
-            await this.getVmStatus(client, params.node!, params.vmid!, "qemu");
+            await this.getVmStatus(activeClient, params.node!, params.vmid!, "qemu");
             destroyType = "qemu";
           } catch {
             // Try lxc if qemu fails
             try {
-              await this.getVmStatus(client, params.node!, params.vmid!, "lxc");
+              await this.getVmStatus(activeClient, params.node!, params.vmid!, "lxc");
               destroyType = "lxc";
             } catch {
               throw new Error(`Could not determine VM type for VMID ${params.vmid} on node ${params.node}. Please specify type parameter.`);
@@ -459,7 +562,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           }
         }
         return this.destroyVm(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           destroyType,

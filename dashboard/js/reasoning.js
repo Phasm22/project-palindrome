@@ -2,6 +2,158 @@ import { API_URL } from './utils.js';
 import { addTooltip, createModal } from './ui-helpers.js';
 import { createSkeletonLoader } from './skeletons.js';
 
+// Format tool results for readable display
+function formatToolResult(dataPreview, toolName) {
+  if (!dataPreview) return '';
+  
+  try {
+    // Try to parse as JSON
+    const data = typeof dataPreview === 'string' ? JSON.parse(dataPreview) : dataPreview;
+    
+    // Handle Proxmox VM list
+    if (data.vms && Array.isArray(data.vms)) {
+      return `
+        <div style="font-size: 0.8rem;">
+          <div style="color: #10b981; margin-bottom: 8px; font-weight: 600;">
+            📦 ${data.vms.length} VM${data.vms.length !== 1 ? 's' : ''} found
+          </div>
+          <div style="display: grid; gap: 6px;">
+            ${data.vms.slice(0, 10).map(vm => `
+              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #1e293b; border-radius: 4px;">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: ${vm.status === 'running' ? '#10b981' : '#94a3b8'};"></span>
+                <span style="color: #f97316; font-weight: 500; min-width: 120px;">${vm.name || vm.vmid}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">ID: ${vm.vmid}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">${vm.node || ''}</span>
+                ${vm.mem_normalized ? `<span style="color: #8b5cf6; font-size: 0.75rem;">${vm.mem_normalized.value}${vm.mem_normalized.unit}</span>` : ''}
+              </div>
+            `).join('')}
+            ${data.vms.length > 10 ? `<div style="color: #94a3b8; font-size: 0.75rem;">... and ${data.vms.length - 10} more</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    // Handle containers
+    if (data.containers && Array.isArray(data.containers)) {
+      return `
+        <div style="font-size: 0.8rem;">
+          <div style="color: #10b981; margin-bottom: 8px; font-weight: 600;">
+            🐳 ${data.containers.length} container${data.containers.length !== 1 ? 's' : ''} found
+          </div>
+          <div style="display: grid; gap: 6px;">
+            ${data.containers.slice(0, 10).map(ct => `
+              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #1e293b; border-radius: 4px;">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: ${ct.status === 'running' ? '#10b981' : '#94a3b8'};"></span>
+                <span style="color: #f97316; font-weight: 500;">${ct.name || ct.vmid}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">ID: ${ct.vmid}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+    
+    // Handle nodes
+    if (data.nodes && Array.isArray(data.nodes)) {
+      return `
+        <div style="font-size: 0.8rem;">
+          <div style="color: #10b981; margin-bottom: 8px; font-weight: 600;">
+            🖥️ ${data.nodes.length} node${data.nodes.length !== 1 ? 's' : ''} found
+          </div>
+          <div style="display: grid; gap: 6px;">
+            ${data.nodes.map(node => `
+              <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #1e293b; border-radius: 4px;">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: ${node.status === 'online' ? '#10b981' : '#ef4444'};"></span>
+                <span style="color: #f97316; font-weight: 500;">${node.node}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">${node.status}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+    
+    // Handle graph/twin query results
+    if (data.entities && Array.isArray(data.entities)) {
+      return `
+        <div style="font-size: 0.8rem;">
+          <div style="color: #8b5cf6; margin-bottom: 8px; font-weight: 600;">
+            🔗 ${data.entities.length} entit${data.entities.length !== 1 ? 'ies' : 'y'} found
+          </div>
+          <div style="display: grid; gap: 6px;">
+            ${data.entities.slice(0, 8).map(e => `
+              <div style="padding: 6px 8px; background: #1e293b; border-radius: 4px; display: flex; gap: 8px; align-items: center;">
+                <span style="background: #8b5cf6; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7rem;">${e.type || e.labels?.[0] || 'Entity'}</span>
+                <span style="color: #e2e8f0;">${e.name || e.properties?.name || e.id || 'Unknown'}</span>
+              </div>
+            `).join('')}
+            ${data.entities.length > 8 ? `<div style="color: #94a3b8; font-size: 0.75rem;">... and ${data.entities.length - 8} more</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+    
+    // Handle simple success/error responses
+    if (data.success !== undefined) {
+      return `
+        <div style="display: flex; align-items: center; gap: 8px; color: ${data.success ? '#10b981' : '#ef4444'};">
+          ${data.success ? '✅' : '❌'} ${data.message || (data.success ? 'Operation successful' : 'Operation failed')}
+        </div>
+      `;
+    }
+    
+    // Default: pretty print JSON with truncation
+    const jsonStr = JSON.stringify(data, null, 2);
+    if (jsonStr.length > 500) {
+      return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.7rem; overflow-x: auto; margin: 0; max-height: 150px; overflow-y: auto;">${jsonStr.substring(0, 500)}...\n<span style="color: #94a3b8;">[${jsonStr.length - 500} more chars]</span></pre>`;
+    }
+    return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.7rem; overflow-x: auto; margin: 0;">${jsonStr}</pre>`;
+    
+  } catch (e) {
+    // Not JSON, show as text with truncation
+    const text = String(dataPreview);
+    if (text.length > 300) {
+      return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; margin: 0; max-height: 100px; overflow-y: auto;">${text.substring(0, 300)}...\n<span style="color: #94a3b8;">[truncated]</span></pre>`;
+    }
+    return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; margin: 0;">${text}</pre>`;
+  }
+}
+
+// Format markdown-like response for display
+function formatFinalResponse(text) {
+  if (!text) return '';
+  
+  // Escape HTML first
+  let formatted = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  
+  // Bold: **text**
+  formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong style="color: #f97316;">$1</strong>');
+  
+  // Headers: lines starting with #
+  formatted = formatted.replace(/^### (.+)$/gm, '<div style="color: #8b5cf6; font-weight: 600; margin: 12px 0 6px 0;">$1</div>');
+  formatted = formatted.replace(/^## (.+)$/gm, '<div style="color: #f97316; font-weight: 600; font-size: 1.1em; margin: 14px 0 8px 0;">$1</div>');
+  formatted = formatted.replace(/^# (.+)$/gm, '<div style="color: #10b981; font-weight: 700; font-size: 1.2em; margin: 16px 0 10px 0;">$1</div>');
+  
+  // List items: - item or * item or numbered 1. item
+  formatted = formatted.replace(/^(\d+)\. (.+)$/gm, '<div style="margin: 4px 0 4px 16px;"><span style="color: #f97316; margin-right: 8px;">$1.</span>$2</div>');
+  formatted = formatted.replace(/^[\-\*] (.+)$/gm, '<div style="margin: 4px 0 4px 16px;"><span style="color: #10b981; margin-right: 8px;">•</span>$1</div>');
+  
+  // Indented sub-items
+  formatted = formatted.replace(/^   [\-\*] (.+)$/gm, '<div style="margin: 2px 0 2px 32px; font-size: 0.95em;"><span style="color: #94a3b8; margin-right: 6px;">◦</span>$1</div>');
+  
+  // Code: `code`
+  formatted = formatted.replace(/`([^`]+)`/g, '<code style="background: #0f172a; padding: 2px 6px; border-radius: 3px; color: #10b981; font-family: monospace; font-size: 0.9em;">$1</code>');
+  
+  // Preserve line breaks
+  formatted = formatted.replace(/\n\n/g, '<div style="margin: 12px 0;"></div>');
+  formatted = formatted.replace(/\n/g, '<br>');
+  
+  return formatted;
+}
+
 export async function loadReasoningTraces() {
   const element = document.getElementById('reasoning-traces');
   if (!element) return;
@@ -91,7 +243,7 @@ export async function loadReasoningTraces() {
               ${step.llmResponse ? `
                 <div style="margin-bottom: 10px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 2px solid #f97316;">
                   <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 0.5px;">LLM Response</div>
-                  <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.875rem;">${step.llmResponse}</div>
+                  <div style="color: #e2e8f0; line-height: 1.5; font-size: 0.875rem;">${formatFinalResponse(step.llmResponse)}</div>
                 </div>
               ` : ''}
               
@@ -127,9 +279,9 @@ export async function loadReasoningTraces() {
                           <strong>Error:</strong> ${tc.result.error}
                         </div>
                       ` : tc.result.dataPreview ? `
-                        <div style="margin-top: 5px;">
-                          <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 3px;">Result Preview:</div>
-                          <pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; margin: 0; max-height: 100px; overflow-y: auto;">${tc.result.dataPreview}</pre>
+                        <div style="margin-top: 8px;">
+                          <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Result</div>
+                          ${formatToolResult(tc.result.dataPreview, tc.toolName)}
                         </div>
                       ` : ''}
                     </div>
@@ -165,7 +317,7 @@ export async function loadReasoningTraces() {
         ${trace.finalResponse ? `
           <div style="margin-top: 20px; padding: 15px; background: #1e293b; border-radius: 6px; border-left: 2px solid #10b981;">
             <div style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px;">Final Response</div>
-            <div style="color: #e2e8f0; white-space: pre-wrap; font-family: 'Courier New', monospace;">${trace.finalResponse}</div>
+            <div style="color: #e2e8f0; line-height: 1.6; font-size: 0.9rem;" class="formatted-response">${formatFinalResponse(trace.finalResponse)}</div>
           </div>
         ` : ''}
       </div>

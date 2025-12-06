@@ -8,6 +8,7 @@ deleteDatasources:
 datasources:
   - name: Prometheus
     type: prometheus
+    uid: PBFA97CFB590B2093
     access: proxy
     # Both Prometheus and Grafana use host network mode
     # Access Prometheus at localhost:9090

@@ -19,6 +19,8 @@ import {
   listVmsWithoutAgentChain,
   listStoppedVmsChain,
   findVmByIdChain,
+  resolveVmDetailsChain,
+  type ResolvedVmDetails,
 } from "../reasoning/chains/compute";
 import { detectNetworkIntent, type NetworkIntent } from "../reasoning/detectNetworkIntent";
 import {
@@ -353,8 +355,52 @@ export async function runAgent(
   // Check action intent FIRST (before ALL query intents)
   // This prevents action requests from being treated as queries
   const actionIntent = detectActionIntent(userInput);
+  let resolvedVmContext: string | null = null;
+  
   if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
+    
+    // For VM-related actions, resolve VM details (node, vmid, type) before letting LLM proceed
+    // This ensures the LLM has the correct parameters for write operations
+    const vmActionsNeedingResolution = ["destroy_vm", "start_vm", "stop_vm", "restart_vm"];
+    if (vmActionsNeedingResolution.includes(actionIntent.type)) {
+      const vmNameOrId = 
+        (actionIntent as any).name || 
+        (actionIntent as any).vmId || 
+        null;
+      
+      if (vmNameOrId) {
+        try {
+          logger.info("Resolving VM details before action", { vmNameOrId, intent: actionIntent.type });
+          const resolved = await resolveVmDetailsChain(tools, session, vmNameOrId);
+          
+          if (resolved.found) {
+            resolvedVmContext = `VM DETAILS (resolved from cluster_resources):
+- VM Name: ${resolved.name}
+- VMID: ${resolved.vmid}
+- Node: ${resolved.node}
+- Type: ${resolved.type}
+- Status: ${resolved.status}
+${resolved.ambiguous ? `\n⚠️ WARNING: Multiple VMs matched "${vmNameOrId}". Using first match. All matches:\n${resolved.matches?.map(m => `  - ${m.name} (vmid=${m.vmid}, node=${m.node}, type=${m.type})`).join("\n")}` : ""}
+
+IMPORTANT: When calling proxmox_write, you MUST use:
+  - node: "${resolved.node}"
+  - vmid: ${resolved.vmid}
+  - type: "${resolved.type}"`;
+            
+            logger.info("VM details resolved successfully", { 
+              vmNameOrId, 
+              resolved: { vmid: resolved.vmid, node: resolved.node, type: resolved.type }
+            });
+          } else {
+            resolvedVmContext = `VM RESOLUTION FAILED: Could not find VM "${vmNameOrId}" in cluster_resources. The VM may not exist or may be on a different cluster. Please verify the VM name and try again.`;
+            logger.warn("VM resolution failed", { vmNameOrId });
+          }
+        } catch (error: any) {
+          logger.error("Error resolving VM details", { vmNameOrId, error: error.message });
+        }
+      }
+    }
     // Skip ALL query intents (including firewall) - let the LLM handle action execution
     // The LLM will use the action tool with proper parameters
     // For compound requests (e.g., "install nginx and configure firewall"), the LLM will execute sequentially
@@ -595,9 +641,15 @@ export async function runAgent(
       }
     }
 
+    // Build messages array with optional resolved VM context
+    const vmContextMessage = resolvedVmContext ? [
+      { role: "system", content: resolvedVmContext }
+    ] : [];
+    
     const messages = [
       { role: "system", content: SYSTEM_PROMPT },
       ...ragMessage,
+      ...vmContextMessage,
       ...context.getMessages(),
     ] as any[];
 

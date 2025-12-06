@@ -106,6 +106,7 @@ export class PceApiServer {
       pceLogger.info("Ingestion scheduler started (every 5 minutes)");
     }
 
+    // HTTP server
     this.server = Bun.serve({
       hostname: "0.0.0.0", // Bind to all interfaces (IPv4) for Docker access
       port: this.options.port,
@@ -117,6 +118,30 @@ export class PceApiServer {
       port: this.server.port,
       url: `http://localhost:${this.server.port}`,
     });
+
+    // HTTPS server (optional, if certs exist)
+    const certPath = `${process.cwd()}/certs/cert.pem`;
+    const keyPath = `${process.cwd()}/certs/key.pem`;
+    const certFile = Bun.file(certPath);
+    const keyFile = Bun.file(keyPath);
+    
+    if (await certFile.exists() && await keyFile.exists()) {
+      const httpsPort = this.options.port + 443; // 4000 -> 4443
+      Bun.serve({
+        hostname: "0.0.0.0",
+        port: httpsPort,
+        fetch: (req, server) => this.handleRequest(req, server),
+        idleTimeout: 255,
+        tls: {
+          cert: certFile,
+          key: keyFile,
+        },
+      });
+      pceLogger.info("PCE API HTTPS server started", {
+        port: httpsPort,
+        url: `https://localhost:${httpsPort}`,
+      });
+    }
   }
 
   async stop(): Promise<void> {

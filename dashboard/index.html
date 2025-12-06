@@ -15,8 +15,8 @@
     window.createIcon = createIcon;
   </script>
 </head>
-<body class="bg-slate-950 text-slate-100 h-dvh overflow-hidden md:overflow-auto md:min-h-screen md:h-auto">
-  <div class="mx-auto max-w-7xl px-4 md:px-6 py-3 md:py-6 h-full md:h-auto flex flex-col">
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div class="mx-auto max-w-7xl px-4 md:px-6 py-3 md:py-6 flex flex-col">
     <h1 class="text-xl md:text-3xl lg:text-4xl font-title-bold mb-2 md:mb-8 flex items-center gap-2 md:gap-3 animate-slide-up">
       <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-16 md:h-16 lg:w-20 lg:h-20 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
       <span id="header-icon-fallback" class="text-primary-500 w-6 h-6 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
@@ -336,7 +336,7 @@
       </div>
       
       <!-- Mobile: Full-bleed iOS-style chat (no card, no background) -->
-      <div class="md:hidden flex flex-col flex-1 -mx-4 min-h-0">
+      <div class="md:hidden flex flex-col" style="height: calc(100dvh - 120px); margin: 0 -1rem; width: calc(100% + 2rem); max-width: 100vw; overflow-x: hidden;">
         <!-- Chat Messages - full width, transparent background -->
         <div id="chat-messages" class="flex-1 overflow-y-auto px-3 py-2">
           <div class="text-slate-500 text-center py-4 text-xs">
@@ -345,16 +345,16 @@
         </div>
 
         <!-- Input area - subtle, blends with background -->
-        <div class="flex-shrink-0 flex gap-2 items-end px-3 py-2 border-t border-slate-800/50" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom));">
+        <div class="flex-shrink-0 flex gap-2 items-end px-2 py-2 border-t border-slate-800/50 w-full box-border" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); max-width: 100vw;">
           <textarea 
             id="chat-input" 
             placeholder="Message..." 
-            class="flex-1 min-h-[36px] max-h-[120px] px-3 py-2 bg-slate-800/60 border border-slate-700/50 rounded-2xl placeholder-slate-500 font-sans resize-none focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
+            class="min-w-0 flex-1 min-h-[36px] max-h-[120px] px-3 py-2 bg-slate-800/60 border border-slate-700/50 rounded-2xl placeholder-slate-500 font-sans resize-none focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
             style="color: #f1f5f9; line-height: 1.4;"
             onkeydown="handleChatInputKeydown(event)"
           ></textarea>
           <button 
-            class="bg-primary-500 text-white p-2 rounded-full transition-all active:scale-95 min-w-[36px] min-h-[36px] flex items-center justify-center" 
+            class="flex-shrink-0 bg-primary-500 text-white p-2 rounded-full transition-all active:scale-95 w-[36px] h-[36px] flex items-center justify-center" 
             onclick="sendChatMessage()" 
             id="chat-send-btn"
           >

@@ -2,6 +2,20 @@ import type { ToolSession } from "../../agent/tool-policy";
 import type { BaseTool } from "../../tools/BaseTool";
 import { executeToolCall } from "../../agent/tool-executor";
 
+/**
+ * VM details resolved from cluster resources
+ */
+export interface ResolvedVmDetails {
+  vmid: number;
+  node: string;
+  name: string;
+  type: "qemu" | "lxc";
+  status: string;
+  found: boolean;
+  ambiguous?: boolean;
+  matches?: Array<{ vmid: number; node: string; name: string; type: "qemu" | "lxc"; status: string }>;
+}
+
 function formatVmList(
   title: string,
   vms: Array<{
@@ -251,5 +265,148 @@ export async function findVmByIdChain(
   }
   
   return lines.join("\n");
+}
+
+/**
+ * Known Proxmox nodes and their endpoints for multi-cluster support
+ * This allows VM resolution across all clusters, not just the primary one
+ */
+const KNOWN_NODES = ["proxBig", "YANG", "YIN"];
+
+/**
+ * Resolve VM details by name or ID using cluster_resources
+ * This is used before write operations to get the node, vmid, and type
+ * 
+ * Queries ALL known clusters to find the VM, not just the primary cluster.
+ * 
+ * @param tools - Available tools
+ * @param session - Tool session
+ * @param vmNameOrId - VM name (string) or ID (number)
+ * @returns Resolved VM details including node, vmid, type, and status
+ */
+export async function resolveVmDetailsChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  vmNameOrId: string | number
+): Promise<ResolvedVmDetails> {
+  // Collect all resources from all clusters
+  const allResources: any[] = [];
+  
+  // First, try cluster_resources from primary cluster
+  const primaryResult = await executeToolCall(
+    {
+      toolName: "proxmox_readonly",
+      parameters: { action: "cluster_resources" },
+    },
+    tools,
+    session
+  );
+  
+  if (!primaryResult.error) {
+    const payload = primaryResult.data as any;
+    const resources = payload?.resources ?? [];
+    allResources.push(...resources);
+  }
+  
+  // Then query each known node individually to get VMs from all clusters
+  // This handles standalone nodes that aren't in the primary cluster
+  for (const nodeName of KNOWN_NODES) {
+    // Skip if we already have VMs from this node
+    const hasNodeVms = allResources.some((r: any) => 
+      r.node?.toLowerCase() === nodeName.toLowerCase()
+    );
+    if (hasNodeVms) continue;
+    
+    // Query this specific node
+    const nodeResult = await executeToolCall(
+      {
+        toolName: "proxmox_readonly",
+        parameters: { action: "list_vms", node: nodeName },
+      },
+      tools,
+      session
+    );
+    
+    if (!nodeResult.error) {
+      const payload = nodeResult.data as any;
+      const vms = payload?.vms ?? [];
+      // Add node name to each VM resource
+      for (const vm of vms) {
+        allResources.push({
+          ...vm,
+          node: payload?.node || nodeName,
+        });
+      }
+    }
+  }
+
+  if (allResources.length === 0) {
+    return {
+      vmid: 0,
+      node: "",
+      name: String(vmNameOrId),
+      type: "qemu",
+      status: "not_found",
+      found: false,
+    };
+  }
+
+  // Search by name or ID
+  const isNumeric = typeof vmNameOrId === "number" || /^\d+$/.test(String(vmNameOrId));
+  const searchValue = isNumeric ? Number(vmNameOrId) : String(vmNameOrId).toLowerCase();
+
+  const matches = allResources.filter((r: any) => {
+    if (r.type !== "qemu" && r.type !== "lxc") return false;
+    
+    if (isNumeric) {
+      return r.vmid === searchValue;
+    } else {
+      // Case-insensitive name match
+      const name = (r.name || "").toLowerCase();
+      return name === searchValue || name.includes(searchValue) || searchValue.includes(name);
+    }
+  });
+
+  if (matches.length === 0) {
+    return {
+      vmid: 0,
+      node: "",
+      name: String(vmNameOrId),
+      type: "qemu",
+      status: "not_found",
+      found: false,
+    };
+  }
+
+  if (matches.length === 1) {
+    const vm = matches[0];
+    return {
+      vmid: vm.vmid,
+      node: vm.node,
+      name: vm.name || "",
+      type: vm.type as "qemu" | "lxc",
+      status: vm.status || "unknown",
+      found: true,
+    };
+  }
+
+  // Multiple matches - return first but flag as ambiguous
+  const vm = matches[0];
+  return {
+    vmid: vm.vmid,
+    node: vm.node,
+    name: vm.name || "",
+    type: vm.type as "qemu" | "lxc",
+    status: vm.status || "unknown",
+    found: true,
+    ambiguous: true,
+    matches: matches.map((m: any) => ({
+      vmid: m.vmid,
+      node: m.node,
+      name: m.name || "",
+      type: m.type as "qemu" | "lxc",
+      status: m.status || "unknown",
+    })),
+  };
 }
 

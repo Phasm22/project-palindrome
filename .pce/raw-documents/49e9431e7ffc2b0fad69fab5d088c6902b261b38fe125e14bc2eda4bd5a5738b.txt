@@ -1,0 +1,28 @@
+# VM Inventory for Node: yin
+Generated: 2025-12-06T22:22:06.632Z
+Total VMs: 4 (2 QEMU, 2 LXC)
+
+## VM 8001: ubuntu-cloud-template
+- Status: stopped
+- Type: qemu
+- Memory: 0 MB / 2 GB
+- CPU Usage: 0.0%
+
+## VM 200: sentinelZero
+- Status: stopped
+- Type: qemu
+- Memory: 0 MB / 7.81 GB
+- CPU Usage: 0.0%
+
+## VM 102: piholelab
+- Status: running
+- Type: lxc
+- Memory: 169.36 MB / 1 GB
+- CPU Usage: 1.0%
+- Uptime: 1970-01-06T19:41:57.000Z
+
+## VM 105: aiMarketBot
+- Status: stopped
+- Type: lxc
+- Memory: 0 MB / 4 GB
+- CPU Usage: 0.0%
