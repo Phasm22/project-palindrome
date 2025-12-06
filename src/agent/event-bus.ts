@@ -12,6 +12,26 @@ export type AgentEventType =
   | "agent:step"
   | "agent:final";
 
+/**
+ * Tool Progress Status
+ */
+export type ToolProgressStatus =
+  | "starting"
+  | "running"
+  | "waiting"
+  | "verifying"
+  | "completed"
+  | "failed";
+
+export interface ToolProgressData {
+  toolName: string;
+  action?: string;
+  status: ToolProgressStatus;
+  message: string;
+  progress?: number; // 0-1
+  details?: Record<string, any>;
+}
+
 export interface AgentEvent {
   type: AgentEventType;
   sessionId?: string;
@@ -63,5 +83,26 @@ export class AgentEventBus extends EventEmitter {
     this.on("agent-event", wrappedHandler);
     return () => this.off("agent-event", wrappedHandler);
   }
+
+  /**
+   * Emit a tool progress event
+   * Helper for tools to report progress during long-running operations
+   */
+  emitProgress(progress: ToolProgressData, sessionId?: string): void {
+    this.emit({
+      type: "tool:progress",
+      sessionId,
+      timestamp: Date.now(),
+      data: progress,
+    });
+  }
+}
+
+/**
+ * Helper function for tools to emit progress events
+ * Can be called from anywhere without needing the session context
+ */
+export function emitToolProgress(progress: ToolProgressData): void {
+  AgentEventBus.getInstance().emitProgress(progress);
 }
 

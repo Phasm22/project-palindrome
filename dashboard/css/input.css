@@ -279,6 +279,11 @@
   .icon-spin {
     animation: spin 0.6s ease-in-out;
   }
+  
+  /* Continuous spin for progress indicators */
+  .spin {
+    animation: spin 1s linear infinite;
+  }
 }
 
 /* Custom scrollbar */

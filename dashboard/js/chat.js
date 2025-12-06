@@ -142,8 +142,97 @@ function formatClusterVmsSection(vms) {
   return '<div style="margin: 12px 0;">' + vms.join('') + '</div>';
 }
 
+/**
+ * Format clarification messages with clickable options
+ */
+function formatClarificationMessage(text) {
+  const lines = text.split('\n');
+  let html = '<div class="clarification-message" style="background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%); border: 1px solid #3b82f6; border-radius: 8px; padding: 16px;">';
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // Typo detection line
+    if (trimmed.startsWith('🔍')) {
+      html += `<div style="color: #60a5fa; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 1.2em;">🔍</span>
+        <span>${escapeHtml(trimmed.substring(2))}</span>
+      </div>`;
+      continue;
+    }
+    
+    // "Did you mean" header
+    if (trimmed === 'Did you mean one of these?') {
+      html += `<div style="color: #e2e8f0; font-weight: 600; margin: 8px 0;">Did you mean one of these?</div>`;
+      continue;
+    }
+    
+    // Numbered options - make them clickable
+    const optionMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+    if (optionMatch) {
+      const [, num, optionText] = optionMatch;
+      html += `<button onclick="selectClarificationOption(${num}, '${escapeHtml(optionText).replace(/'/g, "\\'")}')" 
+        style="display: block; width: 100%; text-align: left; padding: 10px 12px; margin: 6px 0; 
+               background: #0f172a; border: 1px solid #334155; border-radius: 6px; 
+               color: #e2e8f0; cursor: pointer; transition: all 0.2s ease;
+               font-family: inherit; font-size: 0.95em;"
+        onmouseover="this.style.background='#1e293b'; this.style.borderColor='#3b82f6';"
+        onmouseout="this.style.background='#0f172a'; this.style.borderColor='#334155';">
+        <span style="color: #3b82f6; font-weight: 600; margin-right: 8px;">${num}.</span>
+        ${escapeHtml(optionText)}
+      </button>`;
+      continue;
+    }
+    
+    // Help text
+    if (trimmed.startsWith('Reply with')) {
+      html += `<div style="color: #64748b; font-size: 0.85em; margin-top: 12px; font-style: italic;">
+        ${escapeHtml(trimmed)}
+      </div>`;
+      continue;
+    }
+    
+    // Unknown entities
+    if (trimmed.startsWith('❓')) {
+      html += `<div style="color: #f59e0b; margin-top: 8px;">
+        ${escapeHtml(trimmed)}
+      </div>`;
+      continue;
+    }
+    
+    // Empty lines
+    if (!trimmed) {
+      continue;
+    }
+    
+    // Other text
+    html += `<div style="color: #94a3b8; margin: 4px 0;">${escapeHtml(trimmed)}</div>`;
+  }
+  
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Handle clicking a clarification option
+ */
+window.selectClarificationOption = function(num, optionText) {
+  // Send the number as a response
+  const input = getChatInput();
+  if (input) {
+    input.value = String(num);
+    // Trigger send
+    sendChatMessage();
+  }
+};
+
 function formatAgentResponse(text) {
   if (!text) return '';
+  
+  // Check if this is a clarification message
+  if (text.includes('🔍') && text.includes('Did you mean')) {
+    return formatClarificationMessage(text);
+  }
   
   const lines = text.split('\n');
   let html = '';
@@ -580,6 +669,51 @@ function handleAgentEvent(event, toolExecutions) {
             <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
             Thinking...
           </div>${toolHtml}`);
+      }
+      break;
+      
+    case 'tool:progress':
+      // Update existing tool card with progress info
+      const progressMessageDiv = document.getElementById(currentResponseId);
+      if (progressMessageDiv) {
+        const toolDivs = progressMessageDiv.querySelectorAll('div[data-tool-name]');
+        const progressToolDiv = Array.from(toolDivs).find(d => 
+          d.getAttribute('data-tool-name') === event.data.toolName
+        );
+        
+        if (progressToolDiv) {
+          const progress = event.data.progress || 0;
+          const progressPercent = Math.round(progress * 100);
+          const statusColor = event.data.status === 'failed' ? '#ef4444' 
+            : event.data.status === 'completed' ? '#10b981' 
+            : event.data.status === 'waiting' ? '#f59e0b' 
+            : '#3b82f6';
+          
+          const statusIcon = event.data.status === 'failed' 
+            ? '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #ef4444;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
+            : event.data.status === 'completed'
+            ? '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #10b981;"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
+            : event.data.status === 'waiting'
+            ? '<svg class="icon spin" viewBox="0 0 24 24" fill="currentColor" style="color: #f59e0b;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>'
+            : '<svg class="icon spin" viewBox="0 0 24 24" fill="currentColor" style="color: #3b82f6;"><path d="M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z"/></svg>';
+          
+          const actionLabel = event.data.action ? `<span style="color: #94a3b8; font-weight: normal;">(${event.data.action})</span>` : '';
+          
+          progressToolDiv.innerHTML = `
+            ${statusIcon}
+            <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
+            ${actionLabel}
+            <div style="color: ${statusColor}; margin-top: 6px; font-size: 0.9em;">
+              ${escapeHtml(event.data.message)}
+            </div>
+            ${progress > 0 && progress < 1 ? `
+              <div style="margin-top: 6px; height: 4px; background: #334155; border-radius: 2px; overflow: hidden;">
+                <div style="height: 100%; width: ${progressPercent}%; background: ${statusColor}; transition: width 0.3s ease;"></div>
+              </div>
+              <div style="color: #64748b; font-size: 0.75em; margin-top: 2px;">${progressPercent}%</div>
+            ` : ''}
+          `;
+        }
       }
       break;
       

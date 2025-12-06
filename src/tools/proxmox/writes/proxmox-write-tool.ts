@@ -5,9 +5,30 @@ import { ProxmoxClient } from "../client";
 import { pceLogger as logger } from "../../../pce/utils/logger";
 import { createToolSchema } from "../../tool-helpers";
 import type { ToolSchema } from "../../tool-schema";
+import { emitToolProgress, type ToolProgressStatus } from "../../../agent/event-bus";
 
 // Alternative client for multi-cluster support
 let alternativeClient: ProxmoxClient | null = null;
+
+/**
+ * Helper to emit progress events for proxmox write operations
+ */
+function emitProgress(
+  action: string,
+  status: ToolProgressStatus,
+  message: string,
+  progress?: number,
+  details?: Record<string, any>
+): void {
+  emitToolProgress({
+    toolName: "proxmox_write",
+    action,
+    status,
+    message,
+    progress,
+    details,
+  });
+}
 
 /**
  * Proxmox Write Tool Parameters Schema
@@ -590,15 +611,20 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    emitProgress("start_vm", "starting", `Checking VM ${vmid} on ${node}...`, 0.1, { node, vmid, type });
+    
     // Get VM name for verification
     const vmName = await this.getVmName(client, node, vmid, type);
+    const vmDisplayName = vmName ? `${vmName} (${vmid})` : `VM ${vmid}`;
     
     // Check current state first
+    emitProgress("start_vm", "verifying", `Verifying ${vmDisplayName} status...`, 0.2, { node, vmid, vmName });
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
 
     // Check if VM is already running (before dry-run check)
     if (currentStatus === "running") {
+      emitProgress("start_vm", "completed", `${vmDisplayName} is already running`, 1, { node, vmid, status: "already_running" });
       return {
         data: {
           action: "start_vm",
@@ -615,6 +641,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
+      emitProgress("start_vm", "completed", `Dry run: would start ${vmDisplayName}`, 1, { node, vmid, dryRun: true });
       return {
         data: {
           ...this.generateDiffPreview("start_vm", currentState, {
@@ -628,10 +655,19 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
+    emitProgress("start_vm", "running", `Capturing pre-write state...`, 0.3, { node, vmid });
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     
     try {
+      emitProgress("start_vm", "running", `Starting ${vmDisplayName}...`, 0.5, { node, vmid });
       const result = await client.post(this.getVmPath(type, node, vmid, "/status/start"), {});
+      
+      emitProgress("start_vm", "waiting", `Waiting for ${vmDisplayName} to boot...`, 0.7, { node, vmid });
+      // Give it a moment to start
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      emitProgress("start_vm", "completed", `${vmDisplayName} started successfully`, 1, { node, vmid, success: true });
+      
       return {
         data: {
           action: "start_vm",
@@ -647,6 +683,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         metadata: result.metadata,
       };
     } catch (error: any) {
+      emitProgress("start_vm", "failed", `Failed to start ${vmDisplayName}: ${error.message}`, 1, { node, vmid, error: error.message });
+      
       // Handle "already running" error from Proxmox
       if (error.response?.data?.message?.includes("already running") || 
           error.message?.includes("already running")) {
@@ -676,12 +714,20 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     timeout: number | undefined,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    emitProgress("stop_vm", "starting", `Checking VM ${vmid} on ${node}...`, 0.1, { node, vmid, type });
+    
+    // Get VM name for display
+    const vmName = await this.getVmName(client, node, vmid, type);
+    const vmDisplayName = vmName ? `${vmName} (${vmid})` : `VM ${vmid}`;
+    
     // Check current state first
+    emitProgress("stop_vm", "verifying", `Verifying ${vmDisplayName} status...`, 0.2, { node, vmid, vmName });
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
 
     // Check if VM is already stopped (before dry-run check)
     if (currentStatus === "stopped") {
+      emitProgress("stop_vm", "completed", `${vmDisplayName} is already stopped`, 1, { node, vmid, status: "already_stopped" });
       return {
         data: {
           action: "stop_vm",
@@ -696,6 +742,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
+      emitProgress("stop_vm", "completed", `Dry run: would stop ${vmDisplayName}`, 1, { node, vmid, dryRun: true });
       return {
         data: this.generateDiffPreview("stop_vm", currentState, {
           status: "stopped",
@@ -706,16 +753,26 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
+    emitProgress("stop_vm", "running", `Capturing pre-write state...`, 0.3, { node, vmid });
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     const params = timeout ? { timeout } : {};
     
     try {
+      emitProgress("stop_vm", "running", `Stopping ${vmDisplayName}...`, 0.5, { node, vmid, timeout });
       const result = await client.post(this.getVmPath(type, node, vmid, "/status/stop"), params);
+      
+      emitProgress("stop_vm", "waiting", `Waiting for ${vmDisplayName} to shut down...`, 0.7, { node, vmid });
+      // Give it a moment to stop
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      emitProgress("stop_vm", "completed", `${vmDisplayName} stopped successfully`, 1, { node, vmid, success: true });
+      
       return {
         data: {
           action: "stop_vm",
           node,
           vmid,
+          vmName: vmName || "unknown",
           status: "stopped",
           preWriteState: preWriteState.hash,
           ...result.data,
@@ -723,6 +780,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         metadata: result.metadata,
       };
     } catch (error: any) {
+      emitProgress("stop_vm", "failed", `Failed to stop ${vmDisplayName}: ${error.message}`, 1, { node, vmid, error: error.message });
+      
       // Handle "already stopped" error from Proxmox
       if (error.response?.data?.message?.includes("already stopped") || 
           error.message?.includes("already stopped") ||
@@ -1324,15 +1383,23 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     type: "qemu" | "lxc",
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    const vmLabel = `VM ${vmid} on ${node}`;
+    
+    // Emit: Starting
+    emitProgress("destroy_vm", "starting", `Checking ${vmLabel}...`, 0.1, { node, vmid, type });
+    
     // Get VM name for verification
     const vmName = await this.getVmName(client, node, vmid, type);
+    const vmDisplayName = vmName ? `${vmName} (${vmid})` : `VM ${vmid}`;
     
     // Check current state first
+    emitProgress("destroy_vm", "verifying", `Verifying ${vmDisplayName} status...`, 0.2, { node, vmid, vmName });
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
 
     // For destroy, VM must be stopped first
     if (currentStatus === "running") {
+      emitProgress("destroy_vm", "failed", `${vmDisplayName} is running - must stop first`, 1, { node, vmid, status: "running" });
       return {
         data: {
           action: "destroy_vm",
@@ -1349,6 +1416,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
+      emitProgress("destroy_vm", "completed", `Dry run: would destroy ${vmDisplayName}`, 1, { node, vmid, dryRun: true });
       return {
         data: {
           action: "destroy_vm",
@@ -1365,11 +1433,16 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
+    emitProgress("destroy_vm", "running", `Capturing pre-write state for ${vmDisplayName}...`, 0.4, { node, vmid });
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     
     try {
+      emitProgress("destroy_vm", "running", `Destroying ${vmDisplayName}...`, 0.6, { node, vmid, type });
+      
       // Destroy endpoint: DELETE /nodes/{node}/{type}/{vmid}
       const result = await client.delete(this.getVmPath(type, node, vmid, ""));
+      
+      emitProgress("destroy_vm", "completed", `${vmDisplayName} destroyed successfully`, 1, { node, vmid, success: true });
       
       return {
         data: {
@@ -1387,6 +1460,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         metadata: result.metadata,
       };
     } catch (error: any) {
+      emitProgress("destroy_vm", "failed", `Failed to destroy ${vmDisplayName}: ${error.message}`, 1, { node, vmid, error: error.message });
+      
       // Handle specific error cases
       if (error.response?.status === 400) {
         const errorMsg = error.response?.data?.message || error.message;
