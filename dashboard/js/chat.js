@@ -1,5 +1,6 @@
 import { API_URL, escapeHtml } from './utils.js';
 import { createConversationItem, createButton } from './components.js';
+import { showConfirm } from './modal.js';
 
 // Chat state
 let currentEventSource = null;
@@ -15,6 +16,58 @@ export function getCurrentConversationId() {
 
 export function setCurrentConversationId(id) {
   currentConversationId = id;
+}
+
+// Save last active conversation to backend
+async function saveLastActiveConversation(conversationId) {
+  try {
+    const userId = 'dashboard-user';
+    await fetch(`${API_URL}/api/user/preferences`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        userId,
+        lastActiveConversationId: conversationId 
+      }),
+    });
+  } catch (error) {
+    console.error('Failed to save last active conversation:', error);
+    // Non-critical, don't throw
+  }
+}
+
+// Restore conversation - prioritize URL, then backend preference
+export async function restoreConversation() {
+  // First, check URL (for sharing/bookmarking)
+  const urlConversationId = getConversationFromUrl();
+  if (urlConversationId) {
+    currentConversationId = urlConversationId;
+    return urlConversationId;
+  }
+  
+  // Fallback to backend preference
+  try {
+    const userId = 'dashboard-user';
+    const response = await fetch(`${API_URL}/api/user/preferences?userId=${userId}`);
+    
+    if (!response.ok) {
+      return null;
+    }
+
+    const result = await response.json();
+    const conversationId = result.data?.lastActiveConversationId;
+    
+    if (conversationId) {
+      currentConversationId = conversationId;
+      // Update URL to match backend preference
+      updateConversationUrl(conversationId);
+      return conversationId;
+    }
+  } catch (error) {
+    console.error('Failed to restore conversation:', error);
+  }
+  
+  return null;
 }
 
 // Helper functions
@@ -642,6 +695,8 @@ export async function sendChatMessage() {
         if (createResponse.ok) {
           const createResult = await createResponse.json();
           currentConversationId = createResult.data.id;
+          setCurrentConversationId(currentConversationId);
+          await saveLastActiveConversation(currentConversationId); // Save to backend
           await loadConversations();
         }
       } catch (error) {
@@ -669,9 +724,12 @@ export async function sendChatMessage() {
     
     if (startResult.conversationId && !currentConversationId) {
       currentConversationId = startResult.conversationId;
+      setCurrentConversationId(currentConversationId);
+      await saveLastActiveConversation(currentConversationId); // Save to backend
       await loadConversations();
     } else if (currentConversationId) {
       // Refresh conversation list to update message count even if conversation already exists
+      await saveLastActiveConversation(currentConversationId); // Update last active
       loadConversations();
     }
 
@@ -863,8 +921,32 @@ export async function loadConversations() {
 
 export async function selectConversation(conversationId) {
   currentConversationId = conversationId;
+  setCurrentConversationId(conversationId);
+  await saveLastActiveConversation(conversationId); // Save to backend
+  
+  // Update URL for sharing/bookmarking
+  updateConversationUrl(conversationId);
+  
   await loadChatHistory(conversationId);
   loadConversations();
+}
+
+// Update URL with conversation ID (for sharing/bookmarking)
+function updateConversationUrl(conversationId) {
+  const url = new URL(window.location.href);
+  if (conversationId) {
+    url.searchParams.set('conversation', conversationId);
+  } else {
+    url.searchParams.delete('conversation');
+  }
+  // Use replaceState to avoid cluttering browser history
+  window.history.replaceState({ conversationId }, '', url.toString());
+}
+
+// Get conversation ID from URL
+function getConversationFromUrl() {
+  const url = new URL(window.location.href);
+  return url.searchParams.get('conversation');
 }
 
 export async function createNewConversation() {
@@ -891,11 +973,13 @@ export async function createNewConversation() {
 }
 
 export async function deleteConversation(conversationId) {
-  if (!confirm('Delete this conversation? All messages will be permanently deleted.')) {
-    return;
-  }
-
-  try {
+  showConfirm({
+    title: 'Delete Conversation',
+    message: 'Delete this conversation? All messages will be permanently deleted.',
+    confirmText: 'Delete',
+    cancelText: 'Cancel',
+    onConfirm: async () => {
+      try {
     const userId = 'dashboard-user';
     const response = await fetch(`${API_URL}/api/chat/conversations/${conversationId}?userId=${userId}`, {
       method: 'DELETE',
@@ -907,17 +991,25 @@ export async function deleteConversation(conversationId) {
 
     if (currentConversationId === conversationId) {
       currentConversationId = null;
+      setCurrentConversationId(null);
+      await saveLastActiveConversation(null); // Clear from backend
+      updateConversationUrl(null); // Clear from URL
       const messagesDiv = document.getElementById('chat-messages');
       if (messagesDiv) {
         messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Select a conversation or create a new one to start chatting.</div>';
       }
     }
 
-    await loadConversations();
-  } catch (error) {
-    console.error('Failed to delete conversation:', error);
-    alert('Failed to delete conversation: ' + error.message);
-  }
+        await loadConversations();
+      } catch (error) {
+        console.error('Failed to delete conversation:', error);
+        alert('Failed to delete conversation: ' + error.message);
+      }
+    },
+    onCancel: () => {
+      // User cancelled, do nothing
+    }
+  });
 }
 
 export async function loadChatHistory(conversationId = null) {
@@ -964,25 +1056,32 @@ export async function loadChatHistory(conversationId = null) {
 }
 
 export async function deleteChatMessage(dbId, messageId) {
-  if (!confirm('Delete this message?')) {
-    return;
-  }
+  showConfirm({
+    title: 'Delete Message',
+    message: 'Delete this message?',
+    confirmText: 'Delete',
+    cancelText: 'Cancel',
+    onConfirm: async () => {
+      try {
+        const userId = 'dashboard-user';
+        const response = await fetch(`${API_URL}/api/chat/history/${dbId}?userId=${userId}`, {
+          method: 'DELETE',
+        });
 
-  try {
-    const userId = 'dashboard-user';
-    const response = await fetch(`${API_URL}/api/chat/history/${dbId}?userId=${userId}`, {
-      method: 'DELETE',
-    });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        removeChatMessage(messageId);
+      } catch (error) {
+        console.error('Failed to delete message:', error);
+        alert('Failed to delete message: ' + error.message);
+      }
+    },
+    onCancel: () => {
+      // User cancelled, do nothing
     }
-
-    removeChatMessage(messageId);
-  } catch (error) {
-    console.error('Failed to delete message:', error);
-    alert('Failed to delete message: ' + error.message);
-  }
+  });
 }
 
 // Make functions globally accessible for onclick handlers

@@ -139,7 +139,7 @@ export class PceApiServer {
         status: 204,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
         },
       });
@@ -258,6 +258,15 @@ export class PceApiServer {
 
     if (req.method === "PATCH" && url.pathname.startsWith("/api/chat/conversations/")) {
       return await this.handleUpdateConversationTitle(req, url);
+    }
+
+    // User preferences endpoints
+    if (req.method === "GET" && url.pathname === "/api/user/preferences") {
+      return await this.handleGetUserPreferences(req);
+    }
+
+    if (req.method === "PUT" && url.pathname === "/api/user/preferences") {
+      return await this.handleSetUserPreferences(req);
     }
 
     return this.jsonResponse(404, { error: "Not Found" });
@@ -1081,7 +1090,7 @@ export class PceApiServer {
       headers: {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
       },
     });
@@ -1512,6 +1521,55 @@ export class PceApiServer {
       });
     } catch (error: any) {
       pceLogger.error("Failed to update conversation title", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle GET /api/user/preferences - Get user preferences (last active conversation)
+   */
+  private async handleGetUserPreferences(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId") || "dashboard-user";
+
+      const lastActiveConversationId = await this.chatHistoryStore.getLastActiveConversation(userId);
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: {
+          lastActiveConversationId,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to get user preferences", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle PUT /api/user/preferences - Set user preferences (last active conversation)
+   */
+  private async handleSetUserPreferences(req: Request): Promise<Response> {
+    try {
+      const body = (await req.json()) as { userId: string; lastActiveConversationId?: string | null };
+      const userId = body.userId || "dashboard-user";
+      const conversationId = body.lastActiveConversationId || null;
+
+      const success = await this.chatHistoryStore.setLastActiveConversation(userId, conversationId);
+
+      if (!success) {
+        return this.jsonResponse(500, { error: "Failed to update preferences" });
+      }
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: {
+          lastActiveConversationId: conversationId,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to set user preferences", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
     }
   }

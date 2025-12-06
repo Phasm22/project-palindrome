@@ -121,6 +121,18 @@ export class ChatHistoryStore {
       CREATE INDEX IF NOT EXISTS idx_acl_group ON chat_messages(acl_group);
       CREATE INDEX IF NOT EXISTS idx_user_timestamp ON chat_messages(user_id, timestamp);
     `);
+
+    // Create user preferences table for storing last active conversation
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_preferences (
+        user_id TEXT PRIMARY KEY,
+        last_active_conversation_id TEXT,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (last_active_conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id ON user_preferences(user_id);
+    `);
   }
 
   /**
@@ -497,6 +509,45 @@ export class ChatHistoryStore {
       if (!error.message.includes("duplicate column")) {
         pceLogger.error("Failed to migrate existing messages", { error: error.message, userId });
       }
+    }
+  }
+
+  /**
+   * Get the last active conversation ID for a user
+   */
+  async getLastActiveConversation(userId: string): Promise<string | null> {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT last_active_conversation_id 
+        FROM user_preferences 
+        WHERE user_id = ?
+      `);
+      const row = stmt.get(userId) as { last_active_conversation_id: string | null } | undefined;
+      return row?.last_active_conversation_id || null;
+    } catch (error: any) {
+      pceLogger.error("Failed to get last active conversation", { error: error.message, userId });
+      return null;
+    }
+  }
+
+  /**
+   * Set the last active conversation ID for a user
+   */
+  async setLastActiveConversation(userId: string, conversationId: string | null): Promise<boolean> {
+    try {
+      const now = Date.now();
+      const stmt = this.db.prepare(`
+        INSERT INTO user_preferences (user_id, last_active_conversation_id, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          last_active_conversation_id = excluded.last_active_conversation_id,
+          updated_at = excluded.updated_at
+      `);
+      stmt.run(userId, conversationId, now);
+      return true;
+    } catch (error: any) {
+      pceLogger.error("Failed to set last active conversation", { error: error.message, userId, conversationId });
+      return false;
     }
   }
 

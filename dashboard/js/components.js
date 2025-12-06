@@ -6,6 +6,50 @@
 import { createIcon, createIconWithText } from './icons.js';
 
 /**
+ * Create a logo image element (reusable component)
+ */
+export function createLogo(options = {}) {
+  const {
+    size = 18, // Size in pixels
+    className = '',
+    style = {},
+    animate = false, // Whether to add animation classes
+    spinOnClick = false // Whether to spin on click
+  } = options;
+  
+  const logo = document.createElement('img');
+  logo.src = 'assets/images/logo.png';
+  logo.alt = 'Palindrome Logo';
+  logo.className = `object-contain ${className}`;
+  // Don't set filter in inline style - let CSS handle it for refresh buttons
+  const inlineStyle = Object.entries(style).map(([k, v]) => `${k}: ${v}`).join('; ');
+  logo.style.cssText = `
+    width: ${size}px;
+    height: ${size}px;
+    ${inlineStyle ? inlineStyle + ';' : ''}
+  `;
+  
+  // Add animation class if requested
+  if (animate) {
+    logo.classList.add('logo-animated');
+  }
+  
+  // Add spin on click if requested
+  if (spinOnClick) {
+    logo.classList.add('logo-spin-on-click');
+  }
+  
+  // Handle error - fallback to icon
+  logo.addEventListener('error', () => {
+    console.warn('Logo not found, using fallback');
+    const icon = createIcon('RefreshCw', { size, color: 'currentColor' });
+    logo.replaceWith(icon);
+  });
+  
+  return logo;
+}
+
+/**
  * Button component - consistent styling for all buttons with enhanced effects
  */
 export function createButton(text, options = {}) {

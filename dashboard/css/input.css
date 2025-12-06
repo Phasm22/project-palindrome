@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 @import "animate.css";
 
@@ -9,6 +10,11 @@
     background-image: 
       radial-gradient(at 0% 0%, rgba(249, 115, 22, 0.1) 0%, transparent 50%),
       radial-gradient(at 100% 100%, rgba(168, 85, 247, 0.1) 0%, transparent 50%);
+    
+    /* Font smoothing for crisp text rendering */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
   
   /* Title styling - only h1 gets glow */
@@ -157,6 +163,14 @@
     animation: pulse-glow 2s ease-in-out infinite;
   }
   
+  /* Logo styling - enhance visibility and detail */
+  #header-logo {
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: auto; /* Best quality rendering */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
   /* Logo animations */
   @keyframes logo-float {
     0%, 100% {
@@ -169,15 +183,44 @@
   
   @keyframes logo-glow-pulse {
     0%, 100% {
-      filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));
+      filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);
     }
     50% {
-      filter: drop-shadow(0 0 16px rgba(249, 115, 22, 0.9));
+      filter: drop-shadow(0 0 20px rgba(249, 115, 22, 1)) brightness(1.3) contrast(1.15);
     }
   }
   
   .logo-animated {
     animation: logo-float 3s ease-in-out infinite, logo-glow-pulse 2s ease-in-out infinite;
+  }
+  
+  /* Logo refresh button styling - no glow, matches button text color (white) */
+  .logo-refresh {
+    filter: brightness(0) saturate(100%) invert(1) !important; /* Makes logo pure white to match button text */
+    opacity: 1;
+    transition: transform 0.6s ease-in-out, opacity 0.2s;
+    width: 42px !important;
+    height: 42px !important;
+    flex-shrink: 0;
+    display: block;
+  }
+  
+  .logo-refresh:hover {
+    opacity: 1;
+  }
+  
+  /* Ensure logo spins smoothly */
+  .logo-refresh[style*="transform"] {
+    will-change: transform;
+  }
+  
+  /* Refresh button gradient - direct CSS */
+  button.refresh-button {
+    background: linear-gradient(to right, #f97316, #ea580c) !important;
+  }
+  
+  button.refresh-button:hover {
+    background: linear-gradient(to right, #ea580c, #c2410c) !important;
   }
   
   .animate-slide-up {
@@ -317,6 +360,15 @@
     letter-spacing: -0.02em;
   }
   
+  /* Icon sizing - constrain all icons to reasonable size */
+  .icon {
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  
   /* Agent response styling */
   .agent-thinking {
     color: #94a3b8;
@@ -325,6 +377,11 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.9em;
+  }
+  
+  .agent-thinking .icon {
+    width: 1.2em;
+    height: 1.2em;
   }
   
   .agent-response {
@@ -496,6 +553,34 @@
     max-height: 200px;
     overflow-y: auto;
     border: 1px solid #334155;
+  }
+  
+  /* Chat input styling - smooth, crisp text like Cursor */
+  #chat-input,
+  #query-input,
+  textarea,
+  input[type="text"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern" 1, "liga" 1;
+    font-kerning: normal;
+    letter-spacing: -0.01em; /* Slightly tighter for better readability */
+    line-height: 1.6; /* Better line spacing for readability */
+    color: #f1f5f9; /* Slightly brighter than text-slate-200 for better contrast */
+    font-weight: 400; /* Normal weight for crisp rendering */
+  }
+  
+  /* Placeholder text styling */
+  #chat-input::placeholder,
+  #query-input::placeholder,
+  textarea::placeholder,
+  input[type="text"]::placeholder {
+    color: #94a3b8;
+    opacity: 0.8;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 

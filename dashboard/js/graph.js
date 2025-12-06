@@ -640,10 +640,12 @@ function initSigma() {
     // Set initial position based on node position
     const nodePosition = sigma.getNodeDisplayData(node);
     const camera = sigma.getCamera();
-    const viewport = sigma.getViewport();
-    const x = nodePosition.x * camera.ratio + viewport.width / 2 + camera.x;
-    const y = nodePosition.y * camera.ratio + viewport.height / 2 + camera.y;
+    // Get viewport dimensions from container instead of getViewport() (not available in this Sigma version)
     const containerRect = container.getBoundingClientRect();
+    const viewportWidth = containerRect.width;
+    const viewportHeight = containerRect.height;
+    const x = nodePosition.x * camera.ratio + viewportWidth / 2 + camera.x;
+    const y = nodePosition.y * camera.ratio + viewportHeight / 2 + camera.y;
     
     tooltip.style.left = `${containerRect.left + x + 10}px`;
     tooltip.style.top = `${containerRect.top + y + 10}px`;

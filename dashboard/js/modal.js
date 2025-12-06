@@ -51,7 +51,8 @@ export function showModal(options = {}) {
   
   // Create modal structure
   const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop fixed inset-0 bg-black bg-opacity-50 z-50';
+  backdrop.className = 'modal-backdrop fixed inset-0 z-50';
+  backdrop.style.cssText = 'backdrop-filter: blur(4px); background: rgba(0, 0, 0, 0.1);';
   backdrop.setAttribute('aria-hidden', 'true');
   
   const modal = document.createElement('div');
@@ -61,11 +62,11 @@ export function showModal(options = {}) {
   modal.setAttribute('aria-labelledby', 'modal-title');
   
   const dialog = document.createElement('div');
-  dialog.className = 'bg-slate-900 border border-slate-700 rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col';
+  dialog.className = 'bg-gradient-to-br from-slate-900 to-slate-800 border-2 border-slate-700 rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col backdrop-blur-sm';
   
   // Header
   const header = document.createElement('div');
-  header.className = 'flex items-center justify-between p-4 border-b border-slate-700';
+  header.className = 'flex items-center justify-between p-4 border-b-2 border-slate-700';
   
   const titleEl = document.createElement('h3');
   titleEl.id = 'modal-title';
@@ -194,7 +195,7 @@ export function showConfirm(options = {}) {
   actions.className = 'flex gap-3 justify-end mt-6';
   
   const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors';
+  cancelBtn.className = 'px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg font-medium transition-all duration-200 hover:scale-105 active:scale-95';
   cancelBtn.textContent = cancelText;
   cancelBtn.onclick = () => {
     closeModal();
@@ -202,7 +203,7 @@ export function showConfirm(options = {}) {
   };
   
   const confirmBtn = document.createElement('button');
-  confirmBtn.className = 'px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg transition-colors';
+  confirmBtn.className = 'px-4 py-2 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white rounded-lg font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95';
   confirmBtn.textContent = confirmText;
   confirmBtn.onclick = () => {
     closeModal();

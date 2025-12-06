@@ -18,7 +18,7 @@
 <body class="bg-slate-950 text-slate-100 min-h-screen">
   <div class="mx-auto max-w-7xl px-4 md:px-6 py-6">
     <h1 class="text-2xl md:text-3xl lg:text-4xl font-title-bold mb-4 md:mb-8 flex items-center gap-3 animate-slide-up">
-      <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-12 md:h-12 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
+      <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-12 h-12 md:w-16 md:h-16 lg:w-20 lg:h-20 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
       <span id="header-icon-fallback" class="text-primary-500 w-8 h-8 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
       <span class="hidden sm:inline text-gradient-shimmer">Palindrome Dashboard</span>
       <span class="sm:hidden text-gradient-shimmer">Dashboard</span>
@@ -101,7 +101,7 @@
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Recent Tool Executions</span>
-          <button class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadToolExecutions()">
+          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadToolExecutions()">
             <span class="flex items-center justify-center gap-2">
               <span id="refresh-icon-executions"></span>
               Refresh
@@ -117,7 +117,7 @@
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Agent Reasoning Traces</span>
-          <button class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadReasoningTraces()">
+          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadReasoningTraces()">
             <span class="flex items-center justify-center gap-2">
               <span id="refresh-icon-reasoning"></span>
               Refresh
@@ -133,7 +133,7 @@
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Ontology Graph</span>
-          <button class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadGraph()">
+          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadGraph()">
             <span class="flex items-center justify-center gap-2">
               <span id="refresh-icon-graph"></span>
               Refresh
@@ -340,7 +340,8 @@
             <textarea 
               id="chat-input" 
               placeholder="Ask me anything about your infrastructure..." 
-              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-800 border-2 border-slate-600 rounded-xl text-slate-200 placeholder-slate-500 font-sans resize-none md:resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base"
+              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-800/95 border-2 border-slate-600/50 rounded-xl placeholder-slate-500 font-sans resize-none md:resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base backdrop-blur-sm"
+              style="color: #f1f5f9; line-height: 1.6;"
               onkeydown="handleChatInputKeydown(event)"
             ></textarea>
             <button 

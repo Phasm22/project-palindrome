@@ -1,4 +1,4 @@
-import { loadConversations, sendChatMessage, selectConversation, createNewConversation, deleteConversation, deleteChatMessage } from './chat.js';
+import { loadConversations, sendChatMessage, selectConversation, createNewConversation, deleteConversation, deleteChatMessage, restoreConversation } from './chat.js';
 import { loadToolExecutions } from './executions.js';
 import { loadReasoningTraces } from './reasoning.js';
 import { loadGraph } from './graph.js';
@@ -335,15 +335,20 @@ window.addEventListener('DOMContentLoaded', async () => {
     headerIconFallback.appendChild(icon);
   }
   
-  // Refresh icons
+  // Refresh icons - use logo component
+  const { createLogo } = await import('./components.js');
   const refreshIcons = ['refresh-icon-executions', 'refresh-icon-reasoning', 'refresh-icon-graph'];
   refreshIcons.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
-      const icon = createIcon('RefreshCw', { size: 18, color: 'currentColor', strokeWidth: 2.5 });
-      icon.style.display = 'block';
-      icon.style.flexShrink = '0';
-      el.appendChild(icon);
+      const logo = createLogo({ 
+        size: 42, 
+        className: 'logo-refresh',
+        spinOnClick: true
+      });
+      logo.style.display = 'block';
+      logo.style.flexShrink = '0';
+      el.appendChild(logo);
       
       // Add click animation - find parent button and add spin on click
       const button = el.closest('button');
@@ -351,10 +356,10 @@ window.addEventListener('DOMContentLoaded', async () => {
         const originalOnClick = button.onclick;
         button.addEventListener('click', (e) => {
           // Spin animation
-          icon.style.transition = 'transform 0.6s ease-in-out';
-          icon.style.transform = 'rotate(360deg)';
+          logo.style.transition = 'transform 0.6s ease-in-out';
+          logo.style.transform = 'rotate(360deg)';
           setTimeout(() => {
-            icon.style.transform = 'rotate(0deg)';
+            logo.style.transform = 'rotate(0deg)';
           }, 600);
           
           // Call original onclick if it exists
@@ -454,6 +459,16 @@ window.addEventListener('DOMContentLoaded', async () => {
   
   // Load chat conversations first (default tab)
   loadConversations();
+  
+  // Restore last active conversation from backend
+  const savedConversationId = await restoreConversation();
+  if (savedConversationId) {
+    // Wait a bit for conversations to load, then restore
+    setTimeout(async () => {
+      await selectConversation(savedConversationId);
+    }, 100);
+  }
+  
   // Load overview data in background
   loadExecutionStats();
   loadClusterStatus();
