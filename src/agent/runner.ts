@@ -48,15 +48,10 @@ import { detectActionIntent } from "../reasoning/action-intents";
 import {
   analyzeInput,
   formatClarificationMessage,
-  isClarificationResponse,
   loadKnownEntitiesFromProxmox,
-  type ClarificationResult,
 } from "../reasoning/clarification";
 
 let openaiClient: OpenAI | null = null;
-
-// Store pending clarification for multi-turn conversations
-let pendingClarification: ClarificationResult | null = null;
 
 function getOpenAIClient(): OpenAI {
   if (!openaiClient) {
@@ -373,29 +368,6 @@ export async function runAgent(
     return tool.execute(params, { toolName, startedAt: Date.now() });
   });
   
-  // Check if this is a response to a previous clarification
-  const clarificationResponse = isClarificationResponse(userInput);
-  if (clarificationResponse.isResponse && pendingClarification) {
-    const selected = clarificationResponse.selectedOption;
-    
-    if (selected === 0) {
-      // User said "none of the above"
-      pendingClarification = null;
-      emitFinalEvent("No problem! Please rephrase your request and I'll try again.", { clarification: true });
-      return { text: "No problem! Please rephrase your request and I'll try again." };
-    }
-    
-    if (selected && pendingClarification.suggestions && selected <= pendingClarification.suggestions.length) {
-      // User selected a suggestion - rerun with the corrected input
-      const suggestion = pendingClarification.suggestions[selected - 1];
-      logger.info("User selected clarification option", { selected, suggestion: suggestion.text });
-      pendingClarification = null;
-      
-      // Recursively call runAgent with the corrected input
-      return runAgent(suggestion.text, options);
-    }
-  }
-  
   // Analyze input for typos and ambiguity
   const clarificationResult = analyzeInput(userInput);
   
@@ -406,17 +378,12 @@ export async function runAgent(
       suggestions: clarificationResult.suggestions?.length,
     });
     
-    // Store for potential follow-up
-    pendingClarification = clarificationResult;
-    
     // Format and return clarification message
+    // Note: Frontend sends the corrected text directly when user clicks an option
     const clarificationMessage = formatClarificationMessage(clarificationResult);
     emitFinalEvent(clarificationMessage, { clarification: true, needsResponse: true });
     return { text: clarificationMessage };
   }
-  
-  // Clear any pending clarification since we're proceeding
-  pendingClarification = null;
 
   // Check action intent FIRST (before ALL query intents)
   // This prevents action requests from being treated as queries

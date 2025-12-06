@@ -8,6 +8,7 @@ import { checkTerraformEnv } from "../helpers/env-validator";
 import { getNextAvailablePalindromeName, getRandomPalindromeName } from "../helpers/palindrome-names";
 import { allocateVmId } from "../helpers/vm-id-allocator";
 import { ProxmoxClient } from "../../tools/proxmox/client";
+import { emitToolProgress } from "../../agent/event-bus";
 
 /**
  * Create VM Action Schema
@@ -51,6 +52,10 @@ export interface CreateVmResult {
  */
 function getProxmoxClientConfig(node: string): { url: string; tokenId: string; tokenSecret: string } {
   const nodeLower = node.toLowerCase();
+  const DEFAULT_NODE_URLS: Record<string, string> = {
+    yang: "https://yang.prox:8006",
+    yin: "https://yin.prox:8006",
+  };
   
   let url: string;
   let tokenId: string | undefined;
@@ -58,9 +63,12 @@ function getProxmoxClientConfig(node: string): { url: string; tokenId: string; t
   
   if (nodeLower === "yin" || nodeLower === "yang") {
     url = nodeLower === "yin"
-      ? process.env.PROXMOX_YIN_URL || process.env.PROXMOX_URL || ""
-      : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL || "";
-    tokenId = process.env.CLUSTER_TF_TOKEN_ID;
+      ? process.env.PROXMOX_YIN_URL || process.env.PROXMOX_URL || DEFAULT_NODE_URLS.yin
+      : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL || DEFAULT_NODE_URLS.yang;
+    // Prefer node-specific TF token if provided; fall back to cluster token
+    tokenId = nodeLower === "yin"
+      ? process.env.PROXMOX_YIN_TF_TOKEN_ID || process.env.CLUSTER_TF_TOKEN_ID
+      : process.env.PROXMOX_YANG_TF_TOKEN_ID || process.env.CLUSTER_TF_TOKEN_ID;
     if (nodeLower === "yin") {
       tokenSecret = process.env.PROXMOX_YIN_TF_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
     } else {
@@ -93,7 +101,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   }
   // proxBig can be any case, keep as-is
 
-  // Generate palindrome name if not provided
+  // Generate palindrome name if not provided, and sanitize to DNS-safe
   let finalName = name;
   if (!finalName || finalName.trim() === "") {
     try {
@@ -113,6 +121,24 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       });
     }
   }
+
+  // Sanitize name to DNS-safe format: lowercase, alphanumerics and hyphens, max 63 chars, cannot start/end with hyphen
+  const sanitizeName = (input: string): string => {
+    const lower = input.toLowerCase().replace(/[_\\s]+/g, "-");
+    const cleaned = lower.replace(/[^a-z0-9-]/g, "");
+    const trimmed = cleaned.replace(/^-+/, "").replace(/-+$/, "");
+    return trimmed.substring(0, 63);
+  };
+
+  const sanitizedName = sanitizeName(finalName);
+  if (!sanitizedName) {
+    return {
+      success: false,
+      message: `Invalid VM name "${finalName}". After sanitization it became empty. Please provide a name with letters, numbers, or hyphens.`,
+    };
+  }
+
+  finalName = sanitizedName;
 
   logger.info("Creating VM", { name: finalName, node: normalizedNode, originalNode: node, cores, memory, diskSize, dryRun });
 
@@ -289,6 +315,15 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
 
   // 4. Execute terraform
   logger.info("Executing terraform apply", { name: finalName, node: normalizedNode, vmId: allocatedVmId });
+  // Progress: entering terraform apply (midpoint)
+  emitToolProgress({
+    toolName: "action",
+    action: "compute.create_vm",
+    status: "running",
+    message: `Terraform apply for ${finalName} on ${normalizedNode}...`,
+    progress: 0.5,
+    details: { name: finalName, node: normalizedNode, vmId: allocatedVmId },
+  });
   const applyResult = await terraformRunner.apply(tfConfig);
 
   if (!applyResult.success) {
@@ -296,6 +331,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     const stderr = applyResult.stderr || "";
     let errorMessage = `Terraform apply failed: ${stderr}`;
     
+    if (stderr.includes("403") || stderr.toLowerCase().includes("permission") || stderr.toLowerCase().includes("forbidden")) {
+      errorMessage = `Terraform/Proxmox permission denied (HTTP 403). The Terraform token likely lacks VM.Allocate / PVEVMAdmin on node "${normalizedNode}". Grant the token (e.g., llm@pve!llm-agent) role PVEVMAdmin on / and /vms for ${normalizedNode}. Original error: ${stderr}`;
+    } else
     if (stderr.includes("401") || stderr.includes("invalid token")) {
       errorMessage = `Terraform authentication failed. The token may not have permissions to write to the "snippets" datastore. ` +
         `Check that your Terraform token (${process.env.CLUSTER_TF_TOKEN_ID || process.env.PROXBIG_TF_TOKEN_ID}) has: ` +
@@ -316,11 +354,19 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
         ` Original error: ${stderr}`;
     }
     
-    return {
-      success: false,
-      message: errorMessage,
-    };
+    // Propagate as failure so the caller stops the chain
+    throw new Error(errorMessage);
   }
+
+  // Progress: terraform apply finished, moving to outputs
+  emitToolProgress({
+    toolName: "action",
+    action: "compute.create_vm",
+    status: "running",
+    message: `Terraform apply finished for ${finalName}, reading outputs...`,
+    progress: 0.9,
+    details: { name: finalName, node: normalizedNode, vmId: allocatedVmId },
+  });
 
   // 5. Get VM info from terraform outputs
   const outputs = await terraformRunner.getOutputs();

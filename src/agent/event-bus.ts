@@ -101,8 +101,9 @@ export class AgentEventBus extends EventEmitter {
 /**
  * Helper function for tools to emit progress events
  * Can be called from anywhere without needing the session context
+ * Note: Without sessionId, events will be broadcast to ALL SSE clients
  */
-export function emitToolProgress(progress: ToolProgressData): void {
-  AgentEventBus.getInstance().emitProgress(progress);
+export function emitToolProgress(progress: ToolProgressData, sessionId?: string): void {
+  AgentEventBus.getInstance().emitProgress(progress, sessionId);
 }
 

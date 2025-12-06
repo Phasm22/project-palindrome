@@ -5,6 +5,7 @@ import { pceLogger as logger } from "../pce/utils/logger";
 import type { ExecutionContext, ExecutionResult } from "../types/execution";
 import type { ToolSchema } from "./tool-schema";
 import { createToolSchema } from "./tool-helpers";
+import { emitToolProgress } from "../agent/event-bus";
 
 // Use z.any() wrapped in z.object() instead of z.record() to avoid schema issues
 const ActionParams = z.object({
@@ -263,8 +264,39 @@ export class ActionTool extends BaseTool {
 
       logger.info("Executing action", { action, params: validatedParams });
 
+      // Emit progress: starting
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "starting",
+        message: `Preparing to execute ${action}...`,
+        progress: 0.1,
+        details: { params: validatedParams },
+      });
+
+      // Emit progress: running
+      const actionFriendlyName = action.replace(/\./g, ' → ').replace(/_/g, ' ');
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "running",
+        message: `Executing ${actionFriendlyName}...`,
+        progress: 0.3,
+        details: { step: "terraform/ansible" },
+      });
+
       // Execute action
       const result = await actionDef.execute(validatedParams);
+
+      // Emit progress: completed
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "completed",
+        message: `${actionFriendlyName} completed successfully`,
+        progress: 1,
+        details: { result: typeof result === 'object' ? result : { value: result } },
+      });
 
       return {
         data: result,
@@ -272,6 +304,17 @@ export class ActionTool extends BaseTool {
       };
     } catch (error: any) {
       logger.error("Action execution failed", { action, error: error.message });
+      
+      // Emit progress: failed
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "failed",
+        message: `Action failed: ${error.message}`,
+        progress: 0,
+        details: { error: error.message },
+      });
+      
       return {
         error: error.message || "Action execution failed",
         durationMs: Date.now() - started,

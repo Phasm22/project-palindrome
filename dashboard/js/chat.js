@@ -155,7 +155,10 @@ function formatClarificationMessage(text) {
     // Typo detection line
     if (trimmed.startsWith('🔍')) {
       html += `<div style="color: #60a5fa; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 1.2em;">🔍</span>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <path d="m21 21-4.35-4.35"></path>
+        </svg>
         <span>${escapeHtml(trimmed.substring(2))}</span>
       </div>`;
       continue;
@@ -217,10 +220,11 @@ function formatClarificationMessage(text) {
  * Handle clicking a clarification option
  */
 window.selectClarificationOption = function(num, optionText) {
-  // Send the number as a response
+  // Send the actual suggestion text (not just the number)
+  // This avoids needing server-side state for pending clarifications
   const input = getChatInput();
   if (input) {
-    input.value = String(num);
+    input.value = optionText;
     // Trigger send
     sendChatMessage();
   }
@@ -228,6 +232,10 @@ window.selectClarificationOption = function(num, optionText) {
 
 function formatAgentResponse(text) {
   if (!text) return '';
+  
+  // Strip markdown bold (**...**) for cleaner output
+  const stripBold = (input) => input.replace(/\*\*(.*?)\*\*/g, '$1');
+  text = stripBold(text);
   
   // Check if this is a clarification message
   if (text.includes('🔍') && text.includes('Did you mean')) {
@@ -1006,9 +1014,14 @@ export async function sendChatMessage() {
         const isActionOperation = currentQuery && (
           currentQuery.toLowerCase().includes('create') ||
           currentQuery.toLowerCase().includes('destroy') ||
-          currentQuery.toLowerCase().includes('provision')
+          currentQuery.toLowerCase().includes('provision') ||
+          currentQuery.toLowerCase().includes('start') ||
+          currentQuery.toLowerCase().includes('stop') ||
+          currentQuery.toLowerCase().includes('vm') ||
+          currentQuery.toLowerCase().includes('container')
         );
-        const timeoutMs = isActionOperation ? 300000 : 60000;
+        // Default 120s timeout, 5 min for actions
+        const timeoutMs = isActionOperation ? 300000 : 120000;
         
         updateChatMessage(currentResponseId, `
           <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 2px solid #fbbf24;">
@@ -1030,9 +1043,14 @@ export async function sendChatMessage() {
       const isActionOperation = message && (
         message.toLowerCase().includes('create') ||
         message.toLowerCase().includes('destroy') ||
-        message.toLowerCase().includes('provision')
+        message.toLowerCase().includes('provision') ||
+        message.toLowerCase().includes('start') ||
+        message.toLowerCase().includes('stop') ||
+        message.toLowerCase().includes('vm') ||
+        message.toLowerCase().includes('container')
       );
-      return isActionOperation ? 300000 : 60000;
+      // Default 120s timeout, 5 min for actions  
+      return isActionOperation ? 300000 : 120000;
     })());
 
   } catch (error) {

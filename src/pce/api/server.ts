@@ -1373,7 +1373,9 @@ export class PceApiServer {
         const eventBus = AgentEventBus.getInstance();
         const unsubscribe = eventBus.onEvent((event: AgentEvent) => {
           // Filter by sessionId if provided
-          if (sessionId && event.sessionId !== sessionId) {
+          // Allow tool:progress events through even without matching sessionId
+          // (tools emit progress without session context)
+          if (sessionId && event.sessionId !== sessionId && event.type !== "tool:progress") {
             return;
           }
 
