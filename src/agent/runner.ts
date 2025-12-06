@@ -401,7 +401,8 @@ export async function runAgent(
   let totalToolCalls = 0;
   
   // Skip RAG for trivial queries (greetings, simple questions that don't need context)
-  // This significantly improves response time for simple interactions
+  // Also skip RAG for action intents - they should go straight to the action tool
+  // This significantly improves response time and prevents RAG from confusing action execution
   const isTrivialQuery = (query: string): boolean => {
     const normalized = query.toLowerCase().trim();
     const trivialPatterns = [
@@ -414,8 +415,13 @@ export async function runAgent(
     return trivialPatterns.some(pattern => pattern.test(normalized));
   };
   
-  // Only fetch RAG context for non-trivial queries
-  const ragPayload = isTrivialQuery(userInput) 
+  // Skip RAG for action intents - they should use the action tool directly
+  const shouldSkipRAG = isTrivialQuery(userInput) || !!actionIntent;
+  
+  // Only fetch RAG context for non-trivial queries and non-action intents
+  // Action intents should go straight to the action tool without RAG context
+  // RAG context can confuse the LLM into thinking VMs don't exist when they do
+  const ragPayload = shouldSkipRAG
     ? null 
     : await fetchHybridContext(userInput, {
         baseUrl: options.ragBaseUrl,

@@ -14,6 +14,7 @@ export interface TerraformConfig {
       cores: number;
       memory: number;
       disk_size: string;
+      vm_id?: number; // Optional: Specific VM ID to use (if not provided, Terraform auto-assigns)
     }
   >;
   sshPublicKey?: string; // Optional - will be read from env or ~/.ssh/id_ed25519.pub if not provided
@@ -117,11 +118,14 @@ export class TerraformRunner {
     // Build vm_configs block
     const vmConfigsBlock = Object.entries(config.vmConfigs)
       .map(([name, cfg]) => {
+        // Use 0 as sentinel for auto-assign (Terraform will convert to null)
+        const vmIdValue = cfg.vm_id !== undefined && cfg.vm_id > 0 ? cfg.vm_id : 0;
         return `  "${name}" = {
     target_node = "${cfg.target_node}"
     cores       = ${cfg.cores}
     memory      = ${cfg.memory}
     disk_size   = "${cfg.disk_size}"
+    vm_id       = ${vmIdValue}
   }`;
       })
       .join(",\n");

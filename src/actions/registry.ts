@@ -1,5 +1,7 @@
 import { createVm, CreateVmSchema } from "./compute/create-vm";
 import { destroyVm, DestroyVmSchema } from "./compute/destroy-vm";
+import { createDnsRecord, CreateDnsRecordSchema } from "./network/create-dns-record";
+import { syncDhcpToDns, SyncDhcpToDnsSchema } from "./network/sync-dhcp-to-dns";
 
 /**
  * Action Registry
@@ -71,5 +73,23 @@ actionRegistry.register({
   execute: destroyVm,
   requiredTools: ["terraform"],
   requiredEntities: ["compute_node"],
+});
+
+actionRegistry.register({
+  name: "network.create_dns_record",
+  description: "Create a DNS A record in Pi-hole for a hostname and IP address",
+  schema: CreateDnsRecordSchema,
+  execute: createDnsRecord,
+  requiredTools: ["pihole"],
+  requiredEntities: [],
+});
+
+actionRegistry.register({
+  name: "network.sync_dhcp_to_dns",
+  description: "Sync OPNsense DHCP leases to Pi-hole DNS records. Bridges the gap between OPNsense DHCP (Unbound) and Pi-hole (forwarder).",
+  schema: SyncDhcpToDnsSchema,
+  execute: syncDhcpToDns,
+  requiredTools: ["opnsense", "pihole"],
+  requiredEntities: [],
 });
 
