@@ -298,42 +298,49 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
   const messageDiv = document.createElement('div');
   messageDiv.id = msgId;
   messageDiv.dataset.dbId = dbId || '';
+  
+  // iOS-like styling with solid backgrounds and visual artifacts
+  const isUser = role === 'user';
   messageDiv.style.cssText = `
-    margin-bottom: 16px;
-    padding: 14px 16px;
-    border-radius: 10px;
-    max-width: 80%;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 8px;
+    padding: 12px 16px;
+    border-radius: ${isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px'};
+    max-width: 75%;
+    word-wrap: break-word;
     position: relative;
-    ${role === 'user' 
-      ? 'background: linear-gradient(135deg, #7c2d12 0%, #9a3412 100%); margin-left: auto; text-align: right; border: 1px solid #f97316;' 
-      : 'background: #1e293b; margin-right: auto; border: 1px solid #334155;'}
+    ${isUser 
+      ? `
+        background: linear-gradient(135deg, #7c2d12 0%, #9a3412 50%, #7c2d12 100%);
+        background-size: 200% 200%;
+        margin-left: auto;
+        margin-right: 0;
+        color: #fef3e7;
+        box-shadow: 0 2px 8px rgba(124, 45, 18, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(249, 115, 22, 0.3);
+      ` 
+      : `
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        margin-left: 0;
+        margin-right: auto;
+        color: #e2e8f0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(51, 65, 85, 0.5);
+      `}
   `;
-
-  const deleteBtn = dbId ? `
-    <button 
-      onclick="window.deleteChatMessage('${dbId}', '${msgId}')" 
-      style="
-        position: absolute;
-        top: 8px;
-        ${role === 'user' ? 'left: 8px;' : 'right: 8px;'}
-        background: rgba(239, 68, 68, 0.2);
-        border: 1px solid rgba(239, 68, 68, 0.4);
-        border-radius: 4px;
-        padding: 4px 8px;
-        cursor: pointer;
-        opacity: 0.6;
-        transition: opacity 0.2s;
-      "
-      onmouseover="this.style.opacity='1'"
-      onmouseout="this.style.opacity='0.6'"
-      title="Delete message"
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="color: #ef4444;">
-        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-      </svg>
-    </button>
-  ` : '';
+  
+  // Add subtle texture overlay for depth
+  if (!isUser) {
+    messageDiv.style.backgroundImage = `
+      linear-gradient(135deg, #1e293b 0%, #0f172a 100%),
+      repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 2px,
+        rgba(51, 65, 85, 0.03) 2px,
+        rgba(51, 65, 85, 0.03) 4px
+      )
+    `;
+  }
 
   const traceLink = (role === 'assistant' && reasoningTraceId) ? `
     <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; display: flex; align-items: center; gap: 8px; font-size: 0.75em;">
@@ -384,13 +391,11 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
 
   if (role === 'user') {
     messageDiv.innerHTML = `
-      ${deleteBtn}
-      <div style="color: #e2e8f0; white-space: pre-wrap; ${dbId ? 'padding-right: 30px;' : ''}">${escapeHtml(content)}</div>
+      <div style="white-space: pre-wrap; line-height: 1.4; font-size: 15px;">${escapeHtml(content)}</div>
     `;
   } else {
     messageDiv.innerHTML = `
-      ${deleteBtn}
-      <div style="${dbId ? 'padding-right: 30px;' : ''}">
+      <div style="line-height: 1.5; font-size: 15px;">
         ${isLoading 
           ? `<div style="color: #94a3b8; font-style: italic;">${content}</div>`
           : content}
@@ -508,21 +513,24 @@ function handleAgentEvent(event, toolExecutions) {
       }, 500);
       
       const traceLinkHtml = traceId ? `
-        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155; display: flex; align-items: center; gap: 8px; font-size: 0.75em;">
+        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(51, 65, 85, 0.5); display: flex; align-items: center; gap: 8px; font-size: 0.8em;">
           <button
-            onclick="navigator.clipboard.writeText('${traceId}'); this.style.background='#3b82f6'; setTimeout(() => this.style.background='#1e293b', 200);"
+            onclick="navigator.clipboard.writeText('${traceId}'); this.style.background='#f97316'; setTimeout(() => this.style.background='rgba(30, 41, 59, 0.6)', 200);"
             style="
-              background: #1e293b;
-              border: 1px solid #334155;
+              background: rgba(30, 41, 59, 0.6);
+              border: 1px solid rgba(51, 65, 85, 0.5);
               color: #94a3b8;
-              padding: 4px 8px;
-              border-radius: 4px;
+              padding: 6px 10px;
+              border-radius: 12px;
               cursor: pointer;
               display: flex;
               align-items: center;
               gap: 4px;
-              font-size: 0.9em;
+              font-size: 0.85em;
+              transition: all 0.2s;
             "
+            onmouseover="this.style.background='rgba(30, 41, 59, 0.8)'"
+            onmouseout="this.style.background='rgba(30, 41, 59, 0.6)'"
             title="Copy trace ID"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -533,17 +541,20 @@ function handleAgentEvent(event, toolExecutions) {
           <button
             onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
             style="
-              background: #1e3a8a;
-              border: 1px solid #3b82f6;
+              background: rgba(124, 45, 18, 0.6);
+              border: 1px solid rgba(249, 115, 22, 0.5);
               color: #e2e8f0;
-              padding: 4px 8px;
-              border-radius: 4px;
+              padding: 6px 10px;
+              border-radius: 12px;
               cursor: pointer;
               display: flex;
               align-items: center;
               gap: 4px;
-              font-size: 0.9em;
+              font-size: 0.85em;
+              transition: all 0.2s;
             "
+            onmouseover="this.style.background='rgba(124, 45, 18, 0.8)'"
+            onmouseout="this.style.background='rgba(124, 45, 18, 0.6)'"
             title="View reasoning trace"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">

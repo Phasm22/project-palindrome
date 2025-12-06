@@ -115,7 +115,13 @@ window.switchTab = function(tabName, clickedElement) {
   }
   if (tabName === 'executions') loadToolExecutions();
   if (tabName === 'reasoning') loadReasoningTraces();
-  if (tabName === 'graph') loadGraph();
+  if (tabName === 'graph') {
+    loadGraph();
+  } else {
+    // Cleanup graph tooltips when switching away from graph tab
+    const existingTooltips = document.querySelectorAll('.graph-tooltip');
+    existingTooltips.forEach(tooltip => tooltip.remove());
+  }
   if (tabName === 'query') setupQueryInterface();
   if (tabName === 'chat') {
     // Load conversations when switching to chat tab
@@ -178,25 +184,113 @@ window.handleChatInputKeydown = function(event) {
   }
 };
 
-// Sidebar toggle function
+// Sidebar state management
+let sidebarState = {
+  isOpen: false,
+  focusTrap: null,
+  escapeHandler: null,
+  previousActiveElement: null
+};
+
+// Focus trap for sidebar
+function trapSidebarFocus(sidebar) {
+  const focusableElements = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+  const focusable = Array.from(sidebar.querySelectorAll(focusableElements));
+  const firstFocusable = focusable[0];
+  const lastFocusable = focusable[focusable.length - 1];
+  
+  function handleTab(e) {
+    if (e.key !== 'Tab') return;
+    
+    if (e.shiftKey) {
+      if (document.activeElement === firstFocusable) {
+        e.preventDefault();
+        lastFocusable?.focus();
+      }
+    } else {
+      if (document.activeElement === lastFocusable) {
+        e.preventDefault();
+        firstFocusable?.focus();
+      }
+    }
+  }
+  
+  sidebar.addEventListener('keydown', handleTab);
+  return () => sidebar.removeEventListener('keydown', handleTab);
+}
+
+// Sidebar toggle function with accessibility
 window.toggleSidebar = function() {
   const sidebarMobile = document.getElementById('conversation-sidebar-mobile');
   const backdrop = document.getElementById('sidebar-backdrop');
   
   if (sidebarMobile && backdrop) {
     const isHidden = sidebarMobile.classList.contains('hidden');
+    
     if (isHidden) {
+      // Opening sidebar
+      sidebarState.previousActiveElement = document.activeElement;
       sidebarMobile.classList.remove('hidden');
       sidebarMobile.classList.add('flex');
       backdrop.classList.remove('hidden');
+      
+      // Set ARIA attributes
+      sidebarMobile.setAttribute('aria-hidden', 'false');
+      backdrop.setAttribute('aria-hidden', 'false');
+      
       // Lock body scroll on mobile
       document.body.classList.add('overflow-hidden');
+      
+      // Trap focus
+      sidebarState.focusTrap = trapSidebarFocus(sidebarMobile);
+      
+      // Focus first focusable element
+      const firstFocusable = sidebarMobile.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (firstFocusable) {
+        firstFocusable.focus();
+      }
+      
+      // Escape key handler
+      sidebarState.escapeHandler = (e) => {
+        if (e.key === 'Escape') {
+          window.toggleSidebar();
+        }
+      };
+      document.addEventListener('keydown', sidebarState.escapeHandler);
+      
+      sidebarState.isOpen = true;
     } else {
+      // Closing sidebar
       sidebarMobile.classList.add('hidden');
       sidebarMobile.classList.remove('flex');
       backdrop.classList.add('hidden');
+      
+      // Set ARIA attributes
+      sidebarMobile.setAttribute('aria-hidden', 'true');
+      backdrop.setAttribute('aria-hidden', 'true');
+      
       // Restore body scroll
       document.body.classList.remove('overflow-hidden');
+      
+      // Remove focus trap
+      if (sidebarState.focusTrap) {
+        sidebarState.focusTrap();
+        sidebarState.focusTrap = null;
+      }
+      
+      // Remove escape handler
+      if (sidebarState.escapeHandler) {
+        document.removeEventListener('keydown', sidebarState.escapeHandler);
+        sidebarState.escapeHandler = null;
+      }
+      
+      // Restore focus
+      if (sidebarState.previousActiveElement) {
+        sidebarState.previousActiveElement.focus();
+        sidebarState.previousActiveElement = null;
+      }
+      
+      sidebarState.isOpen = false;
     }
   }
 };
@@ -209,11 +303,36 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Initialize icons
   const { createIcon } = await import('./icons.js');
   
-  // Header icon
-  const headerIcon = document.getElementById('header-icon');
-  if (headerIcon) {
+  // Header logo - check if logo exists, otherwise use fallback icon
+  const headerLogo = document.getElementById('header-logo');
+  const headerIconFallback = document.getElementById('header-icon-fallback');
+  
+  if (headerLogo) {
+    // Check if logo loaded successfully
+    headerLogo.addEventListener('error', () => {
+      console.warn('Logo not found, using fallback icon');
+      if (headerIconFallback) {
+        headerIconFallback.classList.remove('hidden');
+        const icon = createIcon('Clock', { size: 24, color: '#f97316', animation: 'pulse' });
+        headerIconFallback.appendChild(icon);
+      }
+    });
+    
+    // If logo loads successfully, add animation
+    headerLogo.addEventListener('load', () => {
+      headerLogo.classList.add('logo-animated');
+      console.log('Logo loaded successfully with animations');
+    });
+    
+    // Check if already loaded (cached)
+    if (headerLogo.complete && headerLogo.naturalHeight !== 0) {
+      headerLogo.classList.add('logo-animated');
+    }
+  } else if (headerIconFallback) {
+    // Fallback if logo element doesn't exist
+    headerIconFallback.classList.remove('hidden');
     const icon = createIcon('Clock', { size: 24, color: '#f97316', animation: 'pulse' });
-    headerIcon.appendChild(icon);
+    headerIconFallback.appendChild(icon);
   }
   
   // Refresh icons

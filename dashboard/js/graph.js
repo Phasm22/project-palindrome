@@ -29,10 +29,30 @@ const nodeTypeColors = {
 
 let sigma = null;
 let graph = null;
+let currentTooltip = null;
+let tooltipUpdateHandler = null;
+let hoveredNode = null;
+let originalNodeColor = null;
+
+// Cleanup function to remove all tooltips
+function cleanupAllTooltips() {
+  // Remove any existing tooltips from DOM
+  const existingTooltips = document.querySelectorAll('.graph-tooltip');
+  existingTooltips.forEach(tooltip => tooltip.remove());
+  
+  // Reset state
+  currentTooltip = null;
+  tooltipUpdateHandler = null;
+  hoveredNode = null;
+  originalNodeColor = null;
+}
 
 export async function loadGraph() {
   const container = document.getElementById('graph-container');
   if (!container) return;
+  
+  // Cleanup any existing tooltips before loading new graph
+  cleanupAllTooltips();
   
   // Check if libraries are loaded - try multiple possible global names
   // Graphology is exposed as window.graphology (from our UMD build)
@@ -153,7 +173,7 @@ export async function loadGraph() {
     const html = `
       <div class="flex flex-col md:flex-row gap-4">
         <!-- Graph Visualization -->
-        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: 60vh; min-height: 400px; overflow: hidden; position: relative;">
+        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative min-h-[400px] md:h-[600px] lg:h-[800px] overflow-hidden" style="position: relative;">
           <!-- Zoom Controls -->
           <div class="absolute top-4 right-4 z-10 flex flex-col gap-2">
             <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Zoom In">
@@ -490,7 +510,51 @@ function initSigma() {
     sigma.refresh();
   }
   
-  // Node hover tooltip with glow effect
+  // Cleanup function for tooltips - removes all tooltips
+  function cleanupTooltips() {
+    // Remove all tooltips from DOM (in case multiple exist)
+    const allTooltips = document.querySelectorAll('.graph-tooltip');
+    allTooltips.forEach(tooltip => tooltip.remove());
+    
+    // Clean up current tooltip reference
+    currentTooltip = null;
+    
+    // Remove event listeners
+    if (tooltipUpdateHandler && container) {
+      container.removeEventListener('mousemove', tooltipUpdateHandler);
+      tooltipUpdateHandler = null;
+    }
+    
+    // Restore node appearance
+    if (hoveredNode && originalNodeColor && graph) {
+      graph.setNodeAttribute(hoveredNode, 'color', originalNodeColor);
+      const nodeData = graph.getNodeAttributes(hoveredNode);
+      graph.setNodeAttribute(hoveredNode, 'size', (nodeData.size || 8) / 1.3);
+      if (sigma) {
+        sigma.refresh();
+      }
+      hoveredNode = null;
+      originalNodeColor = null;
+    }
+  }
+  
+  // Cleanup tooltips when tab is hidden
+  const graphTab = document.getElementById('graph');
+  if (graphTab) {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+          const isHidden = graphTab.classList.contains('hidden');
+          if (isHidden) {
+            cleanupTooltips();
+          }
+        }
+      });
+    });
+    observer.observe(graphTab, { attributes: true, attributeFilter: ['class'] });
+  }
+  
+  // Node hover tooltip with proper ARIA semantics
   sigma.on('enterNode', ({ node }) => {
     const nodeData = graph.getNodeAttributes(node);
     
@@ -508,8 +572,20 @@ function initSigma() {
       sigma.refresh();
     }
     
+    // Remove existing tooltip if any
+    if (currentTooltip) {
+      currentTooltip.remove();
+      if (tooltipUpdateHandler) {
+        container.removeEventListener('mousemove', tooltipUpdateHandler);
+      }
+    }
+    
+    // Create tooltip with proper ARIA attributes
     const tooltip = document.createElement('div');
     tooltip.className = 'graph-tooltip';
+    tooltip.setAttribute('role', 'tooltip');
+    tooltip.setAttribute('aria-live', 'polite');
+    tooltip.setAttribute('id', `tooltip-${node}`);
     tooltip.style.cssText = `
       position: absolute;
       background: linear-gradient(135deg, ${colorPalette.surface} 0%, #1e293b 100%);
@@ -526,7 +602,9 @@ function initSigma() {
       animation: slide-up-fade 0.2s ease-out;
     `;
     
-    let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${nodeData.label || node}</strong><br>`;
+    // Build accessible tooltip content
+    const label = nodeData.label || node;
+    let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${label}</strong><br>`;
     tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${nodeData.type || 'unknown'}</span><br>`;
     tooltipContent += `<span style="color: ${colorPalette.textMuted}">Degree:</span> <span style="color: ${colorPalette.text}">${nodeData.degree || 0}</span><br>`;
     if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}">${nodeData.id}</span><br>`;
@@ -535,25 +613,45 @@ function initSigma() {
     
     tooltip.innerHTML = tooltipContent;
     document.body.appendChild(tooltip);
+    currentTooltip = tooltip;
     
-    const updateTooltip = (e) => {
-      tooltip.style.left = (e.clientX + 10) + 'px';
-      tooltip.style.top = (e.clientY + 10) + 'px';
+    // Update tooltip position on mouse move
+    tooltipUpdateHandler = (e) => {
+      const padding = 10;
+      const tooltipRect = tooltip.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      
+      let left = e.clientX + padding;
+      let top = e.clientY + padding;
+      
+      // Prevent tooltip from going off-screen
+      if (left + tooltipRect.width > viewportWidth) {
+        left = e.clientX - tooltipRect.width - padding;
+      }
+      if (top + tooltipRect.height > viewportHeight) {
+        top = e.clientY - tooltipRect.height - padding;
+      }
+      
+      tooltip.style.left = `${Math.max(padding, left)}px`;
+      tooltip.style.top = `${Math.max(padding, top)}px`;
     };
     
-    container.addEventListener('mousemove', updateTooltip);
+    // Set initial position based on node position
+    const nodePosition = sigma.getNodeDisplayData(node);
+    const camera = sigma.getCamera();
+    const viewport = sigma.getViewport();
+    const x = nodePosition.x * camera.ratio + viewport.width / 2 + camera.x;
+    const y = nodePosition.y * camera.ratio + viewport.height / 2 + camera.y;
+    const containerRect = container.getBoundingClientRect();
+    
+    tooltip.style.left = `${containerRect.left + x + 10}px`;
+    tooltip.style.top = `${containerRect.top + y + 10}px`;
+    
+    container.addEventListener('mousemove', tooltipUpdateHandler);
+    
     sigma.once('leaveNode', () => {
-      // Restore original node appearance
-      if (hoveredNode && originalNodeColor) {
-        const nodeData = graph.getNodeAttributes(hoveredNode);
-        graph.setNodeAttribute(hoveredNode, 'color', originalNodeColor);
-        graph.setNodeAttribute(hoveredNode, 'size', (nodeData.size || 8) / 1.3);
-        sigma.refresh();
-        hoveredNode = null;
-        originalNodeColor = null;
-      }
-      tooltip.remove();
-      container.removeEventListener('mousemove', updateTooltip);
+      cleanupTooltips();
     });
   });
   

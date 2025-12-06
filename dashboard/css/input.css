@@ -157,12 +157,58 @@
     animation: pulse-glow 2s ease-in-out infinite;
   }
   
+  /* Logo animations */
+  @keyframes logo-float {
+    0%, 100% {
+      transform: translateY(0px);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+  
+  @keyframes logo-glow-pulse {
+    0%, 100% {
+      filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));
+    }
+    50% {
+      filter: drop-shadow(0 0 16px rgba(249, 115, 22, 0.9));
+    }
+  }
+  
+  .logo-animated {
+    animation: logo-float 3s ease-in-out infinite, logo-glow-pulse 2s ease-in-out infinite;
+  }
+  
   .animate-slide-up {
     animation: slide-up-fade 0.5s ease-out;
   }
   
   .animate-shimmer {
     animation: shimmer 1.5s ease-in-out infinite;
+  }
+  
+  /* Gradient text with shimmer effect */
+  .text-gradient-shimmer {
+    background: linear-gradient(135deg, #f8fafc 0%, #f97316 50%, #f8fafc 100%);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-size: 200% auto;
+    animation: shimmer 3s linear infinite;
+  }
+  
+  /* Drop shadow glow utilities */
+  .drop-shadow-glow-orange {
+    filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));
+  }
+  
+  .drop-shadow-glow-purple {
+    filter: drop-shadow(0 0 8px rgba(168, 85, 247, 0.6));
+  }
+  
+  .drop-shadow-glow-blue {
+    filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.6));
   }
   
   /* Refresh icon spin animation */

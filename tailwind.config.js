@@ -56,6 +56,11 @@ export default {
         'elevated': '0 1px 3px rgba(0,0,0,0.3), 0 10px 30px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05)',
         'elevated-hover': '0 4px 6px rgba(0,0,0,0.4), 0 15px 40px rgba(0,0,0,0.3), 0 0 20px rgba(249, 115, 22, 0.3)',
       },
+      dropShadow: {
+        'glow-orange': '0 0 8px rgba(249, 115, 22, 0.6)',
+        'glow-purple': '0 0 8px rgba(168, 85, 247, 0.6)',
+        'glow-blue': '0 0 8px rgba(59, 130, 246, 0.6)',
+      },
     },
   },
   plugins: [

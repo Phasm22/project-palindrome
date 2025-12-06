@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Palindrome Dashboard</title>
+  <link rel="icon" type="image/png" href="assets/images/logo.png" onerror="this.href='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔷</text></svg>';">
   <link rel="stylesheet" href="css/styles.css">
   <script src="lib/graphology.umd.js"></script>
   <script src="lib/graphology-layout-forceatlas2.umd.js"></script>
@@ -17,9 +18,10 @@
 <body class="bg-slate-950 text-slate-100 min-h-screen">
   <div class="mx-auto max-w-7xl px-4 md:px-6 py-6">
     <h1 class="text-2xl md:text-3xl lg:text-4xl font-title-bold mb-4 md:mb-8 flex items-center gap-3 animate-slide-up">
-      <span id="header-icon" class="text-primary-500 md:w-8 md:h-8 drop-shadow-lg" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));"></span>
-      <span class="hidden sm:inline" style="background: linear-gradient(135deg, #f8fafc 0%, #f97316 50%, #f8fafc 100%); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-size: 200% auto; animation: shimmer 3s linear infinite;">Palindrome Dashboard</span>
-      <span class="sm:hidden" style="background: linear-gradient(135deg, #f8fafc 0%, #f97316 50%, #f8fafc 100%); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-size: 200% auto; animation: shimmer 3s linear infinite;">Dashboard</span>
+      <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-12 md:h-12 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
+      <span id="header-icon-fallback" class="text-primary-500 w-8 h-8 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
+      <span class="hidden sm:inline text-gradient-shimmer">Palindrome Dashboard</span>
+      <span class="sm:hidden text-gradient-shimmer">Dashboard</span>
     </h1>
 
     <!-- Mobile: Dropdown menu for tabs -->
@@ -61,19 +63,19 @@
     <div id="overview" class="tab-content hidden flex flex-col" role="tabpanel" aria-labelledby="overview-tab" aria-hidden="true">
       <!-- Mobile: Bottom-fixed nav - icons only with glow -->
       <div class="md:hidden fixed bottom-4 left-4 right-4 z-50 flex gap-3 justify-center pb-safe" id="overview-nav-mobile" style="display: none; padding-bottom: max(1rem, env(safe-area-inset-bottom));">
-        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));">
+        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats">
           <span id="nav-icon-stats-mobile"></span>
         </button>
-        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));">
+        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster">
           <span id="nav-icon-cluster-mobile"></span>
         </button>
       </div>
       <!-- Desktop: Right-side floating nav - icons only with glow -->
       <div class="hidden md:flex fixed right-4 bottom-24 z-50 flex-col gap-3 pr-safe" id="overview-nav" style="display: none; padding-right: max(1rem, env(safe-area-inset-right));">
-        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));">
+        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats">
           <span id="nav-icon-stats"></span>
         </button>
-        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster" style="filter: drop-shadow(0 0 8px rgba(249, 115, 22, 0.6));">
+        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster">
           <span id="nav-icon-cluster"></span>
         </button>
       </div>
@@ -286,10 +288,10 @@
         </div>
         
         <!-- Mobile: Overlay backdrop when sidebar is open -->
-        <div id="sidebar-backdrop" class="md:hidden fixed inset-0 bg-black bg-opacity-50 z-40 hidden" onclick="window.toggleSidebar()"></div>
+        <div id="sidebar-backdrop" class="md:hidden fixed inset-0 bg-black bg-opacity-50 z-40 hidden" onclick="window.toggleSidebar()" aria-hidden="true"></div>
         
         <!-- Mobile: Sidebar overlay -->
-        <div id="conversation-sidebar-mobile" class="md:hidden fixed inset-0 z-50 flex flex-col bg-slate-950 hidden">
+        <div id="conversation-sidebar-mobile" class="md:hidden fixed inset-0 z-50 flex flex-col bg-slate-950 hidden" role="dialog" aria-modal="true" aria-label="Conversations" aria-hidden="true">
           <div class="p-4 border-b-2 border-slate-600 flex justify-between items-center">
             <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
             <div class="flex items-center gap-2">
@@ -324,9 +326,10 @@
         <!-- Chat Area -->
         <div class="flex-1 flex flex-col min-w-0">
           <h2 class="mb-4 text-xl md:text-2xl font-title text-slate-100">Chat with Palindrome</h2>
+          <div class="mb-4 border-t border-slate-600/70"></div>
           
           <!-- Chat Messages Area -->
-          <div id="chat-messages" class="flex-1 overflow-y-auto p-6 bg-slate-950 rounded-xl mb-4 min-h-[300px] md:min-h-[400px]">
+          <div id="chat-messages" class="flex-1 overflow-y-auto px-4 py-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-xl mb-4 min-h-[300px] md:min-h-[400px] relative" style="background-image: repeating-linear-gradient(0deg, transparent, transparent 20px, rgba(15, 23, 42, 0.3) 20px, rgba(15, 23, 42, 0.3) 21px);">
             <div class="text-slate-400 text-center py-6 text-sm">
               Select a conversation or create a new one to start chatting.
             </div>
