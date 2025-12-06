@@ -151,9 +151,9 @@ export async function loadGraph() {
     
     // Create layout HTML
     const html = `
-      <div class="flex flex-col md:flex-row gap-4 min-h-0">
+      <div class="flex flex-col md:flex-row gap-4">
         <!-- Graph Visualization -->
-        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative min-h-[50vh] md:min-h-[70vh]" style="overflow: hidden; position: relative;">
+        <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative" style="height: 60vh; min-height: 400px; overflow: hidden; position: relative;">
           <!-- Zoom Controls -->
           <div class="absolute top-4 right-4 z-10 flex flex-col gap-2">
             <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Zoom In">
@@ -181,11 +181,11 @@ export async function loadGraph() {
             <div id="search-results" class="mt-2 bg-slate-800 border border-slate-600 rounded-lg max-h-48 overflow-y-auto hidden"></div>
           </div>
           
-          <div id="sigma-container" style="width: 100%; height: 100%;"></div>
+          <div id="sigma-container" style="position: absolute; inset: 0; width: 100%; height: 100%;"></div>
         </div>
         
         <!-- Statistics and Legend Sidebar -->
-        <div class="w-full md:w-80 flex flex-col gap-4 overflow-y-auto md:max-h-[70vh]">
+        <div class="w-full md:w-80 flex flex-col gap-4 overflow-y-auto">
           <!-- Statistics Panel -->
           <div class="bg-slate-950 border border-slate-700 rounded-lg p-4">
             <h3 class="m-0 mb-4 text-slate-200 text-base font-semibold">Statistics</h3>
@@ -351,6 +351,20 @@ export async function loadGraph() {
 function initSigma() {
   const container = document.getElementById('sigma-container');
   if (!container || !graph) return;
+  
+  // Ensure container has proper dimensions before initializing
+  const parent = container.parentElement;
+  if (parent) {
+    const rect = parent.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      console.warn('Graph container has zero dimensions, retrying...');
+      setTimeout(() => initSigma(), 200);
+      return;
+    }
+    // Force container to fill parent
+    container.style.width = rect.width + 'px';
+    container.style.height = rect.height + 'px';
+  }
   
   // Destroy existing instance
   if (sigma) {

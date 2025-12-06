@@ -23,17 +23,7 @@
     </h1>
 
     <!-- Mobile: Dropdown menu for tabs -->
-    <div class="md:hidden mb-4">
-      <select id="mobile-tab-select" class="w-full px-4 py-3 bg-slate-900 border-2 border-slate-600 rounded-lg text-slate-200 text-base font-medium focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent" onchange="window.switchTabMobile(this.value)">
-        <option value="chat">Chat</option>
-        <option value="overview">Overview</option>
-        <option value="executions">Tool Executions</option>
-        <option value="reasoning">Reasoning Traces</option>
-        <option value="graph">Ontology Graph</option>
-        <option value="rag">RAG Diagnostics</option>
-        <option value="query">Query</option>
-      </select>
-    </div>
+    <div class="md:hidden mb-4" id="mobile-tab-dropdown-container"></div>
 
     <!-- Desktop: Horizontal tabs -->
     <div class="hidden md:flex gap-2 mb-6 border-b-4 border-slate-600 overflow-x-auto" role="tablist" aria-label="Dashboard tabs">
@@ -148,7 +138,7 @@
             </span>
           </button>
         </h2>
-        <div id="graph-container" class="w-full h-[60dvh] md:h-[600px] lg:h-[800px] rounded-xl bg-slate-950 overflow-hidden shadow-inner" style="position: relative;"></div>
+        <div id="graph-container" class="w-full rounded-xl bg-slate-950 overflow-hidden shadow-inner" style="position: relative; min-height: 400px;"></div>
       </div>
     </div>
 
@@ -336,28 +326,28 @@
           <h2 class="mb-4 text-xl md:text-2xl font-title text-slate-100">Chat with Palindrome</h2>
           
           <!-- Chat Messages Area -->
-          <div id="chat-messages" class="flex-1 overflow-y-auto p-6 bg-slate-950 rounded-lg mb-6 min-h-[300px] md:min-h-[400px]">
+          <div id="chat-messages" class="flex-1 overflow-y-auto p-6 bg-slate-950 rounded-xl mb-4 min-h-[300px] md:min-h-[400px]">
             <div class="text-slate-400 text-center py-6 text-sm">
               Select a conversation or create a new one to start chatting.
             </div>
           </div>
 
-        <!-- Chat Input Area -->
-          <div class="sticky bottom-0 bg-slate-900 pt-2 flex gap-2 md:gap-3 items-end pb-safe" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom));">
-          <textarea 
-            id="chat-input" 
-            placeholder="Ask me anything about your infrastructure..." 
-              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-950 border-2 border-slate-600 rounded-lg text-slate-200 placeholder-slate-500 font-sans resize-none md:resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base"
-            onkeydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendChatMessage(); }"
-          ></textarea>
-          <button 
+          <!-- Chat Input Area - Separate from messages area -->
+          <div class="flex gap-2 md:gap-3 items-end pb-safe" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom));">
+            <textarea 
+              id="chat-input" 
+              placeholder="Ask me anything about your infrastructure..." 
+              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-800 border-2 border-slate-600 rounded-xl text-slate-200 placeholder-slate-500 font-sans resize-none md:resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base"
+              onkeydown="handleChatInputKeydown(event)"
+            ></textarea>
+            <button 
               class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 md:px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 min-w-[70px] md:min-w-[80px] min-h-[44px] flex items-center justify-center gap-2" 
-            onclick="sendChatMessage()" 
-            id="chat-send-btn"
-          >
-            <span id="send-icon"></span>
-            <span>Send</span>
-          </button>
+              onclick="sendChatMessage()" 
+              id="chat-send-btn"
+            >
+              <span id="send-icon"></span>
+              <span>Send</span>
+            </button>
           </div>
         </div>
       </div>

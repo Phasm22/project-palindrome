@@ -5,6 +5,7 @@ import { loadGraph } from './graph.js';
 import { setupQueryInterface, executeQuery, executeGraphQuery, executeCypherQuery } from './query.js';
 import { loadExecutionStats, loadClusterStatus, loadSystemHealth } from './overview.js';
 import { testRagQuery } from './rag.js';
+import { createCustomDropdown, updateDropdown } from './dropdown.js';
 
 // Make functions globally accessible for onclick handlers
 window.loadToolExecutions = loadToolExecutions;
@@ -147,29 +148,34 @@ window.switchTab = function(tabName, clickedElement) {
   }
   
   // Update mobile dropdown selector
-  const mobileSelect = document.getElementById('mobile-tab-select');
-  if (mobileSelect) {
-    mobileSelect.value = tabName;
-  }
+  updateDropdown(tabName);
 };
 
 // Mobile tab switching function
 window.switchTabMobile = function(tabName) {
-  // Force state sync
-  document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
-  const targetTab = document.getElementById(tabName);
-  if (targetTab) {
-    targetTab.classList.remove('hidden');
-  }
-  
-  // Sync mobile selector
-  const mobileSelect = document.getElementById('mobile-tab-select');
-  if (mobileSelect) {
-    mobileSelect.value = tabName;
-  }
-  
-  // Also update desktop tabs
+  // Use the main switchTab function which handles everything
   window.switchTab(tabName, null);
+};
+
+// Chat input keydown handler - mobile: Enter = new line, desktop: Enter = send
+window.handleChatInputKeydown = function(event) {
+  // Check if mobile device (touch screen and small width)
+  const isMobile = window.innerWidth < 768 || ('ontouchstart' in window);
+  
+  if (event.key === 'Enter') {
+    if (isMobile) {
+      // On mobile: Enter always creates new line (default behavior)
+      // Don't prevent default, let Enter work normally
+      return;
+    } else {
+      // On desktop: Enter sends, Shift+Enter creates new line
+      if (!event.shiftKey) {
+        event.preventDefault();
+        sendChatMessage();
+      }
+      // If Shift+Enter, let it create new line (default behavior)
+    }
+  }
 };
 
 // Sidebar toggle function
@@ -197,6 +203,9 @@ window.toggleSidebar = function() {
 
 // Load initial data when page loads
 window.addEventListener('DOMContentLoaded', async () => {
+  // Initialize custom dropdown for mobile tabs
+  createCustomDropdown('mobile-tab-dropdown-container', 'chat');
+  
   // Initialize icons
   const { createIcon } = await import('./icons.js');
   
@@ -212,8 +221,29 @@ window.addEventListener('DOMContentLoaded', async () => {
   refreshIcons.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
-      const icon = createIcon('RefreshCw', { size: 16, color: 'currentColor' });
+      const icon = createIcon('RefreshCw', { size: 18, color: 'currentColor', strokeWidth: 2.5 });
+      icon.style.display = 'block';
+      icon.style.flexShrink = '0';
       el.appendChild(icon);
+      
+      // Add click animation - find parent button and add spin on click
+      const button = el.closest('button');
+      if (button) {
+        const originalOnClick = button.onclick;
+        button.addEventListener('click', (e) => {
+          // Spin animation
+          icon.style.transition = 'transform 0.6s ease-in-out';
+          icon.style.transform = 'rotate(360deg)';
+          setTimeout(() => {
+            icon.style.transform = 'rotate(0deg)';
+          }, 600);
+          
+          // Call original onclick if it exists
+          if (originalOnClick) {
+            originalOnClick.call(button, e);
+          }
+        });
+      }
     }
   });
   
