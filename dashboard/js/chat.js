@@ -9,6 +9,46 @@ let currentResponseId = null;
 let finalEventTimeout = null;
 let currentConversationId = null;
 
+// Helper: Get all chat message containers (mobile + desktop)
+function getChatMessageContainers() {
+  const mobile = document.getElementById('chat-messages');
+  const desktop = document.getElementById('chat-messages-desktop');
+  return [mobile, desktop].filter(Boolean);
+}
+
+// Helper: Get all chat inputs (mobile + desktop)
+function getChatInputs() {
+  const mobile = document.getElementById('chat-input');
+  const desktop = document.getElementById('chat-input-desktop');
+  return [mobile, desktop].filter(Boolean);
+}
+
+// Helper: Get all send buttons (mobile + desktop)
+function getSendButtons() {
+  const mobile = document.getElementById('chat-send-btn');
+  const desktop = document.getElementById('chat-send-btn-desktop');
+  return [mobile, desktop].filter(Boolean);
+}
+
+// Helper: Get primary chat messages container (visible one)
+function getPrimaryChatMessages() {
+  const isMobile = window.innerWidth < 768;
+  return document.getElementById(isMobile ? 'chat-messages' : 'chat-messages-desktop');
+}
+
+// Helper: Get primary chat input (visible one)
+function getPrimaryChatInput() {
+  const isMobile = window.innerWidth < 768;
+  return document.getElementById(isMobile ? 'chat-input' : 'chat-input-desktop');
+}
+
+// Helper: Sync content to all containers
+function syncToAllContainers(html) {
+  getChatMessageContainers().forEach(container => {
+    if (container) container.innerHTML = html;
+  });
+}
+
 // Export conversation ID getter/setter for other modules
 export function getCurrentConversationId() {
   return currentConversationId;
@@ -333,20 +373,31 @@ function formatAgentResponse(text) {
 }
 
 function updateChatMessage(messageId, newContent) {
-  const messageDiv = document.getElementById(messageId);
-  if (messageDiv) {
-    messageDiv.innerHTML = newContent;
-    const messagesDiv = document.getElementById('chat-messages');
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
-  }
+  // Update in all containers (mobile + desktop)
+  getChatMessageContainers().forEach(messagesDiv => {
+    if (!messagesDiv) return;
+    const messageDiv = messagesDiv.querySelector(`#${messageId}`);
+    if (messageDiv) {
+      const wasNearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 100;
+      messageDiv.innerHTML = newContent;
+      if (wasNearBottom) {
+        requestAnimationFrame(() => {
+          messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        });
+      }
+    }
+  });
 }
 
 function addChatMessage(role, content, isLoading = false, messageId = null, dbId = null, reasoningTraceId = null) {
-  const messagesDiv = document.getElementById('chat-messages');
+  const containers = getChatMessageContainers();
   const msgId = messageId || 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
   
-  const welcomeMsg = messagesDiv.querySelector('div[style*="text-align: center"]');
-  if (welcomeMsg) welcomeMsg.remove();
+  // Remove welcome message from all containers
+  containers.forEach(c => {
+    const welcomeMsg = c.querySelector('div[style*="text-align: center"]');
+    if (welcomeMsg) welcomeMsg.remove();
+  });
 
   const messageDiv = document.createElement('div');
   messageDiv.id = msgId;
@@ -457,24 +508,34 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     `;
   }
 
-  messagesDiv.appendChild(messageDiv);
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  // Append to all containers
+  containers.forEach(messagesDiv => {
+    const clone = messageDiv.cloneNode(true);
+    const wasNearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 100;
+    messagesDiv.appendChild(clone);
+    if (wasNearBottom || isLoading || role === 'user') {
+      requestAnimationFrame(() => {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+    }
+  });
 
   return msgId;
 }
 
 function removeChatMessage(messageId) {
-  const message = document.getElementById(messageId);
-  if (message) message.remove();
-  
-  const messagesDiv = document.getElementById('chat-messages');
-  if (messagesDiv && messagesDiv.children.length === 0) {
-    messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.</div>';
-  }
+  // Remove from all containers
+  getChatMessageContainers().forEach(container => {
+    const message = container.querySelector(`#${messageId}`);
+    if (message) message.remove();
+    if (container.children.length === 0) {
+      container.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 0.875rem;">Start a conversation with Palindrome.</div>';
+    }
+  });
 }
 
 function handleAgentEvent(event, toolExecutions) {
-  const messagesDiv = document.getElementById('chat-messages');
+  const messagesDiv = getPrimaryChatMessages();
   
   switch (event.type) {
     case 'agent:step':
@@ -634,7 +695,7 @@ function handleAgentEvent(event, toolExecutions) {
       `;
       
       updateChatMessage(currentResponseId, finalHtml);
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      // Scroll is handled inside updateChatMessage
       
       if (currentEventSource) {
         currentEventSource.close();
@@ -646,28 +707,25 @@ function handleAgentEvent(event, toolExecutions) {
         finalEventTimeout = null;
       }
       
-      const input = document.getElementById('chat-input');
-      const sendBtn = document.getElementById('chat-send-btn');
-      input.disabled = false;
-      sendBtn.disabled = false;
-      sendBtn.textContent = 'Send';
-      input.focus();
+      getChatInputs().forEach(i => i.disabled = false);
+      getSendButtons().forEach(b => b.disabled = false);
+      const primaryInput = getPrimaryChatInput();
+      if (primaryInput) setTimeout(() => primaryInput.focus(), 100);
       break;
   }
 }
 
 // Main chat functions
 export async function sendChatMessage() {
-  const input = document.getElementById('chat-input');
-  const sendBtn = document.getElementById('chat-send-btn');
-  const messagesDiv = document.getElementById('chat-messages');
+  const inputs = getChatInputs();
+  const buttons = getSendButtons();
+  const primaryInput = getPrimaryChatInput();
   
-  const message = input.value.trim();
+  const message = primaryInput?.value?.trim() || '';
   if (!message) return;
 
-  input.disabled = true;
-  sendBtn.disabled = true;
-  sendBtn.textContent = 'Sending...';
+  inputs.forEach(i => { i.disabled = true; i.value = ''; });
+  buttons.forEach(b => b.disabled = true);
 
   if (currentEventSource) {
     currentEventSource.close();
@@ -675,7 +733,6 @@ export async function sendChatMessage() {
   }
 
   addChatMessage('user', message);
-  input.value = '';
 
   currentResponseId = addChatMessage('assistant', `
     <div class="agent-thinking">
@@ -1013,11 +1070,11 @@ export async function deleteConversation(conversationId) {
 }
 
 export async function loadChatHistory(conversationId = null) {
-  const messagesDiv = document.getElementById('chat-messages');
-  if (!messagesDiv) return;
+  const containers = getChatMessageContainers();
+  if (containers.length === 0) return;
 
   if (!conversationId) {
-    messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Select a conversation or create a new one to start chatting.</div>';
+    syncToAllContainers('<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 0.875rem;">Select a conversation or create a new one.</div>');
     return;
   }
 
@@ -1032,26 +1089,32 @@ export async function loadChatHistory(conversationId = null) {
     const result = await response.json();
     const messages = result.data || [];
 
-    messagesDiv.innerHTML = '';
+    // Clear all containers
+    containers.forEach(c => c.innerHTML = '');
 
     if (messages.length === 0) {
-      messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.</div>';
+      syncToAllContainers('<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 0.875rem;">Start a conversation with Palindrome.</div>');
       return;
     }
 
-        messages.forEach(msg => {
-          if (msg.role === 'user') {
-            addChatMessage('user', msg.content, false, null, msg.id, null);
-          } else {
-            const formattedContent = formatAgentResponse(msg.content);
-            addChatMessage('assistant', formattedContent, false, null, msg.id, msg.reasoningTraceId || null);
-          }
-        });
+    messages.forEach(msg => {
+      if (msg.role === 'user') {
+        addChatMessage('user', msg.content, false, null, msg.id, null);
+      } else {
+        const formattedContent = formatAgentResponse(msg.content);
+        addChatMessage('assistant', formattedContent, false, null, msg.id, msg.reasoningTraceId || null);
+      }
+    });
 
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    // Scroll to bottom in all containers
+    containers.forEach(c => {
+      requestAnimationFrame(() => {
+        c.scrollTop = c.scrollHeight;
+      });
+    });
   } catch (error) {
     console.error('Failed to load chat history:', error);
-    messagesDiv.innerHTML = '<div style="color: #ef4444; text-align: center; padding: 20px;">Failed to load messages</div>';
+    syncToAllContainers('<div style="color: #ef4444; text-align: center; padding: 20px; font-size: 0.875rem;">Failed to load messages</div>');
   }
 }
 

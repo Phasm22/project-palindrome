@@ -373,8 +373,18 @@ export async function runAgent(
       }
     }
 
+    // Skip compute intent if this is a diagnostic/troubleshooting request
+    // Diagnostic requests should go to the LLM to use infrastructure_diagnostic tool
+    const isDiagnosticRequest = 
+      userInput.toLowerCase().includes("diagnose") ||
+      userInput.toLowerCase().includes("why isn't") ||
+      userInput.toLowerCase().includes("why is") ||
+      userInput.toLowerCase().includes("check why") ||
+      userInput.toLowerCase().includes("troubleshoot") ||
+      userInput.toLowerCase().includes("what's wrong");
+
     const computeIntent = detectComputeIntent(userInput);
-    if (computeIntent) {
+    if (computeIntent && !isDiagnosticRequest) {
       const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
       if (twinAnswer) {
         logger.info("Responding via twin-first reasoning chain (no LLM needed).");
@@ -398,17 +408,17 @@ export async function runAgent(
         return { text: firewallAnswer };
       }
     }
-  }
-
-  const networkIntent = detectNetworkIntent(userInput);
-  if (networkIntent) {
-    const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
-    if (networkAnswer) {
-      logger.info("Responding via twin-first network reasoning chain.");
-      emitStepEvent({ intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
-      const traceId = await recordEarlyReturnTrace(networkAnswer, networkIntent.type, 1);
-      emitFinalEvent(networkAnswer, { intent: networkIntent.type, traceId });
-      return { text: networkAnswer };
+    // Only check network intent if no action, exposure, compute, or firewall intent was detected
+    const networkIntent = detectNetworkIntent(userInput);
+    if (networkIntent) {
+      const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
+      if (networkAnswer) {
+        logger.info("Responding via twin-first network reasoning chain.");
+        emitStepEvent({ intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
+        const traceId = await recordEarlyReturnTrace(networkAnswer, networkIntent.type, 1);
+        emitFinalEvent(networkAnswer, { intent: networkIntent.type, traceId });
+        return { text: networkAnswer };
+      }
     }
   }
 

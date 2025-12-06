@@ -90,15 +90,19 @@
 
 **Current Status:**
 - ✅ Network query operations exist
+- ✅ VLAN query operations exist (`opnsense_readonly.interfaces_vlans_list`)
+
+**Strategy:** Use existing VLANs only. Creating VLANs requires orchestration across Ansible (switch), OPNsense, and Proxmox, with latency/retry complexity. For Phase 5, we'll validate existing VLANs and assign VMs to them.
 
 **Missing Operations:**
-- ❌ `set_interface_vlan` - Configure interface VLAN
-  - Parameters: node, interface, vlan_id
-  - Validation: Check node exists, interface exists, VLAN exists
-  
-- ❌ `create_vlan` - Create new VLAN
-  - Parameters: vlan_id, name, subnet
-  - Validation: Check VLAN doesn't exist, subnet valid
+- ❌ `set_interface_vlan` - Assign VM to existing VLAN
+  - Parameters: vmid, node, vlan_id, bridge (default: vmbr0)
+  - Validation: 
+    - Check VLAN exists in OPNsense (query `opnsense_readonly.interfaces_vlans_list`)
+    - Check VLAN exists in twin (NetworkInterface entities)
+    - Check node exists, VM exists
+  - Implementation: Terraform (Proxmox bridge config with `vlan_id`)
+  - Note: This assigns VM to VLAN, not creating VLAN on switch
   
 - ❌ `assign_static_ip` - Assign static IP to interface
   - Parameters: node, interface, ip, subnet, gateway

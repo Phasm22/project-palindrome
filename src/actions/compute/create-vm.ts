@@ -20,6 +20,7 @@ export const CreateVmSchema = z.object({
   diskSize: z.string().default("20G"),
   sshPublicKey: z.string().optional(),
   vmBridge: z.string().default("vmbr0"),
+  vlanId: z.number().int().min(1).max(4094).optional(), // Optional: VLAN ID to assign (for vmbr0 tagging, or validation for pre-configured bridges)
   datastore: z.string().default("local-lvm"),
   cloudInitDatastore: z.string().optional(), // Optional: defaults to "local" in Terraform
   templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001)
@@ -79,7 +80,7 @@ function getProxmoxClientConfig(node: string): { url: string; tokenId: string; t
 }
 
 export async function createVm(params: CreateVmParams): Promise<CreateVmResult> {
-  const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, bootstrap: shouldBootstrap, dryRun } = params;
+  const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, vlanId, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, bootstrap: shouldBootstrap, dryRun } = params;
 
   // Normalize node name: Proxmox node names are case-sensitive (YANG, yin, etc.)
   // Convert common lowercase inputs to correct case
@@ -269,6 +270,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     },
     sshPublicKey: sshKey,
     vmBridge,
+    vlanId, // Optional VLAN ID for network tagging
     datastore,
     cloudInitDatastore: cloudInitDatastore || defaultCloudInitDatastore,
     templateId: finalTemplateId, // Use the calculated template ID

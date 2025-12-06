@@ -459,30 +459,40 @@
     color: #e2e8f0;
   }
   
-  /* Table responsive wrapper - show both on mobile with horizontal scroll */
+  /* Table responsive wrapper - cards on mobile, table on desktop */
   .table-responsive {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
   
+  /* Mobile: hide table, show full-width cards */
   @media (max-width: 767px) {
     .table-responsive {
-      display: block;
+      display: none !important;
     }
     
     .card-responsive {
       display: block;
-      margin-top: 1rem;
+      margin: 0 -1rem; /* Full bleed */
+      padding: 0 0.75rem;
+    }
+    
+    .card-responsive > div {
+      border-radius: 0.5rem;
+      margin-bottom: 0.5rem;
+      padding: 0.75rem;
+      font-size: 0.8125rem;
     }
   }
   
+  /* Desktop: show table, hide cards */
   @media (min-width: 768px) {
     .table-responsive {
       display: block;
     }
     
     .card-responsive {
-      display: none;
+      display: none !important;
     }
   }
   

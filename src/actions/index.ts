@@ -10,6 +10,7 @@ export * from "./compute/create-vm";
 export * from "./compute/destroy-vm";
 export * from "./network/create-dns-record";
 export * from "./network/sync-dhcp-to-dns";
+export * from "./network/set-interface-vlan";
 export * from "./services/bootstrap";
 export * from "./services/install-docker";
 export * from "./services/install-nginx";

@@ -1,5 +1,6 @@
 import { BaseTool } from "../tools/BaseTool";
 import { RunDiagnosticTool } from "../tools/RunDiagnosticTool";
+import { InfrastructureDiagnosticTool } from "../tools/InfrastructureDiagnosticTool";
 import { CreateIncidentTicketTool } from "../tools/CreateIncidentTicketTool";
 import { LookupUserProfileTool } from "../tools/LookupUserProfileTool";
 import { OpnsenseReadOnlyTool } from "../tools/opnsense/readonly";
@@ -14,6 +15,7 @@ import { ActionTool } from "../tools/ActionTool";
 export function loadTools(): BaseTool[] {
   return [
     new RunDiagnosticTool(),
+    new InfrastructureDiagnosticTool(),
     new LookupUserProfileTool(),
     new CreateIncidentTicketTool(),
     new OpnsenseReadOnlyTool(),

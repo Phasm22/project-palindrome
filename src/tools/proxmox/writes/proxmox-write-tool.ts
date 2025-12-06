@@ -61,7 +61,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
               "migrate_vm",
               "destroy_vm",
             ],
-            description: "The write action to execute. WARNING: destroy_vm is a destructive operation that permanently deletes the VM/container and cannot be undone.",
+            description: "The write action to execute. Use 'reboot_vm' for restart/reboot operations. Use 'start_vm' to start a stopped VM. Use 'stop_vm' to stop a running VM. WARNING: destroy_vm is a destructive operation that permanently deletes the VM/container and cannot be undone.",
           },
           node: {
             type: "string",
@@ -117,6 +117,26 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
             node: "pve1",
             vmid: 101,
             dryRun: true,
+          },
+        },
+        {
+          description: "Restart/Reboot a VM - use reboot_vm action for restart operations",
+          parameters: {
+            action: "reboot_vm",
+            node: "YANG",
+            vmid: 9000,
+            type: "qemu",
+            dryRun: false,
+          },
+        },
+        {
+          description: "Stop a VM gracefully",
+          parameters: {
+            action: "stop_vm",
+            node: "pve1",
+            vmid: 101,
+            type: "qemu",
+            dryRun: false,
           },
         },
         {

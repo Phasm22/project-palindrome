@@ -15,6 +15,24 @@ function extractNodeName(text: string): string | null {
 export function detectNetworkIntent(userInput: string): NetworkIntent | null {
   const normalized = userInput.toLowerCase();
 
+  // Don't match network intent if this is clearly an action (create, install, configure, etc.)
+  // Action intents should take priority
+  const hasActionKeyword = 
+    normalized.includes("create") || 
+    normalized.includes("install") || 
+    normalized.includes("configure") || 
+    normalized.includes("set") ||
+    normalized.includes("destroy") ||
+    normalized.includes("delete") ||
+    normalized.includes("sync") ||
+    normalized.includes("put") ||
+    normalized.includes("assign");
+  
+  if (hasActionKeyword) {
+    // This is likely an action, not a query - let action intent detection handle it
+    return null;
+  }
+
   if (normalized.includes("network") || normalized.includes("interfaces")) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
@@ -39,7 +57,8 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
     }
   }
 
-  if (normalized.includes("vlan") || normalized.includes("subnet") || normalized.includes("routing")) {
+  // Only match VLAN/subnet/routing if it's clearly a query (not an action)
+  if ((normalized.includes("vlan") || normalized.includes("subnet") || normalized.includes("routing")) && !hasActionKeyword) {
     return { type: "describe_network" };
   }
 

@@ -80,11 +80,17 @@ export class HybridOrchestrator {
       });
 
       // Check cache for common queries (temperature, status checks, etc.)
+      // Skip cache for action queries (restart, start, stop, etc.) as they're time-sensitive
+      const isActionQuery = /\b(restart|start|stop|create|destroy|install|configure|set|put|assign)\b/i.test(userQuery);
       const cacheKey = `${userQuery.toLowerCase().trim()}:${userACLGroup}`;
       const cached = this.cache.get(cacheKey);
-      if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
+      if (!isActionQuery && cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
         pceLogger.debug("Cache hit for RAG query", { query: userQuery.slice(0, 50) });
         return cached.response;
+      }
+      
+      if (isActionQuery) {
+        pceLogger.debug("Skipping cache for action query", { query: userQuery.slice(0, 50) });
       }
 
       // Step 0: Check for exact-match VM/container names before semantic search

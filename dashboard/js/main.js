@@ -141,16 +141,18 @@ window.switchTab = function(tabName, clickedElement) {
     }, 100);
   }
   
-  // Show/hide floating nav for overview tab (desktop)
+  // Show/hide floating nav for overview tab (desktop only)
   const overviewNav = document.getElementById('overview-nav');
   if (overviewNav) {
-    overviewNav.style.display = tabName === 'overview' ? 'flex' : 'none';
-  }
-  
-  // Show/hide mobile nav for overview tab
-  const overviewNavMobile = document.getElementById('overview-nav-mobile');
-  if (overviewNavMobile) {
-    overviewNavMobile.style.display = tabName === 'overview' ? 'flex' : 'none';
+    if (tabName === 'overview' && window.innerWidth >= 768) {
+      // Show on desktop when overview tab is active
+      overviewNav.classList.remove('hidden');
+      overviewNav.classList.add('flex');
+    } else {
+      // Hide on all other tabs or on mobile
+      overviewNav.classList.add('hidden');
+      overviewNav.classList.remove('flex');
+    }
   }
   
   // Update mobile dropdown selector
@@ -391,14 +393,20 @@ window.addEventListener('DOMContentLoaded', async () => {
     plusIconMobile.appendChild(icon);
   }
   
-  // Send icon
+  // Send icons (mobile + desktop)
   const sendIcon = document.getElementById('send-icon');
   if (sendIcon) {
-    const icon = createIcon('Send', { size: 18, color: 'currentColor' });
+    const icon = createIcon('Send', { size: 16, color: 'currentColor' });
     sendIcon.appendChild(icon);
   }
   
-  // Navigation icons for overview
+  const sendIconDesktop = document.getElementById('send-icon-desktop');
+  if (sendIconDesktop) {
+    const icon = createIcon('Send', { size: 18, color: 'currentColor' });
+    sendIconDesktop.appendChild(icon);
+  }
+  
+  // Navigation icons for overview (desktop floating nav)
   const navIconStats = document.getElementById('nav-icon-stats');
   if (navIconStats) {
     const icon = createIcon('BarChart3', { size: 20, color: '#f97316' });
@@ -409,19 +417,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (navIconCluster) {
     const icon = createIcon('Server', { size: 20, color: '#f97316' });
     navIconCluster.appendChild(icon);
-  }
-  
-  // Mobile navigation icons
-  const navIconStatsMobile = document.getElementById('nav-icon-stats-mobile');
-  if (navIconStatsMobile) {
-    const icon = createIcon('BarChart3', { size: 20, color: '#f97316' });
-    navIconStatsMobile.appendChild(icon);
-  }
-  
-  const navIconClusterMobile = document.getElementById('nav-icon-cluster-mobile');
-  if (navIconClusterMobile) {
-    const icon = createIcon('Server', { size: 20, color: '#f97316' });
-    navIconClusterMobile.appendChild(icon);
   }
   
   // Add page load animations only for visible elements

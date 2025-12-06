@@ -35,16 +35,23 @@ Based on `docs/ROADMAP.md`, here's the implementation order:
 
 **Goal:** Enable "put VM in VLAN 50" type operations
 
-**Missing Actions:**
-- ❌ `network.set_interface_vlan` - Configure interface VLAN
-  - Parameters: node, interface, vlan_id
-  - Validation: Check node exists, interface exists, VLAN exists in twin
-  - Implementation: Proxmox API or Terraform
+**Strategy:** Use existing VLANs only (simplifies implementation, avoids complex orchestration)
 
-- ❌ `network.create_vlan` - Create new VLAN
-  - Parameters: vlan_id, name, subnet
-  - Validation: Check VLAN doesn't exist, subnet valid
-  - Implementation: OPNsense or Proxmox bridge config
+**Why not create VLANs?**
+- Creating VLANs requires orchestration across Ansible (switch config), OPNsense (interface creation), and Proxmox (bridge config)
+- Requires handling latency, retries, and coordination between systems
+- For Phase 5, we focus on assignment/validation of existing VLANs
+- VLAN creation can be added later if needed (Phase 6+)
+
+**Missing Actions:**
+- ❌ `network.set_interface_vlan` - Configure interface VLAN (assign VM to existing VLAN)
+  - Parameters: vmid, node, vlan_id, bridge (default: vmbr0)
+  - Validation: 
+    - Check VLAN exists in OPNsense (via `opnsense_readonly.interfaces_vlans_list`)
+    - Check VLAN exists in twin (NetworkInterface entities)
+    - Check node exists, VM exists
+  - Implementation: Terraform (Proxmox bridge config with `vlan_id`)
+  - Note: This is VM-level VLAN assignment, not switch-level
 
 - ❌ `network.assign_static_ip` - Assign static IP to interface (network-level)
   - Parameters: node, interface, ip, subnet, gateway
