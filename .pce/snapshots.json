@@ -7470,5 +7470,13 @@
     "aclGroup": "ops",
     "documentType": "proxmox_inventory",
     "size": 316
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-2-1765064557611.txt",
+    "sha256Hash": "d08303bb18672a78ea64b5b264314c582109879ca8f5252e43f8e3e860b12d84",
+    "timestamp": "2025-12-06T23:42:52.799Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 468
   }
 ]
