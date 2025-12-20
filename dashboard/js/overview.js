@@ -38,7 +38,7 @@ export async function loadExecutionStats() {
           <div class="status-grid">
             <div class="stat-card">
               <div class="stat-label">Status</div>
-              <div class="stat-value">
+              <div>
                 <span class="status-badge ${ingestion.active ? 'status-success' : 'status-error'}">
                   ${ingestion.active ? 'Active' : 'Inactive'}
                 </span>
@@ -200,7 +200,7 @@ export async function loadClusterStatus() {
       
       ${data.vms?.resources && data.vms.resources.length > 0 ? `
         <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0; font-size: 1rem; text-align: center;">Recent VMs</h3>
-        <div style="max-height: 400px; overflow-y: auto; display: flex; justify-content: center;">
+        <div style="max-height: 400px; overflow-y: auto; width: 100%;">
           ${renderResponsiveTable(
             ['Name', 'Node', 'Status', 'Type'],
             data.vms.resources.slice(0, 20),

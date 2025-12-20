@@ -74,6 +74,17 @@ const INFRA_TERMS: Record<string, { canonical: string; description: string; alia
 };
 
 /**
+ * Common English words that should never be matched to infrastructure terms
+ * These are prepositions, articles, etc. that appear frequently
+ */
+const COMMON_WORDS = new Set([
+  "in", "on", "at", "to", "for", "of", "with", "by", "from", "the", "a", "an",
+  "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+  "do", "does", "did", "will", "would", "could", "should", "may", "might",
+  "and", "or", "but", "if", "then", "else", "when", "where", "what", "which",
+]);
+
+/**
  * Known Proxmox nodes (will be populated from ingested data)
  */
 let knownNodes: string[] = ["proxBig", "YANG", "YIN"];
@@ -165,7 +176,11 @@ function findClosestTerm(input: string, terms: string[]): { term: string; distan
     }
     
     // Skip if lengths are too different (prevents "cm" matching "destroy")
+    // For very short words (2 chars), be extra strict - only match if length diff is 0 or 1
     const lengthDiff = Math.abs(normalized.length - termLower.length);
+    if (normalized.length <= 2 && lengthDiff > 1) {
+      continue; // "in" (2 chars) should not match "YIN" (3 chars)
+    }
     if (lengthDiff > 2) {
       continue;
     }
@@ -279,18 +294,22 @@ export function analyzeInput(input: string): ClarificationResult {
       }
     }
     
-    // Check for known nodes
-    const nodeMatch = findClosestTerm(word, knownNodes);
-    if (nodeMatch) {
-      if (nodeMatch.isTypo) {
-        corrections.push({
-          original: word,
-          corrected: nodeMatch.term,
-          type: nodeMatch.distance === 1 ? "adjacent_key" : "levenshtein",
-        });
-        confidence -= 0.1;
+    // Check for known nodes (but skip common English words)
+    if (!COMMON_WORDS.has(word)) {
+      const nodeMatch = findClosestTerm(word, knownNodes);
+      if (nodeMatch) {
+        // Only treat as typo if word length is similar to node name (prevent "in" -> "YIN")
+        const lengthDiff = Math.abs(word.length - nodeMatch.term.length);
+        if (nodeMatch.isTypo && lengthDiff <= 1) {
+          corrections.push({
+            original: word,
+            corrected: nodeMatch.term,
+            type: nodeMatch.distance === 1 ? "adjacent_key" : "levenshtein",
+          });
+          confidence -= 0.1;
+        }
+        detectedNode = nodeMatch.term;
       }
-      detectedNode = nodeMatch.term;
     }
     
     // Check for known VM names

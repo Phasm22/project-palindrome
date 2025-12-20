@@ -47,6 +47,32 @@
 
 **Status:** Phase 4 is complete. The Parser Layer provides situational awareness. The Twin Layer provides facts. Reasoning chains provide natural language responses.
 
+### Additional Features Built ✅
+
+**Clarification System:**
+- ✅ Rule-based typo detection (adjacent keyboard keys, Levenshtein distance)
+- ✅ Entity recognition (VM names, node names, infrastructure terms)
+- ✅ Multi-turn clarification with clickable suggestions
+- ✅ No LLM needed - fast, deterministic corrections
+
+**Tool Progress Events:**
+- ✅ Real-time progress updates during long-running operations
+- ✅ Status indicators (starting, running, waiting, verifying, completed, failed)
+- ✅ Progress bars with percentage
+- ✅ Visual feedback in dashboard during VM creation, terraform operations
+
+**Environment Overview:**
+- ✅ Natural language queries: "What's running on node X?", "Show me all VMs", "Overview of my environment"
+- ✅ Twin-grounded responses with cluster/node/VM status
+- ✅ Formatted output with running/stopped VM counts
+- ✅ No action required - pure informational queries
+
+**Multi-Cluster Support:**
+- ✅ Proxmox operations work across YANG, YIN, proxBig clusters
+- ✅ Automatic endpoint resolution for alternative clusters
+- ✅ Node name normalization and validation
+- ✅ Token management per cluster
+
 ---
 
 ## PHASE 5 — ACTION LAYER 🚀
@@ -57,32 +83,38 @@
 
 **Current Status:**
 - ✅ `proxmox_write` has: start, stop, shutdown, reboot, reset, snapshot, rollback, clone, migrate, destroy
+- ✅ `compute.create_vm` - Create new VM from template via Terraform
+  - ✅ Parameters: node, name (auto-generated palindrome if not provided), template ID, resources (CPU, memory, disk), network config
+  - ✅ Validation: Twin-grounded (check node exists, VM name available)
+  - ✅ Twin update: Auto-syncs to twin after creation
+  - ✅ Multi-cluster support: Works across YANG, YIN, proxBig clusters
+  - ✅ DNS integration: Auto-creates DNS records in Pi-hole
+  - ✅ Progress events: Real-time progress updates during long operations
+  - ✅ VM ID allocation: Auto-allocates from 9000-9999 range
+  - ✅ Node-specific templates: yang=8000, yin=8001, proxBig=8001
 
 **Missing Operations:**
-- ❌ `create_vm` - Create new VM from template or ISO
-  - Parameters: node, name, template/ISO, resources (CPU, memory, disk), network config
-  - Validation: Check node exists, resources available, template/ISO exists
-  - Twin update: Create ComputeVM entity after creation
-  
-- ❌ `set_vm_resources` - Configure CPU/memory/disk
+- ❌ `set_vm_resources` - Configure CPU/memory/disk on existing VM
   - Parameters: vmid, node, cpu, memory, disk
   - Validation: Check node has resources, VM exists
   
-- ❌ `attach_vlan` - Attach VM to VLAN
+- ❌ `attach_vlan` - Attach VM to VLAN (via Terraform network config)
   - Parameters: vmid, node, vlan_id, interface
   - Validation: Check VLAN exists in twin, VM exists
+  - Note: Can be done via `compute.create_vm` with `vlanId` parameter, but no update path for existing VMs
   
-- ❌ `set_vm_ip` - Configure VM network/IP
+- ❌ `set_vm_ip` - Configure VM network/IP on existing VM
   - Parameters: vmid, node, ip, subnet, gateway
   - Validation: Check subnet exists, IP available, gateway valid
+  - Note: Static IPs can be set via cloud-init during creation, but no update path
 
 **Implementation Notes:**
-- Extend `proxmox_write` tool with new actions
-- Add twin-grounded validation (check node/VLAN exists before creating)
-- Update twin after successful operations
-- Support dry-run mode for all operations
+- VM creation uses Terraform for deterministic operations
+- Multi-cluster awareness built into both `proxmox_write` and `compute.create_vm`
+- Tool progress events provide real-time feedback during long operations
+- DNS names are primary identifier (e.g., `aha.prox`)
 
-**Priority:** HIGH - This is the core automation capability
+**Priority:** HIGH - Core automation capability is working, resource management still needed
 
 ---
 
@@ -91,47 +123,47 @@
 **Current Status:**
 - ✅ Network query operations exist
 - ✅ VLAN query operations exist (`opnsense_readonly.interfaces_vlans_list`)
+- ✅ `network.create_dns_record` - Create DNS A/AAAA record in Pi-hole
+  - ✅ Parameters: hostname, ip, domain (optional, defaults to .prox)
+  - ✅ Validation: Check hostname valid, IP valid, handles conflicts (updates existing)
+  - ✅ Implementation: Pi-hole REST API (session-based auth)
+  - ✅ Auto-integration: VM creation automatically creates DNS records
+  - ✅ **Naming convention**: DNS names are primary identifier (e.g., `aha.prox`)
+- ✅ `network.sync_dhcp_to_dns` - Sync OPNsense DHCP leases to Pi-hole DNS records
+  - ✅ Automatically bridges OPNsense DHCP (Unbound) and Pi-hole (forwarder)
+  - ✅ Updates existing DNS records if IP changed
 
 **Strategy:** Use existing VLANs only. Creating VLANs requires orchestration across Ansible (switch), OPNsense, and Proxmox, with latency/retry complexity. For Phase 5, we'll validate existing VLANs and assign VMs to them.
 
 **Missing Operations:**
-- ❌ `set_interface_vlan` - Assign VM to existing VLAN
+- ❌ `set_interface_vlan` - Assign existing VM to VLAN (update path)
   - Parameters: vmid, node, vlan_id, bridge (default: vmbr0)
   - Validation: 
     - Check VLAN exists in OPNsense (query `opnsense_readonly.interfaces_vlans_list`)
     - Check VLAN exists in twin (NetworkInterface entities)
     - Check node exists, VM exists
   - Implementation: Terraform (Proxmox bridge config with `vlan_id`)
-  - Note: This assigns VM to VLAN, not creating VLAN on switch
+  - Note: Can be done during VM creation via `vlanId` parameter, but no update path for existing VMs
   
-- ❌ `assign_static_ip` - Assign static IP to interface
+- ❌ `assign_static_ip` - Assign static IP to existing VM interface
   - Parameters: node, interface, ip, subnet, gateway
   - Validation: Check IP available, subnet exists, gateway valid
+  - Note: Static IPs can be set via cloud-init during creation, but no update path
   
-- ❌ `create_dhcp_reservation` - Create DHCP reservation (OPTIONAL)
+- ❌ `create_dhcp_reservation` - Create DHCP reservation in OPNsense (OPTIONAL)
   - Parameters: mac, ip, hostname
   - Validation: Check MAC valid, IP available, not conflicting
   - Note: Only needed if using DHCP with guaranteed IPs. If using static IPs (cloud-init/Ansible), skip this.
 
-- ❌ `create_dns_record` - Create DNS A/AAAA record (pihole/unbound)
-  - Parameters: hostname, ip, domain (optional, defaults to .prox)
-  - Validation: Check hostname valid, IP valid, no conflicts
-  - Implementation: Pi-hole API or unbound config management
-  - Note: Unbound forwards to pihole, so pihole API is primary interface
-  - **Naming convention**: Use DNS names as primary identifier (e.g., `web-server.prox` instead of IP)
-
 **Implementation Notes:**
+- DNS operations are complete and integrated with VM creation
 - OPNsense + Proxmox both contribute here
 - Use `opnsense_safewrite` for OPNsense operations (DHCP reservations - optional)
-- Use `pihole_api` or `dns_mcp` tool for DNS operations (HIGH priority)
 - Use `proxmox_write` for Proxmox network config
 - Update twin after successful operations
-- **Recommended workflow**: 
-  - Option A (Static IPs): Create VM → Set static IP (cloud-init/Ansible) → Create DNS record (pihole)
-  - Option B (DHCP with reservations): Create VM → Create DHCP reservation (OPNsense) → Create DNS record (pihole)
+- **Current workflow**: Create VM (with cloud-init static IP) → Auto-create DNS record (pihole)
 
-**Priority:** HIGH - Needed for "put VM in VLAN 50" type operations
-**DNS Priority:** HIGH - Critical for naming convention-based workflow. DNS names are primary identifier.
+**Priority:** MEDIUM - DNS is done, VLAN assignment for existing VMs still needed
 **DHCP Reservation Priority:** LOW - Only needed if using DHCP with guaranteed IPs. Can skip if using static IPs.
 
 ---
@@ -177,25 +209,38 @@
 
 ---
 
-### 5.4 Bootstrap Actions (Optional)
+### 5.4 Bootstrap Actions ✅
 
 **Current Status:**
-- ❌ No bootstrap script system
+- ✅ `services.bootstrap` - Run Ansible playbook on VM (default: common.yml)
+  - ✅ Parameters: vmName, playbook, waitForVm, timeout, retryOnFailure, maxRetries
+  - ✅ Implementation: Ansible via SSH
+  - ✅ Auto-wait: Waits for VM to be accessible before running
+- ✅ `services.install_docker` - Install Docker CE, Docker Compose, and Portainer
+  - ✅ Parameters: vmName, waitForVm, timeout, retryOnFailure, maxRetries
+  - ✅ Implementation: Ansible playbook
+- ✅ `services.install_nginx` - Install and configure nginx web server
+  - ✅ Parameters: vmName, waitForVm, timeout, retryOnFailure, maxRetries
+  - ✅ Implementation: Ansible playbook
+- ✅ `services.configure_firewall` - Configure UFW firewall rules on VM
+  - ✅ Parameters: vmName, rules, defaultPolicy, waitForVm, timeout, retryOnFailure, maxRetries
+  - ✅ Implementation: Ansible playbook
+- ✅ `services.set_static_ip` - Configure static IP address on VM using netplan
+  - ✅ Parameters: vmName, ip (CIDR format), gateway, dns, interface, waitForVm, timeout, retryOnFailure, maxRetries
+  - ✅ Implementation: Ansible playbook
 
 **Missing Operations:**
-- ❌ `install_docker` - Install docker on VM
-- ❌ `install_nginx` - Install nginx on VM
 - ❌ `install_wazuh_agent` - Install Wazuh agent
 - ❌ `install_fail2ban` - Install fail2ban
-- ❌ Generic script execution framework
+- ❌ Generic script execution framework (beyond Ansible)
 
 **Implementation Notes:**
-- Create bootstrap script framework
-- Support SSH-based script execution
-- Support cloud-init for VM creation
-- Store scripts in templates directory
+- Bootstrap system uses Ansible for SSH-based script execution
+- Cloud-init handles initial VM setup (packages, users, SSH keys)
+- Ansible handles post-creation configuration
+- All services actions support dry-run mode
 
-**Priority:** MEDIUM - Nice-to-have for complete automation
+**Priority:** MEDIUM - Core bootstrap is done, additional services can be added as needed
 
 ---
 
@@ -205,12 +250,13 @@
 
 ### Safety Checks Before Any Modification
 
-#### 1. Twin-Grounding
-- ✅ Does the node exist? (Query twin)
-- ✅ Does VLAN exist? (Query twin)
-- ✅ Is VM name valid? (Check naming conventions)
-- ✅ Does subnet exist? (Query twin)
-- ✅ Does interface exist? (Query twin)
+#### 1. Twin-Grounding (Partially Implemented)
+- ✅ Does the node exist? (Query twin) - DONE in `compute.create_vm`
+- ✅ Is VM name valid? (Check naming conventions) - DONE (DNS-safe names, palindrome generation)
+- ✅ Does VM already exist? (Query twin) - DONE in `compute.create_vm`
+- ⚠️ Does VLAN exist? (Query twin) - Can validate during creation, but not enforced
+- ⚠️ Does subnet exist? (Query twin) - Not yet implemented
+- ⚠️ Does interface exist? (Query twin) - Not yet implemented
 
 #### 2. Exposure Warnings
 - ⚠️ "This rule will expose this VM to WAN."
@@ -285,22 +331,24 @@
 - ✅ Reasoning Chains are finished
 - **Stop expanding these**
 
-### 2. Build VM Create Flow (Next)
-- This is the flagship demo
-- "Create VM named X on node Y"
-- "Give it IP address Z"
-- "Put it in VLAN 50"
+### 2. Build VM Create Flow ✅
+- ✅ "Create VM named X on node Y" - DONE
+- ✅ "Give it IP address Z" - DONE (via cloud-init + DNS)
+- ⚠️ "Put it in VLAN 50" - Partial (can set during creation, no update path)
 
-### 3. Build Network Operations
-- Needed for VM creation to be useful
-- VLAN + IP manipulation
+### 3. Build Network Operations (In Progress)
+- ✅ DNS operations - DONE
+- ✅ DHCP→DNS sync - DONE
+- ❌ VLAN assignment for existing VMs - TODO
+- ❌ Static IP updates for existing VMs - TODO
 
-### 4. Build Firewall Actions
+### 4. Build Firewall Actions (Next)
 - Once VM creation works cleanly
 - Port management
+- Rule creation/deletion
 
 ### 5. Build Safety Layer
-- Twin-grounded validation
+- Twin-grounded validation (partially done - VM creation validates)
 - Exposure warnings
 - Resource validation
 - Undo path
@@ -340,5 +388,23 @@
 
 ---
 
-**Last Updated:** 2025-11-27
+**Last Updated:** 2025-12-06
+
+## Current Capabilities Summary
+
+**What You Can Do Now:**
+- ✅ Query environment: "What's running on node YIN?", "Show me all VMs", "Overview of my environment"
+- ✅ Create VMs: "Create a VM on node yin" (auto-generates palindrome name, creates DNS record)
+- ✅ VM lifecycle: Start, stop, restart, destroy VMs across multiple Proxmox clusters
+- ✅ DNS management: Create/update DNS records in Pi-hole, sync DHCP leases to DNS
+- ✅ Service installation: Install Docker, nginx, configure firewall on VMs via Ansible
+- ✅ Network configuration: Set static IPs, configure VLANs during VM creation
+- ✅ Typo correction: Automatic clarification for common typos (e.g., "cm" → "vm")
+
+**What's Still TODO:**
+- ❌ Update existing VMs: Change VLAN, update static IP, modify resources
+- ❌ Firewall write operations: Create/delete firewall rules, open/close ports
+- ❌ Resource management: Adjust CPU/memory/disk on existing VMs
+- ❌ Safety warnings: Exposure alerts, resource capacity warnings
+- ❌ Posture checks: Drift detection, hygiene reports, readiness checks
 
