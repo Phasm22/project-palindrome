@@ -53,7 +53,11 @@ export class TwinQueryTool extends BaseTool {
     super({
       name: "twin_query",
       description:
-        "Query the digital twin for compute entities (nodes, VMs, relationships) with structured responses. Use this before calling live Proxmox tools.",
+        "Query the digital twin for compute entities (nodes, VMs, relationships) with structured responses. Use this before calling live Proxmox tools. " +
+        "IMPORTANT: When searching for a VM by name (e.g., 'code server', 'nginx', 'database'), use operation='find_vm_by_name' which searches across ALL nodes with case-insensitive partial matching. " +
+        "Do NOT assume a VM is on a specific node - always search by name first. " +
+        "Note: For IP addresses, check the 'primaryIp' field on network interfaces (even if 'ips' array is empty). " +
+        "If twin data doesn't have IPs, use proxmox_readonly get_vm_ip for real-time IP resolution.",
       categories: ["twin", "compute", "graph", "read"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
@@ -236,7 +240,15 @@ export class TwinQueryTool extends BaseTool {
         }
         case "network_list_interfaces": {
           const data = await this.service.listInterfaces();
-          return { data: { kind: "network_interface_list", data } };
+          // Format interfaces to highlight primaryIp field for IP address queries
+          const formattedData = data.map((iface: any) => ({
+            ...iface,
+            // Add a note if primaryIp exists but ips array is empty
+            _note: iface.primaryIp && (!iface.ips || iface.ips.length === 0) 
+              ? `IP address available in primaryIp field: ${iface.primaryIp}`
+              : undefined,
+          }));
+          return { data: { kind: "network_interface_list", data: formattedData } };
         }
         case "network_interfaces_by_node": {
           const nodeName = opParams?.nodeName;
@@ -244,7 +256,15 @@ export class TwinQueryTool extends BaseTool {
             return { error: "nodeName is required for network_interfaces_by_node" };
           }
           const data = await this.service.interfacesByNode(nodeName);
-          return { data: { kind: "network_interface_list", nodeName, data } };
+          // Format interfaces to highlight primaryIp field for IP address queries
+          const formattedData = data.map((iface: any) => ({
+            ...iface,
+            // Add a note if primaryIp exists but ips array is empty
+            _note: iface.primaryIp && (!iface.ips || iface.ips.length === 0) 
+              ? `IP address available in primaryIp field: ${iface.primaryIp}`
+              : undefined,
+          }));
+          return { data: { kind: "network_interface_list", nodeName, data: formattedData } };
         }
         case "network_vms_by_subnet": {
           const subnet = opParams?.subnet;

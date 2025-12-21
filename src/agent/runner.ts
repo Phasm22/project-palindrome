@@ -46,10 +46,10 @@ import {
 } from "../reasoning/chains/exposure";
 import { detectActionIntent } from "../reasoning/action-intents";
 import {
-  analyzeInput,
-  formatClarificationMessage,
   loadKnownEntitiesFromProxmox,
 } from "../reasoning/clarification";
+import { classifyAndRoute } from "../reasoning/intent-router";
+import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../reasoning/failure-reclassification";
 
 let openaiClient: OpenAI | null = null;
 
@@ -92,6 +92,96 @@ function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
       };
     })
     .filter((def): def is NonNullable<typeof def> => def !== null);
+}
+
+/**
+ * Clean up RAG answers by removing verbose citations and formatting
+ * 
+ * Removes:
+ * - Source citations like "[Source N]" or "Source: [Source N]"
+ * - Verbose explanations about where information can be found
+ * - Redundant notes about variations or updates
+ * - Unnecessary formatting markers
+ * 
+ * Keeps:
+ * - The actual answer/data
+ * - Essential context
+ */
+function cleanupRagAnswer(answer: string): string {
+  if (!answer) return answer;
+  
+  let cleaned = answer;
+  
+  // Remove source citations: "[Source N]" or "Source: [Source N]"
+  cleaned = cleaned.replace(/\[Source \d+\]/gi, '');
+  cleaned = cleaned.replace(/Source:\s*\[Source \d+\]/gi, '');
+  cleaned = cleaned.replace(/according to.*?Source \d+/gi, '');
+  cleaned = cleaned.replace(/found in.*?Source \d+/gi, '');
+  cleaned = cleaned.replace(/provided in.*?Source \d+/gi, '');
+  cleaned = cleaned.replace(/according to one of the entries provided in/gi, '');
+  cleaned = cleaned.replace(/according to.*?entries?/gi, '');
+  
+  // Remove verbose explanations about where information can be found
+  cleaned = cleaned.replace(/This information can be found.*?\n/gi, '');
+  cleaned = cleaned.replace(/The following line.*?\n/gi, '');
+  cleaned = cleaned.replace(/under the.*?field.*?\n/gi, '');
+  cleaned = cleaned.replace(/in the following.*?\n/gi, '');
+  cleaned = cleaned.replace(/The information.*?found.*?\n/gi, '');
+  
+  // Remove notes about variations or updates
+  cleaned = cleaned.replace(/Note that.*?over time\./gi, '');
+  cleaned = cleaned.replace(/which might indicate.*?over time\./gi, '');
+  cleaned = cleaned.replace(/might indicate.*?variations/gi, '');
+  cleaned = cleaned.replace(/Note that this value.*?difference.*?\n/gi, '');
+  
+  // Remove code block markers - extract just the data, not the formatting
+  cleaned = cleaned.replace(/```\s*\n?([^`]+)\n?\s*```/g, '');
+  
+  // Remove "The other relevant details" sections that are redundant
+  cleaned = cleaned.replace(/The other relevant details.*$/gis, '');
+  
+  // Remove standalone "Source:" lines
+  cleaned = cleaned.replace(/^Source:.*$/gim, '');
+  
+  // Extract key information patterns (like "Memory: X / Y") and remove duplicates
+  // If we have a pattern like "Memory: X / Y" in a code block and also in text, keep the text version
+  const memoryPattern = /Memory:\s*([\d.]+)\s*(GB|MB|TB)\s*\/\s*([\d.]+)\s*(GB|MB|TB)/gi;
+  const memoryMatches = [...cleaned.matchAll(memoryPattern)];
+  if (memoryMatches.length > 1) {
+    // Keep the first occurrence, remove standalone "Memory: X / Y" lines
+    cleaned = cleaned.replace(/^Memory:\s*[\d.]+\s*(GB|MB|TB)\s*\/\s*[\d.]+\s*(GB|MB|TB)\s*$/gim, '');
+  }
+  
+  // Remove trailing periods after removing citations
+  cleaned = cleaned.replace(/\s+\.\s*$/gm, '.');
+  
+  // Clean up multiple newlines and spaces
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  cleaned = cleaned.replace(/[ \t]{2,}/g, ' ');
+  cleaned = cleaned.replace(/\n\s+\./g, '.');
+  
+  // Remove leading/trailing whitespace from each line
+  cleaned = cleaned.split('\n').map(line => line.trim()).filter(line => line.length > 0).join('\n');
+  
+  // Remove leading/trailing whitespace
+  cleaned = cleaned.trim();
+  
+  // If answer starts with "The" and contains key info, simplify it
+  // Example: "The memory usage for VM 101 is 14.36 GB / 16 GB." -> "VM 101 memory usage: 14.36 GB / 16 GB"
+  if (cleaned.match(/^The\s+\w+\s+usage.*?is\s+([\d.]+\s*(GB|MB|TB)\s*\/\s*[\d.]+\s*(GB|MB|TB))/i)) {
+    cleaned = cleaned.replace(/^The\s+(\w+)\s+usage\s+for\s+(.+?)\s+is\s+([\d.]+\s*(GB|MB|TB)\s*\/\s*[\d.]+\s*(GB|MB|TB))\.?/i, 
+      (match, metric, entity, value) => {
+        const entityClean = entity.replace(/\s*\([^)]+\)\s*/, '').trim();
+        return `${entityClean} ${metric} usage: ${value}`;
+      });
+  }
+  
+  // If the answer is just about sources or formatting, return a simplified version
+  if (cleaned.length < 20 && cleaned.toLowerCase().includes('source')) {
+    return "I found the information, but the answer needs to be extracted from the source data.";
+  }
+  
+  return cleaned;
 }
 
 function formatRagSummary(rag: HybridApiContext) {
@@ -319,6 +409,9 @@ export async function runAgent(
   context.addUserMessage(userInput);
 
   const tools = loadTools();
+  
+  // Track failures to prevent retry loops (must be declared before classification)
+  const failureTracker = new FailureTracker();
 
   // Helper to record reasoning trace for early returns
   const recordEarlyReturnTrace = async (answer: string, intent: string, toolCalls: number = 1): Promise<string | undefined> => {
@@ -368,20 +461,181 @@ export async function runAgent(
     return tool.execute(params, { toolName, startedAt: Date.now() });
   });
   
-  // Analyze input for typos and ambiguity
-  const clarificationResult = analyzeInput(userInput);
+  // Classify intent using probabilistic classifier
+  const { classification, routing } = classifyAndRoute(userInput);
   
-  if (clarificationResult.needsClarification) {
+  // Store original classification for confidence monotonicity
+  failureTracker.setOriginalClassification(userInput, classification);
+  
+  logger.info("Intent classification", {
+    input: userInput.slice(0, 100),
+    type: classification.type,
+    confidence: classification.confidence,
+    metadata: classification.metadata,
+    route: routing.route,
+  });
+  
+  // Handle clarification requests (low confidence or genuinely ambiguous)
+  // BUT: If we have domain metadata, try RAG first - it might have the answer
+  // EXCEPT: Skip RAG for real-time metric queries (uptime, memory, cpu, etc.) - these need tools
+  if (routing.route === "clarification") {
     logger.info("Input needs clarification", {
-      confidence: clarificationResult.confidence,
-      corrections: clarificationResult.corrections,
-      suggestions: clarificationResult.suggestions?.length,
+      confidence: classification.confidence,
+      type: classification.type,
+      metadata: classification.metadata,
     });
     
-    // Format and return clarification message
-    // Note: Frontend sends the corrected text directly when user clicks an option
-    const clarificationMessage = formatClarificationMessage(clarificationResult);
-    emitFinalEvent(clarificationMessage, { clarification: true, needsResponse: true });
+    // Detect real-time metric queries that should use tools, not RAG
+    // These queries need current/live data that RAG can't provide accurately
+    const realTimeMetricPatterns = [
+      /\b(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
+      /\b(what|what's|what is)\s+(the\s+)?(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
+      /\b(how\s+much\s+)?(memory|ram|cpu|disk)\s+(does|has|is)\s+/i,
+      /\b(how\s+long\s+)?(has|is)\s+.*\s+(been\s+)?(running|up)\b/i,
+    ];
+    
+    const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
+    
+    // If we have domain metadata, try RAG first - the data might answer the question
+    // This leverages the PCE data we're collecting even when confidence is low
+    // BUT: Skip RAG for real-time metric queries - they need tools for accurate data
+    if (classification.metadata?.domain && classification.confidence >= 0.2 && !isRealTimeMetricQuery) {
+      logger.info("Low confidence but domain detected - trying RAG before clarification", {
+        domain: classification.metadata.domain,
+        confidence: classification.confidence,
+      });
+      
+      // Fetch RAG to see if we can answer from collected data
+      const ragPayload = await fetchHybridContext(userInput, {
+        baseUrl: options.ragBaseUrl,
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+      });
+      
+      // If RAG has a good answer (high score), use it instead of asking for clarification
+      if (ragPayload && ragPayload.answer && ragPayload.sTotalScore && ragPayload.sTotalScore > 0.3) {
+        logger.info("RAG provided answer despite low classification confidence", {
+          sTotalScore: ragPayload.sTotalScore,
+          answerLength: ragPayload.answer.length,
+        });
+        
+        // Clean up the RAG answer (remove verbose citations, formatting)
+        const cleanedAnswer = cleanupRagAnswer(ragPayload.answer);
+        
+        // Record trace
+        try {
+          const traceStore = getReasoningTraceStore();
+          await traceStore.recordTrace({
+            userId: session.userId,
+            aclGroup: session.aclGroup,
+            userInput,
+            finalResponse: cleanedAnswer,
+            steps: [{
+              step: 1,
+              toolCalls: [],
+              decisions: [{
+                type: "rag_answer_used",
+                description: `Low confidence (${classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore.toFixed(2)})`,
+                metadata: { classification, routing, ragScore: ragPayload.sTotalScore },
+              }],
+            }],
+            totalSteps: 1,
+            totalToolCalls: 0,
+            maxStepsReached: false,
+            timestamp: new Date(),
+            durationMs: Date.now() - startTime,
+          });
+        } catch (error: any) {
+          logger.warn("Failed to record RAG answer trace", { error: error.message });
+        }
+        
+        // Small delay to ensure SSE stream is subscribed before emitting
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        emitFinalEvent(cleanedAnswer, { 
+          ragAnswer: true,
+          ragScore: ragPayload.sTotalScore,
+          classification,
+        });
+        return { text: cleanedAnswer };
+      }
+      
+      // RAG didn't have a good answer, fall through to clarification
+      logger.info("RAG did not provide sufficient answer, proceeding with clarification", {
+        ragScore: ragPayload?.sTotalScore,
+        hasAnswer: !!ragPayload?.answer,
+      });
+    } else if (isRealTimeMetricQuery) {
+      // Real-time metric queries should use tools, not RAG
+      logger.info("Skipping RAG for real-time metric query - will use tools instead", {
+        query: userInput.slice(0, 100),
+        domain: classification.metadata?.domain,
+      });
+    }
+    
+    // Generate clarification message based on classification
+    let clarificationMessage: string;
+    if (classification.confidence < 0.2) {
+      clarificationMessage = "I'm not sure what you're asking. Could you rephrase your question?";
+    } else if (classification.metadata?.domain) {
+      const domain = classification.metadata.domain;
+      const suggestions: string[] = [];
+      
+      if (domain === "metrics") {
+        suggestions.push("Are you asking about temperature, CPU, memory, or status?");
+      } else if (domain === "compute") {
+        suggestions.push("Are you asking about VMs, containers, or nodes?");
+      } else if (domain === "firewall") {
+        suggestions.push("Are you asking about firewall rules, chains, or exposure?");
+      } else if (domain === "network") {
+        suggestions.push("Are you asking about network interfaces, subnets, or connectivity?");
+      }
+      
+      if (suggestions.length > 0) {
+        clarificationMessage = `I understand you're asking about ${domain}, but could you be more specific?\n\n${suggestions.join("\n")}`;
+      } else {
+        clarificationMessage = "Could you clarify what you'd like to know or do?";
+      }
+    } else {
+      clarificationMessage = "Could you clarify what you'd like to know or do?";
+    }
+    
+    // Record trace for clarification
+    try {
+      const traceStore = getReasoningTraceStore();
+      await traceStore.recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: clarificationMessage,
+        steps: [{
+          step: 1,
+          toolCalls: [],
+          decisions: [{
+            type: "clarification_requested",
+            description: `Confidence ${classification.confidence.toFixed(2)} below threshold for ${classification.type} intent`,
+            metadata: { classification, routing },
+          }],
+        }],
+        totalSteps: 1,
+        totalToolCalls: 0,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record clarification trace", { error: error.message });
+    }
+    
+    // Small delay to ensure SSE stream is subscribed before emitting
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    emitFinalEvent(clarificationMessage, { 
+      clarification: true, 
+      needsResponse: true, 
+      classification,
+      traceId: undefined, // Will be set if trace was recorded above
+    });
     return { text: clarificationMessage };
   }
 
@@ -462,8 +716,15 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       userInput.toLowerCase().includes("troubleshoot") ||
       userInput.toLowerCase().includes("what's wrong");
 
+    // Skip compute intent if this is an IP address query (should go to LLM to use twin_query + proxmox_readonly)
+    const isIpAddressQuery = 
+      userInput.toLowerCase().includes("ip address") ||
+      userInput.toLowerCase().includes("ip addresses") ||
+      userInput.toLowerCase().includes("what is the ip") ||
+      userInput.toLowerCase().includes("what are the ip");
+    
     const computeIntent = detectComputeIntent(userInput);
-    if (computeIntent && !isDiagnosticRequest) {
+    if (computeIntent && !isDiagnosticRequest && !isIpAddressQuery) {
       const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
       if (twinAnswer) {
         logger.info("Responding via twin-first reasoning chain (no LLM needed).");
@@ -509,7 +770,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   
   // Skip RAG for trivial queries (greetings, simple questions that don't need context)
   // Also skip RAG for action intents - they should go straight to the action tool
-  // This significantly improves response time and prevents RAG from confusing action execution
+  // Also skip RAG for real-time metric queries (uptime, memory, cpu, etc.) - these need tools for accurate data
+  // This significantly improves response time and prevents RAG from confusing action execution or providing stale data
   const isTrivialQuery = (query: string): boolean => {
     const normalized = query.toLowerCase().trim();
     const trivialPatterns = [
@@ -522,8 +784,25 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     return trivialPatterns.some(pattern => pattern.test(normalized));
   };
   
+  // Detect real-time metric queries that should use tools, not RAG
+  // These queries need current/live data that RAG can't provide accurately
+  const realTimeMetricPatterns = [
+    /\b(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
+    /\b(what|what's|what is)\s+(the\s+)?(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
+    /\b(how\s+much\s+)?(memory|ram|cpu|disk)\s+(does|has|is)\s+/i,
+    /\b(how\s+long\s+)?(has|is)\s+.*\s+(been\s+)?(running|up)\b/i,
+  ];
+  
+  const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
+  
   // Skip RAG for action intents - they should use the action tool directly
-  const shouldSkipRAG = isTrivialQuery(userInput) || !!actionIntent;
+  const shouldSkipRAG = isTrivialQuery(userInput) || !!actionIntent || isRealTimeMetricQuery;
+  
+  if (isRealTimeMetricQuery) {
+    logger.info("Skipping RAG for real-time metric query - will use tools instead", {
+      query: userInput.slice(0, 100),
+    });
+  }
   
   // Only fetch RAG context for non-trivial queries and non-action intents
   // Action intents should go straight to the action tool without RAG context
@@ -537,6 +816,12 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       });
 
   const ragMessage = ragPayload ? [{ role: "system", content: formatRagSummary(ragPayload) }] : [];
+  
+  // For real-time metric queries, add explicit instruction to use tools
+  const realTimeMetricInstruction = isRealTimeMetricQuery 
+    ? [{ role: "system", content: "IMPORTANT: This query asks for real-time metrics (uptime, memory, CPU, etc.). You MUST use tools (twin_query and/or proxmox_readonly) to get current data. Do not answer from memory or training data - always use tools for real-time metrics." }]
+    : [];
+  
   const MAX_STEPS = 5;
   const MAX_TOOL_CALLS_PER_STEP = 5; // Prevent tool call flooding (reduced from 10)
   const seenToolCalls = new Set<string>(); // Track tool calls to prevent infinite loops
@@ -682,6 +967,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     const messages = [
       { role: "system", content: SYSTEM_PROMPT },
       ...ragMessage,
+      ...realTimeMetricInstruction,
       ...vmContextMessage,
       ...context.getMessages(),
     ] as any[];
@@ -693,7 +979,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
     if (openaiTools.length > 0) {
       request.tools = openaiTools;
-      request.tool_choice = "auto";
+      // For real-time metric queries, force tool usage (don't allow text-only responses)
+      request.tool_choice = isRealTimeMetricQuery ? "required" : "auto";
     }
 
     const response = await client.chat.completions.create(request);
@@ -1072,15 +1359,109 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           },
         });
 
+        // CRITICAL: Add tool result to context IMMEDIATELY after execution
+        // This ensures the context is always correct before any failure handling
+        // that might add user messages and trigger another LLM call
+        const sanitizedData = sanitizeToolPayload(result.data);
+        context.addToolResult(toolCall.id, toolName, {
+          provenanceId,
+          success: !result.error,
+          data: sanitizedData,
+          error: result.error ?? null,
+          durationMs: result.durationMs ?? 0,
+        });
+
         if (result.error) {
           logger.error(`Tool execution failed: ${toolName}`, {
             error: result.error,
             parameters: parsedArgs,
           });
+          
+          // Reclassify intent with failure context instead of blindly retrying
+          const failureHistory = failureTracker.getFailureHistory(userInput);
+          const attemptNumber = failureHistory.length + 1;
+          
+          // Check if we should stop retrying
+          if (failureTracker.shouldStopRetrying(userInput)) {
+            logger.warn(`Stopping retries for "${userInput}" after ${attemptNumber} attempts`);
+            reasoningStep.decisions.push({
+              type: "failure_limit_reached",
+              description: `Tool execution failed after ${attemptNumber} attempts. Stopping retries to prevent loop.`,
+              metadata: { toolName, error: result.error, attemptNumber },
+            });
+          } else {
+            // Record failure and reclassify with context
+            const failureContext: FailureContext = {
+              error: result.error,
+              toolName,
+              parameters: parsedArgs,
+              partialState: result.data ? { partialData: result.data } : undefined,
+              attemptNumber,
+              previousAttempts: failureHistory.map(f => ({
+                toolName: f.toolName,
+                error: f.error,
+                attemptNumber: f.attemptNumber,
+              })),
+            };
+            
+            failureTracker.recordFailure(userInput, failureContext);
+            
+            // Get original classification for confidence monotonicity
+            const originalClassification = failureTracker.getOriginalClassification(userInput);
+            
+            // Reclassify with context (confidence will be capped to original if no new evidence)
+            const reclassification = reclassifyIntentWithContext(
+              userInput, 
+              failureContext,
+              originalClassification
+            );
+            
+            logger.info(`Reclassified intent after failure`, {
+              originalInput: userInput,
+              originalConfidence: originalClassification?.confidence,
+              newClassification: reclassification.classification.type,
+              newConfidence: reclassification.classification.confidence,
+              confidenceAdjusted: reclassification.confidenceAdjusted,
+              shouldRetry: reclassification.shouldRetry,
+              reason: reclassification.reason,
+              suggestedAction: reclassification.suggestedAction,
+            });
+            
+            reasoningStep.decisions.push({
+              type: "failure_reclassification",
+              description: reclassification.reason,
+              metadata: {
+                toolName,
+                error: result.error,
+                attemptNumber,
+                originalConfidence: originalClassification?.confidence,
+                newClassification: reclassification.classification.type,
+                newConfidence: reclassification.classification.confidence,
+                confidenceAdjusted: reclassification.confidenceAdjusted,
+                shouldRetry: reclassification.shouldRetry,
+                suggestedAction: reclassification.suggestedAction,
+              },
+            });
+            
+            // If reclassification suggests a different approach, add context to help LLM
+            if (reclassification.shouldRetry && reclassification.suggestedAction) {
+              context.addUserMessage(
+                `Previous attempt failed: ${result.error}. ${reclassification.suggestedAction}`
+              );
+            } else if (!reclassification.shouldRetry) {
+              // Don't retry - add context explaining why
+              context.addUserMessage(
+                `Tool execution failed: ${result.error}. ${reclassification.reason}. Please try a different approach or ask for clarification.`
+              );
+            }
+          }
         } else {
           logger.debug(`Tool execution succeeded: ${toolName}`, {
             dataKeys: result.data && typeof result.data === 'object' ? Object.keys(result.data) : [],
           });
+          
+          // Clear failure history on success
+          failureTracker.clearHistory(userInput);
         }
 
         // Track node discovery and queries for "all nodes" validation (BEFORE sanitization)
@@ -1174,16 +1555,6 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           durationMs: result.durationMs ?? 0,
         });
         totalToolCalls++;
-
-        const sanitizedData = sanitizeToolPayload(result.data);
-
-        context.addToolResult(toolCall.id, toolName, {
-          provenanceId,
-          success: !result.error,
-          data: sanitizedData,
-          error: result.error ?? null,
-          durationMs: result.durationMs ?? 0,
-        });
         }
       }
 

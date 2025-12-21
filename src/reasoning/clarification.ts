@@ -85,6 +85,48 @@ const COMMON_WORDS = new Set([
 ]);
 
 /**
+ * Query intent patterns - informational queries that should skip aggressive typo detection
+ */
+const QUERY_INTENT_PATTERNS = [
+  /^(what|whats|what's|how|show|list|tell|describe|display|get|find|check|see)/i,
+  /\b(temperature|temp|cpu|memory|ram|disk|status|health|metrics|usage|load|uptime)\b/i,
+  /\b(what|which|where|when|how|why)\s+(is|are|was|were|the|a|an)\b/i,
+];
+
+/**
+ * Check if input is clearly an informational query
+ * This helps skip aggressive typo detection for queries like "what's the temperature"
+ */
+function isInformationalQuery(input: string): boolean {
+  const normalized = input.toLowerCase().trim();
+  
+  // Check against query intent patterns
+  for (const pattern of QUERY_INTENT_PATTERNS) {
+    if (pattern.test(normalized)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Normalize casual spellings before typo detection
+ * Handles common casual spellings like "whats" -> "what's"
+ */
+function normalizeCasualSpellings(input: string): string {
+  // Normalize common casual spellings
+  // Note: We don't replace "its" -> "it's" because "its" is a valid possessive pronoun
+  return input
+    .replace(/\bwhats\b/gi, "what's")
+    .replace(/\bwheres\b/gi, "where's")
+    .replace(/\bwhos\b/gi, "who's")
+    .replace(/\bthats\b/gi, "that's")
+    .replace(/\btheres\b/gi, "there's")
+    .replace(/\bheres\b/gi, "here's");
+}
+
+/**
  * Known Proxmox nodes (will be populated from ingested data)
  */
 let knownNodes: string[] = ["proxBig", "YANG", "YIN"];
@@ -237,7 +279,13 @@ export interface TypoCorrection {
  * Parse input and detect potential issues
  */
 export function analyzeInput(input: string): ClarificationResult {
-  const words = input.toLowerCase().split(/\s+/);
+  // Normalize casual spellings first (e.g., "whats" -> "what's")
+  const normalizedInput = normalizeCasualSpellings(input);
+  
+  // Check if this is an informational query - if so, skip aggressive typo detection
+  const isInfoQuery = isInformationalQuery(normalizedInput);
+  
+  const words = normalizedInput.toLowerCase().split(/\s+/);
   const corrections: TypoCorrection[] = [];
   const suggestions: ClarificationSuggestion[] = [];
   const unknownEntities: string[] = [];
@@ -248,15 +296,28 @@ export function analyzeInput(input: string): ClarificationResult {
   let detectedTarget: string | null = null;
   let detectedNode: string | null = null;
   
+  // For informational queries, skip typo detection on common query words
+  // and be much more lenient with corrections
   for (const word of words) {
     // Skip very short words for action verb matching (they cause false positives like "cm" -> "destroy")
     const skipTypoMatch = word.length < 3;
+    
+    // For informational queries, skip typo detection on query words and common words
+    if (isInfoQuery && (COMMON_WORDS.has(word) || word === "what's" || word === "what" || word === "the" || word === "of")) {
+      continue; // Skip typo detection for common query words
+    }
     
     // Check for action verbs
     for (const [action, info] of Object.entries(ACTION_VERBS)) {
       if (word === action || info.aliases.includes(word)) {
         detectedAction = info.canonical;
         break;
+      }
+      // For informational queries, skip typo detection on action verbs that are query words
+      // Don't treat "what" as typo for "list" in informational queries
+      if (isInfoQuery && (action === "list" || action === "status") && 
+          (word === "what" || word === "what's" || word === "which" || word === "how")) {
+        break; // Skip typo detection for query words in informational queries
       }
       // Check for typos in action verbs (but not for very short words)
       if (!skipTypoMatch) {
@@ -280,6 +341,10 @@ export function analyzeInput(input: string): ClarificationResult {
         detectedTarget = info.canonical;
         break;
       }
+      // For informational queries, skip typo detection on common prepositions like "of"
+      if (isInfoQuery && COMMON_WORDS.has(word)) {
+        continue; // Don't treat "of" as typo for "firewall" in informational queries
+      }
       // Check for typos
       const match = findClosestTerm(word, [term, ...info.aliases]);
       if (match && match.isTypo) {
@@ -300,6 +365,12 @@ export function analyzeInput(input: string): ClarificationResult {
       if (nodeMatch) {
         // Only treat as typo if word length is similar to node name (prevent "in" -> "YIN")
         const lengthDiff = Math.abs(word.length - nodeMatch.term.length);
+        // For informational queries, be more lenient - "nodes" (plural) is valid, not a typo
+        if (isInfoQuery && word === "nodes" && nodeMatch.term.toLowerCase() === "node") {
+          // "nodes" is plural of "node", not a typo
+          detectedNode = nodeMatch.term;
+          continue;
+        }
         if (nodeMatch.isTypo && lengthDiff <= 1) {
           corrections.push({
             original: word,
@@ -404,10 +475,11 @@ export function analyzeInput(input: string): ClarificationResult {
     }
   }
   
-  // Determine if clarification is needed
-  const needsClarification = confidence < 0.7 || 
-    (deduplicatedCorrections.length > 0 && suggestions.length > 0) ||
-    unknownEntities.length > 0;
+  // For informational queries, be much more lenient - only ask for clarification if really unclear
+  // Informational queries like "what's the temperature" should pass through even with minor issues
+  const needsClarification = isInfoQuery 
+    ? (confidence < 0.5 && deduplicatedCorrections.length > 2) || unknownEntities.length > 0
+    : (confidence < 0.7 || (deduplicatedCorrections.length > 0 && suggestions.length > 0) || unknownEntities.length > 0);
   
   // Build interpretation string
   let interpretation: string | undefined;
@@ -422,7 +494,7 @@ export function analyzeInput(input: string): ClarificationResult {
   return {
     needsClarification,
     confidence,
-    originalInput: input,
+    originalInput: input, // Return original input, not normalized
     interpretation,
     suggestions: suggestions.length > 0 ? suggestions : undefined,
     corrections: deduplicatedCorrections.length > 0 ? deduplicatedCorrections : undefined,

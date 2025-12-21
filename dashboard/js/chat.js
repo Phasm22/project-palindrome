@@ -9,6 +9,28 @@ let currentResponseId = null;
 let finalEventTimeout = null;
 let currentConversationId = null;
 
+// Scroll lock state - track async operations and user scroll behavior
+let isAsyncOperationActive = false;
+let shouldAutoScroll = true; // Whether to auto-scroll to bottom
+let scrollLockTimeout = null;
+let scrollHandlersAttached = false;
+let scrollScheduled = false; // Prevent multiple scroll operations
+
+/**
+ * Global scroll handler - detects when user scrolls up during async operations
+ */
+function handleScrollDuringAsync(e) {
+  if (!isAsyncOperationActive) return;
+  
+  const messagesDiv = e.target;
+  const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+  
+  // If user scrolled up more than 150px from bottom, disable auto-scroll
+  if (distanceFromBottom > 150) {
+    shouldAutoScroll = false;
+  }
+}
+
 // Helper: Get all chat message containers (mobile + desktop)
 function getChatMessageContainers() {
   const mobile = document.getElementById('chat-messages');
@@ -471,24 +493,132 @@ function formatAgentResponse(text) {
 
 function updateChatMessage(messageId, newContent) {
   // Update in all containers (mobile + desktop)
+  const containersToScroll = [];
+  
+  // Ensure containers are visible when updating
+  const containers = getChatMessageContainers();
+  containers.forEach(c => {
+    if (c) {
+      c.style.display = '';
+    }
+  });
+  
+  containers.forEach(messagesDiv => {
+    if (!messagesDiv) return;
+    let messageDiv = messagesDiv.querySelector(`#${messageId}`);
+    
+    // If message not found, create it (fallback for race conditions)
+    if (!messageDiv) {
+      console.warn(`Message ${messageId} not found, creating fallback message`);
+      messageDiv = document.createElement('div');
+      messageDiv.id = messageId;
+      messageDiv.style.cssText = `
+        margin-bottom: 8px;
+        padding: 12px 16px;
+        border-radius: 18px 18px 18px 4px;
+        max-width: 75%;
+        word-wrap: break-word;
+        position: relative;
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        margin-left: 0;
+        margin-right: auto;
+        color: #e2e8f0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(51, 65, 85, 0.5);
+      `;
+      messagesDiv.appendChild(messageDiv);
+    }
+    
+    // Check if user scrolled up (more than 150px from bottom)
+    const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+    const wasNearBottom = distanceFromBottom < 150;
+    
+    // If async operation is active and user hasn't scrolled up, lock to bottom
+    const shouldLockScroll = isAsyncOperationActive && (wasNearBottom || shouldAutoScroll);
+    
+    messageDiv.innerHTML = newContent;
+    
+    if (shouldLockScroll || (wasNearBottom && shouldAutoScroll)) {
+      containersToScroll.push(messagesDiv);
+    }
+  });
+  
+  // Scroll all containers that need scrolling in a single animation frame
+  if (containersToScroll.length > 0 && !scrollScheduled) {
+    scrollScheduled = true;
+    requestAnimationFrame(() => {
+      containersToScroll.forEach(messagesDiv => {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+      scrollScheduled = false;
+    });
+  }
+}
+
+/**
+ * Lock scroll to bottom during async operations
+ */
+function lockScrollToBottom() {
+  isAsyncOperationActive = true;
+  shouldAutoScroll = true;
+  
+  // Clear any existing timeout
+  if (scrollLockTimeout) {
+    clearTimeout(scrollLockTimeout);
+  }
+  
+  // Set up scroll lock for all containers
+  if (!scrollScheduled) {
+    scrollScheduled = true;
+    requestAnimationFrame(() => {
+      getChatMessageContainers().forEach(messagesDiv => {
+        if (!messagesDiv) return;
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+      scrollScheduled = false;
+    });
+  }
+  
+  // Attach scroll listeners once if not already attached
+  if (!scrollHandlersAttached) {
+    getChatMessageContainers().forEach(messagesDiv => {
+      if (messagesDiv) {
+        messagesDiv.addEventListener('scroll', handleScrollDuringAsync, { passive: true });
+      }
+    });
+    scrollHandlersAttached = true;
+  }
+}
+
+/**
+ * Unlock scroll when async operations complete
+ */
+function unlockScroll() {
+  isAsyncOperationActive = false;
+  
+  // Clear timeout
+  if (scrollLockTimeout) {
+    clearTimeout(scrollLockTimeout);
+    scrollLockTimeout = null;
+  }
+  
+  // Remove scroll listeners
   getChatMessageContainers().forEach(messagesDiv => {
     if (!messagesDiv) return;
-    const messageDiv = messagesDiv.querySelector(`#${messageId}`);
-    if (messageDiv) {
-      const wasNearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 100;
-      messageDiv.innerHTML = newContent;
-      if (wasNearBottom) {
-        requestAnimationFrame(() => {
-          messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        });
-      }
-    }
+    // We can't remove anonymous listeners, but that's okay - they check isAsyncOperationActive
   });
 }
 
 function addChatMessage(role, content, isLoading = false, messageId = null, dbId = null, reasoningTraceId = null) {
   const containers = getChatMessageContainers();
   const msgId = messageId || 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+  
+  // Show chatbox containers when first message is added
+  containers.forEach(c => {
+    if (c) {
+      c.style.display = '';
+    }
+  });
   
   // Remove welcome message from all containers
   containers.forEach(c => {
@@ -605,17 +735,33 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     `;
   }
 
-  // Append to all containers
+  // Append to all containers and collect which ones need scrolling
+  const containersToScroll = [];
+  
   containers.forEach(messagesDiv => {
     const clone = messageDiv.cloneNode(true);
-    const wasNearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 100;
+    const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+    const wasNearBottom = distanceFromBottom < 150;
+    
     messagesDiv.appendChild(clone);
-    if (wasNearBottom || isLoading || role === 'user') {
-      requestAnimationFrame(() => {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-      });
+    
+    // Always scroll for user messages or loading messages
+    // For assistant messages, only scroll if user is near bottom or async operation is active
+    if (role === 'user' || isLoading || (wasNearBottom && shouldAutoScroll) || (isAsyncOperationActive && shouldAutoScroll)) {
+      containersToScroll.push(messagesDiv);
     }
   });
+  
+  // Scroll all containers that need scrolling in a single animation frame
+  if (containersToScroll.length > 0 && !scrollScheduled) {
+    scrollScheduled = true;
+    requestAnimationFrame(() => {
+      containersToScroll.forEach(messagesDiv => {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+      scrollScheduled = false;
+    });
+  }
 
   return msgId;
 }
@@ -636,6 +782,8 @@ function handleAgentEvent(event, toolExecutions) {
   
   switch (event.type) {
     case 'agent:step':
+      // Lock scroll during async operations
+      lockScrollToBottom();
       updateChatMessage(currentResponseId, 
         `<div class="agent-thinking">
           <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
@@ -644,6 +792,8 @@ function handleAgentEvent(event, toolExecutions) {
       break;
       
     case 'tool:start':
+      // Lock scroll during tool execution
+      lockScrollToBottom();
       const toolInfo = {
         toolName: event.data.toolName,
         params: event.data.parameters,
@@ -681,6 +831,8 @@ function handleAgentEvent(event, toolExecutions) {
       break;
       
     case 'tool:progress':
+      // Lock scroll during progress updates
+      lockScrollToBottom();
       // Update existing tool card with progress info
       const progressMessageDiv = document.getElementById(currentResponseId);
       if (progressMessageDiv) {
@@ -726,6 +878,8 @@ function handleAgentEvent(event, toolExecutions) {
       break;
       
     case 'tool:complete':
+      // Lock scroll during tool completion
+      lockScrollToBottom();
       const tool = toolExecutions.find(t => t.toolName === event.data.toolName);
       const duration = event.data.durationMs || (tool ? Date.now() - tool.startTime : 0);
       const statusColor = event.data.success ? '#10b981' : '#ef4444';
@@ -756,17 +910,31 @@ function handleAgentEvent(event, toolExecutions) {
       break;
       
     case 'agent:final':
+      console.log('Handling agent:final event', event.data);
       const formattedText = formatAgentResponse(event.data.text || 'No response');
       const durationSeconds = (event.data.durationMs || 0) / 1000;
       const traceId = event.data.traceId;
       
-      setTimeout(() => {
-        if (currentConversationId) {
-          loadChatHistory(currentConversationId);
+      // Ensure containers are visible before updating
+      const containers = getChatMessageContainers();
+      containers.forEach(c => {
+        if (c) {
+          c.style.display = '';
         }
-        // Refresh conversation list to update message counts
+      });
+      
+      // Don't reload chat history - message is already displayed via updateChatMessage
+      // Just refresh conversation list to update message counts
+      setTimeout(() => {
         loadConversations();
       }, 500);
+      
+      // Ensure currentResponseId is set
+      if (!currentResponseId) {
+        console.warn('No currentResponseId set when receiving agent:final event');
+        // Create a new message if one doesn't exist
+        currentResponseId = addChatMessage('assistant', '', false);
+      }
       
       const traceLinkHtml = traceId ? `
         <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(51, 65, 85, 0.5); display: flex; align-items: center; gap: 8px; font-size: 0.8em;">
@@ -836,8 +1004,16 @@ function handleAgentEvent(event, toolExecutions) {
         ${traceLinkHtml}
       `;
       
-      updateChatMessage(currentResponseId, finalHtml);
+      // Use requestAnimationFrame to ensure DOM is ready
+      requestAnimationFrame(() => {
+        updateChatMessage(currentResponseId, finalHtml);
+      });
       // Scroll is handled inside updateChatMessage
+      
+      // Unlock scroll after a short delay to allow final render
+      scrollLockTimeout = setTimeout(() => {
+        unlockScroll();
+      }, 500);
       
       if (currentEventSource) {
         currentEventSource.close();
@@ -875,6 +1051,10 @@ export async function sendChatMessage() {
   }
 
   addChatMessage('user', message);
+  
+  // Re-enable auto-scroll when user sends a new message
+  shouldAutoScroll = true;
+  lockScrollToBottom();
 
   currentResponseId = addChatMessage('assistant', `
     <div class="agent-thinking">
@@ -941,13 +1121,15 @@ export async function sendChatMessage() {
     currentEventSource.onmessage = (event) => {
       try {
         const agentEvent = JSON.parse(event.data);
+        console.log('Received SSE event:', agentEvent.type, agentEvent);
         handleAgentEvent(agentEvent, toolExecutions);
         
         if (agentEvent.type === 'agent:final') {
           finalText = agentEvent.data.text || '';
+          console.log('Final text received:', finalText);
         }
       } catch (error) {
-        console.error('Error parsing SSE event:', error);
+        console.error('Error parsing SSE event:', error, event.data);
       }
     };
 
@@ -980,10 +1162,16 @@ export async function sendChatMessage() {
           `);
         }
         
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
+        // Re-enable inputs and buttons
+        const inputs = getChatInputs();
+        const buttons = getSendButtons();
+        inputs.forEach(i => { i.disabled = false; });
+        buttons.forEach(b => { 
+          b.disabled = false;
+          b.textContent = 'Send';
+        });
+        const primaryInput = getPrimaryChatInput();
+        if (primaryInput) primaryInput.focus();
       }
       
       currentEventSource.close();
@@ -1006,10 +1194,16 @@ export async function sendChatMessage() {
         currentEventSource.close();
         currentEventSource = null;
         
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
+        // Re-enable inputs and buttons
+        const inputs = getChatInputs();
+        const buttons = getSendButtons();
+        inputs.forEach(i => { i.disabled = false; });
+        buttons.forEach(b => { 
+          b.disabled = false;
+          b.textContent = 'Send';
+        });
+        const primaryInput = getPrimaryChatInput();
+        if (primaryInput) primaryInput.focus();
       } else if (currentEventSource && !finalText) {
         const isActionOperation = currentQuery && (
           currentQuery.toLowerCase().includes('create') ||
@@ -1033,10 +1227,16 @@ export async function sendChatMessage() {
         currentEventSource.close();
         currentEventSource = null;
         
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
+        // Re-enable inputs and buttons
+        const inputs = getChatInputs();
+        const buttons = getSendButtons();
+        inputs.forEach(i => { i.disabled = false; });
+        buttons.forEach(b => { 
+          b.disabled = false;
+          b.textContent = 'Send';
+        });
+        const primaryInput = getPrimaryChatInput();
+        if (primaryInput) primaryInput.focus();
       }
       finalEventTimeout = null;
     }, (() => {
@@ -1060,10 +1260,16 @@ export async function sendChatMessage() {
     
     addChatMessage('assistant', `<div style="color: #ef4444;">Error: ${escapeHtml(error.message)}</div>`);
     
-    input.disabled = false;
-    sendBtn.disabled = false;
-    sendBtn.textContent = 'Send';
-    input.focus();
+    // Re-enable inputs and buttons
+    const inputs = getChatInputs();
+    const buttons = getSendButtons();
+    inputs.forEach(i => { i.disabled = false; });
+    buttons.forEach(b => { 
+      b.disabled = false;
+      b.textContent = 'Send';
+    });
+    const primaryInput = getPrimaryChatInput();
+    if (primaryInput) primaryInput.focus();
   }
 }
 
@@ -1226,7 +1432,12 @@ export async function loadChatHistory(conversationId = null) {
   if (containers.length === 0) return;
 
   if (!conversationId) {
-    syncToAllContainers('<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 0.875rem;">Select a conversation or create a new one.</div>');
+    // Hide containers when no conversation is selected
+    containers.forEach(c => {
+      if (c) {
+        c.style.display = 'none';
+      }
+    });
     return;
   }
 
@@ -1244,10 +1455,23 @@ export async function loadChatHistory(conversationId = null) {
     // Clear all containers
     containers.forEach(c => c.innerHTML = '');
 
+    // Hide chatbox containers for empty conversations
+    // The chatbox will appear when the first message is sent
     if (messages.length === 0) {
-      syncToAllContainers('<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 0.875rem;">Start a conversation with Palindrome.</div>');
+      containers.forEach(c => {
+        if (c) {
+          c.style.display = 'none';
+        }
+      });
       return;
     }
+    
+    // Show chatbox containers when there are messages
+    containers.forEach(c => {
+      if (c) {
+        c.style.display = '';
+      }
+    });
 
     messages.forEach(msg => {
       if (msg.role === 'user') {
@@ -1259,11 +1483,16 @@ export async function loadChatHistory(conversationId = null) {
     });
 
     // Scroll to bottom in all containers
+    // Disable async scroll lock during history load (not an async operation)
+    const wasAsyncActive = isAsyncOperationActive;
+    isAsyncOperationActive = false;
     containers.forEach(c => {
       requestAnimationFrame(() => {
         c.scrollTop = c.scrollHeight;
       });
     });
+    // Restore async state
+    isAsyncOperationActive = wasAsyncActive;
   } catch (error) {
     console.error('Failed to load chat history:', error);
     syncToAllContainers('<div style="color: #ef4444; text-align: center; padding: 20px; font-size: 0.875rem;">Failed to load messages</div>');

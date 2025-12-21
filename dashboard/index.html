@@ -92,7 +92,7 @@
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Recent Tool Executions</span>
-          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadToolExecutions()">
+          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadToolExecutions(true)">
             <span class="flex items-center justify-center gap-2">
               <span id="refresh-icon-executions"></span>
               Refresh
@@ -108,14 +108,14 @@
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Agent Reasoning Traces</span>
-          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadReasoningTraces()">
+          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadReasoningTraces(true)">
             <span class="flex items-center justify-center gap-2">
               <span id="refresh-icon-reasoning"></span>
               Refresh
             </span>
           </button>
         </h2>
-        <div id="reasoning-traces" class="text-slate-400 text-center py-6 flex-1 overflow-y-auto"></div>
+        <div id="reasoning-traces" class="text-slate-400 py-6 flex-1 overflow-y-auto" style="display: flex; flex-direction: column; gap: 16px; max-width: 100%;"></div>
       </div>
     </div>
 
@@ -306,10 +306,7 @@
         
         <!-- Desktop Chat Area -->
         <div class="flex-1 flex flex-col min-w-0">
-          <h2 class="mb-4 text-2xl font-title text-slate-100">Chat with Palindrome</h2>
-          <div class="mb-4 border-t border-slate-600/70"></div>
-          
-          <div id="chat-messages-desktop" class="flex-1 overflow-y-auto px-4 py-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-xl mb-4 min-h-[400px] relative">
+          <div id="chat-messages-desktop" class="flex-1 overflow-y-auto px-4 py-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-xl mb-4 min-h-0 relative">
             <div class="text-slate-400 text-center py-6 text-sm">
               Select a conversation or create a new one to start chatting.
             </div>

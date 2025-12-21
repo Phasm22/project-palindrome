@@ -1,6 +1,6 @@
 import { loadConversations, sendChatMessage, selectConversation, createNewConversation, deleteConversation, deleteChatMessage, restoreConversation } from './chat.js';
 import { loadToolExecutions } from './executions.js';
-import { loadReasoningTraces } from './reasoning.js';
+import { loadReasoningTraces, copyTraceData } from './reasoning.js';
 import { loadGraph } from './graph.js';
 import { setupQueryInterface, executeQuery, executeGraphQuery, executeCypherQuery } from './query.js';
 import { loadExecutionStats, loadClusterStatus, loadSystemHealth } from './overview.js';
@@ -75,6 +75,7 @@ window.checkApiConnection = checkApiConnection;
 // Make functions globally accessible for onclick handlers
 window.loadToolExecutions = loadToolExecutions;
 window.loadReasoningTraces = loadReasoningTraces;
+window.copyTraceData = copyTraceData;
 window.loadGraph = loadGraph;
 window.sendChatMessage = sendChatMessage;
 window.selectConversation = selectConversation;

@@ -66,3 +66,15 @@ Thumbs.db
 # Cursor IDE (keep .cursor/rules/ for project rules)
 .cursor/*
 !.cursor/rules/
+
+# pce folders
+.pce/
+.pce-ia-dod-test/
+.pce-ib-dod-test/
+.pce-ic-dod-test/
+.pce-ii-dod-test/
+.pce-iii-dod-test/
+.pce-tl-1a-dod-test/
+.pce-tl-1b-dod-test/
+.pce-tl-1c-dod-test/
+.pce-tl-2a-dod-test/

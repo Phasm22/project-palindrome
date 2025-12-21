@@ -120,8 +120,8 @@ export class LocalLLMService {
         .join("\n\n---\n\n");
 
       const systemPrompt = `You are a helpful assistant that answers questions based on the provided context. 
-Always cite your sources using the [Source N] format when referencing information from the context.
-If the context doesn't contain enough information to answer the question, say so clearly.`;
+Provide direct, concise answers. Do not include source citations like "[Source N]" in your answer.
+Focus on the actual information requested. If the context doesn't contain enough information, say so clearly.`;
 
       const userPrompt = `Context:\n${context}\n\nQuestion: ${query}\n\nAnswer:`;
 
