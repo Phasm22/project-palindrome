@@ -1,0 +1,3 @@
+[submodule "lab-infra"]
+	path = lab-infra
+	url = git@github.com:Phasm22/lab-infra.git
