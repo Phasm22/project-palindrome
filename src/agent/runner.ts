@@ -827,6 +827,10 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   const seenToolCalls = new Set<string>(); // Track tool calls to prevent infinite loops
   const client = getOpenAIClient();
   
+  // Track if we've successfully retrieved data for real-time metric queries
+  // Once we have the data, allow text responses instead of forcing more tool calls
+  let hasRealTimeMetricData = false;
+  
   // Track "all nodes" queries to prevent partial answers
   // Match patterns like "all nodes", "all the nodes", "temperature of all nodes", etc.
   const isAllNodesQuery = /\ball\s+(the\s+)?nodes?\b/i.test(userInput);
@@ -979,8 +983,9 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
     if (openaiTools.length > 0) {
       request.tools = openaiTools;
-      // For real-time metric queries, force tool usage (don't allow text-only responses)
-      request.tool_choice = isRealTimeMetricQuery ? "required" : "auto";
+      // For real-time metric queries, force tool usage ONLY if we haven't gotten the data yet
+      // Once we have the data (hasRealTimeMetricData), allow text responses
+      request.tool_choice = (isRealTimeMetricQuery && !hasRealTimeMetricData) ? "required" : "auto";
     }
 
     const response = await client.chat.completions.create(request);
@@ -1161,6 +1166,15 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             error: result.error ?? null,
             durationMs: result.durationMs ?? 0,
           });
+          
+          // For real-time metric queries, mark that we've successfully retrieved data
+          if (isRealTimeMetricQuery && result.data && !result.error) {
+            hasRealTimeMetricData = true;
+            logger.info("Real-time metric data retrieved successfully (parallel path), allowing text response", {
+              toolName,
+              hasData: !!result.data,
+            });
+          }
         }
       } else {
         // Sequential execution (original behavior)
@@ -1462,6 +1476,16 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           
           // Clear failure history on success
           failureTracker.clearHistory(userInput);
+          
+          // For real-time metric queries, mark that we've successfully retrieved data
+          // This allows the LLM to respond with text instead of forcing more tool calls
+          if (isRealTimeMetricQuery && result.data && !result.error) {
+            hasRealTimeMetricData = true;
+            logger.info("Real-time metric data retrieved successfully, allowing text response", {
+              toolName,
+              hasData: !!result.data,
+            });
+          }
         }
 
         // Track node discovery and queries for "all nodes" validation (BEFORE sanitization)
