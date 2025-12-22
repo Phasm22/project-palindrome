@@ -12094,5 +12094,229 @@
     "aclGroup": "ops",
     "documentType": "proxmox_inventory",
     "size": 651
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-cluster_status-0-1766421960302.txt",
+    "sha256Hash": "94739a9f3363415cf176725f064e794e41b551b654102387ee795b8788679e4e",
+    "timestamp": "2025-12-22T16:46:00.303Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 200
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-1-1766421960302.txt",
+    "sha256Hash": "fa5fb043fd3fec8889346293c103595948f8739a54621ae9c093fe62109a6773",
+    "timestamp": "2025-12-22T16:46:00.338Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 281
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-2-1766421960302.txt",
+    "sha256Hash": "ad763b95572f3087c08457abf90c568e582f224a47dc951d1e8414718b84cdc0",
+    "timestamp": "2025-12-22T16:46:00.351Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 468
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-3-1766421960302.txt",
+    "sha256Hash": "bc4150bdb764cc5fc1cd2378344e6354d4dcfa75c2c0f283f9740df6529d7684",
+    "timestamp": "2025-12-22T16:46:00.364Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 277
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-4-1766421960302.txt",
+    "sha256Hash": "d8f524a9449e9ae8bded34706d66c717b24f9fdd4ac96cfa64c548841ce32aa6",
+    "timestamp": "2025-12-22T16:46:00.381Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 651
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-5-1766421960302.txt",
+    "sha256Hash": "12930eff2d6a775d507e600968cf61f96c25d0395f134fb2a53df5d2de108a4a",
+    "timestamp": "2025-12-22T16:46:00.395Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 278
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-6-1766421960302.txt",
+    "sha256Hash": "d1a7ad37b5dcffa11dcba2f275da53d0adabfdeefb7d0289c4438667cc5b47ae",
+    "timestamp": "2025-12-22T16:46:00.408Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 824
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-cluster_status-0-1766421960932.txt",
+    "sha256Hash": "94739a9f3363415cf176725f064e794e41b551b654102387ee795b8788679e4e",
+    "timestamp": "2025-12-22T16:46:00.933Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 200
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-1-1766421960932.txt",
+    "sha256Hash": "fa5fb043fd3fec8889346293c103595948f8739a54621ae9c093fe62109a6773",
+    "timestamp": "2025-12-22T16:46:07.105Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 281
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-2-1766421960932.txt",
+    "sha256Hash": "ad763b95572f3087c08457abf90c568e582f224a47dc951d1e8414718b84cdc0",
+    "timestamp": "2025-12-22T16:46:14.312Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 468
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-3-1766421960933.txt",
+    "sha256Hash": "bc4150bdb764cc5fc1cd2378344e6354d4dcfa75c2c0f283f9740df6529d7684",
+    "timestamp": "2025-12-22T16:46:32.773Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 277
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-4-1766421960933.txt",
+    "sha256Hash": "d8f524a9449e9ae8bded34706d66c717b24f9fdd4ac96cfa64c548841ce32aa6",
+    "timestamp": "2025-12-22T16:46:39.995Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 651
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-5-1766421960933.txt",
+    "sha256Hash": "12930eff2d6a775d507e600968cf61f96c25d0395f134fb2a53df5d2de108a4a",
+    "timestamp": "2025-12-22T16:46:52.366Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 278
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-6-1766421960933.txt",
+    "sha256Hash": "d1a7ad37b5dcffa11dcba2f275da53d0adabfdeefb7d0289c4438667cc5b47ae",
+    "timestamp": "2025-12-22T16:46:58.871Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 824
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-cluster_status-0-1766422259568.txt",
+    "sha256Hash": "013ff17a289dd1212dea915b6c1e85800bd884b4940948d7e7a9b1cfb772b96e",
+    "timestamp": "2025-12-22T16:50:59.569Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 200
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-1-1766422259568.txt",
+    "sha256Hash": "6b09a49fc7ec5e7eff7e054e96e833432a4beb7aeb5e98ec1e1ee67dbf0ade8c",
+    "timestamp": "2025-12-22T16:50:59.585Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 316
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-2-1766422259568.txt",
+    "sha256Hash": "84a3ef1d40bdff55b78b605d113619e1e1741ecb7671ecfc8e942ec3b079b182",
+    "timestamp": "2025-12-22T16:50:59.598Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 468
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-3-1766422259568.txt",
+    "sha256Hash": "1cfd28a15b6edf434b91bdbcc3d914757a28e09f416be4079ab887d04ecd10a0",
+    "timestamp": "2025-12-22T16:50:59.612Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 313
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-4-1766422259568.txt",
+    "sha256Hash": "cf1cf2d3bf7229aa91a351c53175ff38af2642c43710e042871e80de1f9cebe1",
+    "timestamp": "2025-12-22T16:50:59.626Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 824
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-5-1766422259568.txt",
+    "sha256Hash": "5f0b41bfaec4e107c4cd1d134ac939dff97908b71f4d632e172f9c4dd9cdcf22",
+    "timestamp": "2025-12-22T16:50:59.643Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 312
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-6-1766422259568.txt",
+    "sha256Hash": "835ca334f716198f032304a9696b00f3ef33338b4eea1b64148bf513a65b7598",
+    "timestamp": "2025-12-22T16:50:59.656Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 651
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-cluster_status-0-1766422260036.txt",
+    "sha256Hash": "013ff17a289dd1212dea915b6c1e85800bd884b4940948d7e7a9b1cfb772b96e",
+    "timestamp": "2025-12-22T16:51:00.037Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 200
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-1-1766422260037.txt",
+    "sha256Hash": "6b09a49fc7ec5e7eff7e054e96e833432a4beb7aeb5e98ec1e1ee67dbf0ade8c",
+    "timestamp": "2025-12-22T16:51:06.957Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 316
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-2-1766422260037.txt",
+    "sha256Hash": "84a3ef1d40bdff55b78b605d113619e1e1741ecb7671ecfc8e942ec3b079b182",
+    "timestamp": "2025-12-22T16:51:12.229Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 468
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-3-1766422260037.txt",
+    "sha256Hash": "1cfd28a15b6edf434b91bdbcc3d914757a28e09f416be4079ab887d04ecd10a0",
+    "timestamp": "2025-12-22T16:51:27.998Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 313
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-4-1766422260037.txt",
+    "sha256Hash": "cf1cf2d3bf7229aa91a351c53175ff38af2642c43710e042871e80de1f9cebe1",
+    "timestamp": "2025-12-22T16:51:33.631Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 824
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-node_profile-5-1766422260037.txt",
+    "sha256Hash": "5f0b41bfaec4e107c4cd1d134ac939dff97908b71f4d632e172f9c4dd9cdcf22",
+    "timestamp": "2025-12-22T16:51:54.520Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 312
+  },
+  {
+    "filePath": "/tmp/pce-proxmox-ingestion/proxmox-vm_inventory-6-1766422260037.txt",
+    "sha256Hash": "835ca334f716198f032304a9696b00f3ef33338b4eea1b64148bf513a65b7598",
+    "timestamp": "2025-12-22T16:52:02.146Z",
+    "aclGroup": "ops",
+    "documentType": "proxmox_inventory",
+    "size": 651
   }
 ]
