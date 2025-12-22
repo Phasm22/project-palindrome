@@ -24,6 +24,16 @@ const DIMENSIONS: Record<string, number> = {
   "bge-large-en-v1.5": 1024,
 };
 
+// Query embedding cache entry
+interface EmbeddingCacheEntry {
+  embedding: number[];
+  timestamp: number;
+}
+
+// Cache TTL: 5 minutes for query embeddings
+const EMBEDDING_CACHE_TTL = 5 * 60 * 1000;
+const EMBEDDING_CACHE_MAX_SIZE = 500;
+
 export class EmbeddingService {
   private openai: OpenAI | null = null;
   private provider: EmbeddingProvider;
@@ -31,6 +41,11 @@ export class EmbeddingService {
   private localModel: string;
   private ollamaBaseUrl: string;
   private dimension: number;
+  
+  // Query embedding cache - avoids re-embedding repeated queries
+  private queryCache: Map<string, EmbeddingCacheEntry> = new Map();
+  private cacheHits = 0;
+  private cacheMisses = 0;
 
   constructor(
     provider?: EmbeddingProvider,
@@ -70,27 +85,76 @@ export class EmbeddingService {
   }
 
   /**
-   * Convert text to embedding vector
+   * Convert text to embedding vector (with caching for queries)
+   * @param text - Text to embed
+   * @param useCache - Whether to use cache (default: true for queries, false for document ingestion)
    */
-  async embed(text: string): Promise<number[]> {
+  async embed(text: string, useCache = true): Promise<number[]> {
+    // Normalize text for cache key (lowercase, trim whitespace)
+    const cacheKey = text.toLowerCase().trim();
+    
+    // Check cache first (for short query-like texts)
+    if (useCache && text.length < 500) {
+      const cached = this.queryCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) < EMBEDDING_CACHE_TTL) {
+        this.cacheHits++;
+        pceLogger.debug("Embedding cache hit", { 
+          textLength: text.length, 
+          cacheHits: this.cacheHits, 
+          cacheMisses: this.cacheMisses 
+        });
+        return cached.embedding;
+      }
+    }
+    
+    this.cacheMisses++;
+    
     try {
+      let embedding: number[];
+      
       if (this.provider === "openai") {
-        return await this.embedOpenAI(text);
+        embedding = await this.embedOpenAI(text);
       } else if (this.provider === "local") {
-        return await this.embedLocal(text);
+        embedding = await this.embedLocal(text);
       } else {
         // Mixed: try local first, fallback to OpenAI
         try {
-          return await this.embedLocal(text);
+          embedding = await this.embedLocal(text);
         } catch (error: any) {
           pceLogger.warn("Local embedding failed, falling back to OpenAI", { error: error.message });
-          return await this.embedOpenAI(text);
+          embedding = await this.embedOpenAI(text);
         }
       }
+      
+      // Cache the embedding for short texts (queries)
+      if (useCache && text.length < 500) {
+        // Evict oldest entries if cache is full
+        if (this.queryCache.size >= EMBEDDING_CACHE_MAX_SIZE) {
+          const oldestKey = this.queryCache.keys().next().value;
+          if (oldestKey) this.queryCache.delete(oldestKey);
+        }
+        this.queryCache.set(cacheKey, { embedding, timestamp: Date.now() });
+      }
+      
+      return embedding;
     } catch (error: any) {
       pceLogger.error("Failed to generate embedding", { error: error.message, provider: this.provider });
       throw error;
     }
+  }
+  
+  /**
+   * Get cache statistics
+   */
+  getCacheStats(): { hits: number; misses: number; size: number; hitRate: string } {
+    const total = this.cacheHits + this.cacheMisses;
+    const hitRate = total > 0 ? ((this.cacheHits / total) * 100).toFixed(1) + "%" : "N/A";
+    return {
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+      size: this.queryCache.size,
+      hitRate,
+    };
   }
 
   private async embedOpenAI(text: string): Promise<number[]> {
@@ -176,4 +240,5 @@ export class EmbeddingService {
     return this.dimension;
   }
 }
+
 

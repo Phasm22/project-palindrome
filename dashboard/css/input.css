@@ -4,6 +4,18 @@
 @import "animate.css";
 
 @layer base {
+  html, body {
+    overflow-x: hidden; /* Prevent horizontal scroll */
+    max-width: 100vw;
+  }
+  
+  /* Prevent iOS zoom on input focus */
+  @media (max-width: 767px) {
+    input, textarea, select {
+      font-size: 16px !important; /* iOS won't zoom if font-size >= 16px */
+    }
+  }
+  
   body {
     @apply bg-slate-950 text-slate-100;
     font-family: var(--font-body, 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
@@ -267,6 +279,11 @@
   .icon-spin {
     animation: spin 0.6s ease-in-out;
   }
+  
+  /* Continuous spin for progress indicators */
+  .spin {
+    animation: spin 1s linear infinite;
+  }
 }
 
 /* Custom scrollbar */
@@ -343,7 +360,7 @@
   }
   
   .stat-label {
-    color: #cbd5e1;
+    color: #e2e8f0;
     font-size: 0.875rem;
     font-weight: 500;
     margin-bottom: 0.5rem;
@@ -459,32 +476,96 @@
     color: #e2e8f0;
   }
   
-  /* Table responsive wrapper - show both on mobile with horizontal scroll */
+  /* Table responsive wrapper - cards on mobile, table on desktop */
   .table-responsive {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    width: 100%;
+    max-width: 100%;
   }
   
-  @media (max-width: 767px) {
-    .table-responsive {
-      display: block;
-    }
-    
-    .card-responsive {
-      display: block;
-      margin-top: 1rem;
-    }
-  }
-  
+  /* Desktop: make table-responsive flex to fill available space */
   @media (min-width: 768px) {
     .table-responsive {
-      display: block;
+      display: flex;
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .table-responsive table {
+      width: 100%;
+      min-width: 100%;
+    }
+  }
+  
+  /* Mobile: hide table, show full-width cards */
+  @media (max-width: 767px) {
+    .table-responsive {
+      display: none !important;
     }
     
     .card-responsive {
-      display: none;
+      display: block !important;
+      width: 100%;
+      margin: 0;
+      padding: 0;
     }
   }
+  
+  /* Mobile card styling - always available but only shown on mobile */
+  .mobile-card {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid #334155;
+    border-radius: 0.75rem;
+    margin-bottom: 0.75rem;
+    padding: 1rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  
+  .mobile-card-row {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0.625rem;
+    padding-bottom: 0.625rem;
+    border-bottom: 1px solid #1e293b;
+  }
+  
+  .mobile-card-row:last-child {
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+  
+  .mobile-card-label {
+    color: #94a3b8;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.25rem;
+  }
+  
+  .mobile-card-value {
+    color: #e2e8f0;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+  
+  /* Status badges in mobile cards */
+  .mobile-card-value .status-badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+  }
+  
+  /* Desktop: show table, hide cards */
+  @media (min-width: 768px) {
+    .card-responsive {
+      display: none !important;
+    }
+  }
+  
   
   /* Status badges */
   .status-badge {
@@ -498,11 +579,15 @@
     border: 2px solid transparent;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     transition: all 0.2s;
+    /* Override parent gradient text styling */
+    -webkit-text-fill-color: unset !important;
+    background-clip: unset !important;
+    -webkit-background-clip: unset !important;
   }
   
   .status-success {
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-    color: white;
+    color: white !important;
     border-color: rgba(16, 185, 129, 0.3);
     box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
   }
@@ -518,14 +603,14 @@
   
   .status-error {
     background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-    color: white;
+    color: white !important;
     border-color: rgba(239, 68, 68, 0.3);
     box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
   }
   
   .status-warning {
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-    color: white;
+    color: white !important;
     border-color: rgba(245, 158, 11, 0.3);
     box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
   }
@@ -553,6 +638,28 @@
     max-height: 200px;
     overflow-y: auto;
     border: 1px solid #334155;
+    max-width: 100%;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+  
+  /* Mobile: prevent any horizontal overflow */
+  @media (max-width: 767px) {
+    pre {
+      font-size: 0.65rem;
+      max-width: calc(100vw - 2rem);
+    }
+    
+    .panel {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+    
+    /* Ensure tab content doesn't overflow */
+    .tab-content {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
   }
   
   /* Chat input styling - smooth, crisp text like Cursor */

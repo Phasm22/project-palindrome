@@ -9,6 +9,68 @@ let currentResponseId = null;
 let finalEventTimeout = null;
 let currentConversationId = null;
 
+// Scroll lock state - track async operations and user scroll behavior
+let isAsyncOperationActive = false;
+let shouldAutoScroll = true; // Whether to auto-scroll to bottom
+let scrollLockTimeout = null;
+let scrollHandlersAttached = false;
+let scrollScheduled = false; // Prevent multiple scroll operations
+
+/**
+ * Global scroll handler - detects when user scrolls up during async operations
+ */
+function handleScrollDuringAsync(e) {
+  if (!isAsyncOperationActive) return;
+  
+  const messagesDiv = e.target;
+  const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+  
+  // If user scrolled up more than 150px from bottom, disable auto-scroll
+  if (distanceFromBottom > 150) {
+    shouldAutoScroll = false;
+  }
+}
+
+// Helper: Get all chat message containers (mobile + desktop)
+function getChatMessageContainers() {
+  const mobile = document.getElementById('chat-messages');
+  const desktop = document.getElementById('chat-messages-desktop');
+  return [mobile, desktop].filter(Boolean);
+}
+
+// Helper: Get all chat inputs (mobile + desktop)
+function getChatInputs() {
+  const mobile = document.getElementById('chat-input');
+  const desktop = document.getElementById('chat-input-desktop');
+  return [mobile, desktop].filter(Boolean);
+}
+
+// Helper: Get all send buttons (mobile + desktop)
+function getSendButtons() {
+  const mobile = document.getElementById('chat-send-btn');
+  const desktop = document.getElementById('chat-send-btn-desktop');
+  return [mobile, desktop].filter(Boolean);
+}
+
+// Helper: Get primary chat messages container (visible one)
+function getPrimaryChatMessages() {
+  const isMobile = window.innerWidth < 768;
+  return document.getElementById(isMobile ? 'chat-messages' : 'chat-messages-desktop');
+}
+
+// Helper: Get primary chat input (visible one)
+function getPrimaryChatInput() {
+  const isMobile = window.innerWidth < 768;
+  return document.getElementById(isMobile ? 'chat-input' : 'chat-input-desktop');
+}
+
+// Helper: Sync content to all containers
+function syncToAllContainers(html) {
+  getChatMessageContainers().forEach(container => {
+    if (container) container.innerHTML = html;
+  });
+}
+
 // Export conversation ID getter/setter for other modules
 export function getCurrentConversationId() {
   return currentConversationId;
@@ -102,8 +164,105 @@ function formatClusterVmsSection(vms) {
   return '<div style="margin: 12px 0;">' + vms.join('') + '</div>';
 }
 
+/**
+ * Format clarification messages with clickable options
+ */
+function formatClarificationMessage(text) {
+  const lines = text.split('\n');
+  let html = '<div class="clarification-message" style="background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%); border: 1px solid #3b82f6; border-radius: 8px; padding: 16px;">';
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // Typo detection line
+    if (trimmed.startsWith('🔍')) {
+      html += `<div style="color: #60a5fa; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <path d="m21 21-4.35-4.35"></path>
+        </svg>
+        <span>${escapeHtml(trimmed.substring(2))}</span>
+      </div>`;
+      continue;
+    }
+    
+    // "Did you mean" header
+    if (trimmed === 'Did you mean one of these?') {
+      html += `<div style="color: #e2e8f0; font-weight: 600; margin: 8px 0;">Did you mean one of these?</div>`;
+      continue;
+    }
+    
+    // Numbered options - make them clickable
+    const optionMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
+    if (optionMatch) {
+      const [, num, optionText] = optionMatch;
+      html += `<button onclick="selectClarificationOption(${num}, '${escapeHtml(optionText).replace(/'/g, "\\'")}')" 
+        style="display: block; width: 100%; text-align: left; padding: 10px 12px; margin: 6px 0; 
+               background: #0f172a; border: 1px solid #334155; border-radius: 6px; 
+               color: #e2e8f0; cursor: pointer; transition: all 0.2s ease;
+               font-family: inherit; font-size: 0.95em;"
+        onmouseover="this.style.background='#1e293b'; this.style.borderColor='#3b82f6';"
+        onmouseout="this.style.background='#0f172a'; this.style.borderColor='#334155';">
+        <span style="color: #3b82f6; font-weight: 600; margin-right: 8px;">${num}.</span>
+        ${escapeHtml(optionText)}
+      </button>`;
+      continue;
+    }
+    
+    // Help text
+    if (trimmed.startsWith('Reply with')) {
+      html += `<div style="color: #64748b; font-size: 0.85em; margin-top: 12px; font-style: italic;">
+        ${escapeHtml(trimmed)}
+      </div>`;
+      continue;
+    }
+    
+    // Unknown entities
+    if (trimmed.startsWith('❓')) {
+      html += `<div style="color: #f59e0b; margin-top: 8px;">
+        ${escapeHtml(trimmed)}
+      </div>`;
+      continue;
+    }
+    
+    // Empty lines
+    if (!trimmed) {
+      continue;
+    }
+    
+    // Other text
+    html += `<div style="color: #94a3b8; margin: 4px 0;">${escapeHtml(trimmed)}</div>`;
+  }
+  
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Handle clicking a clarification option
+ */
+window.selectClarificationOption = function(num, optionText) {
+  // Send the actual suggestion text (not just the number)
+  // This avoids needing server-side state for pending clarifications
+  const input = getChatInput();
+  if (input) {
+    input.value = optionText;
+    // Trigger send
+    sendChatMessage();
+  }
+};
+
 function formatAgentResponse(text) {
   if (!text) return '';
+  
+  // Strip markdown bold (**...**) for cleaner output
+  const stripBold = (input) => input.replace(/\*\*(.*?)\*\*/g, '$1');
+  text = stripBold(text);
+  
+  // Check if this is a clarification message
+  if (text.includes('🔍') && text.includes('Did you mean')) {
+    return formatClarificationMessage(text);
+  }
   
   const lines = text.split('\n');
   let html = '';
@@ -333,20 +492,139 @@ function formatAgentResponse(text) {
 }
 
 function updateChatMessage(messageId, newContent) {
-  const messageDiv = document.getElementById(messageId);
-  if (messageDiv) {
+  // Update in all containers (mobile + desktop)
+  const containersToScroll = [];
+  
+  // Ensure containers are visible when updating
+  const containers = getChatMessageContainers();
+  containers.forEach(c => {
+    if (c) {
+      c.style.display = '';
+    }
+  });
+  
+  containers.forEach(messagesDiv => {
+    if (!messagesDiv) return;
+    let messageDiv = messagesDiv.querySelector(`#${messageId}`);
+    
+    // If message not found, create it (fallback for race conditions)
+    if (!messageDiv) {
+      console.warn(`Message ${messageId} not found, creating fallback message`);
+      messageDiv = document.createElement('div');
+      messageDiv.id = messageId;
+      messageDiv.style.cssText = `
+        margin-bottom: 8px;
+        padding: 12px 16px;
+        border-radius: 18px 18px 18px 4px;
+        max-width: 75%;
+        word-wrap: break-word;
+        position: relative;
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        margin-left: 0;
+        margin-right: auto;
+        color: #e2e8f0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(51, 65, 85, 0.5);
+      `;
+      messagesDiv.appendChild(messageDiv);
+    }
+    
+    // Check if user scrolled up (more than 150px from bottom)
+    const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+    const wasNearBottom = distanceFromBottom < 150;
+    
+    // If async operation is active and user hasn't scrolled up, lock to bottom
+    const shouldLockScroll = isAsyncOperationActive && (wasNearBottom || shouldAutoScroll);
+    
     messageDiv.innerHTML = newContent;
-    const messagesDiv = document.getElementById('chat-messages');
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    
+    if (shouldLockScroll || (wasNearBottom && shouldAutoScroll)) {
+      containersToScroll.push(messagesDiv);
+    }
+  });
+  
+  // Scroll all containers that need scrolling in a single animation frame
+  if (containersToScroll.length > 0 && !scrollScheduled) {
+    scrollScheduled = true;
+    requestAnimationFrame(() => {
+      containersToScroll.forEach(messagesDiv => {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+      scrollScheduled = false;
+    });
   }
 }
 
+/**
+ * Lock scroll to bottom during async operations
+ */
+function lockScrollToBottom() {
+  isAsyncOperationActive = true;
+  shouldAutoScroll = true;
+  
+  // Clear any existing timeout
+  if (scrollLockTimeout) {
+    clearTimeout(scrollLockTimeout);
+  }
+  
+  // Set up scroll lock for all containers
+  if (!scrollScheduled) {
+    scrollScheduled = true;
+    requestAnimationFrame(() => {
+      getChatMessageContainers().forEach(messagesDiv => {
+        if (!messagesDiv) return;
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+      scrollScheduled = false;
+    });
+  }
+  
+  // Attach scroll listeners once if not already attached
+  if (!scrollHandlersAttached) {
+    getChatMessageContainers().forEach(messagesDiv => {
+      if (messagesDiv) {
+        messagesDiv.addEventListener('scroll', handleScrollDuringAsync, { passive: true });
+      }
+    });
+    scrollHandlersAttached = true;
+  }
+}
+
+/**
+ * Unlock scroll when async operations complete
+ */
+function unlockScroll() {
+  isAsyncOperationActive = false;
+  
+  // Clear timeout
+  if (scrollLockTimeout) {
+    clearTimeout(scrollLockTimeout);
+    scrollLockTimeout = null;
+  }
+  
+  // Remove scroll listeners
+  getChatMessageContainers().forEach(messagesDiv => {
+    if (!messagesDiv) return;
+    // We can't remove anonymous listeners, but that's okay - they check isAsyncOperationActive
+  });
+}
+
 function addChatMessage(role, content, isLoading = false, messageId = null, dbId = null, reasoningTraceId = null) {
-  const messagesDiv = document.getElementById('chat-messages');
+  const containers = getChatMessageContainers();
   const msgId = messageId || 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
   
-  const welcomeMsg = messagesDiv.querySelector('div[style*="text-align: center"]');
-  if (welcomeMsg) welcomeMsg.remove();
+  // Show chatbox containers when first message is added
+  containers.forEach(c => {
+    if (c) {
+      c.style.display = '';
+    }
+  });
+  
+  // Remove welcome message from all containers
+  containers.forEach(c => {
+    const welcomeMsg = c.querySelector('div[style*="text-align: center"]');
+    if (welcomeMsg) welcomeMsg.remove();
+  });
 
   const messageDiv = document.createElement('div');
   messageDiv.id = msgId;
@@ -457,27 +735,55 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     `;
   }
 
-  messagesDiv.appendChild(messageDiv);
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  // Append to all containers and collect which ones need scrolling
+  const containersToScroll = [];
+  
+  containers.forEach(messagesDiv => {
+    const clone = messageDiv.cloneNode(true);
+    const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+    const wasNearBottom = distanceFromBottom < 150;
+    
+    messagesDiv.appendChild(clone);
+    
+    // Always scroll for user messages or loading messages
+    // For assistant messages, only scroll if user is near bottom or async operation is active
+    if (role === 'user' || isLoading || (wasNearBottom && shouldAutoScroll) || (isAsyncOperationActive && shouldAutoScroll)) {
+      containersToScroll.push(messagesDiv);
+    }
+  });
+  
+  // Scroll all containers that need scrolling in a single animation frame
+  if (containersToScroll.length > 0 && !scrollScheduled) {
+    scrollScheduled = true;
+    requestAnimationFrame(() => {
+      containersToScroll.forEach(messagesDiv => {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      });
+      scrollScheduled = false;
+    });
+  }
 
   return msgId;
 }
 
 function removeChatMessage(messageId) {
-  const message = document.getElementById(messageId);
-  if (message) message.remove();
-  
-  const messagesDiv = document.getElementById('chat-messages');
-  if (messagesDiv && messagesDiv.children.length === 0) {
-    messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.</div>';
-  }
+  // Remove from all containers
+  getChatMessageContainers().forEach(container => {
+    const message = container.querySelector(`#${messageId}`);
+    if (message) message.remove();
+    if (container.children.length === 0) {
+      container.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px; font-size: 0.875rem;">Start a conversation with Palindrome.</div>';
+    }
+  });
 }
 
 function handleAgentEvent(event, toolExecutions) {
-  const messagesDiv = document.getElementById('chat-messages');
+  const messagesDiv = getPrimaryChatMessages();
   
   switch (event.type) {
     case 'agent:step':
+      // Lock scroll during async operations
+      lockScrollToBottom();
       updateChatMessage(currentResponseId, 
         `<div class="agent-thinking">
           <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
@@ -486,6 +792,8 @@ function handleAgentEvent(event, toolExecutions) {
       break;
       
     case 'tool:start':
+      // Lock scroll during tool execution
+      lockScrollToBottom();
       const toolInfo = {
         toolName: event.data.toolName,
         params: event.data.parameters,
@@ -522,7 +830,56 @@ function handleAgentEvent(event, toolExecutions) {
       }
       break;
       
+    case 'tool:progress':
+      // Lock scroll during progress updates
+      lockScrollToBottom();
+      // Update existing tool card with progress info
+      const progressMessageDiv = document.getElementById(currentResponseId);
+      if (progressMessageDiv) {
+        const toolDivs = progressMessageDiv.querySelectorAll('div[data-tool-name]');
+        const progressToolDiv = Array.from(toolDivs).find(d => 
+          d.getAttribute('data-tool-name') === event.data.toolName
+        );
+        
+        if (progressToolDiv) {
+          const progress = event.data.progress || 0;
+          const progressPercent = Math.round(progress * 100);
+          const statusColor = event.data.status === 'failed' ? '#ef4444' 
+            : event.data.status === 'completed' ? '#10b981' 
+            : event.data.status === 'waiting' ? '#f59e0b' 
+            : '#3b82f6';
+          
+          const statusIcon = event.data.status === 'failed' 
+            ? '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #ef4444;"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>'
+            : event.data.status === 'completed'
+            ? '<svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #10b981;"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>'
+            : event.data.status === 'waiting'
+            ? '<svg class="icon spin" viewBox="0 0 24 24" fill="currentColor" style="color: #f59e0b;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>'
+            : '<svg class="icon spin" viewBox="0 0 24 24" fill="currentColor" style="color: #3b82f6;"><path d="M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z"/></svg>';
+          
+          const actionLabel = event.data.action ? `<span style="color: #94a3b8; font-weight: normal;">(${event.data.action})</span>` : '';
+          
+          progressToolDiv.innerHTML = `
+            ${statusIcon}
+            <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
+            ${actionLabel}
+            <div style="color: ${statusColor}; margin-top: 6px; font-size: 0.9em;">
+              ${escapeHtml(event.data.message)}
+            </div>
+            ${progress > 0 && progress < 1 ? `
+              <div style="margin-top: 6px; height: 4px; background: #334155; border-radius: 2px; overflow: hidden;">
+                <div style="height: 100%; width: ${progressPercent}%; background: ${statusColor}; transition: width 0.3s ease;"></div>
+              </div>
+              <div style="color: #64748b; font-size: 0.75em; margin-top: 2px;">${progressPercent}%</div>
+            ` : ''}
+          `;
+        }
+      }
+      break;
+      
     case 'tool:complete':
+      // Lock scroll during tool completion
+      lockScrollToBottom();
       const tool = toolExecutions.find(t => t.toolName === event.data.toolName);
       const duration = event.data.durationMs || (tool ? Date.now() - tool.startTime : 0);
       const statusColor = event.data.success ? '#10b981' : '#ef4444';
@@ -553,17 +910,31 @@ function handleAgentEvent(event, toolExecutions) {
       break;
       
     case 'agent:final':
+      console.log('Handling agent:final event', event.data);
       const formattedText = formatAgentResponse(event.data.text || 'No response');
       const durationSeconds = (event.data.durationMs || 0) / 1000;
       const traceId = event.data.traceId;
       
-      setTimeout(() => {
-        if (currentConversationId) {
-          loadChatHistory(currentConversationId);
+      // Ensure containers are visible before updating
+      const containers = getChatMessageContainers();
+      containers.forEach(c => {
+        if (c) {
+          c.style.display = '';
         }
-        // Refresh conversation list to update message counts
+      });
+      
+      // Don't reload chat history - message is already displayed via updateChatMessage
+      // Just refresh conversation list to update message counts
+      setTimeout(() => {
         loadConversations();
       }, 500);
+      
+      // Ensure currentResponseId is set
+      if (!currentResponseId) {
+        console.warn('No currentResponseId set when receiving agent:final event');
+        // Create a new message if one doesn't exist
+        currentResponseId = addChatMessage('assistant', '', false);
+      }
       
       const traceLinkHtml = traceId ? `
         <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(51, 65, 85, 0.5); display: flex; align-items: center; gap: 8px; font-size: 0.8em;">
@@ -633,8 +1004,16 @@ function handleAgentEvent(event, toolExecutions) {
         ${traceLinkHtml}
       `;
       
-      updateChatMessage(currentResponseId, finalHtml);
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      // Use requestAnimationFrame to ensure DOM is ready
+      requestAnimationFrame(() => {
+        updateChatMessage(currentResponseId, finalHtml);
+      });
+      // Scroll is handled inside updateChatMessage
+      
+      // Unlock scroll after a short delay to allow final render
+      scrollLockTimeout = setTimeout(() => {
+        unlockScroll();
+      }, 500);
       
       if (currentEventSource) {
         currentEventSource.close();
@@ -646,28 +1025,25 @@ function handleAgentEvent(event, toolExecutions) {
         finalEventTimeout = null;
       }
       
-      const input = document.getElementById('chat-input');
-      const sendBtn = document.getElementById('chat-send-btn');
-      input.disabled = false;
-      sendBtn.disabled = false;
-      sendBtn.textContent = 'Send';
-      input.focus();
+      getChatInputs().forEach(i => i.disabled = false);
+      getSendButtons().forEach(b => b.disabled = false);
+      const primaryInput = getPrimaryChatInput();
+      if (primaryInput) setTimeout(() => primaryInput.focus(), 100);
       break;
   }
 }
 
 // Main chat functions
 export async function sendChatMessage() {
-  const input = document.getElementById('chat-input');
-  const sendBtn = document.getElementById('chat-send-btn');
-  const messagesDiv = document.getElementById('chat-messages');
+  const inputs = getChatInputs();
+  const buttons = getSendButtons();
+  const primaryInput = getPrimaryChatInput();
   
-  const message = input.value.trim();
+  const message = primaryInput?.value?.trim() || '';
   if (!message) return;
 
-  input.disabled = true;
-  sendBtn.disabled = true;
-  sendBtn.textContent = 'Sending...';
+  inputs.forEach(i => { i.disabled = true; i.value = ''; });
+  buttons.forEach(b => b.disabled = true);
 
   if (currentEventSource) {
     currentEventSource.close();
@@ -675,7 +1051,10 @@ export async function sendChatMessage() {
   }
 
   addChatMessage('user', message);
-  input.value = '';
+  
+  // Re-enable auto-scroll when user sends a new message
+  shouldAutoScroll = true;
+  lockScrollToBottom();
 
   currentResponseId = addChatMessage('assistant', `
     <div class="agent-thinking">
@@ -742,13 +1121,15 @@ export async function sendChatMessage() {
     currentEventSource.onmessage = (event) => {
       try {
         const agentEvent = JSON.parse(event.data);
+        console.log('Received SSE event:', agentEvent.type, agentEvent);
         handleAgentEvent(agentEvent, toolExecutions);
         
         if (agentEvent.type === 'agent:final') {
           finalText = agentEvent.data.text || '';
+          console.log('Final text received:', finalText);
         }
       } catch (error) {
-        console.error('Error parsing SSE event:', error);
+        console.error('Error parsing SSE event:', error, event.data);
       }
     };
 
@@ -781,10 +1162,16 @@ export async function sendChatMessage() {
           `);
         }
         
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
+        // Re-enable inputs and buttons
+        const inputs = getChatInputs();
+        const buttons = getSendButtons();
+        inputs.forEach(i => { i.disabled = false; });
+        buttons.forEach(b => { 
+          b.disabled = false;
+          b.textContent = 'Send';
+        });
+        const primaryInput = getPrimaryChatInput();
+        if (primaryInput) primaryInput.focus();
       }
       
       currentEventSource.close();
@@ -807,17 +1194,28 @@ export async function sendChatMessage() {
         currentEventSource.close();
         currentEventSource = null;
         
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
+        // Re-enable inputs and buttons
+        const inputs = getChatInputs();
+        const buttons = getSendButtons();
+        inputs.forEach(i => { i.disabled = false; });
+        buttons.forEach(b => { 
+          b.disabled = false;
+          b.textContent = 'Send';
+        });
+        const primaryInput = getPrimaryChatInput();
+        if (primaryInput) primaryInput.focus();
       } else if (currentEventSource && !finalText) {
         const isActionOperation = currentQuery && (
           currentQuery.toLowerCase().includes('create') ||
           currentQuery.toLowerCase().includes('destroy') ||
-          currentQuery.toLowerCase().includes('provision')
+          currentQuery.toLowerCase().includes('provision') ||
+          currentQuery.toLowerCase().includes('start') ||
+          currentQuery.toLowerCase().includes('stop') ||
+          currentQuery.toLowerCase().includes('vm') ||
+          currentQuery.toLowerCase().includes('container')
         );
-        const timeoutMs = isActionOperation ? 300000 : 60000;
+        // Default 120s timeout, 5 min for actions
+        const timeoutMs = isActionOperation ? 300000 : 120000;
         
         updateChatMessage(currentResponseId, `
           <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 2px solid #fbbf24;">
@@ -829,19 +1227,30 @@ export async function sendChatMessage() {
         currentEventSource.close();
         currentEventSource = null;
         
-        input.disabled = false;
-        sendBtn.disabled = false;
-        sendBtn.textContent = 'Send';
-        input.focus();
+        // Re-enable inputs and buttons
+        const inputs = getChatInputs();
+        const buttons = getSendButtons();
+        inputs.forEach(i => { i.disabled = false; });
+        buttons.forEach(b => { 
+          b.disabled = false;
+          b.textContent = 'Send';
+        });
+        const primaryInput = getPrimaryChatInput();
+        if (primaryInput) primaryInput.focus();
       }
       finalEventTimeout = null;
     }, (() => {
       const isActionOperation = message && (
         message.toLowerCase().includes('create') ||
         message.toLowerCase().includes('destroy') ||
-        message.toLowerCase().includes('provision')
+        message.toLowerCase().includes('provision') ||
+        message.toLowerCase().includes('start') ||
+        message.toLowerCase().includes('stop') ||
+        message.toLowerCase().includes('vm') ||
+        message.toLowerCase().includes('container')
       );
-      return isActionOperation ? 300000 : 60000;
+      // Default 120s timeout, 5 min for actions  
+      return isActionOperation ? 300000 : 120000;
     })());
 
   } catch (error) {
@@ -851,10 +1260,16 @@ export async function sendChatMessage() {
     
     addChatMessage('assistant', `<div style="color: #ef4444;">Error: ${escapeHtml(error.message)}</div>`);
     
-    input.disabled = false;
-    sendBtn.disabled = false;
-    sendBtn.textContent = 'Send';
-    input.focus();
+    // Re-enable inputs and buttons
+    const inputs = getChatInputs();
+    const buttons = getSendButtons();
+    inputs.forEach(i => { i.disabled = false; });
+    buttons.forEach(b => { 
+      b.disabled = false;
+      b.textContent = 'Send';
+    });
+    const primaryInput = getPrimaryChatInput();
+    if (primaryInput) primaryInput.focus();
   }
 }
 
@@ -1013,11 +1428,16 @@ export async function deleteConversation(conversationId) {
 }
 
 export async function loadChatHistory(conversationId = null) {
-  const messagesDiv = document.getElementById('chat-messages');
-  if (!messagesDiv) return;
+  const containers = getChatMessageContainers();
+  if (containers.length === 0) return;
 
   if (!conversationId) {
-    messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Select a conversation or create a new one to start chatting.</div>';
+    // Hide containers when no conversation is selected
+    containers.forEach(c => {
+      if (c) {
+        c.style.display = 'none';
+      }
+    });
     return;
   }
 
@@ -1032,26 +1452,50 @@ export async function loadChatHistory(conversationId = null) {
     const result = await response.json();
     const messages = result.data || [];
 
-    messagesDiv.innerHTML = '';
+    // Clear all containers
+    containers.forEach(c => c.innerHTML = '');
 
+    // Hide chatbox containers for empty conversations
+    // The chatbox will appear when the first message is sent
     if (messages.length === 0) {
-      messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Start a conversation with Palindrome. Ask questions about your infrastructure, VMs, services, or anything else.</div>';
+      containers.forEach(c => {
+        if (c) {
+          c.style.display = 'none';
+        }
+      });
       return;
     }
+    
+    // Show chatbox containers when there are messages
+    containers.forEach(c => {
+      if (c) {
+        c.style.display = '';
+      }
+    });
 
-        messages.forEach(msg => {
-          if (msg.role === 'user') {
-            addChatMessage('user', msg.content, false, null, msg.id, null);
-          } else {
-            const formattedContent = formatAgentResponse(msg.content);
-            addChatMessage('assistant', formattedContent, false, null, msg.id, msg.reasoningTraceId || null);
-          }
-        });
+    messages.forEach(msg => {
+      if (msg.role === 'user') {
+        addChatMessage('user', msg.content, false, null, msg.id, null);
+      } else {
+        const formattedContent = formatAgentResponse(msg.content);
+        addChatMessage('assistant', formattedContent, false, null, msg.id, msg.reasoningTraceId || null);
+      }
+    });
 
-    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    // Scroll to bottom in all containers
+    // Disable async scroll lock during history load (not an async operation)
+    const wasAsyncActive = isAsyncOperationActive;
+    isAsyncOperationActive = false;
+    containers.forEach(c => {
+      requestAnimationFrame(() => {
+        c.scrollTop = c.scrollHeight;
+      });
+    });
+    // Restore async state
+    isAsyncOperationActive = wasAsyncActive;
   } catch (error) {
     console.error('Failed to load chat history:', error);
-    messagesDiv.innerHTML = '<div style="color: #ef4444; text-align: center; padding: 20px;">Failed to load messages</div>';
+    syncToAllContainers('<div style="color: #ef4444; text-align: center; padding: 20px; font-size: 0.875rem;">Failed to load messages</div>');
   }
 }
 

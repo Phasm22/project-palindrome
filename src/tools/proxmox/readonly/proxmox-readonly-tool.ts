@@ -1580,7 +1580,12 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     // ===== LAYER 2: Guest Agent (QEMU only) =====
     if (type === "qemu" && !resolvedIP) {
       // Check if agent is enabled in config (we already have config from Layer 1)
-      const agentEnabled = config.agent === 1 || config.agent === "1" || config.agent === "enabled";
+      // Handle different formats: 1, "1", "enabled", or "enabled=1,..."
+      const agentEnabled = 
+        config.agent === 1 || 
+        config.agent === "1" || 
+        config.agent === "enabled" ||
+        (typeof config.agent === "string" && config.agent.includes("enabled=1"));
       
       if (!agentEnabled) {
         resolutionLayers.push({

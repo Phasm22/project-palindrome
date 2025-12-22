@@ -124,7 +124,7 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "sum(query_latency_vector_ms_count) + sum(query_latency_graph_ms_count) + sum(query_latency_hybrid_ms_count)",
+          "expr": "(sum(query_latency_vector_ms_count) or vector(0)) + (sum(query_latency_graph_ms_count) or vector(0)) + (sum(query_latency_hybrid_ms_count) or vector(0))",
           "refId": "A"
         }
       ],
@@ -187,7 +187,7 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "sum(rate(query_latency_vector_ms_count[1m])) + sum(rate(query_latency_graph_ms_count[1m])) + sum(rate(query_latency_hybrid_ms_count[1m]))",
+          "expr": "(sum(rate(query_latency_vector_ms_count[1m])) or vector(0)) + (sum(rate(query_latency_graph_ms_count[1m])) or vector(0)) + (sum(rate(query_latency_hybrid_ms_count[1m])) or vector(0))",
           "refId": "A"
         }
       ],

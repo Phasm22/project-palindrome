@@ -1,15 +1,81 @@
 import { loadConversations, sendChatMessage, selectConversation, createNewConversation, deleteConversation, deleteChatMessage, restoreConversation } from './chat.js';
 import { loadToolExecutions } from './executions.js';
-import { loadReasoningTraces } from './reasoning.js';
+import { loadReasoningTraces, copyTraceData } from './reasoning.js';
 import { loadGraph } from './graph.js';
 import { setupQueryInterface, executeQuery, executeGraphQuery, executeCypherQuery } from './query.js';
 import { loadExecutionStats, loadClusterStatus, loadSystemHealth } from './overview.js';
 import { testRagQuery } from './rag.js';
 import { createCustomDropdown, updateDropdown } from './dropdown.js';
+import { API_URL } from './utils.js';
+
+// Check API connection and show helpful message if it fails
+async function checkApiConnection() {
+  try {
+    const response = await fetch(`${API_URL}/health`, { 
+      method: 'GET',
+      mode: 'cors',
+    });
+    if (response.ok) {
+      console.log('✅ API connection successful:', API_URL);
+      return true;
+    }
+  } catch (error) {
+    console.error('❌ API connection failed:', error);
+  }
+  
+  // Show connection error banner
+  const banner = document.createElement('div');
+  banner.id = 'api-error-banner';
+  banner.innerHTML = `
+    <div style="
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+      color: white;
+      padding: 12px 20px;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      font-size: 14px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    ">
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 20px;">⚠️</span>
+        <div>
+          <strong>Cannot connect to API</strong> at ${API_URL}
+          <div style="font-size: 12px; opacity: 0.9; margin-top: 2px;">
+            ${window.location.protocol === 'https:' 
+              ? `Self-signed cert? <a href="${API_URL}/health" target="_blank" style="color: #fbbf24; text-decoration: underline;">Click here to accept it</a>, then refresh this page.`
+              : 'Make sure the PCE API server is running.'}
+          </div>
+        </div>
+      </div>
+      <button onclick="this.parentElement.parentElement.remove(); checkApiConnection();" style="
+        background: rgba(255,255,255,0.2);
+        border: none;
+        color: white;
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+      ">Retry</button>
+    </div>
+  `;
+  document.body.prepend(banner);
+  return false;
+}
+
+// Expose for retry button
+window.checkApiConnection = checkApiConnection;
 
 // Make functions globally accessible for onclick handlers
 window.loadToolExecutions = loadToolExecutions;
 window.loadReasoningTraces = loadReasoningTraces;
+window.copyTraceData = copyTraceData;
 window.loadGraph = loadGraph;
 window.sendChatMessage = sendChatMessage;
 window.selectConversation = selectConversation;
@@ -141,16 +207,18 @@ window.switchTab = function(tabName, clickedElement) {
     }, 100);
   }
   
-  // Show/hide floating nav for overview tab (desktop)
+  // Show/hide floating nav for overview tab (desktop only)
   const overviewNav = document.getElementById('overview-nav');
   if (overviewNav) {
-    overviewNav.style.display = tabName === 'overview' ? 'flex' : 'none';
-  }
-  
-  // Show/hide mobile nav for overview tab
-  const overviewNavMobile = document.getElementById('overview-nav-mobile');
-  if (overviewNavMobile) {
-    overviewNavMobile.style.display = tabName === 'overview' ? 'flex' : 'none';
+    if (tabName === 'overview' && window.innerWidth >= 768) {
+      // Show on desktop when overview tab is active
+      overviewNav.classList.remove('hidden');
+      overviewNav.classList.add('flex');
+    } else {
+      // Hide on all other tabs or on mobile
+      overviewNav.classList.add('hidden');
+      overviewNav.classList.remove('flex');
+    }
   }
   
   // Update mobile dropdown selector
@@ -391,14 +459,20 @@ window.addEventListener('DOMContentLoaded', async () => {
     plusIconMobile.appendChild(icon);
   }
   
-  // Send icon
+  // Send icons (mobile + desktop)
   const sendIcon = document.getElementById('send-icon');
   if (sendIcon) {
-    const icon = createIcon('Send', { size: 18, color: 'currentColor' });
+    const icon = createIcon('Send', { size: 16, color: 'currentColor' });
     sendIcon.appendChild(icon);
   }
   
-  // Navigation icons for overview
+  const sendIconDesktop = document.getElementById('send-icon-desktop');
+  if (sendIconDesktop) {
+    const icon = createIcon('Send', { size: 18, color: 'currentColor' });
+    sendIconDesktop.appendChild(icon);
+  }
+  
+  // Navigation icons for overview (desktop floating nav)
   const navIconStats = document.getElementById('nav-icon-stats');
   if (navIconStats) {
     const icon = createIcon('BarChart3', { size: 20, color: '#f97316' });
@@ -409,19 +483,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (navIconCluster) {
     const icon = createIcon('Server', { size: 20, color: '#f97316' });
     navIconCluster.appendChild(icon);
-  }
-  
-  // Mobile navigation icons
-  const navIconStatsMobile = document.getElementById('nav-icon-stats-mobile');
-  if (navIconStatsMobile) {
-    const icon = createIcon('BarChart3', { size: 20, color: '#f97316' });
-    navIconStatsMobile.appendChild(icon);
-  }
-  
-  const navIconClusterMobile = document.getElementById('nav-icon-cluster-mobile');
-  if (navIconClusterMobile) {
-    const icon = createIcon('Server', { size: 20, color: '#f97316' });
-    navIconClusterMobile.appendChild(icon);
   }
   
   // Add page load animations only for visible elements
@@ -456,6 +517,12 @@ window.addEventListener('DOMContentLoaded', async () => {
       }, 500);
     }, idx * 50 + 200);
   });
+  
+  // Check API connection first
+  const apiOk = await checkApiConnection();
+  if (!apiOk) {
+    console.warn('API connection failed - some features may not work');
+  }
   
   // Load chat conversations first (default tab)
   loadConversations();

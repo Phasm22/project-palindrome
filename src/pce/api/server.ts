@@ -15,6 +15,7 @@ import { ChatHistoryStore } from "./chat-history-store";
 import { transformHybridContext } from "./context-transformer";
 import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
+import { IngestionScheduler } from "../scheduler/ingestion-scheduler";
 
 type BunServer = ReturnType<typeof Bun.serve>;
 
@@ -67,6 +68,7 @@ export class PceApiServer {
   private ownsMetricsCollector: boolean;
   private startTime = Date.now();
   private redactor: Redactor;
+  private ingestionScheduler: IngestionScheduler | null = null;
 
   constructor(deps: PceApiServerDependencies, options: PceApiServerOptions = {}) {
     this.options = {
@@ -97,6 +99,14 @@ export class PceApiServer {
       throw new Error("PCE API server is already running");
     }
 
+    // Start ingestion scheduler (runs every 5 minutes)
+    if (!this.ingestionScheduler) {
+      this.ingestionScheduler = new IngestionScheduler(5, this.metricsCollector); // 5 minutes, pass metrics collector
+      this.ingestionScheduler.start();
+      pceLogger.info("Ingestion scheduler started (every 5 minutes)");
+    }
+
+    // HTTP server
     this.server = Bun.serve({
       hostname: "0.0.0.0", // Bind to all interfaces (IPv4) for Docker access
       port: this.options.port,
@@ -108,9 +118,40 @@ export class PceApiServer {
       port: this.server.port,
       url: `http://localhost:${this.server.port}`,
     });
+
+    // HTTPS server (optional, if certs exist)
+    const certPath = `${process.cwd()}/certs/cert.pem`;
+    const keyPath = `${process.cwd()}/certs/key.pem`;
+    const certFile = Bun.file(certPath);
+    const keyFile = Bun.file(keyPath);
+    
+    if (await certFile.exists() && await keyFile.exists()) {
+      const httpsPort = this.options.port + 443; // 4000 -> 4443
+      Bun.serve({
+        hostname: "0.0.0.0",
+        port: httpsPort,
+        fetch: (req, server) => this.handleRequest(req, server),
+        idleTimeout: 255,
+        tls: {
+          cert: certFile,
+          key: keyFile,
+        },
+      });
+      pceLogger.info("PCE API HTTPS server started", {
+        port: httpsPort,
+        url: `https://localhost:${httpsPort}`,
+      });
+    }
   }
 
   async stop(): Promise<void> {
+    // Stop ingestion scheduler
+    if (this.ingestionScheduler) {
+      this.ingestionScheduler.stop();
+      this.ingestionScheduler = null;
+      pceLogger.info("Ingestion scheduler stopped");
+    }
+
     if (this.server) {
       this.server.stop();
       this.server = null;
@@ -1018,11 +1059,56 @@ export class PceApiServer {
         since ? new Date(since) : undefined
       );
 
-      return this.jsonResponse(200, stats);
+      // Add ingestion scheduler metrics
+      const ingestionMetrics = this.getIngestionSchedulerMetrics();
+      const metricsSnapshot = this.metricsCollector.getSnapshot(300_000); // Last 5 minutes
+      
+      // Extract ingestion scheduler metrics from snapshot
+      const ingestionRunCount = metricsSnapshot.metrics["ingestion_scheduler_run_count"]?.latest || 0;
+      const ingestionSuccessCount = metricsSnapshot.metrics["ingestion_scheduler_success_count"]?.latest || 0;
+      const ingestionFailureCount = metricsSnapshot.metrics["ingestion_scheduler_failure_count"]?.latest || 0;
+      const ingestionAvgDuration = metricsSnapshot.metrics["ingestion_scheduler_run_duration_ms"]?.avg || 0;
+      const proxmoxAvgDuration = metricsSnapshot.metrics["ingestion_scheduler_proxmox_duration_ms"]?.avg || 0;
+      const networkAvgDuration = metricsSnapshot.metrics["ingestion_scheduler_network_duration_ms"]?.avg || 0;
+      const firewallAvgDuration = metricsSnapshot.metrics["ingestion_scheduler_firewall_duration_ms"]?.avg || 0;
+
+      return this.jsonResponse(200, {
+        ...stats,
+        ingestion: {
+          ...ingestionMetrics,
+          runCount: ingestionRunCount,
+          successCount: ingestionSuccessCount,
+          failureCount: ingestionFailureCount,
+          successRate: ingestionRunCount > 0 ? (ingestionSuccessCount / ingestionRunCount) * 100 : 0,
+          avgDurationMs: ingestionAvgDuration,
+          proxmoxAvgDurationMs: proxmoxAvgDuration,
+          networkAvgDurationMs: networkAvgDuration,
+          firewallAvgDurationMs: firewallAvgDuration,
+        },
+      });
     } catch (error: any) {
       pceLogger.error("Failed to fetch execution stats", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
     }
+  }
+
+  /**
+   * Get ingestion scheduler metrics
+   */
+  private getIngestionSchedulerMetrics() {
+    if (!this.ingestionScheduler) {
+      return {
+        active: false,
+        lastRun: null,
+        intervalMinutes: 0,
+      };
+    }
+
+    return {
+      active: this.ingestionScheduler.isActive(),
+      lastRun: this.ingestionScheduler.getLastRun()?.toISOString() || null,
+      intervalMinutes: 5,
+    };
   }
 
   private async handleReasoningTraces(req: Request): Promise<Response> {
@@ -1287,7 +1373,9 @@ export class PceApiServer {
         const eventBus = AgentEventBus.getInstance();
         const unsubscribe = eventBus.onEvent((event: AgentEvent) => {
           // Filter by sessionId if provided
-          if (sessionId && event.sessionId !== sessionId) {
+          // Allow tool:progress events through even without matching sessionId
+          // (tools emit progress without session context)
+          if (sessionId && event.sessionId !== sessionId && event.type !== "tool:progress") {
             return;
           }
 

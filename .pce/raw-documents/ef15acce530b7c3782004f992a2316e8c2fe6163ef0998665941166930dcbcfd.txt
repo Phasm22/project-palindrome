@@ -1,0 +1,43 @@
+# VM Inventory for Node: YANG
+Generated: 2025-12-06T23:14:58.388Z
+Total VMs: 6 (2 QEMU, 4 LXC)
+
+## VM 8000: ubuntu-cloudinit-template
+- Status: stopped
+- Type: qemu
+- Memory: 0 MB / 1 GB
+- CPU Usage: 0.0%
+
+## VM 211: opsbox
+- Status: running
+- Type: qemu
+- Memory: 2.87 GB / 7.81 GB
+- CPU Usage: 0.4%
+- Uptime: 1970-01-16T04:21:10.000Z
+
+## VM 101: pihole
+- Status: running
+- Type: lxc
+- Memory: 278.89 MB / 4 GB
+- CPU Usage: 0.1%
+- Uptime: 1970-03-18T03:09:36.000Z
+
+## VM 100: homebridge
+- Status: running
+- Type: lxc
+- Memory: 234.93 MB / 1 GB
+- CPU Usage: 0.2%
+- Uptime: 1970-01-26T06:27:51.000Z
+
+## VM 108: lxc-test2
+- Status: stopped
+- Type: lxc
+- Memory: 0 MB / 512 MB
+- CPU Usage: 0.0%
+
+## VM 103: PvVPN-Home
+- Status: running
+- Type: lxc
+- Memory: 88.15 MB / 1 GB
+- CPU Usage: 0.0%
+- Uptime: 1970-03-18T03:08:51.000Z

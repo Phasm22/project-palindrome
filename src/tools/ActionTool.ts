@@ -5,13 +5,14 @@ import { pceLogger as logger } from "../pce/utils/logger";
 import type { ExecutionContext, ExecutionResult } from "../types/execution";
 import type { ToolSchema } from "./tool-schema";
 import { createToolSchema } from "./tool-helpers";
+import { emitToolProgress } from "../agent/event-bus";
 
 // Use z.any() wrapped in z.object() instead of z.record() to avoid schema issues
 const ActionParams = z.object({
   action: z.string().describe("Action name (e.g., 'compute.create_vm')"),
   params: z.any().describe(
     "Action parameters as an object. " +
-        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, templateId?: number, bootstrap?: boolean, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. Set bootstrap=true to run Ansible bootstrap after VM creation. " +
+        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, vmBridge?: string (default: 'vmbr0'), vlanId?: number (1-4094, optional), templateId?: number, bootstrap?: boolean, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. Set vmBridge to 'vmbr2' for pre-configured VLAN bridges, or use vlanId with vmbr0 for VLAN tagging. Set bootstrap=true to run Ansible bootstrap after VM creation. " +
         "For compute.destroy_vm: {name?: string, vmId?: number, node?: string, dryRun?: boolean}. Either name or vmId is required. " +
         "For network.create_dns_record: {hostname: string, ip: string, domain?: string, dryRun?: boolean}. Creates DNS A record in Pi-hole. " +
         "For network.sync_dhcp_to_dns: {dryRun?: boolean, domain?: string, updateExisting?: boolean}. Syncs OPNsense DHCP leases to Pi-hole DNS records. " +
@@ -90,6 +91,21 @@ export class ActionTool extends BaseTool {
             action: "compute.create_vm",
             params: {
               node: "YANG",
+              cores: 2,
+              memory: 4096,
+              diskSize: "20G",
+              dryRun: false
+            }
+          }
+        },
+        {
+          description: "Create a VM in VLAN 50 using pre-configured bridge vmbr2",
+          parameters: {
+            action: "compute.create_vm",
+            params: {
+              node: "YANG",
+              vmBridge: "vmbr2",
+              vlanId: 50,
               cores: 2,
               memory: 4096,
               diskSize: "20G",
@@ -248,8 +264,39 @@ export class ActionTool extends BaseTool {
 
       logger.info("Executing action", { action, params: validatedParams });
 
+      // Emit progress: starting
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "starting",
+        message: `Preparing to execute ${action}...`,
+        progress: 0.1,
+        details: { params: validatedParams },
+      });
+
+      // Emit progress: running
+      const actionFriendlyName = action.replace(/\./g, ' → ').replace(/_/g, ' ');
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "running",
+        message: `Executing ${actionFriendlyName}...`,
+        progress: 0.3,
+        details: { step: "terraform/ansible" },
+      });
+
       // Execute action
       const result = await actionDef.execute(validatedParams);
+
+      // Emit progress: completed
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "completed",
+        message: `${actionFriendlyName} completed successfully`,
+        progress: 1,
+        details: { result: typeof result === 'object' ? result : { value: result } },
+      });
 
       return {
         data: result,
@@ -257,6 +304,17 @@ export class ActionTool extends BaseTool {
       };
     } catch (error: any) {
       logger.error("Action execution failed", { action, error: error.message });
+      
+      // Emit progress: failed
+      emitToolProgress({
+        toolName: "action",
+        action,
+        status: "failed",
+        message: `Action failed: ${error.message}`,
+        progress: 0,
+        details: { error: error.message },
+      });
+      
       return {
         error: error.message || "Action execution failed",
         durationMs: Date.now() - started,

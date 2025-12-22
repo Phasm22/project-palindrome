@@ -2,6 +2,7 @@ import { createVm, CreateVmSchema } from "./compute/create-vm";
 import { destroyVm, DestroyVmSchema } from "./compute/destroy-vm";
 import { createDnsRecord, CreateDnsRecordSchema } from "./network/create-dns-record";
 import { syncDhcpToDns, SyncDhcpToDnsSchema } from "./network/sync-dhcp-to-dns";
+import { setInterfaceVlan, SetInterfaceVlanSchema } from "./network/set-interface-vlan";
 import { bootstrap, BootstrapSchema } from "./services/bootstrap";
 import { installDocker, InstallDockerSchema } from "./services/install-docker";
 import { installNginx, InstallNginxSchema } from "./services/install-nginx";
@@ -96,6 +97,15 @@ actionRegistry.register({
   execute: syncDhcpToDns,
   requiredTools: ["opnsense", "pihole"],
   requiredEntities: [],
+});
+
+actionRegistry.register({
+  name: "network.set_interface_vlan",
+  description: "Assign a VM to an existing VLAN by updating its network configuration. Validates VLAN exists in OPNsense and twin before assignment.",
+  schema: SetInterfaceVlanSchema,
+  execute: setInterfaceVlan,
+  requiredTools: ["proxmox", "opnsense"],
+  requiredEntities: ["compute_vm", "network_interface"],
 });
 
 actionRegistry.register({

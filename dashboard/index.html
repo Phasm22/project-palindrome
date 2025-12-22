@@ -16,16 +16,16 @@
   </script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
-  <div class="mx-auto max-w-7xl px-4 md:px-6 py-6">
-    <h1 class="text-2xl md:text-3xl lg:text-4xl font-title-bold mb-4 md:mb-8 flex items-center gap-3 animate-slide-up">
-      <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-12 h-12 md:w-16 md:h-16 lg:w-20 lg:h-20 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
-      <span id="header-icon-fallback" class="text-primary-500 w-8 h-8 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
+  <div class="mx-auto max-w-7xl px-4 md:px-6 py-3 md:py-6 flex flex-col">
+    <h1 class="text-xl md:text-3xl lg:text-4xl font-title-bold mb-2 md:mb-8 flex items-center gap-2 md:gap-3 animate-slide-up">
+      <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-16 md:h-16 lg:w-20 lg:h-20 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
+      <span id="header-icon-fallback" class="text-primary-500 w-6 h-6 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
       <span class="hidden sm:inline text-gradient-shimmer">Palindrome Dashboard</span>
-      <span class="sm:hidden text-gradient-shimmer">Dashboard</span>
+      <span class="sm:hidden text-gradient-shimmer text-lg">Palindrome</span>
     </h1>
 
     <!-- Mobile: Dropdown menu for tabs -->
-    <div class="md:hidden mb-4" id="mobile-tab-dropdown-container"></div>
+    <div class="md:hidden mb-2" id="mobile-tab-dropdown-container"></div>
 
     <!-- Desktop: Horizontal tabs -->
     <div class="hidden md:flex gap-2 mb-6 border-b-4 border-slate-600 overflow-x-auto" role="tablist" aria-label="Dashboard tabs">
@@ -59,27 +59,18 @@
       </button>
     </div>
 
+    <!-- Desktop: Right-side floating nav for Overview tab - starts hidden, JS shows it -->
+    <div class="hidden fixed right-4 top-1/2 -translate-y-1/2 z-50 flex-col gap-3" id="overview-nav">
+      <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats">
+        <span id="nav-icon-stats"></span>
+      </button>
+      <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster">
+        <span id="nav-icon-cluster"></span>
+      </button>
+    </div>
+
     <!-- Overview Tab -->
     <div id="overview" class="tab-content hidden flex flex-col" role="tabpanel" aria-labelledby="overview-tab" aria-hidden="true">
-      <!-- Mobile: Bottom-fixed nav - icons only with glow -->
-      <div class="md:hidden fixed bottom-4 left-4 right-4 z-50 flex gap-3 justify-center pb-safe" id="overview-nav-mobile" style="display: none; padding-bottom: max(1rem, env(safe-area-inset-bottom));">
-        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats">
-          <span id="nav-icon-stats-mobile"></span>
-        </button>
-        <button class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster">
-          <span id="nav-icon-cluster-mobile"></span>
-        </button>
-      </div>
-      <!-- Desktop: Right-side floating nav - icons only with glow -->
-      <div class="hidden md:flex fixed right-4 bottom-24 z-50 flex-col gap-3 pr-safe" id="overview-nav" style="display: none; padding-right: max(1rem, env(safe-area-inset-right));">
-        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('execution-stats-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Stats">
-          <span id="nav-icon-stats"></span>
-        </button>
-        <button class="floating-nav-btn bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-primary-500/50 text-primary-500 p-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:scale-110 active:scale-95 flex items-center justify-center drop-shadow-glow-orange" onclick="document.getElementById('cluster-status-section').scrollIntoView({ behavior: 'smooth', block: 'start' });" title="Cluster">
-          <span id="nav-icon-cluster"></span>
-        </button>
-      </div>
-      
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 mb-6 overflow-y-auto max-h-[calc(100dvh-220px)] md:max-h-none" id="execution-stats-section">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4">Execution Statistics</h2>
         <div id="execution-stats" class="text-slate-400 text-center py-6"></div>
@@ -101,7 +92,7 @@
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Recent Tool Executions</span>
-          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadToolExecutions()">
+          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadToolExecutions(true)">
             <span class="flex items-center justify-center gap-2">
               <span id="refresh-icon-executions"></span>
               Refresh
@@ -117,14 +108,14 @@
       <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col">
         <h2 class="text-xl md:text-2xl font-title mb-4 border-b border-slate-700 pb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
           <span>Agent Reasoning Traces</span>
-          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadReasoningTraces()">
+          <button class="refresh-button bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 w-full sm:w-auto min-h-[44px]" onclick="loadReasoningTraces(true)">
             <span class="flex items-center justify-center gap-2">
               <span id="refresh-icon-reasoning"></span>
               Refresh
             </span>
           </button>
         </h2>
-        <div id="reasoning-traces" class="text-slate-400 text-center py-6 flex-1 overflow-y-auto"></div>
+        <div id="reasoning-traces" class="text-slate-400 py-6 flex-1 overflow-y-auto" style="display: flex; flex-direction: column; gap: 16px; max-width: 100%;"></div>
       </div>
     </div>
 
@@ -246,113 +237,126 @@
     </div>
 
     <!-- Chat Tab -->
+    <!-- Chat Tab - iOS-style on mobile (no card), card on desktop -->
     <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="chat-tab" aria-hidden="false">
-      <!-- Mobile: Hamburger button to toggle sidebar -->
-      <button id="sidebar-toggle" class="md:hidden mb-4 bg-gradient-to-r from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:bg-slate-700 hover:border-primary-500 hover:scale-105 active:scale-95 flex items-center gap-2 min-h-[44px]" onclick="window.toggleSidebar()">
+      <!-- Mobile: Conversations button - compact -->
+      <button id="sidebar-toggle" class="md:hidden mb-2 bg-transparent border border-slate-700/50 text-slate-400 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 min-h-[32px] self-start" onclick="window.toggleSidebar()">
         <span id="menu-icon"></span>
-        Conversations
+        Chats
       </button>
       
-      <div class="card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex flex-col md:flex-row gap-6">
-        <!-- Conversation Sidebar - Mobile: absolute overlay, Desktop: normal flow -->
-        <div id="conversation-sidebar" class="hidden md:flex md:w-64 flex-col rounded-lg bg-slate-950 min-w-0 flex-shrink-0">
+      <!-- Mobile: Overlay backdrop when sidebar is open -->
+      <div id="sidebar-backdrop" class="md:hidden fixed inset-0 bg-black/60 z-40 hidden" onclick="window.toggleSidebar()" aria-hidden="true"></div>
+      
+      <!-- Mobile: Sidebar overlay - iOS style -->
+      <div id="conversation-sidebar-mobile" class="md:hidden fixed inset-0 z-50 flex flex-col bg-slate-950 hidden" role="dialog" aria-modal="true" aria-label="Conversations" aria-hidden="true">
+        <div class="px-4 py-3 border-b border-slate-800 flex justify-between items-center">
+          <h3 class="m-0 text-slate-100 text-base font-semibold">Chats</h3>
+          <div class="flex items-center gap-2">
+            <button 
+              id="new-conversation-btn-mobile"
+              onclick="window.createNewConversation()"
+              class="bg-primary-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1"
+              title="New conversation"
+            >
+              <span id="plus-icon-mobile"></span>
+              New
+            </button>
+            <button 
+              id="sidebar-close-mobile"
+              class="text-slate-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+              onclick="window.toggleSidebar()"
+              title="Close"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="conversation-list-mobile" class="flex-1 overflow-y-auto p-3 min-h-0 flex flex-col gap-2">
+          <div class="text-slate-500 text-center py-4 text-xs">
+            Loading...
+          </div>
+        </div>
+      </div>
+      
+      <!-- Desktop: Card wrapper -->
+      <div class="hidden md:flex card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex-row gap-6">
+        <!-- Desktop Conversation Sidebar -->
+        <div id="conversation-sidebar" class="flex w-64 flex-col rounded-lg bg-slate-950 min-w-0 flex-shrink-0">
           <div class="p-4 border-b-2 border-slate-600 flex justify-between items-center flex-shrink-0">
             <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
-            <div class="flex items-center gap-2">
-              <button 
-                id="sidebar-close"
-                class="md:hidden bg-slate-800 hover:bg-slate-700 text-slate-200 p-1.5 rounded cursor-pointer transition-colors"
-                onclick="window.toggleSidebar()"
-                title="Close sidebar"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                </svg>
-              </button>
-              <button 
-                id="new-conversation-btn"
-                onclick="window.createNewConversation()"
-                class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
-                title="New conversation"
-              >
-                <span id="plus-icon"></span>
-                <span class="hidden sm:inline">New</span>
-              </button>
-            </div>
+            <button 
+              id="new-conversation-btn"
+              onclick="window.createNewConversation()"
+              class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
+              title="New conversation"
+            >
+              <span id="plus-icon"></span>
+              <span>New</span>
+            </button>
           </div>
-          <div id="conversation-list" class="flex-1 overflow-y-auto p-4 min-h-0">
+          <div id="conversation-list" class="flex-1 overflow-y-auto p-4 min-h-0 flex flex-col gap-2">
             <div class="text-slate-400 text-center py-5 text-sm">
               Loading conversations...
             </div>
           </div>
         </div>
         
-        <!-- Mobile: Overlay backdrop when sidebar is open -->
-        <div id="sidebar-backdrop" class="md:hidden fixed inset-0 bg-black bg-opacity-50 z-40 hidden" onclick="window.toggleSidebar()" aria-hidden="true"></div>
-        
-        <!-- Mobile: Sidebar overlay -->
-        <div id="conversation-sidebar-mobile" class="md:hidden fixed inset-0 z-50 flex flex-col bg-slate-950 hidden" role="dialog" aria-modal="true" aria-label="Conversations" aria-hidden="true">
-          <div class="p-4 border-b-2 border-slate-600 flex justify-between items-center">
-            <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
-            <div class="flex items-center gap-2">
-              <button 
-                id="new-conversation-btn-mobile"
-                onclick="window.createNewConversation()"
-                class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
-                title="New conversation"
-              >
-                <span id="plus-icon-mobile"></span>
-                <span>New</span>
-              </button>
-              <button 
-                id="sidebar-close-mobile"
-                class="bg-slate-800 hover:bg-slate-700 text-slate-200 p-1.5 rounded cursor-pointer transition-colors"
-                onclick="window.toggleSidebar()"
-                title="Close sidebar"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-          <div id="conversation-list-mobile" class="flex-1 overflow-y-auto p-4 min-h-0">
-            <div class="text-slate-400 text-center py-5 text-sm">
-              Loading conversations...
-            </div>
-          </div>
-        </div>
-        
-        <!-- Chat Area -->
+        <!-- Desktop Chat Area -->
         <div class="flex-1 flex flex-col min-w-0">
-          <h2 class="mb-4 text-xl md:text-2xl font-title text-slate-100">Chat with Palindrome</h2>
-          <div class="mb-4 border-t border-slate-600/70"></div>
-          
-          <!-- Chat Messages Area -->
-          <div id="chat-messages" class="flex-1 overflow-y-auto px-4 py-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-xl mb-4 min-h-[300px] md:min-h-[400px] relative" style="background-image: repeating-linear-gradient(0deg, transparent, transparent 20px, rgba(15, 23, 42, 0.3) 20px, rgba(15, 23, 42, 0.3) 21px);">
+          <div id="chat-messages-desktop" class="flex-1 overflow-y-auto px-4 py-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-xl mb-4 min-h-0 relative">
             <div class="text-slate-400 text-center py-6 text-sm">
               Select a conversation or create a new one to start chatting.
             </div>
           </div>
 
-          <!-- Chat Input Area - Separate from messages area -->
-          <div class="flex gap-2 md:gap-3 items-end pb-safe" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom));">
+          <div class="flex gap-3 items-end">
             <textarea 
-              id="chat-input" 
+              id="chat-input-desktop" 
               placeholder="Ask me anything about your infrastructure..." 
-              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-800/95 border-2 border-slate-600/50 rounded-xl placeholder-slate-500 font-sans resize-none md:resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base backdrop-blur-sm"
+              class="flex-1 min-h-[60px] max-h-[200px] px-4 py-3 bg-slate-800/95 border-2 border-slate-600/50 rounded-xl placeholder-slate-500 font-sans resize-y focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-base backdrop-blur-sm"
               style="color: #f1f5f9; line-height: 1.6;"
               onkeydown="handleChatInputKeydown(event)"
             ></textarea>
             <button 
-              class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-4 md:px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 min-w-[70px] md:min-w-[80px] min-h-[44px] flex items-center justify-center gap-2" 
+              class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 min-w-[80px] min-h-[44px] flex items-center justify-center gap-2" 
               onclick="sendChatMessage()" 
-              id="chat-send-btn"
+              id="chat-send-btn-desktop"
             >
-              <span id="send-icon"></span>
-              <span>Send</span>
+              <span id="send-icon-desktop"></span>
+              Send
             </button>
           </div>
+        </div>
+      </div>
+      
+      <!-- Mobile: Full-bleed iOS-style chat (no card, no background) -->
+      <div class="md:hidden flex flex-col" style="height: calc(100dvh - 120px); margin: 0 -1rem; width: calc(100% + 2rem); max-width: 100vw; overflow-x: hidden;">
+        <!-- Chat Messages - full width, transparent background -->
+        <div id="chat-messages" class="flex-1 overflow-y-auto px-3 py-2">
+          <div class="text-slate-500 text-center py-4 text-xs">
+            Select a conversation or create a new one.
+          </div>
+        </div>
+
+        <!-- Input area - subtle, blends with background -->
+        <div class="flex-shrink-0 flex gap-2 items-end px-2 py-2 border-t border-slate-800/50 w-full box-border" style="padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); max-width: 100vw;">
+          <textarea 
+            id="chat-input" 
+            placeholder="Message..." 
+            class="min-w-0 flex-1 min-h-[36px] max-h-[120px] px-3 py-2 bg-slate-800/60 border border-slate-700/50 rounded-2xl placeholder-slate-500 font-sans resize-none focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
+            style="color: #f1f5f9; line-height: 1.4;"
+            onkeydown="handleChatInputKeydown(event)"
+          ></textarea>
+          <button 
+            class="flex-shrink-0 bg-primary-500 text-white p-2 rounded-full transition-all active:scale-95 w-[36px] h-[36px] flex items-center justify-center" 
+            onclick="sendChatMessage()" 
+            id="chat-send-btn"
+          >
+            <span id="send-icon"></span>
+          </button>
         </div>
       </div>
     </div>

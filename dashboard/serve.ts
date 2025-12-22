@@ -3,8 +3,15 @@
 import { serve } from "bun";
 import { watch } from "node:fs";
 
-const PORT = 8080;
+const HTTP_PORT = 8080;
+const HTTPS_PORT = 8443;
 const DASHBOARD_DIR = import.meta.dir;
+const PROJECT_ROOT = `${DASHBOARD_DIR}/..`;
+
+// Check if certs exist
+const certPath = `${PROJECT_ROOT}/certs/cert.pem`;
+const keyPath = `${PROJECT_ROOT}/certs/key.pem`;
+const hasCerts = await Bun.file(certPath).exists() && await Bun.file(keyPath).exists();
 
 const connectedClients = new Set<WebSocket>();
 
@@ -27,10 +34,8 @@ const watcher = watch(
   }
 );
 
-// Simple file server with auto-reload
-const server = serve({
-  port: PORT,
-  async fetch(req, server) {
+// Request handler
+async function handleRequest(req: Request, server: any) {
     const url = new URL(req.url);
     
     // Handle WebSocket upgrade for /_reload
@@ -65,7 +70,8 @@ const server = serve({
 <script>
   // Auto-reload on file changes
   (function() {
-    const ws = new WebSocket('ws://localhost:${PORT}/_reload');
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(wsProtocol + '//' + location.host + '/_reload');
     ws.onmessage = () => {
       console.log('🔄 Reloading...');
       location.reload();
@@ -90,22 +96,48 @@ const server = serve({
     } catch (error) {
       return new Response(`Error: ${error}`, { status: 500 });
     }
+}
+
+const websocketHandlers = {
+  message(ws: any, message: any) {},
+  open(ws: any) {
+    connectedClients.add(ws);
+    console.log(`✅ WebSocket client connected for auto-reload`);
   },
-  
-  websocket: {
-    message(ws, message) {},
-    open(ws) {
-      connectedClients.add(ws);
-      console.log(`✅ WebSocket client connected for auto-reload`);
-    },
-    close(ws) {
-      connectedClients.delete(ws);
-      console.log(`❌ WebSocket client disconnected`);
-    },
+  close(ws: any) {
+    connectedClients.delete(ws);
+    console.log(`❌ WebSocket client disconnected`);
   },
+};
+
+// HTTP server (always start)
+const httpServer = serve({
+  port: HTTP_PORT,
+  hostname: "0.0.0.0",
+  fetch: handleRequest,
+  websocket: websocketHandlers,
 });
 
-console.log(`🚀 Dashboard server running at http://localhost:${PORT}`);
+console.log(`🚀 Dashboard server running at http://0.0.0.0:${HTTP_PORT}`);
+
+// HTTPS server (if certs exist)
+if (hasCerts) {
+  const httpsServer = serve({
+    port: HTTPS_PORT,
+    hostname: "0.0.0.0",
+    fetch: handleRequest,
+    websocket: websocketHandlers,
+    tls: {
+      cert: Bun.file(certPath),
+      key: Bun.file(keyPath),
+    },
+  });
+  console.log(`🔒 HTTPS server running at https://0.0.0.0:${HTTPS_PORT}`);
+} else {
+  console.log(`⚠️  No certs found at ${certPath} - HTTPS disabled`);
+  console.log(`   Run: openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes`);
+}
+
 console.log(`📁 Serving from: ${DASHBOARD_DIR}`);
 console.log(`🔄 Auto-reload enabled - changes will refresh automatically`);
 console.log(`\nPress Ctrl+C to stop\n`);

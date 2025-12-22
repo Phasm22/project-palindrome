@@ -9,6 +9,7 @@ export type ActionIntent =
   | { type: "destroy_vm"; name?: string; vmId?: number }
   | { type: "start_vm"; name: string }
   | { type: "stop_vm"; name: string }
+  | { type: "restart_vm"; name: string }
   | { type: "sync_dhcp_to_dns" }
   | { type: "install_service"; service: string; vmName: string }
   | { type: "configure_firewall"; vmName: string }
@@ -33,6 +34,13 @@ function extractVmName(text: string): string | null {
     return destroyMatch[1];
   }
 
+  // Match patterns like "restart X", "start X", "stop X", "reboot X" where X is a VM name
+  // These are common patterns for VM lifecycle operations
+  const lifecycleMatch = text.match(/\b(?:restart|start|stop|reboot|shutdown)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
+  if (lifecycleMatch) {
+    return lifecycleMatch[1];
+  }
+
   return null;
 }
 
@@ -53,10 +61,16 @@ function extractVmId(text: string): number | null {
 }
 
 function extractNodeName(text: string): string | null {
-  // Match patterns like "on node X", "on X", "node X"
-  const onMatch = text.match(/\bon\s+(?:node\s+)?([a-z0-9\-_]+)/i);
+  // Match patterns like "on node X", "on X", "in X", "node X"
+  const onMatch = text.match(/\b(?:on|in)\s+(?:node\s+)?([a-z0-9\-_]+)/i);
   if (onMatch) {
     return onMatch[1];
+  }
+
+  // Also try "node X" pattern
+  const nodeMatch = text.match(/\bnode\s+([a-z0-9\-_]+)/i);
+  if (nodeMatch) {
+    return nodeMatch[1];
   }
 
   return null;
@@ -76,8 +90,9 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
     const vmName = extractVmName(userInput);
     const nodeName = extractNodeName(userInput);
 
-    if (vmName && nodeName) {
-      return { type: "create_vm", name: vmName, node: nodeName };
+    // Node name is required, VM name is optional (will be auto-generated)
+    if (nodeName) {
+      return { type: "create_vm", name: vmName || "", node: nodeName };
     }
   }
 
@@ -117,6 +132,17 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
     const vmName = extractVmName(userInput);
     if (vmName) {
       return { type: "stop_vm", name: vmName };
+    }
+  }
+
+  // Restart/Reboot VM
+  if (
+    (normalized.includes("restart") || normalized.includes("reboot")) &&
+    (normalized.includes("vm") || normalized.includes("virtual machine") || normalized.match(/\b\w+\b/))
+  ) {
+    const vmName = extractVmName(userInput);
+    if (vmName) {
+      return { type: "restart_vm", name: vmName };
     }
   }
 

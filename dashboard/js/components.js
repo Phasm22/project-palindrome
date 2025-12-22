@@ -228,10 +228,10 @@ export function createConversationItem(conversation, options = {}) {
   } = options;
 
   const item = document.createElement('div');
-  item.className = `flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors group ${
+  item.className = `flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors group ${
     isActive 
-      ? 'bg-primary-600/20 border border-primary-500/50 text-primary-500' 
-      : 'bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200'
+      ? 'bg-slate-800/80 border border-primary-500/30 text-primary-400' 
+      : 'bg-slate-800/60 hover:bg-slate-800/80 border border-slate-700/50 text-slate-200'
   }`;
 
   const content = document.createElement('div');

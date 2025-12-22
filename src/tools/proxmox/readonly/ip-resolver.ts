@@ -144,7 +144,13 @@ export async function resolveVMIP(
 
     // Step 3: Try Proxmox guest agent (if enabled)
     // Check if agent is enabled in config
-    if (vmConfig.agent === 1 || vmConfig.agent === "enabled") {
+    // Handle different formats: 1, "1", "enabled", or "enabled=1,..."
+    const agentEnabled = 
+      vmConfig.agent === 1 || 
+      vmConfig.agent === "1" || 
+      vmConfig.agent === "enabled" ||
+      (typeof vmConfig.agent === "string" && vmConfig.agent.includes("enabled=1"));
+    if (agentEnabled) {
       try {
         // Query guest agent for network info
         // This requires guest agent to be running in the VM

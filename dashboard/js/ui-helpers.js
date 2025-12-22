@@ -8,23 +8,26 @@ export function showTooltip(element, text, position = 'top') {
   tooltip.className = 'custom-tooltip';
   tooltip.textContent = text;
   tooltip.style.cssText = `
-    position: absolute;
+    position: fixed;
     background: #1e293b;
     color: #e2e8f0;
-    padding: 6px 10px;
-    border-radius: 4px;
-    font-size: 0.75em;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.8em;
     border: 1px solid #334155;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     z-index: 10000;
     pointer-events: none;
-    white-space: nowrap;
-    max-width: 300px;
+    max-width: 350px;
     word-wrap: break-word;
     white-space: normal;
+    line-height: 1.4;
   `;
   
   document.body.appendChild(tooltip);
+  
+  // Force layout calculation
+  tooltip.offsetHeight;
   
   const rect = element.getBoundingClientRect();
   const tooltipRect = tooltip.getBoundingClientRect();
@@ -50,6 +53,11 @@ export function showTooltip(element, text, position = 'top') {
     default:
       top = rect.top - tooltipRect.height - 8;
       left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+  }
+  
+  // If tooltip would go above viewport, flip to bottom
+  if (top < 8) {
+    top = rect.bottom + 8;
   }
   
   // Keep tooltip within viewport

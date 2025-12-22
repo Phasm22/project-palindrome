@@ -5,6 +5,30 @@ import { ProxmoxClient } from "../client";
 import { pceLogger as logger } from "../../../pce/utils/logger";
 import { createToolSchema } from "../../tool-helpers";
 import type { ToolSchema } from "../../tool-schema";
+import { emitToolProgress, type ToolProgressStatus } from "../../../agent/event-bus";
+
+// Alternative client for multi-cluster support
+let alternativeClient: ProxmoxClient | null = null;
+
+/**
+ * Helper to emit progress events for proxmox write operations
+ */
+function emitProgress(
+  action: string,
+  status: ToolProgressStatus,
+  message: string,
+  progress?: number,
+  details?: Record<string, any>
+): void {
+  emitToolProgress({
+    toolName: "proxmox_write",
+    action,
+    status,
+    message,
+    progress,
+    details,
+  });
+}
 
 /**
  * Proxmox Write Tool Parameters Schema
@@ -61,7 +85,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
               "migrate_vm",
               "destroy_vm",
             ],
-            description: "The write action to execute. WARNING: destroy_vm is a destructive operation that permanently deletes the VM/container and cannot be undone.",
+            description: "The write action to execute. Use 'reboot_vm' for restart/reboot operations. Use 'start_vm' to start a stopped VM. Use 'stop_vm' to stop a running VM. WARNING: destroy_vm is a destructive operation that permanently deletes the VM/container and cannot be undone.",
           },
           node: {
             type: "string",
@@ -102,7 +126,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         required: ["action", "node", "vmid"],
       },
       allowedAcls: ["admin", "ops"], // Write operations restricted to admin/ops
-      requiresConfirmation: true, // All write operations require HIL
+      requiresConfirmation: false, // HIL disabled - safe write operations with dry-run and pre-write state capture
       risk: "medium", // Controlled write operations (destroy_vm handled separately)
     });
   }
@@ -117,6 +141,26 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
             node: "pve1",
             vmid: 101,
             dryRun: true,
+          },
+        },
+        {
+          description: "Restart/Reboot a VM - use reboot_vm action for restart operations",
+          parameters: {
+            action: "reboot_vm",
+            node: "YANG",
+            vmid: 9000,
+            type: "qemu",
+            dryRun: false,
+          },
+        },
+        {
+          description: "Stop a VM gracefully",
+          parameters: {
+            action: "stop_vm",
+            node: "pve1",
+            vmid: 101,
+            type: "qemu",
+            dryRun: false,
           },
         },
         {
@@ -199,6 +243,45 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
   };
 
   /**
+   * Known node → endpoint map so we can query alternate clusters directly.
+   * This enables write operations on nodes in separate Proxmox instances.
+   */
+  private static readonly NODE_ENDPOINT_MAP: Record<string, string> = {
+    proxbig: "https://proxBig.prox:8006",
+    yin: "https://yin.prox:8006",
+    yang: "https://yang.prox:8006",
+  };
+
+  private static normalizeNodeKey(name: string): string {
+    return name.toLowerCase().replace(/[_-]/g, "");
+  }
+
+  /**
+   * Get alternative Proxmox endpoints to try when a node isn't found in the primary cluster
+   * Returns array of endpoint configs based on node name patterns
+   */
+  private getAlternativeEndpoints(nodeName: string): Array<{ url: string; tokenId?: string; tokenSecret?: string }> {
+    const endpoints: Array<{ url: string; tokenId?: string; tokenSecret?: string }> = [];
+    const normalizedName = ProxmoxWriteTool.normalizeNodeKey(nodeName);
+    
+    const endpoint = ProxmoxWriteTool.NODE_ENDPOINT_MAP[normalizedName];
+    if (endpoint) {
+      // Try to get node-specific credentials
+      const nodeNameUpper = normalizedName.toUpperCase().replace(/[_-]/g, '');
+      const tokenId = process.env.PROXMOX_TOKEN_ID || process.env[`${nodeNameUpper}_TOKEN_ID`];
+      const tokenSecret = process.env.PROXMOX_TOKEN_SECRET || process.env[`${nodeNameUpper}_TOKEN_SECRET`];
+      
+      endpoints.push({
+        url: endpoint,
+        tokenId: tokenId || undefined,
+        tokenSecret: tokenSecret || undefined,
+      });
+    }
+    
+    return endpoints;
+  }
+
+  /**
    * Normalize node name by validating FIRST, then using fuzzy matching
    * This prevents 403 errors from trying non-existent node names
    * 
@@ -208,7 +291,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
    * 3. Try exact case-insensitive match
    * 4. Try fuzzy match (ignoring underscores/hyphens/case)
    * 5. Check if it matches PROXMOX_URL hostname (for standalone nodes)
-   * 6. Return normalized name or throw helpful error
+   * 6. Try alternative endpoints for multi-cluster support
+   * 7. Return normalized name or throw helpful error
    */
   private async normalizeNodeName(
     client: ProxmoxClient,
@@ -302,7 +386,61 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       }
     }
 
-    // Step 6: Node not found - throw helpful error with available nodes
+    // Step 6: Node not found in primary cluster - try alternative endpoints
+    const alternativeEndpoints = this.getAlternativeEndpoints(nodeName);
+    for (const altEndpoint of alternativeEndpoints) {
+      try {
+        logger.debug(`Trying alternative Proxmox endpoint for node "${nodeName}": ${altEndpoint.url}`);
+        // Get credentials - prefer node-specific, fallback to default
+        const normalizedNameForCreds = nodeName.toLowerCase().replace(/[_-]/g, '');
+        const nodeNameUpper = normalizedNameForCreds.toUpperCase();
+        const tokenId = altEndpoint.tokenId || process.env.PROXMOX_TOKEN_ID;
+        const tokenSecret = altEndpoint.tokenSecret || process.env[`${nodeNameUpper}_TOKEN_SECRET`] || process.env.PROXMOX_TOKEN_SECRET;
+        const verifySsl = process.env.PROXMOX_VERIFY_SSL !== 'false';
+        
+        if (!tokenId || !tokenSecret) {
+          logger.debug(`Skipping alternative endpoint ${altEndpoint.url}: missing credentials`);
+          continue;
+        }
+        
+        const altClient = new ProxmoxClient({
+          url: altEndpoint.url,
+          tokenId,
+          tokenSecret,
+          verifySsl,
+        });
+        
+        const result = await altClient.get("/nodes");
+        let nodes: any[] = [];
+        if (result?.data?.data) {
+          nodes = Array.isArray(result.data.data) ? result.data.data : [];
+        } else if (Array.isArray(result?.data)) {
+          nodes = result.data;
+        }
+        
+        // Try to find the node in this alternative cluster
+        const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
+        const searchNormalized = normalizeForMatch(nodeName);
+        const normalized = nodes.find(
+          (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
+        );
+        
+        if (normalized?.node) {
+          logger.info(`Found node "${nodeName}" in alternative cluster: ${altEndpoint.url} (normalized to "${normalized.node}")`);
+          // Store the alternative client for use in subsequent API calls
+          alternativeClient = altClient;
+          return normalized.node;
+        } else {
+          logger.debug(`Node "${nodeName}" not found in alternative cluster ${altEndpoint.url}. Found nodes: ${nodes.map((n: any) => n?.node).filter(Boolean).join(", ") || "none"}`);
+        }
+      } catch (altError: any) {
+        const statusCode = altError?.response?.status;
+        logger.debug(`Alternative endpoint ${altEndpoint.url} failed: ${altError.message}${statusCode ? ` (HTTP ${statusCode})` : ''}`);
+        // Continue to next endpoint
+      }
+    }
+
+    // Step 7: Node not found in any cluster - throw helpful error
     try {
       const result = await client.get("/nodes");
       // Handle various response structures defensively
@@ -313,14 +451,14 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         nodes = result.data;
       }
       const availableNodes = nodes.filter((n: any) => n?.node).map((n: any) => n.node).join(", ");
-      const errorMsg = `Node "${nodeName}" not found in cluster. Available nodes: ${availableNodes || "none"}. ` +
-        `If "${nodeName}" is a standalone node, ensure PROXMOX_URL points to that node. ` +
+      const errorMsg = `Node "${nodeName}" not found in any accessible cluster. Available nodes in primary cluster: ${availableNodes || "none"}. ` +
+        `If "${nodeName}" is in a different cluster, ensure the appropriate PROXMOX_URL and credentials are configured. ` +
         `Current PROXMOX_URL: ${proxmoxUrl || "not set"}`;
       logger.warn(errorMsg);
       throw new Error(errorMsg);
     } catch (error: any) {
       // If we can't even list nodes, throw a simpler error
-      if (error.message.includes("not found in cluster")) {
+      if (error.message.includes("not found")) {
         throw error;
       }
       throw new Error(`Node "${nodeName}" not found and could not validate against cluster. ${error.message}`);
@@ -336,6 +474,9 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     client: ProxmoxClient,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    // Reset alternative client before normalization
+    alternativeClient = null;
+    
     // Normalize node name for all actions
     if (params.node) {
       params.node = await this.normalizeNodeName(client, params.node);
@@ -344,24 +485,27 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       params.targetNode = await this.normalizeNodeName(client, params.targetNode);
     }
     
+    // Use alternative client if it was set during normalization (multi-cluster support)
+    const activeClient = alternativeClient || client;
+    
     switch (action) {
       case "start_vm":
-        return this.startVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
+        return this.startVm(activeClient, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "stop_vm":
-        return this.stopVm(client, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
+        return this.stopVm(activeClient, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
       case "shutdown_vm":
-        return this.shutdownVm(client, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
+        return this.shutdownVm(activeClient, params.node!, params.vmid!, params.type || "qemu", params.timeout, dryRun);
       case "reboot_vm":
-        return this.rebootVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
+        return this.rebootVm(activeClient, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "reset_vm":
-        return this.resetVm(client, params.node!, params.vmid!, params.type || "qemu", dryRun);
+        return this.resetVm(activeClient, params.node!, params.vmid!, params.type || "qemu", dryRun);
       case "create_snapshot":
         // Snapshots only available for QEMU VMs
         if (params.type === "lxc") {
           throw new Error("Snapshot operations are not available for LXC containers");
         }
         return this.createSnapshot(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           params.snapshotName!,
@@ -373,7 +517,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           throw new Error("Snapshot operations are not available for LXC containers");
         }
         return this.rollbackSnapshot(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           params.snapshotName!,
@@ -385,7 +529,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           throw new Error("Clone operation is not available for LXC containers");
         }
         return this.cloneVm(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           params.newVmid!,
@@ -400,12 +544,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         if (!migrateType) {
           try {
             // Try qemu first
-            await this.getVmStatus(client, params.node!, params.vmid!, "qemu");
+            await this.getVmStatus(activeClient, params.node!, params.vmid!, "qemu");
             migrateType = "qemu";
           } catch {
             // Try lxc if qemu fails
             try {
-              await this.getVmStatus(client, params.node!, params.vmid!, "lxc");
+              await this.getVmStatus(activeClient, params.node!, params.vmid!, "lxc");
               migrateType = "lxc";
             } catch {
               throw new Error(`Could not determine VM type for VMID ${params.vmid} on node ${params.node}. Please specify type parameter.`);
@@ -413,7 +557,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           }
         }
         return this.migrateVm(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           migrateType,
@@ -426,12 +570,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         if (!destroyType) {
           try {
             // Try qemu first
-            await this.getVmStatus(client, params.node!, params.vmid!, "qemu");
+            await this.getVmStatus(activeClient, params.node!, params.vmid!, "qemu");
             destroyType = "qemu";
           } catch {
             // Try lxc if qemu fails
             try {
-              await this.getVmStatus(client, params.node!, params.vmid!, "lxc");
+              await this.getVmStatus(activeClient, params.node!, params.vmid!, "lxc");
               destroyType = "lxc";
             } catch {
               throw new Error(`Could not determine VM type for VMID ${params.vmid} on node ${params.node}. Please specify type parameter.`);
@@ -439,7 +583,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           }
         }
         return this.destroyVm(
-          client,
+          activeClient,
           params.node!,
           params.vmid!,
           destroyType,
@@ -467,15 +611,20 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     type: string,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    emitProgress("start_vm", "starting", `Checking VM ${vmid} on ${node}...`, 0.1, { node, vmid, type });
+    
     // Get VM name for verification
     const vmName = await this.getVmName(client, node, vmid, type);
+    const vmDisplayName = vmName ? `${vmName} (${vmid})` : `VM ${vmid}`;
     
     // Check current state first
+    emitProgress("start_vm", "verifying", `Verifying ${vmDisplayName} status...`, 0.2, { node, vmid, vmName });
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
 
     // Check if VM is already running (before dry-run check)
     if (currentStatus === "running") {
+      emitProgress("start_vm", "completed", `${vmDisplayName} is already running`, 1, { node, vmid, status: "already_running" });
       return {
         data: {
           action: "start_vm",
@@ -492,6 +641,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
+      emitProgress("start_vm", "completed", `Dry run: would start ${vmDisplayName}`, 1, { node, vmid, dryRun: true });
       return {
         data: {
           ...this.generateDiffPreview("start_vm", currentState, {
@@ -505,10 +655,19 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
+    emitProgress("start_vm", "running", `Capturing pre-write state...`, 0.3, { node, vmid });
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     
     try {
+      emitProgress("start_vm", "running", `Starting ${vmDisplayName}...`, 0.5, { node, vmid });
       const result = await client.post(this.getVmPath(type, node, vmid, "/status/start"), {});
+      
+      emitProgress("start_vm", "waiting", `Waiting for ${vmDisplayName} to boot...`, 0.7, { node, vmid });
+      // Give it a moment to start
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      emitProgress("start_vm", "completed", `${vmDisplayName} started successfully`, 1, { node, vmid, success: true });
+      
       return {
         data: {
           action: "start_vm",
@@ -524,6 +683,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         metadata: result.metadata,
       };
     } catch (error: any) {
+      emitProgress("start_vm", "failed", `Failed to start ${vmDisplayName}: ${error.message}`, 1, { node, vmid, error: error.message });
+      
       // Handle "already running" error from Proxmox
       if (error.response?.data?.message?.includes("already running") || 
           error.message?.includes("already running")) {
@@ -553,12 +714,20 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     timeout: number | undefined,
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    emitProgress("stop_vm", "starting", `Checking VM ${vmid} on ${node}...`, 0.1, { node, vmid, type });
+    
+    // Get VM name for display
+    const vmName = await this.getVmName(client, node, vmid, type);
+    const vmDisplayName = vmName ? `${vmName} (${vmid})` : `VM ${vmid}`;
+    
     // Check current state first
+    emitProgress("stop_vm", "verifying", `Verifying ${vmDisplayName} status...`, 0.2, { node, vmid, vmName });
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
 
     // Check if VM is already stopped (before dry-run check)
     if (currentStatus === "stopped") {
+      emitProgress("stop_vm", "completed", `${vmDisplayName} is already stopped`, 1, { node, vmid, status: "already_stopped" });
       return {
         data: {
           action: "stop_vm",
@@ -573,6 +742,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
+      emitProgress("stop_vm", "completed", `Dry run: would stop ${vmDisplayName}`, 1, { node, vmid, dryRun: true });
       return {
         data: this.generateDiffPreview("stop_vm", currentState, {
           status: "stopped",
@@ -583,16 +753,26 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
+    emitProgress("stop_vm", "running", `Capturing pre-write state...`, 0.3, { node, vmid });
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     const params = timeout ? { timeout } : {};
     
     try {
+      emitProgress("stop_vm", "running", `Stopping ${vmDisplayName}...`, 0.5, { node, vmid, timeout });
       const result = await client.post(this.getVmPath(type, node, vmid, "/status/stop"), params);
+      
+      emitProgress("stop_vm", "waiting", `Waiting for ${vmDisplayName} to shut down...`, 0.7, { node, vmid });
+      // Give it a moment to stop
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      emitProgress("stop_vm", "completed", `${vmDisplayName} stopped successfully`, 1, { node, vmid, success: true });
+      
       return {
         data: {
           action: "stop_vm",
           node,
           vmid,
+          vmName: vmName || "unknown",
           status: "stopped",
           preWriteState: preWriteState.hash,
           ...result.data,
@@ -600,6 +780,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         metadata: result.metadata,
       };
     } catch (error: any) {
+      emitProgress("stop_vm", "failed", `Failed to stop ${vmDisplayName}: ${error.message}`, 1, { node, vmid, error: error.message });
+      
       // Handle "already stopped" error from Proxmox
       if (error.response?.data?.message?.includes("already stopped") || 
           error.message?.includes("already stopped") ||
@@ -1201,15 +1383,23 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     type: "qemu" | "lxc",
     dryRun: boolean
   ): Promise<{ data: any; metadata: any }> {
+    const vmLabel = `VM ${vmid} on ${node}`;
+    
+    // Emit: Starting
+    emitProgress("destroy_vm", "starting", `Checking ${vmLabel}...`, 0.1, { node, vmid, type });
+    
     // Get VM name for verification
     const vmName = await this.getVmName(client, node, vmid, type);
+    const vmDisplayName = vmName ? `${vmName} (${vmid})` : `VM ${vmid}`;
     
     // Check current state first
+    emitProgress("destroy_vm", "verifying", `Verifying ${vmDisplayName} status...`, 0.2, { node, vmid, vmName });
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
 
     // For destroy, VM must be stopped first
     if (currentStatus === "running") {
+      emitProgress("destroy_vm", "failed", `${vmDisplayName} is running - must stop first`, 1, { node, vmid, status: "running" });
       return {
         data: {
           action: "destroy_vm",
@@ -1226,6 +1416,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
 
     if (dryRun) {
+      emitProgress("destroy_vm", "completed", `Dry run: would destroy ${vmDisplayName}`, 1, { node, vmid, dryRun: true });
       return {
         data: {
           action: "destroy_vm",
@@ -1242,11 +1433,16 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       };
     }
 
+    emitProgress("destroy_vm", "running", `Capturing pre-write state for ${vmDisplayName}...`, 0.4, { node, vmid });
     const preWriteState = await this.capturePreWriteState(client, node, vmid, type);
     
     try {
+      emitProgress("destroy_vm", "running", `Destroying ${vmDisplayName}...`, 0.6, { node, vmid, type });
+      
       // Destroy endpoint: DELETE /nodes/{node}/{type}/{vmid}
       const result = await client.delete(this.getVmPath(type, node, vmid, ""));
+      
+      emitProgress("destroy_vm", "completed", `${vmDisplayName} destroyed successfully`, 1, { node, vmid, success: true });
       
       return {
         data: {
@@ -1264,6 +1460,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         metadata: result.metadata,
       };
     } catch (error: any) {
+      emitProgress("destroy_vm", "failed", `Failed to destroy ${vmDisplayName}: ${error.message}`, 1, { node, vmid, error: error.message });
+      
       // Handle specific error cases
       if (error.response?.status === 400) {
         const errorMsg = error.response?.data?.message || error.message;

@@ -16,6 +16,7 @@ export async function loadExecutionStats() {
     }
     const stats = await response.json();
     
+    const ingestion = stats.ingestion || {};
     const html = `
       <div class="status-grid">
         <div class="stat-card">
@@ -31,6 +32,67 @@ export async function loadExecutionStats() {
           <div class="stat-value">${Math.round(stats.avgDurationMs || 0)}ms</div>
         </div>
       </div>
+      ${ingestion.active !== undefined ? `
+        <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #334155;">
+          <h3 style="margin-bottom: 15px; color: #e2e8f0; font-size: 1.1em;">Ingestion Scheduler</h3>
+          <div class="status-grid">
+            <div class="stat-card">
+              <div class="stat-label">Status</div>
+              <div>
+                <span class="status-badge ${ingestion.active ? 'status-success' : 'status-error'}">
+                  ${ingestion.active ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Runs</div>
+              <div class="stat-value">${ingestion.runCount || 0}</div>
+              <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
+                ${ingestion.successCount || 0} success, ${ingestion.failureCount || 0} failed
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Success Rate</div>
+              <div class="stat-value">${((ingestion.successRate || 0)).toFixed(1)}%</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Avg Duration</div>
+              <div class="stat-value">${Math.round(ingestion.avgDurationMs || 0)}ms</div>
+            </div>
+            ${ingestion.lastRun ? `
+              <div class="stat-card">
+                <div class="stat-label">Last Run</div>
+                <div class="stat-value" style="font-size: 0.9em;">${new Date(ingestion.lastRun).toLocaleString()}</div>
+              </div>
+            ` : ''}
+          </div>
+          ${ingestion.proxmoxAvgDurationMs || ingestion.networkAvgDurationMs || ingestion.firewallAvgDurationMs ? `
+            <div style="margin-top: 15px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
+              <div style="font-size: 0.875em; color: #94a3b8; margin-bottom: 8px;">Component Durations:</div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; font-size: 0.85em;">
+                ${ingestion.proxmoxAvgDurationMs ? `
+                  <div>
+                    <span style="color: #94a3b8;">Proxmox:</span>
+                    <span style="color: #e2e8f0; margin-left: 8px;">${Math.round(ingestion.proxmoxAvgDurationMs)}ms</span>
+                  </div>
+                ` : ''}
+                ${ingestion.networkAvgDurationMs ? `
+                  <div>
+                    <span style="color: #94a3b8;">Network:</span>
+                    <span style="color: #e2e8f0; margin-left: 8px;">${Math.round(ingestion.networkAvgDurationMs)}ms</span>
+                  </div>
+                ` : ''}
+                ${ingestion.firewallAvgDurationMs ? `
+                  <div>
+                    <span style="color: #94a3b8;">Firewall:</span>
+                    <span style="color: #e2e8f0; margin-left: 8px;">${Math.round(ingestion.firewallAvgDurationMs)}ms</span>
+                  </div>
+                ` : ''}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
       ${stats.recentErrors && stats.recentErrors.length > 0 ? `
         <div class="mt-4 md:mt-6 pt-4 md:pt-6 border-t border-slate-700">
           <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4 text-red-400 text-center">Recent Errors</h3>
@@ -138,7 +200,7 @@ export async function loadClusterStatus() {
       
       ${data.vms?.resources && data.vms.resources.length > 0 ? `
         <h3 style="margin-top: 20px; margin-bottom: 10px; color: #e2e8f0; font-size: 1rem; text-align: center;">Recent VMs</h3>
-        <div style="max-height: 400px; overflow-y: auto; display: flex; justify-content: center;">
+        <div style="max-height: 400px; overflow-y: auto; width: 100%;">
           ${renderResponsiveTable(
             ['Name', 'Node', 'Status', 'Type'],
             data.vms.resources.slice(0, 20),
