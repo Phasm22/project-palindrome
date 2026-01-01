@@ -4,7 +4,7 @@ A lightweight dashboard for monitoring Palindrome agent activity, tool execution
 
 ## Quick Start
 
-1. **Start the PCE API server:**
+1. **Start the Palindrome API server:**
    ```bash
    bun run pce:api
    ```
@@ -20,7 +20,7 @@ A lightweight dashboard for monitoring Palindrome agent activity, tool execution
 
 3. **Configure API URL (if needed):**
    - The dashboard defaults to `http://localhost:4000`
-   - To change it, edit the `API_URL` variable in `index.html` or set environment variable `VITE_PCE_API_URL`
+   - To change it, edit the `API_URL` variable in `index.html` or set environment variable `VITE_PALINDROME_API_URL`
 
 ## Features
 
@@ -35,7 +35,7 @@ The Query tab provides an interactive interface for querying both RAG and graph 
 ### Overview Tab
 - **Execution Statistics**: Total executions, error rate, average duration
 - **Cluster Status**: Proxmox cluster health (when implemented)
-- **System Health**: PCE API, Neo4j, Qdrant health checks
+- **System Health**: Palindrome API, Neo4j, Qdrant health checks
 
 ### Tool Executions Tab
 - Real-time view of all tool executions
@@ -58,7 +58,7 @@ The Query tab provides an interactive interface for querying both RAG and graph 
 
 ## API Endpoints Used
 
-The dashboard calls these endpoints from the PCE API:
+The dashboard calls these endpoints from the Palindrome API:
 
 - `GET /api/dashboard/execution-stats` - Execution statistics
 - `GET /api/dashboard/tool-executions` - Tool execution log
