@@ -1,0 +1,36 @@
+[Unit]
+Description=Palindrome Services (Docker Compose, API, Dashboard)
+After=network.target docker.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# TODO: Replace 'tj' with your actual username
+User=tj
+Group=tj
+WorkingDirectory=/home/tj/project-palindrome
+# Use full path to bun or ensure PATH includes ~/.bun/bin
+ExecStart=/home/tj/.bun/bin/bun run scripts/start-all.ts
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=palindrome-services
+
+# Environment variables
+Environment="NODE_ENV=production"
+Environment="PCE_API_PORT=4000"
+Environment="PATH=/home/tj/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Resource limits (adjust as needed)
+LimitNOFILE=65536
+MemoryLimit=8G
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

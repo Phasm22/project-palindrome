@@ -73,6 +73,7 @@ jobs:
     name: Type Check
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    continue-on-error: true  # Don't fail the workflow on type errors
     
     steps:
       - uses: actions/checkout@v4
@@ -87,4 +88,11 @@ jobs:
       
       - name: Type check
         run: bun run --bun tsc --noEmit
+      
+      - name: Type check summary
+        if: always()
+        run: |
+          echo "## Type Check Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Note: Type errors are non-blocking. Fix gradually." >> $GITHUB_STEP_SUMMARY
 

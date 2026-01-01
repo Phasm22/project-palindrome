@@ -78,3 +78,8 @@ Thumbs.db
 .pce-tl-1b-dod-test/
 .pce-tl-1c-dod-test/
 .pce-tl-2a-dod-test/
+
+# Service files
+.palindrome-service.pid
+.pce-service.pid
+logs/
