@@ -1,0 +1,114 @@
+---
+description: Dashboard/frontend UI guardrails and patterns
+globs: dashboard/**/*.{ts,tsx,js,jsx,css}
+alwaysApply: false
+---
+
+# Dashboard / Frontend Guardrails
+
+These standards apply to the dashboard UI surface only. They keep the frontend lightweight, consistent, and focused on display and interaction while pushing infra semantics into the API layer.
+
+## Tailwind-first styling
+
+- Prefer Tailwind utility classes for layout, spacing, typography, and color.
+- Only introduce or extend UI libraries if they are already used in the dashboard.
+- Do not add heavyweight component libraries (e.g. multiple design systems at once) without a clear, documented reason.
+
+```tsx
+// ✅ GOOD: Tailwind-first button
+export function PrimaryButton(props: JSX.IntrinsicElements['button']) {
+  return (
+    <button
+      className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+      {...props}
+    />
+  );
+}
+```
+
+## “Dumb” UI components
+
+Dashboard components should be presentation-focused:
+
+- Accept already-shaped data via props.
+- Contain local UI concerns only (open/close, hover, selection, form field values).
+- Avoid embedding infra or domain logic (e.g. Proxmox semantics, topology rules) in React components.
+
+Push semantics into APIs, services, or hooks that live outside the component tree.
+
+```tsx
+// ❌ BAD: component encodes infra logic
+function VmStatusBadge({ vm }: { vm: VmFromApi }) {
+  const isCritical = vm.cpuUsage > 0.9 && vm.nodeRole === 'core';
+  // ... complex decision tree here ...
+}
+
+// ✅ BETTER: component just renders a shaped view model
+type VmStatusView = {
+  label: string;
+  tone: 'ok' | 'warning' | 'critical';
+};
+
+function VmStatusBadge({ status }: { status: VmStatusView }) {
+  const toneClass =
+    status.tone === 'critical'
+      ? 'bg-red-100 text-red-800'
+      : status.tone === 'warning'
+      ? 'bg-yellow-100 text-yellow-800'
+      : 'bg-emerald-100 text-emerald-800';
+
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${toneClass}`}>
+      {status.label}
+    </span>
+  );
+}
+```
+
+## Push data shaping into API / hooks
+
+- Derive view models, aggregates, and flags in:
+  - API adapters/clients.
+  - Domain services or selectors.
+  - Reusable hooks (e.g. `useVmStatusView`, `useTopologySummary`).
+- UI components should consume these shaped structures, not raw infra payloads.
+
+This keeps domain rules testable and decoupled from rendering.
+
+## Accessibility basics
+
+- **Keyboard navigation**:
+  - All interactive elements must be reachable via Tab/Shift+Tab.
+  - Use semantic elements (`button`, `a`, `input`, `label`) whenever possible.
+- **ARIA**:
+  - Add `aria-*` attributes where native semantics are not enough (e.g. custom dialogs, tabs).
+  - Ensure visible labels are connected via `aria-label`, `aria-labelledby`, or `<label htmlFor="...">`.
+- **Focus management**:
+  - Manage focus when opening dialogs, menus, and other overlays.
+  - Provide visible focus states (Tailwind `focus-visible:` utilities are preferred).
+
+```tsx
+// ✅ GOOD: accessible dialog trigger
+export function DetailsDialogTrigger() {
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+      aria-haspopup="dialog"
+    >
+      View details
+    </button>
+  );
+}
+```
+
+## State management
+
+- Prefer React’s built-in state (`useState`, `useReducer`, `useContext`) and light-weight hooks.
+- Do **not** introduce heavy state management frameworks (e.g. Redux, MobX, large global stores) for dashboard UI unless:
+  - The project already uses them in the dashboard, and
+  - The new usage is consistent with existing patterns.
+- Keep global/shared state small and focused (e.g. current selection, filters, layout preferences).
+
+When in doubt, start with local component state and extract to a hook or small shared store only after concrete reuse or complexity justifies it.
+

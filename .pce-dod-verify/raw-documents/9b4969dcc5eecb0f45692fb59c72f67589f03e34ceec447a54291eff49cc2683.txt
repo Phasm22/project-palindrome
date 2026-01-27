@@ -1,0 +1,1 @@
+The firewall rule list can be viewed at /ui/firewall/rules. You can also check the OPNsense dashboard for active rules.

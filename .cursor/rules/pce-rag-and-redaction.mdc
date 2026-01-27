@@ -1,0 +1,16 @@
+---
+description: RAG, redaction, and store usage rules for PCE
+globs: src/pce/**/*.ts, reasoning/**/*.md
+alwaysApply: false
+---
+
+PCE RAG, redaction, and store discipline.
+
+Never bypass the redaction/chunking pipeline for user or system data. All retrieval and generation must go through the established redaction and chunking stages, not ad-hoc queries over raw data.
+
+Prefer existing orchestration primitives for retrieval and generation instead of inventing new flows. Extend or compose the current PCE RAG orchestration patterns before adding new pipelines.
+
+Treat stores (history, traces, tool executions, and similar) as internal contracts. Do not advise direct database access, schema poking, or manual migrations for these; use the established store APIs and patterns.
+
+For logging and metrics, keep metric names consistent with existing conventions and cardinality expectations. Avoid adding noisy or low-signal logs and metrics without a clear purpose and consumer.
+

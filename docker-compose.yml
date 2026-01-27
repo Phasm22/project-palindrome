@@ -17,7 +17,8 @@ services:
           cpus: "1.0"
           memory: "2g"
     # CPU pinning: Use cores 0-1 (dedicated for Qdrant vector operations)
-    cpuset: "0,1"
+    # Commented out - may not be supported on all systems
+    # cpuset: "0,1"
     environment:
       # Qdrant memory-mapped files optimization for 32GB system
       # Allocate 2GB for mmap cache (leaves room for OS + other services)
@@ -74,7 +75,8 @@ services:
           cpus: "1.0"
           memory: "8g"
     # CPU pinning: Use cores 2-3 (dedicated for Neo4j graph operations)
-    cpuset: "2,3"
+    # Commented out - may not be supported on all systems
+    # cpuset: "2,3"
     ulimits:
       # Increase file descriptors for large graph queries
       nofile: 65536
@@ -89,7 +91,8 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     ports:
-      - "11434:11434"  # Ollama API
+      # Port changed - 11434 may be in use on host
+      - "11435:11434"  # Ollama API (mapped to 11435 to avoid conflict)
     volumes:
       - ollama_data:/root/.ollama
     # GPU support - RTX 4070 Ti SUPER (16GB VRAM)
@@ -126,7 +129,8 @@ services:
     restart: unless-stopped
     # CPU pinning: Use cores 4-15 (12 cores for Ollama + token generation)
     # Leave cores 0-3 for Qdrant/Neo4j
-    cpuset: "4,5,6,7,8,9,10,11,12,13,14,15"
+    # Commented out - may not be supported on all systems
+    # cpuset: "4,5,6,7,8,9,10,11,12,13,14,15"
     # No CPU/memory limits - let GPU handle the load, CPU can saturate
     # GPU memory is managed by NVIDIA driver
     ulimits:

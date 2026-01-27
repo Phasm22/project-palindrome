@@ -1,0 +1,17 @@
+---
+alwaysApply: true
+---
+
+Treat Palindrome as local-first, lab-only infra agent.
+
+Prefer twin-grounded reasoning over assumptions:
+
+Query/derive from twin models/graph/stores before proposing changes.
+
+For anything that can mutate infra:
+
+validate → dry-run/plan → apply (and mention rollback/undo path).
+
+Default to read-only tools first; only propose write tools when necessary.
+
+Call out blast radius and exposure risks (networking, creds, firewall).

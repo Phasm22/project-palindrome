@@ -1,0 +1,41 @@
+---
+description: Testing expectations and quality gates for new behavior
+globs: tests/**/*.ts, src/**/*.ts
+alwaysApply: false
+---
+
+# Testing Expectations & Quality Gates
+
+This rule defines the minimum testing expectations for new or changed behavior.
+
+## Unit tests for pure logic
+
+- New pure logic (pure functions, small helpers, selectors, mappers) must have unit tests.
+- Tests should:
+  - Exercise happy paths and important edge cases.
+  - Assert on concrete outputs (no “test just calls function”).
+
+## Integration tests for tools / stores
+
+- When behavior involves tools, stores, or external integrations:
+  - Add integration-style tests that cover the interaction boundaries.
+  - Mock external systems at clear seams (e.g. tool client, store adapter, HTTP client).
+  - Verify that:
+    - Correct calls are made to tools/stores.
+    - The returned data is interpreted and shaped correctly.
+
+## Prefer deterministic tests
+
+- Tests must be deterministic and repeatable:
+  - **No real infra calls** (Proxmox, OPNsense, graphs, external APIs, etc.).
+  - Use stable, explicit fixtures instead of live data.
+  - Avoid time-based flakiness (e.g. wall-clock `Date.now()` or `setTimeout` without control).
+- If randomness or time is involved, inject controllable sources (e.g. seeded RNG, fake timers).
+
+## Coverage expectations
+
+- New behavior should not significantly reduce coverage.
+- If coverage decreases:
+  - The change must explicitly justify why (e.g. dead code removal, refactor moving tests).
+  - Prefer adding or adapting tests so that overall coverage remains stable or improves over time.
+

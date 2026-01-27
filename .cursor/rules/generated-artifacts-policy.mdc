@@ -1,0 +1,43 @@
+---
+description: Policy for generated and audit artifacts; never hand-edit, always regenerate
+globs: .gold-path/**, .provenance-audit/**, .pce-dashboard/**, .pce-test/**
+alwaysApply: false
+---
+
+# Generated / Audit Artifacts Are Not Hand-Edited
+
+Files under these paths are treated as generated or audit output:
+
+- `.gold-path/**`
+- `.provenance-audit/**`
+- `.pce-dashboard/**`
+- `.pce-test/**`
+
+They are **not** meant to be maintained by hand.
+
+## Do not hand-edit
+
+- Do **not** manually edit contents of these directories to “fix” tests, dashboards, or audits.
+- Do **not** update snapshots, audit logs, or stored traces by hand.
+- If a change is required, fix the **source of truth** (code, configuration, or generator) instead.
+
+## Fix by regenerating
+
+- When artifacts are stale or incorrect:
+  - Identify the owning generator (script, test harness, audit runner).
+  - Update code/config so that the desired behavior is reflected at generation time.
+  - Re-run the appropriate generator or test command to refresh artifacts.
+- Prefer commands in `scripts/` or documented in the repo (e.g. `run-gold-path`, provenance audit scripts, test runners) over ad-hoc edits.
+
+## Out-of-sync artifacts
+
+If you detect that generated/audit artifacts are out of sync with the current code or infra:
+
+- **Recommend regeneration**, not manual edits:
+  - Suggest the relevant `scripts/*.ts` or `.sh` command, or the documented regeneration steps.
+  - If unsure which generator produced a file, search for its path or filename in:
+    - `scripts/`
+    - `tests/`
+    - `docs/tests/` or related documentation
+- Only accept changes to these directories as valid when they are the result of a generator/test run, not ad-hoc editing.
+
