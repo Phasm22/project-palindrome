@@ -1,0 +1,23 @@
+---
+alwaysApply: true
+---
+
+globs: src/**/*.ts, scripts/**/*.ts, tests/**/*.ts, dashboard/**/*.ts, dashboard/**/*.tsx
+
+Bun-first commands: bun run, bun test.
+
+Strict TS:
+
+No any unless justified and localized.
+
+Prefer explicit domain types and schema validation.
+
+Input safety:
+
+Validate external inputs (CLI args, tool payloads, API payloads) with zod (or your existing schema system).
+
+Error handling:
+
+No silent catches.
+
+Use project logger patterns; wrap errors into domain-specific errors where it improves observability.

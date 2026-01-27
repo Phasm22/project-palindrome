@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Project Palindrome is a sophisticated infrastructure intelligence platform built on a **Pervasive Context Engine (PCE)** that combines:
+Project Palindrome is a sophisticated infrastructure intelligence platform that combines:
 - **Hybrid RAG** (Vector + Graph) for semantic and structural retrieval
 - **Multi-domain tooling** (Proxmox, OPNsense, SSH, MCP) for infrastructure access
 - **Knowledge graph** (Neo4j) for relationship modeling
@@ -200,7 +200,7 @@ Project Palindrome is a sophisticated infrastructure intelligence platform built
 - ❌ VPN client state - Not tracked
 - ❌ VPN connection logs - Not collected
 
-### 3.4 Network Topology in PCE
+### 3.4 Network Topology in Palindrome
 
 **Status:** ✅ **Partially Maintained**
 
@@ -313,7 +313,7 @@ Project Palindrome is a sophisticated infrastructure intelligence platform built
 
 ## 6. TOPOLOGY & GRAPH MODEL
 
-### 6.1 Current Entities in PCE
+### 6.1 Current Entities in Palindrome
 
 **Node Types (from ontology):**
 - `HOST` - Physical hosts
@@ -396,11 +396,11 @@ Project Palindrome is a sophisticated infrastructure intelligence platform built
 ### 7.1 Metric Sources
 
 **Current:**
-- ✅ **PCE API metrics:** `/metrics` endpoint (Prometheus format)
+- ✅ **Palindrome API metrics:** `/metrics` endpoint (Prometheus format)
   - Query latency, ingestion throughput, error rates
   - Location: `src/pce/api/server.ts:359-437`
 - ✅ **Prometheus config:** `prometheus/prometheus.yml`
-  - Scrapes PCE API at `localhost:4000/metrics`
+  - Scrapes Palindrome API at `localhost:4000/metrics`
 - ⚠️ **Grafana:** Configured but dashboards minimal
   - Location: `grafana/dashboards/pce-overview.json`
 

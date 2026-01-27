@@ -1,0 +1,26 @@
+[
+  {
+    "filePath": ".pce-dod-verify/test.txt",
+    "sha256Hash": "4ccfac83d4aadc93c5d62a50cd894c4b213e3ab1d5654800a61356a70e0b1f37",
+    "timestamp": "2026-01-27T17:35:14.497Z",
+    "aclGroup": "admin",
+    "documentType": "generic_text",
+    "size": 16
+  },
+  {
+    "filePath": ".pce-dod-verify/dod4-test.txt",
+    "sha256Hash": "9b4969dcc5eecb0f45692fb59c72f67589f03e34ceec447a54291eff49cc2683",
+    "timestamp": "2026-01-27T17:35:14.503Z",
+    "aclGroup": "admin",
+    "documentType": "generic_text",
+    "size": 119
+  },
+  {
+    "filePath": ".pce-dod-verify/dod5-test.txt",
+    "sha256Hash": "6d2fc24724614cee5977be62dd0bf18305f0ad6811c67283ddc74c7168ad5bc5",
+    "timestamp": "2026-01-27T17:35:14.504Z",
+    "aclGroup": "ops",
+    "documentType": "generic_text",
+    "size": 71
+  }
+]

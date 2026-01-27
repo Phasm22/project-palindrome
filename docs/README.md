@@ -19,9 +19,10 @@ docs/
 
 ### Status & Progress
 - [Definition of Done Verification](status/DOD_VERIFICATION.md)
-- [Phase Status Reports](status/) - All PCE phase and test level status files
+- [Phase Status Reports](status/) - All phase and test level status files
 
 ### Getting Started
+- **[Getting Started Guide](GETTING_STARTED.md)** - Complete setup and onboarding
 - [Quick Start: Topology Ingestion](guides/QUICK_START_TOPOLOGY.md)
 
 ### Technical Documentation
