@@ -82,13 +82,38 @@ function formatRelativeTime(dateString) {
   return `${diffYears} year${diffYears !== 1 ? 's' : ''} ago`;
 }
 
+function beginSoftRefresh(element, skeletonCount) {
+  const hadContent = element.dataset.loaded === 'true' && element.innerHTML.trim().length > 0;
+  element.setAttribute('aria-busy', 'true');
+
+  if (!hadContent) {
+    element.innerHTML = '';
+    element.appendChild(createSkeletonStatsGrid(skeletonCount));
+    return { hadContent, prevHeight: 0 };
+  }
+
+  const prevHeight = element.offsetHeight || 0;
+  if (prevHeight > 0) {
+    element.style.minHeight = `${prevHeight}px`;
+  }
+  element.style.transition = 'opacity 120ms ease';
+  element.style.opacity = '0.75';
+  return { hadContent, prevHeight };
+}
+
+function endSoftRefresh(element) {
+  element.dataset.loaded = 'true';
+  element.removeAttribute('aria-busy');
+  element.style.opacity = '';
+  element.style.minHeight = '';
+  element.style.transition = '';
+}
+
 export async function loadExecutionStats() {
   const element = document.getElementById('execution-stats');
   if (!element) return;
-  
-  // Show skeleton loader
-  element.innerHTML = '';
-  element.appendChild(createSkeletonStatsGrid(3));
+
+  const refresh = beginSoftRefresh(element, 3);
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/execution-stats`);
@@ -200,19 +225,19 @@ export async function loadExecutionStats() {
     `;
     
     document.getElementById('execution-stats').innerHTML = html;
+    endSoftRefresh(element);
   } catch (error) {
     document.getElementById('execution-stats').innerHTML = 
       `<div class="error">Failed to load execution stats: ${error.message}</div>`;
+    endSoftRefresh(element);
   }
 }
 
 export async function loadClusterStatus() {
   const element = document.getElementById('cluster-status');
   if (!element) return;
-  
-  // Show skeleton loader
-  element.innerHTML = '';
-  element.appendChild(createSkeletonStatsGrid(3));
+
+  const refresh = beginSoftRefresh(element, 3);
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/cluster-status`);
@@ -259,6 +284,13 @@ export async function loadClusterStatus() {
             <div class="stat-value">${data.vms?.total || 0}</div>
             <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
               ${data.vms?.running || 0} running, ${data.vms?.stopped || 0} stopped
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">LXC</div>
+            <div class="stat-value">${data.lxc?.total || 0}</div>
+            <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
+              ${data.lxc?.running || 0} running, ${data.lxc?.stopped || 0} stopped
             </div>
           </div>
         </div>
@@ -317,6 +349,35 @@ export async function loadClusterStatus() {
           </div>
         </details>
       ` : ''}
+
+      ${data.lxc?.resources && data.lxc.resources.length > 0 ? `
+        <details class="overview-details">
+          <summary class="overview-summary">Recent LXCs (${data.lxc.resources.length})</summary>
+          <div class="overview-details-body">
+            <div style="max-height: 360px; overflow-y: auto; width: 100%;">
+              ${renderResponsiveTable(
+                ['Name', 'Node', 'Status', 'Type'],
+                data.lxc.resources.slice(0, 20),
+                (ct) => {
+                  const name = (ct.name || ct.id || 'Unknown').split('\n')[0];
+                  const node = (ct.node || 'N/A').split('\n')[0];
+                  const type = (ct.type || 'N/A').split('\n')[0];
+                  return `
+                    <td class="whitespace-nowrap">${name}</td>
+                    <td class="whitespace-nowrap">${node}</td>
+                    <td>
+                      <span class="status-badge ${ct.status === 'running' ? 'status-success' : ct.status === 'stopped' ? 'status-error' : 'status-warning'}">
+                        ${ct.status || 'unknown'}
+                      </span>
+                    </td>
+                    <td class="whitespace-nowrap">${type}</td>
+                  `;
+                }
+              )}
+            </div>
+          </div>
+        </details>
+      ` : ''}
       
       <details style="margin-top: 20px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px;">
         <summary style="cursor: pointer; color: #94a3b8; font-size: 0.875em;">Show Raw JSON</summary>
@@ -325,9 +386,17 @@ export async function loadClusterStatus() {
     `;
     
     document.getElementById('cluster-status').innerHTML = html;
+    endSoftRefresh(element);
   } catch (error) {
-    document.getElementById('cluster-status').innerHTML = 
+    // If this was a refresh (not first load), keep existing content and just remove loading state.
+    if (refresh.hadContent) {
+      console.error('Failed to load cluster status:', error);
+      endSoftRefresh(element);
+      return;
+    }
+    document.getElementById('cluster-status').innerHTML =
       `<div class="error">Failed to load cluster status: ${error.message}</div>`;
+    endSoftRefresh(element);
   }
 }
 
@@ -335,10 +404,10 @@ export async function loadSystemHealth() {
   const element = document.getElementById('system-health');
   const section = document.getElementById('system-health-section');
   if (!element || !section) return;
-  
-  // Show skeleton loader
-  element.innerHTML = '';
-  element.appendChild(createSkeletonStatsGrid(4));
+
+  // Always keep section stable; avoid hide/show layout jumps.
+  section.style.display = '';
+  const refresh = beginSoftRefresh(element, 4);
   
   try {
     const response = await fetch(`${API_URL}/health`);
@@ -350,9 +419,14 @@ export async function loadSystemHealth() {
     const dependencies = data.dependencies || {};
     const entries = Object.entries(dependencies);
     
-    // If no dependencies or all empty, hide the section
+    // If no dependencies or all empty, show a stable message (no layout shift).
     if (entries.length === 0 || entries.every(([_, status]) => !status)) {
-      section.style.display = 'none';
+      element.innerHTML = `
+        <div class="text-slate-400 text-center py-2 text-sm">
+          No dependency health checks configured.
+        </div>
+      `;
+      endSoftRefresh(element);
       return;
     }
     
@@ -375,9 +449,19 @@ export async function loadSystemHealth() {
     `;
     
     element.innerHTML = html;
+    endSoftRefresh(element);
   } catch (error) {
-    // Hide section on error too
-    section.style.display = 'none';
+    if (refresh.hadContent) {
+      console.error('Failed to load system health:', error);
+      endSoftRefresh(element);
+      return;
+    }
+    element.innerHTML = `
+      <div class="text-slate-400 text-center py-2 text-sm">
+        System health unavailable.
+      </div>
+    `;
+    endSoftRefresh(element);
   }
 }
 

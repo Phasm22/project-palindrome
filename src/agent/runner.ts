@@ -1,6 +1,8 @@
 import readline from "node:readline";
+import { createHash, randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import type { AgentResponse } from "../types/agent";
+import type { ConversationContext, ConversationState, UserPreferences } from "../types";
 import { logger } from "../utils/logger";
 import { loadTools } from "./tool-loader";
 import { executeToolCall } from "./tool-executor";
@@ -16,6 +18,7 @@ import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-in
 import {
   describeClusterChain,
   listVmsByNodeChain,
+  listRunningVmsOnNodeChain,
   listVmsWithoutAgentChain,
   listStoppedVmsChain,
   findVmByIdChain,
@@ -50,7 +53,10 @@ import {
 } from "../reasoning/clarification";
 import { classifyAndRoute } from "../reasoning/intent-router";
 import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../reasoning/failure-reclassification";
-import { formatResponseForBot, detectResponseIntent, type FormatContext } from "./response-formatter";
+import { formatResponseForBot, detectResponseIntent, type FormatContext, type ResponseMode } from "./response-formatter";
+import { planConversation } from "./conversation-orchestrator";
+import { parseConfirmationInput } from "./dialog-policy";
+import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-risk";
 
 let openaiClient: OpenAI | null = null;
 
@@ -233,6 +239,8 @@ async function executeComputeIntent(
         return await describeClusterChain(tools, session);
       case "vms_by_node":
         return await listVmsByNodeChain(tools, session, intent.nodeName);
+      case "running_vms_on_node":
+        return await listRunningVmsOnNodeChain(tools, session, intent.nodeName);
       case "vms_without_agent":
         return await listVmsWithoutAgentChain(tools, session);
       case "stopped_vms_on_node":
@@ -330,6 +338,10 @@ export type AgentRunOptions = {
   confirmHighRisk?: (info: { toolName: string; parameters: Record<string, any>; risk: string }) => Promise<boolean>;
   ragBaseUrl?: string;
   sessionId?: string; // Optional session ID for event tracking
+  conversationId?: string;
+  conversationState?: ConversationState;
+  conversationContext?: ConversationContext;
+  userPreferences?: UserPreferences;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>; // Previous messages in conversation
 };
 
@@ -362,6 +374,22 @@ export async function runAgent(
   const sessionId = options.sessionId ?? `session-${startTime}-${Math.random().toString(36).slice(2, 9)}`;
   const eventBus = AgentEventBus.getInstance();
 
+  const originalUserInput = userInput;
+  const confirmation = parseConfirmationInput(userInput);
+  const pendingAction = options.conversationContext?.pendingAction;
+  const pendingActionId = options.conversationContext?.pendingActionId;
+  let usedPendingAction = false;
+  if (confirmation.confirmed && confirmation.actionText) {
+    userInput = confirmation.actionText;
+  } else if (
+    confirmation.confirmed &&
+    pendingAction &&
+    (!confirmation.actionId || (pendingActionId && confirmation.actionId === pendingActionId))
+  ) {
+    userInput = pendingAction;
+    usedPendingAction = true;
+  }
+
   const emitStepEvent = (data: Record<string, any>) => {
     eventBus.emit({
       type: "agent:step",
@@ -385,6 +413,65 @@ export async function runAgent(
       },
     });
   };
+
+  const pendingActionCreatedAt = options.conversationContext?.pendingActionCreatedAt;
+  const pendingActionSummary = options.conversationContext?.pendingActionSummary ?? pendingAction;
+  const pendingActionExpired =
+    pendingActionCreatedAt ? (Date.now() - pendingActionCreatedAt) > (15 * 60 * 1000) : false;
+
+  if (confirmation.confirmed && confirmation.actionId && !pendingActionId) {
+    const prompt = "There is no pending action to confirm. Please restate the change.";
+    emitFinalEvent(prompt, {
+      clarification: true,
+      needsResponse: true,
+      conversationState: "IDLE",
+    });
+    return { text: prompt };
+  }
+
+  if (confirmation.confirmed && confirmation.actionId && pendingActionId && confirmation.actionId !== pendingActionId) {
+    const prompt = `Confirmation id does not match the pending action. Reply with CONFIRM ${pendingActionId} to proceed.`;
+    emitFinalEvent(prompt, {
+      clarification: true,
+      needsResponse: true,
+      conversationState: "AWAITING_CONFIRMATION",
+      conversationContext: {
+        pendingAction,
+        pendingActionId,
+        pendingActionDigest: options.conversationContext?.pendingActionDigest,
+        pendingActionCreatedAt,
+        pendingActionSummary,
+      },
+    });
+    return { text: prompt };
+  }
+
+  if (confirmation.confirmed && pendingActionExpired) {
+    const prompt = "Confirmation expired. Please re-request the change.";
+    emitFinalEvent(prompt, {
+      clarification: true,
+      needsResponse: true,
+      conversationState: "IDLE",
+      conversationContext: {
+        pendingAction: "",
+        pendingActionId: "",
+        pendingActionDigest: "",
+        pendingActionCreatedAt: 0,
+        pendingActionSummary: "",
+      },
+    });
+    return { text: prompt };
+  }
+
+  if (confirmation.confirmed && !confirmation.actionText && !pendingAction) {
+    const prompt = "What should I confirm? Reply with CONFIRM: <action>.";
+    emitFinalEvent(prompt, {
+      clarification: true,
+      needsResponse: true,
+      conversationState: "NEED_CLARIFICATION",
+    });
+    return { text: prompt };
+  }
 
   const session: ToolSession = {
     userId: options.userId ?? "agent-user",
@@ -451,6 +538,78 @@ export async function runAgent(
     }
   };
 
+  const buildBotMoveContext = async (observations: string, intentLabel: string): Promise<string> => {
+    if (!observations || observations.trim().length < 40) {
+      return "";
+    }
+
+    const cappedObservations = observations
+      .split("\n")
+      .slice(0, 20)
+      .join("\n")
+      .slice(0, 2000);
+
+    const parts: string[] = [];
+
+    try {
+      const summaryResult = await executeToolCall(
+        {
+          toolName: "summarize_observations",
+          parameters: { observations: cappedObservations, intent: intentLabel },
+        },
+        tools,
+        { userId: session.userId, aclGroup: session.aclGroup }
+      );
+      const summaryText = (summaryResult as any)?.data?.summary;
+      if (typeof summaryText === "string" && summaryText.trim().length > 0) {
+        parts.push(`Evidence:\n${summaryText.trim()}`);
+      }
+    } catch (error: any) {
+      logger.warn("summarize_observations failed", { error: error.message });
+    }
+
+    try {
+      const nextStepsResult = await executeToolCall(
+        {
+          toolName: "next_steps",
+          parameters: { intent: intentLabel, observations: cappedObservations },
+        },
+        tools,
+        { userId: session.userId, aclGroup: session.aclGroup }
+      );
+      const steps = (nextStepsResult as any)?.data?.steps;
+      if (Array.isArray(steps) && steps.length > 0) {
+        const formattedSteps = steps.map((step: string) => `- ${step}`).join("\n");
+        parts.push(`Next steps:\n${formattedSteps}`);
+      }
+    } catch (error: any) {
+      logger.warn("next_steps failed", { error: error.message });
+    }
+
+    return parts.join("\n\n");
+  };
+
+  const buildPendingActionRecord = (actionText: string, summary?: string) => {
+    const createdAt = Date.now();
+    const digest = createHash("sha256").update(actionText).digest("hex");
+    const id = digest.slice(0, 8);
+    return { id, digest, createdAt, summary: summary ?? actionText };
+  };
+
+  const summarizeToolCall = (toolName: string, params: Record<string, any>): string => {
+    if (toolName === "action" && params.action) {
+      return `action ${params.action}`;
+    }
+    if (toolName === "proxmox_write" && params.action) {
+      const target = params.vmid ? `vmid ${params.vmid}` : params.node ? `node ${params.node}` : "";
+      return `proxmox_write ${params.action}${target ? ` ${target}` : ""}`;
+    }
+    if (toolName === "opnsense_safewrite" && params.action) {
+      return `opnsense ${params.action}`;
+    }
+    return `${toolName} change`;
+  };
+
   // ============================================================
   // CLARIFICATION CHECK - detect typos and ambiguous queries
   // ============================================================
@@ -464,6 +623,36 @@ export async function runAgent(
   
   // Classify intent using probabilistic classifier
   const { classification, routing } = classifyAndRoute(userInput);
+  const conversationPlan = planConversation({
+    userInput: originalUserInput,
+    intent: classification,
+    routing,
+    conversationState: options.conversationState,
+    conversationContext: options.conversationContext,
+    userPreferences: options.userPreferences,
+    confirmation,
+  });
+  const responseMode: ResponseMode | undefined = conversationPlan.responseMode;
+  const contextUpdate: ConversationContext = {};
+  if (classification.entities.hosts.length > 0) {
+    contextUpdate.activeHost = classification.entities.hosts[0];
+  }
+  if (classification.entities.services.length > 0) {
+    contextUpdate.activeService = classification.entities.services[0];
+  }
+  const postExecutionState: ConversationState = conversationPlan.shouldExecute ? "FOLLOWUP" : conversationPlan.nextState;
+  const finalContextUpdate: ConversationContext = { ...contextUpdate };
+  const shouldClearPending =
+    usedPendingAction ||
+    (confirmation.confirmed && conversationPlan.shouldExecute) ||
+    (!!pendingAction && !confirmation.confirmed && (classification.intent !== "ACTION" || classification.operation.verbs.length === 0));
+  if (shouldClearPending) {
+    finalContextUpdate.pendingAction = "";
+    finalContextUpdate.pendingActionId = "";
+    finalContextUpdate.pendingActionDigest = "";
+    finalContextUpdate.pendingActionCreatedAt = 0;
+    finalContextUpdate.pendingActionSummary = "";
+  }
   
   // Store original classification for confidence monotonicity
   failureTracker.setOriginalClassification(userInput, classification);
@@ -475,6 +664,142 @@ export async function runAgent(
     metadata: classification.metadata,
     route: routing.route,
   });
+
+  // Fast-path social chat: do not run tools/LLM formatting pipeline.
+  // This prevents "Answer/Evidence/Next steps" nonsense for greetings like "Hello".
+  if (classification.intent === "CHAT_SOCIAL" && !confirmation.confirmed) {
+    const text = "Hi — what do you want to check or change in your lab?";
+    emitFinalEvent(text, {
+      classification,
+      conversationState: "FOLLOWUP",
+      conversationContext: contextUpdate,
+    });
+    return { text };
+  }
+
+  // Fast-path subnet sizing questions (avoid falling into intent disambiguation).
+  // Example: "i need a subnet for 128 hosts" → /24 (254 usable), /25 is only 126 usable.
+  const subnetSizing = (() => {
+    const q = (originalUserInput || "").toLowerCase();
+    const match = q.match(/\bsubnet\b[\s\S]*?\b(\d+)\b[\s\S]*?\bhosts?\b/) || q.match(/\b(\d+)\b[\s\S]*?\bhosts?\b[\s\S]*?\bsubnet\b/);
+    if (!match) return null;
+    const hosts = parseInt(match[1], 10);
+    if (!Number.isFinite(hosts) || hosts <= 0) return null;
+    // IPv4: need 2 extra addresses for network+broadcast
+    const needed = hosts + 2;
+    let size = 1;
+    while (size < needed) size *= 2;
+    const prefix = 32 - Math.log2(size);
+    const usable = Math.max(0, size - 2);
+    // If exactly 128 was requested, call out /25 nuance explicitly.
+    const note = hosts === 128
+      ? "Note: /25 has 128 total addresses but only 126 usable host IPs; /24 is the smallest that supports 128 usable hosts."
+      : undefined;
+    return { hosts, prefix, usable, total: size, note };
+  })();
+  if (subnetSizing) {
+    const text =
+      `SubnetSizing | required_hosts=${subnetSizing.hosts} | smallest_ipv4_prefix=/${subnetSizing.prefix} | usable_hosts=${subnetSizing.usable} | total_addresses=${subnetSizing.total}` +
+      (subnetSizing.note ? ` | note="${subnetSizing.note}"` : "");
+    emitFinalEvent(text, {
+      classification,
+      conversationState: "FOLLOWUP",
+      conversationContext: contextUpdate,
+    });
+    return { text };
+  }
+
+  // Handle high-risk confirmation gate (bound to pending action)
+  if (conversationPlan.decision === "ASK_CONFIRM") {
+    const pendingActionText = originalUserInput;
+    const pendingSummary = conversationPlan.pendingAction ?? pendingActionText;
+    const pendingRecord = buildPendingActionRecord(pendingActionText, pendingSummary);
+    const requiresId = classification.risk === "DESTRUCTIVE";
+    const confirmationPrompt = requiresId
+      ? `This is a destructive change. Reply with CONFIRM ${pendingRecord.id} to proceed.`
+      : `This is a high-risk change. Reply with CONFIRM to proceed.`;
+
+    emitFinalEvent(confirmationPrompt, {
+      confirmationRequired: true,
+      classification,
+      conversationState: conversationPlan.nextState,
+      pendingAction: pendingSummary,
+      conversationContext: {
+        ...contextUpdate,
+        // Keep the full original request so a later bare CONFIRM replays the real action.
+        pendingAction: pendingActionText,
+        pendingActionId: pendingRecord.id,
+        pendingActionDigest: pendingRecord.digest,
+        pendingActionCreatedAt: pendingRecord.createdAt,
+        pendingActionSummary: pendingRecord.summary,
+      },
+    });
+    return { text: confirmationPrompt };
+  }
+
+  // Handle clarification flow
+  if (conversationPlan.decision === "ASK_CLARIFY") {
+    // If we only know that the intent itself is ambiguous, ask for intent disambiguation
+    // rather than calling ask_missing (which is slot-oriented).
+    if (classification.missing.length === 1 && classification.missing[0] === "intent") {
+      const disambiguation =
+        "What do you want to do next — observe status, diagnose a problem, make a change, or get an explanation?";
+      emitFinalEvent(disambiguation, {
+        clarification: true,
+        needsResponse: true,
+        classification,
+        conversationState: conversationPlan.nextState,
+        conversationContext: contextUpdate,
+      });
+      return { text: disambiguation };
+    }
+
+    if (classification.missing.length > 0) {
+      let clarificationQuestion = "Could you clarify the missing details?";
+      try {
+        const toolResult = await executeToolCall(
+          {
+            toolName: "ask_missing",
+            parameters: {
+              missing: classification.missing,
+              intent: classification.intent,
+              context: `Input: ${originalUserInput}`,
+            },
+          },
+          tools,
+          { userId: session.userId, aclGroup: session.aclGroup }
+        );
+        const question = (toolResult as any)?.data?.question;
+        if (typeof question === "string" && question.trim().length > 0) {
+          clarificationQuestion = question.trim();
+        }
+      } catch (error: any) {
+        logger.warn("ask_missing tool failed, using fallback clarification", { error: error.message });
+      }
+
+      emitFinalEvent(clarificationQuestion, {
+        clarification: true,
+        needsResponse: true,
+        classification,
+        conversationState: conversationPlan.nextState,
+        conversationContext: contextUpdate,
+      });
+      return { text: clarificationQuestion };
+    }
+
+    if (routing.route === "clarification") {
+      const disambiguation =
+        "Are you asking to observe, diagnose, change, explain, or plan? Please specify.";
+      emitFinalEvent(disambiguation, {
+        clarification: true,
+        needsResponse: true,
+        classification,
+        conversationState: conversationPlan.nextState,
+        conversationContext: contextUpdate,
+      });
+      return { text: disambiguation };
+    }
+  }
   
   // Handle clarification requests (low confidence or genuinely ambiguous)
   // BUT: If we have domain metadata, try RAG first - it might have the answer
@@ -529,6 +854,7 @@ export async function runAgent(
           cleanedAnswer = await formatResponseForBot(cleanedAnswer, {
             userQuery: userInput,
             intentType,
+            mode: responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format RAG answer", { error: error.message });
@@ -568,6 +894,8 @@ export async function runAgent(
           ragAnswer: true,
           ragScore: ragPayload.sTotalScore,
           classification,
+          conversationState: postExecutionState,
+          conversationContext: finalContextUpdate,
         });
         return { text: cleanedAnswer };
       }
@@ -646,6 +974,8 @@ export async function runAgent(
       clarification: true, 
       needsResponse: true, 
       classification,
+      conversationState: conversationPlan.nextState,
+      conversationContext: contextUpdate,
       traceId: undefined, // Will be set if trace was recorded above
     });
     return { text: clarificationMessage };
@@ -658,6 +988,61 @@ export async function runAgent(
   
   if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
+
+    // Deterministic fast-path: create VM requests must include a node; we already extracted it.
+    // This avoids relying on the LLM to remember required action params (node is required by CreateVmSchema).
+    if (actionIntent.type === "create_vm") {
+      const node = (actionIntent as any).node as string | undefined;
+      const name = (actionIntent as any).name as string | undefined;
+      if (!node) {
+        // Shouldn't happen (detectActionIntent requires node), but keep a safe fallback.
+        const prompt = "Which node should I create the VM on? (e.g., yin, YANG, proxBig)";
+        emitFinalEvent(prompt, {
+          clarification: true,
+          needsResponse: true,
+          conversationState: "NEED_CLARIFICATION",
+          conversationContext: contextUpdate,
+        });
+        return { text: prompt };
+      }
+
+      emitStepEvent({ step: 1, maxSteps: 1, userInput, intent: "create_vm", tool: "action" });
+
+      const params: Record<string, any> = { node };
+      if (name && name.trim().length > 0) params.name = name.trim();
+      if (/\bdry\s*run\b/i.test(userInput) || /\bdryrun\b/i.test(userInput) || /\bpreview\b/i.test(userInput) || /\bplan\b/i.test(userInput)) {
+        params.dryRun = true;
+      }
+
+      const result = await executeToolCall(
+        {
+          toolName: "action",
+          parameters: {
+            action: "compute.create_vm",
+            params,
+          },
+        },
+        tools,
+        { userId: session.userId, aclGroup: session.aclGroup }
+      );
+
+      const data = (result as any)?.data;
+      const ok = (result as any)?.success === true || data?.success === true;
+      const message = data?.message || (result as any)?.message || (result as any)?.error || "Action completed.";
+      const vmId = data?.vmId || data?.vmid || data?.id;
+      const hostname = data?.hostname || data?.name;
+
+      const text = ok
+        ? `VMCreate | node=${node} | ${hostname ? `name=${hostname} | ` : ""}${vmId ? `vmid=${vmId} | ` : ""}message="${String(message).replace(/"/g, '\\"')}"`
+        : `Error | action=compute.create_vm | node=${node} | message="${String(message).replace(/"/g, '\\"')}"`;
+
+      emitFinalEvent(text, {
+        classification,
+        conversationState: postExecutionState,
+        conversationContext: finalContextUpdate,
+      });
+      return { text };
+    }
     
     // For VM-related actions, resolve VM details (node, vmid, type) before letting LLM proceed
     // This ensures the LLM has the correct parameters for write operations
@@ -720,13 +1105,19 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "exposure_analysis",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: exposureIntent.type } }],
+            mode: responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format exposure answer", { error: error.message });
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, exposureIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { intent: exposureIntent.type, traceId });
+        emitFinalEvent(formattedAnswer, { 
+          intent: exposureIntent.type,
+          traceId,
+          conversationState: postExecutionState,
+          conversationContext: finalContextUpdate,
+        });
         return { text: formattedAnswer };
       }
     }
@@ -762,13 +1153,19 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "compute_status",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: computeIntent.type } }],
+            mode: responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format compute answer", { error: error.message });
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, computeIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { intent: computeIntent.type, traceId });
+        emitFinalEvent(formattedAnswer, { 
+          intent: computeIntent.type,
+          traceId,
+          conversationState: postExecutionState,
+          conversationContext: finalContextUpdate,
+        });
         return { text: formattedAnswer };
       }
     }
@@ -789,13 +1186,19 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "firewall_rules",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }],
+            mode: responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format firewall answer", { error: error.message });
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, firewallIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { intent: firewallIntent.type, traceId });
+        emitFinalEvent(formattedAnswer, { 
+          intent: firewallIntent.type,
+          traceId,
+          conversationState: postExecutionState,
+          conversationContext: finalContextUpdate,
+        });
         return { text: formattedAnswer };
       }
     }
@@ -814,13 +1217,19 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "network_info",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }],
+            mode: responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format network answer", { error: error.message });
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, networkIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { intent: networkIntent.type, traceId });
+        emitFinalEvent(formattedAnswer, { 
+          intent: networkIntent.type,
+          traceId,
+          conversationState: postExecutionState,
+          conversationContext: finalContextUpdate,
+        });
         return { text: formattedAnswer };
       }
     }
@@ -942,6 +1351,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   } else {
     console.error(`[NOT ALL NODES] Query: "${userInput}"`);
   }
+
+  let confirmationAbort: { prompt: string; context: ConversationContext; state: ConversationState } | null = null;
 
   for (let step = 0; step < MAX_STEPS; step++) {
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
@@ -1352,6 +1763,47 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           vmid: typeof vmid === "number" ? vmid : undefined,
         };
 
+        const toolRisk = mapToolRiskToIntentRisk(getToolRisk(targetTool));
+        const derivedRisk = deriveToolCallRisk(toolName, parsedArgs);
+        const effectiveRisk = maxRisk(
+          classification.risk,
+          toolRisk,
+          derivedRisk ?? "READ"
+        );
+        const needsToolConfirmation = effectiveRisk === "WRITE_HIGH" || effectiveRisk === "DESTRUCTIVE";
+        const explicitConfirmationOk =
+          effectiveRisk === "DESTRUCTIVE"
+            ? (confirmation.confirmed && !!pendingActionId && confirmation.actionId === pendingActionId && !pendingActionExpired)
+            : (confirmation.confirmed && !pendingActionExpired);
+
+        if (needsToolConfirmation && !explicitConfirmationOk) {
+          const summary = summarizeToolCall(toolName, parsedArgs);
+          const pendingRecord = buildPendingActionRecord(summary, summary);
+          const prompt = effectiveRisk === "DESTRUCTIVE"
+            ? `This is a destructive change. Reply with CONFIRM ${pendingRecord.id} to proceed.`
+            : "This is a high-risk change. Reply with CONFIRM to proceed.";
+
+          confirmationAbort = {
+            prompt,
+            state: "AWAITING_CONFIRMATION",
+            context: {
+              pendingAction: summary,
+              pendingActionId: pendingRecord.id,
+              pendingActionDigest: pendingRecord.digest,
+              pendingActionCreatedAt: pendingRecord.createdAt,
+              pendingActionSummary: pendingRecord.summary,
+            },
+          };
+          reasoningStep.decisions.push({
+            type: "validation_failed",
+            description: "Tool execution blocked pending explicit confirmation",
+            metadata: { toolName, effectiveRisk },
+          });
+          break;
+        }
+
+        const requiresApproval = requiresConfirmation(targetTool) || needsToolConfirmation;
+
         // For proxmox_write operations, do a dry-run first to check if action is needed
         // This avoids prompting for confirmation when the VM is already in the desired state
         let result: ExecutionResult;
@@ -1374,7 +1826,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             result = dryRunResult;
           } else {
             // Action is needed, prompt for confirmation
-            if (requiresConfirmation(targetTool)) {
+            if (requiresApproval && !explicitConfirmationOk) {
               const approved = await confirmHighRisk({
                 toolName,
                 parameters: parsedArgs,
@@ -1399,7 +1851,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           }
         } else {
           // For other tools, prompt for confirmation if needed
-          if (requiresConfirmation(targetTool)) {
+          if (requiresApproval && !explicitConfirmationOk) {
             const approved = await confirmHighRisk({
               toolName,
               parameters: parsedArgs,
@@ -1650,6 +2102,20 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
       }
 
+      if (confirmationAbort) {
+        const mergedContext: ConversationContext = {
+          ...contextUpdate,
+          ...confirmationAbort.context,
+        };
+        emitFinalEvent(confirmationAbort.prompt, {
+          confirmationRequired: true,
+          classification,
+          conversationState: confirmationAbort.state,
+          conversationContext: mergedContext,
+        });
+        return { text: confirmationAbort.prompt };
+      }
+
       // Record this reasoning step
       reasoningSteps.push(reasoningStep);
       continue;
@@ -1694,10 +2160,18 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         );
         
         const intentType = detectResponseIntent(userInput, allToolCalls);
-        finalText = await formatResponseForBot(finalText, {
+        let enrichedText = finalText;
+        if (responseMode === "ASSISTIVE" || responseMode === "EXPLAINER") {
+          const movesContext = await buildBotMoveContext(finalText, classification.intent);
+          if (movesContext) {
+            enrichedText = `${movesContext}\n\n${finalText}`;
+          }
+        }
+        finalText = await formatResponseForBot(enrichedText, {
           userQuery: userInput,
           intentType,
           toolCalls: allToolCalls,
+          mode: responseMode,
         });
       } catch (error: any) {
         logger.warn("Failed to format final response", { error: error.message });
@@ -1728,7 +2202,13 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
-      emitFinalEvent(finalText, { totalSteps: step + 1, totalToolCalls, traceId });
+      emitFinalEvent(finalText, { 
+        totalSteps: step + 1,
+        totalToolCalls,
+        traceId,
+        conversationState: postExecutionState,
+        conversationContext: finalContextUpdate,
+      });
       
       return { text: finalText };
     }
@@ -1758,7 +2238,9 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   emitFinalEvent("Max reasoning depth reached. Please try a simpler query.", { 
     totalSteps: reasoningSteps.length, 
     totalToolCalls,
-    traceId 
+    traceId,
+    conversationState: conversationPlan.nextState,
+    conversationContext: contextUpdate,
   });
 
   return { text: "Max reasoning depth reached. Please try a simpler query." };

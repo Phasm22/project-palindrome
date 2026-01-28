@@ -152,6 +152,58 @@ export async function listVmsByNodeChain(
   return formatVmList("VMs on node " + finalNodeName + ":", allVms);
 }
 
+export async function listRunningVmsOnNodeChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  nodeName: string
+): Promise<string> {
+  const allText = await listVmsByNodeChain(tools, session, nodeName);
+
+  // If the list function returned a "no VMs" note, preserve it.
+  if (allText.startsWith("No VMs found")) {
+    return allText;
+  }
+
+  // Re-run the underlying calls to filter deterministically (avoid parsing formatted text).
+  const normalizedNode = nodeName.charAt(0).toUpperCase() + nodeName.slice(1).toLowerCase();
+  const finalNodeName = normalizedNode === "Proxbig" ? "proxBig" :
+                       normalizedNode === "Yang" ? "YANG" :
+                       normalizedNode === "Yin" ? "yin" : normalizedNode;
+
+  const [qemuResult, lxcResult] = await Promise.all([
+    executeToolCall(
+      {
+        toolName: "twin_query",
+        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "qemu" } },
+      },
+      tools,
+      session
+    ),
+    executeToolCall(
+      {
+        toolName: "twin_query",
+        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "lxc" } },
+      },
+      tools,
+      session
+    ),
+  ]);
+
+  if (qemuResult.error) throw new Error(qemuResult.error);
+  if (lxcResult.error) throw new Error(lxcResult.error);
+
+  const qemuVms = (qemuResult.data as any)?.data ?? [];
+  const lxcVms = (lxcResult.data as any)?.data ?? [];
+  const allVms = [...qemuVms, ...lxcVms];
+  const running = allVms.filter((vm: any) => String(vm?.state ?? "").toLowerCase() === "running");
+
+  if (!running.length) {
+    return `No running VMs found on node ${finalNodeName}.`;
+  }
+
+  return formatVmList(`Running VMs on node ${finalNodeName}:`, running);
+}
+
 export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolSession): Promise<string> {
   const result = await executeToolCall(
     {

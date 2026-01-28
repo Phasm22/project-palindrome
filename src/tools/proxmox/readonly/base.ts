@@ -16,10 +16,20 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
    */
   protected getApiConfig(): ProxmoxApiConfig {
     const url = process.env.PROXMOX_URL;
-    const tokenId = process.env.PROXMOX_TOKEN_ID;
+    const tokenId =
+      process.env.PROXMOX_TOKEN_ID ||
+      process.env.PROXMOX_API_TOKEN_ID ||
+      process.env.CLUSTER_TF_TOKEN_ID ||
+      process.env.PROXBIG_TF_TOKEN_ID;
     // Support node-specific token secrets (e.g., PROXBIG_TOKEN_SECRET) as fallback
     // Extract node name from URL if possible, or use default
-    let tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
+    let tokenSecret =
+      process.env.PROXMOX_TOKEN_SECRET ||
+      process.env.PROXMOX_API_TOKEN_SECRET ||
+      process.env.PROXMOX_CLUSTER_TF_SECRET ||
+      process.env.PROXBIG_TOKEN_SECRET ||
+      process.env.PROXBIG_TF_SECRET ||
+      process.env.PROXMOX_PROXBIG_TF_SECRET;
     
     // Try to find node-specific token secret based on URL hostname
     if (url) {
@@ -30,7 +40,14 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
         // IMPORTANT: If URL is an IP address, this will extract the first octet (e.g., "172")
         // which won't match node-specific secrets. Use hostname URLs for proper lookup.
         const nodeName = hostname.split('.')[0].toUpperCase();
-        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
+        // Try a few common patterns:
+        // - YIN_TOKEN_SECRET / YANG_TOKEN_SECRET / PROXBIG_TOKEN_SECRET
+        // - PROXMOX_YIN_TF_SECRET / PROXMOX_YANG_TF_SECRET (cluster node TF tokens)
+        // - PROXMOX_<NODE>_TOKEN_SECRET (future-proof)
+        const nodeSpecificSecret =
+          process.env[`${nodeName}_TOKEN_SECRET`] ||
+          process.env[`PROXMOX_${nodeName}_TF_SECRET`] ||
+          process.env[`PROXMOX_${nodeName}_TOKEN_SECRET`];
         if (nodeSpecificSecret) {
           logger.debug(`Using node-specific secret: ${nodeName}_TOKEN_SECRET (extracted from URL hostname: ${hostname})`);
           tokenSecret = nodeSpecificSecret;

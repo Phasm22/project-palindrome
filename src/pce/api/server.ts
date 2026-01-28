@@ -16,6 +16,7 @@ import { transformHybridContext } from "./context-transformer";
 import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
 import { IngestionScheduler } from "../scheduler/ingestion-scheduler";
+import { normalizeProxmoxResponse } from "../../tools/proxmox/readonly/normalization";
 
 type BunServer = ReturnType<typeof Bun.serve>;
 
@@ -629,13 +630,25 @@ export class PceApiServer {
     try {
       // Check if Proxmox environment variables are set
       const proxmoxUrl = process.env.PROXMOX_URL;
-      const proxmoxTokenId = process.env.PROXMOX_TOKEN_ID || process.env.PROXMOX_API_TOKEN_ID;
-      const proxmoxTokenSecret = process.env.PROXMOX_TOKEN_SECRET || process.env.PROXMOX_API_TOKEN_SECRET;
+      // Support both legacy API token vars and newer cluster TF token vars.
+      const proxmoxTokenId =
+        process.env.PROXMOX_TOKEN_ID ||
+        process.env.PROXMOX_API_TOKEN_ID ||
+        process.env.CLUSTER_TF_TOKEN_ID ||
+        process.env.PROXBIG_TF_TOKEN_ID;
+      const proxmoxTokenSecret =
+        process.env.PROXMOX_TOKEN_SECRET ||
+        process.env.PROXMOX_API_TOKEN_SECRET ||
+        process.env.PROXMOX_CLUSTER_TF_SECRET ||
+        process.env.PROXBIG_TOKEN_SECRET ||
+        process.env.PROXBIG_TF_SECRET ||
+        process.env.PROXMOX_PROXBIG_TF_SECRET;
 
       if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
         return this.jsonResponse(200, {
           nodes: [],
           vms: [],
+          lxc: [],
           alerts: [],
           message: "Proxmox not configured (missing environment variables)",
         });
@@ -645,12 +658,14 @@ export class PceApiServer {
       const { ProxmoxClient } = await import("../../tools/proxmox/client");
       const { ProxmoxReadOnlyTool } = await import("../../tools/proxmox/readonly/proxmox-readonly-tool");
 
-      // Create Proxmox client
+      const verifySsl = process.env.PROXMOX_VERIFY_SSL !== "false";
+
+      // Create Proxmox client (primary)
       const client = new ProxmoxClient({
         url: proxmoxUrl,
         tokenId: proxmoxTokenId,
         tokenSecret: proxmoxTokenSecret,
-        verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+        verifySsl,
       });
 
       const tool = new ProxmoxReadOnlyTool();
@@ -676,7 +691,149 @@ export class PceApiServer {
 
       const nodes = nodesResult.data?.nodes || [];
       const clusterStatus = clusterStatusResult.data || {};
-      const resources = resourcesResult.data?.resources || [];
+      const primaryResources = resourcesResult.data?.resources || [];
+
+      // Attempt to pull compute resources from other configured endpoints (yin/yang) if present.
+      // This helps when PROXMOX_URL points at an API that doesn't surface all LXCs due to token scoping.
+      const fetchExtraResources = async (): Promise<any[]> => {
+        const endpoints: Array<{ label: string; url?: string; tokenId?: string; tokenSecret?: string }> = [
+          {
+            label: "yin",
+            url: process.env.PROXMOX_YIN_URL,
+            tokenId:
+              process.env.PROXMOX_YIN_TF_TOKEN_ID ||
+              process.env.CLUSTER_TF_TOKEN_ID ||
+              process.env.PROXMOX_YIN_TOKEN_ID ||
+              process.env.PROXMOX_TOKEN_ID ||
+              process.env.PROXMOX_API_TOKEN_ID,
+            tokenSecret:
+              process.env.PROXMOX_YIN_TF_SECRET ||
+              process.env.YIN_TOKEN_SECRET ||
+              process.env.PROXMOX_CLUSTER_TF_SECRET ||
+              process.env.PROXMOX_TOKEN_SECRET ||
+              process.env.PROXMOX_API_TOKEN_SECRET,
+          },
+          {
+            label: "yang",
+            url: process.env.PROXMOX_YANG_URL,
+            tokenId:
+              process.env.PROXMOX_YANG_TF_TOKEN_ID ||
+              process.env.CLUSTER_TF_TOKEN_ID ||
+              process.env.PROXMOX_YANG_TOKEN_ID ||
+              process.env.PROXMOX_TOKEN_ID ||
+              process.env.PROXMOX_API_TOKEN_ID,
+            tokenSecret:
+              process.env.PROXMOX_YANG_TF_SECRET ||
+              process.env.YANG_TOKEN_SECRET ||
+              process.env.PROXMOX_CLUSTER_TF_SECRET ||
+              process.env.PROXMOX_TOKEN_SECRET ||
+              process.env.PROXMOX_API_TOKEN_SECRET,
+          },
+        ];
+
+        const primaryBase = proxmoxUrl?.replace(/\/api2\/json\/?$/, "").replace(/\/$/, "");
+        const seenBaseUrls = new Set<string>([primaryBase || ""]);
+        const combined: any[] = [];
+
+        for (const ep of endpoints) {
+          if (!ep.url || !ep.tokenId || !ep.tokenSecret) continue;
+          const base = ep.url.replace(/\/api2\/json\/?$/, "").replace(/\/$/, "");
+          if (seenBaseUrls.has(base)) continue;
+          seenBaseUrls.add(base);
+
+          try {
+            const altClient = new ProxmoxClient({
+              url: ep.url,
+              tokenId: ep.tokenId,
+              tokenSecret: ep.tokenSecret,
+              verifySsl,
+            });
+
+            // 1) Prefer /cluster/resources (single call, includes both qemu + lxc)
+            const clusterRes = await altClient.get("/cluster/resources");
+            const all = (clusterRes.data as any)?.data || [];
+            const filtered = Array.isArray(all) ? all.filter((r: any) => r?.type === "qemu" || r?.type === "lxc") : [];
+            if (filtered.length) {
+              combined.push(
+                ...filtered.map((resource: any) =>
+                  normalizeProxmoxResponse({
+                    id: resource.id,
+                    type: resource.type,
+                    node: resource.node,
+                    name: resource.name,
+                    status: resource.status,
+                    cpu: resource.cpu,
+                    mem: resource.mem,
+                    maxmem: resource.maxmem,
+                    maxdisk: resource.maxdisk,
+                    disk: resource.disk,
+                    uptime: resource.uptime,
+                    vmid: resource.vmid,
+                  })
+                )
+              );
+              continue;
+            }
+
+            // 2) Fallback: per-node LXC listing (some token scopes can see /nodes/*/lxc even if cluster resources is filtered)
+            const nodesRes = await altClient.get("/nodes");
+            const altNodes = Array.isArray((nodesRes.data as any)?.data) ? (nodesRes.data as any).data : [];
+            for (const n of altNodes) {
+              const nodeName = n?.node;
+              if (!nodeName) continue;
+              try {
+                const lxcRes = await altClient.get(`/nodes/${nodeName}/lxc`);
+                const lxcs = Array.isArray((lxcRes.data as any)?.data) ? (lxcRes.data as any).data : [];
+                combined.push(
+                  ...lxcs.map((ct: any) =>
+                    normalizeProxmoxResponse({
+                      id: ct.id ? `lxc/${ct.id}` : `lxc/${ct.vmid}`,
+                      type: "lxc",
+                      node: nodeName,
+                      name: ct.name,
+                      status: ct.status,
+                      cpu: ct.cpu,
+                      mem: ct.mem,
+                      maxmem: ct.maxmem,
+                      maxdisk: ct.maxdisk,
+                      disk: ct.disk,
+                      uptime: ct.uptime,
+                      vmid: ct.vmid,
+                    })
+                  )
+                );
+              } catch {
+                // ignore per-node failures
+              }
+            }
+          } catch {
+            // ignore alternative endpoint failures
+          }
+        }
+
+        return combined;
+      };
+
+      const extraResources = await fetchExtraResources();
+
+      // Merge primary + extra resources (dedupe by id)
+      const mergedResources = (() => {
+        const byId = new Map<string, any>();
+        const add = (arr: any[]) => {
+          for (const r of arr) {
+            const key = String(r?.id || `${r?.type || "unknown"}/${r?.vmid || "na"}/${r?.node || "na"}`);
+            if (!byId.has(key)) byId.set(key, r);
+          }
+        };
+        add(primaryResources);
+        add(extraResources);
+        return Array.from(byId.values());
+      })();
+
+      // Only count compute resources (qemu + lxc). cluster_resources can include nodes/storage too.
+      const computeResources = mergedResources.filter((r: any) => r?.type === "qemu" || r?.type === "lxc");
+      const vmResources = computeResources.filter((r: any) => r?.type === "qemu");
+      const lxcResources = computeResources.filter((r: any) => r?.type === "lxc");
 
       // Determine if this is a cluster or standalone node
       const isCluster = nodes.length > 1;
@@ -687,10 +844,14 @@ export class PceApiServer {
         quorum = clusterStatus.quorum;
       }
 
-      // Aggregate VM statistics
-      const runningVms = resources.filter((r: any) => r.status === "running");
-      const stoppedVms = resources.filter((r: any) => r.status === "stopped");
-      const totalVms = resources.length;
+      // Aggregate compute statistics
+      const runningVms = vmResources.filter((r: any) => r.status === "running");
+      const stoppedVms = vmResources.filter((r: any) => r.status === "stopped");
+      const totalVms = vmResources.length;
+
+      const runningLxc = lxcResources.filter((r: any) => r.status === "running");
+      const stoppedLxc = lxcResources.filter((r: any) => r.status === "stopped");
+      const totalLxc = lxcResources.length;
 
       // Aggregate node statistics
       const onlineNodes = nodes.filter((n: any) => n.status_normalized === "online" || n.status === "online");
@@ -715,7 +876,13 @@ export class PceApiServer {
           total: totalVms,
           running: runningVms.length,
           stopped: stoppedVms.length,
-          resources: resources.slice(0, 50), // Limit to first 50 for performance
+          resources: vmResources.slice(0, 50), // Limit to first 50 for performance
+        },
+        lxc: {
+          total: totalLxc,
+          running: runningLxc.length,
+          stopped: stoppedLxc.length,
+          resources: lxcResources.slice(0, 50),
         },
         alerts: [], // TODO: Implement alert detection
         timestamp: new Date().toISOString(),
@@ -1317,6 +1484,7 @@ export class PceApiServer {
         userId?: string;
         aclGroup?: string;
         sessionId?: string;
+        conversationId?: string;
       };
 
       if (!body.query) {
@@ -1341,6 +1509,9 @@ export class PceApiServer {
 
       // Load conversation history for context
       let conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
+      let conversationState = "IDLE";
+      let conversationContext = {};
+      let userPreferences = {};
       if (activeConversationId) {
         try {
           const messages = await this.chatHistoryStore.getHistory({
@@ -1352,9 +1523,17 @@ export class PceApiServer {
             role: msg.role,
             content: msg.content,
           }));
+          const conversation = await this.chatHistoryStore.getConversation(activeConversationId, userId);
+          conversationState = conversation?.state || "IDLE";
+          conversationContext = await this.chatHistoryStore.getConversationContext(activeConversationId);
         } catch (error: any) {
           pceLogger.warn("Failed to load conversation history", { error: error.message });
         }
+      }
+      try {
+        userPreferences = await this.chatHistoryStore.getUserPreferences(userId);
+      } catch (error: any) {
+        pceLogger.warn("Failed to load user preferences", { error: error.message });
       }
 
       // Save user message to chat history
@@ -1387,6 +1566,23 @@ export class PceApiServer {
               timestamp: new Date(event.timestamp),
               reasoningTraceId: event.data.traceId,
             });
+
+            if (event.data.conversationState) {
+              await this.chatHistoryStore.updateConversationState(
+                activeConversationId,
+                event.data.conversationState,
+                userId
+              );
+            }
+            if (event.data.conversationContext) {
+              await this.chatHistoryStore.setConversationContext(
+                activeConversationId,
+                event.data.conversationContext,
+                "policy_inference",
+                0.7,
+                userId
+              );
+            }
             
             // Auto-generate conversation title from first user message if still default
             const conv = await this.chatHistoryStore.getConversation(activeConversationId);
@@ -1417,6 +1613,10 @@ export class PceApiServer {
         aclGroup,
         ragBaseUrl: `http://localhost:${this.options.port}`,
         sessionId,
+        conversationId: activeConversationId,
+        conversationState,
+        conversationContext,
+        userPreferences,
         conversationHistory, // Pass history to agent
       }).catch((error: any) => {
         pceLogger.error("Agent execution error", { error: error.message, sessionId });

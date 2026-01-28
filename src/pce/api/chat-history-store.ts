@@ -1,5 +1,12 @@
 import { Database } from "bun:sqlite";
-import type { ACLGroup } from "../types";
+import type {
+  ACLGroup,
+  ConversationContext,
+  ConversationState,
+  UserPreferences,
+  VerbosityPreference,
+  MemoryUpdateSource
+} from "../types";
 import type { ApiHistoryEntry, ApiQueryResponse } from "./types";
 import { pceLogger } from "../utils/logger";
 import { mkdirSync } from "fs";
@@ -24,6 +31,7 @@ export interface Conversation {
   createdAt: Date;
   updatedAt: Date;
   messageCount: number;
+  state?: ConversationState;
 }
 
 export interface ChatHistoryFilters {
@@ -61,7 +69,8 @@ export class ChatHistoryStore {
         user_id TEXT NOT NULL,
         title TEXT NOT NULL,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        state TEXT
       );
       
       CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
@@ -113,6 +122,22 @@ export class ChatHistoryStore {
       }
     }
 
+    // Ensure conversation state column exists
+    try {
+      const convTableInfo = this.db.prepare("PRAGMA table_info(conversations)").all() as any[];
+      const hasState = convTableInfo.some(col => col.name === "state");
+      if (!hasState) {
+        pceLogger.info("Migrating conversations table: adding state column");
+        this.db.exec(`
+          ALTER TABLE conversations ADD COLUMN state TEXT;
+        `);
+      }
+    } catch (error: any) {
+      if (!error.message.includes("duplicate column")) {
+        pceLogger.error("Failed to add state column to conversations", { error: error.message });
+      }
+    }
+
     // Create remaining indexes
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_conversation_id ON chat_messages(conversation_id);
@@ -122,16 +147,101 @@ export class ChatHistoryStore {
       CREATE INDEX IF NOT EXISTS idx_user_timestamp ON chat_messages(user_id, timestamp);
     `);
 
-    // Create user preferences table for storing last active conversation
+    // Create user preferences table for storing last active conversation and prefs
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS user_preferences (
         user_id TEXT PRIMARY KEY,
         last_active_conversation_id TEXT,
+        safe_mode INTEGER,
+        default_env TEXT,
+        preferred_time_range TEXT,
+        verbosity TEXT,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY (last_active_conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
       );
       
       CREATE INDEX IF NOT EXISTS idx_user_preferences_user_id ON user_preferences(user_id);
+    `);
+
+    // Ensure user preferences columns exist
+    try {
+      const prefInfo = this.db.prepare("PRAGMA table_info(user_preferences)").all() as any[];
+      const hasSafeMode = prefInfo.some(col => col.name === "safe_mode");
+      const hasDefaultEnv = prefInfo.some(col => col.name === "default_env");
+      const hasPreferredTimeRange = prefInfo.some(col => col.name === "preferred_time_range");
+      const hasVerbosity = prefInfo.some(col => col.name === "verbosity");
+
+      if (!hasSafeMode || !hasDefaultEnv || !hasPreferredTimeRange || !hasVerbosity) {
+        pceLogger.info("Migrating user_preferences table: adding preference columns");
+        if (!hasSafeMode) this.db.exec("ALTER TABLE user_preferences ADD COLUMN safe_mode INTEGER;");
+        if (!hasDefaultEnv) this.db.exec("ALTER TABLE user_preferences ADD COLUMN default_env TEXT;");
+        if (!hasPreferredTimeRange) this.db.exec("ALTER TABLE user_preferences ADD COLUMN preferred_time_range TEXT;");
+        if (!hasVerbosity) this.db.exec("ALTER TABLE user_preferences ADD COLUMN verbosity TEXT;");
+      }
+    } catch (error: any) {
+      if (!error.message.includes("duplicate column")) {
+        pceLogger.error("Failed to add preference columns to user_preferences", { error: error.message });
+      }
+    }
+
+    // Create conversation context table for per-conversation memory
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_context (
+        conversation_id TEXT PRIMARY KEY,
+        active_host TEXT,
+        active_service TEXT,
+        last_incident_signature TEXT,
+        pending_action TEXT,
+        pending_action_id TEXT,
+        pending_action_digest TEXT,
+        pending_action_created_at INTEGER,
+        pending_action_summary TEXT,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_conversation_context_conversation_id ON conversation_context(conversation_id);
+    `);
+
+    // Ensure conversation_context columns exist (for backward compatibility)
+    try {
+      const ctxInfo = this.db.prepare("PRAGMA table_info(conversation_context)").all() as any[];
+      const columnExists = (name: string) => ctxInfo.some(col => col.name === name);
+      if (!columnExists("pending_action_id")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_id TEXT;");
+      }
+      if (!columnExists("pending_action_digest")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_digest TEXT;");
+      }
+      if (!columnExists("pending_action_created_at")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_created_at INTEGER;");
+      }
+      if (!columnExists("pending_action_summary")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_summary TEXT;");
+      }
+    } catch (error: any) {
+      if (!error.message.includes("duplicate column")) {
+        pceLogger.error("Failed to migrate conversation_context columns", { error: error.message });
+      }
+    }
+
+    // Create memory events table for provenance
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_events (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT,
+        user_id TEXT,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        source TEXT NOT NULL,
+        confidence REAL,
+        timestamp INTEGER NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memory_events_conversation_id ON memory_events(conversation_id);
+      CREATE INDEX IF NOT EXISTS idx_memory_events_user_id ON memory_events(user_id);
+      CREATE INDEX IF NOT EXISTS idx_memory_events_timestamp ON memory_events(timestamp);
     `);
   }
 
@@ -178,18 +288,18 @@ export class ChatHistoryStore {
   /**
    * Create a new conversation
    */
-  async createConversation(userId: string, title?: string): Promise<string> {
+  async createConversation(userId: string, title?: string, state: ConversationState = "IDLE"): Promise<string> {
     const id = crypto.randomUUID();
     const now = Date.now();
     const conversationTitle = title || `Chat ${new Date(now).toLocaleString()}`;
     
     const stmt = this.db.prepare(`
-      INSERT INTO conversations (id, user_id, title, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO conversations (id, user_id, title, created_at, updated_at, state)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     
     try {
-      stmt.run(id, userId, conversationTitle, now, now);
+      stmt.run(id, userId, conversationTitle, now, now, state);
       return id;
     } catch (error: any) {
       pceLogger.error("Failed to create conversation", { error: error.message, userId });
@@ -209,6 +319,7 @@ export class ChatHistoryStore {
           c.title,
           c.created_at,
           c.updated_at,
+          c.state,
           COALESCE(COUNT(m.id), 0) as message_count
         FROM conversations c
         LEFT JOIN chat_messages m ON c.id = m.conversation_id
@@ -227,6 +338,7 @@ export class ChatHistoryStore {
         createdAt: new Date(row.created_at),
         updatedAt: new Date(row.updated_at),
         messageCount: Number(row.message_count) || 0,
+        state: (row.state as ConversationState) || "IDLE",
       }));
     } catch (error: any) {
       pceLogger.error("Failed to get conversations", { error: error.message, userId });
@@ -246,6 +358,7 @@ export class ChatHistoryStore {
           c.title,
           c.created_at,
           c.updated_at,
+          c.state,
           COUNT(m.id) as message_count
         FROM conversations c
         LEFT JOIN chat_messages m ON c.id = m.conversation_id
@@ -272,6 +385,7 @@ export class ChatHistoryStore {
         createdAt: new Date(row.created_at),
         updatedAt: new Date(row.updated_at),
         messageCount: row.message_count || 0,
+        state: (row.state as ConversationState) || "IDLE",
       };
     } catch (error: any) {
       pceLogger.error("Failed to get conversation", { error: error.message, conversationId });
@@ -297,6 +411,28 @@ export class ChatHistoryStore {
       return (result.changes || 0) > 0;
     } catch (error: any) {
       pceLogger.error("Failed to update conversation title", { error: error.message, conversationId });
+      return false;
+    }
+  }
+
+  /**
+   * Update conversation state
+   */
+  async updateConversationState(conversationId: string, state: ConversationState, userId?: string): Promise<boolean> {
+    try {
+      let query = "UPDATE conversations SET state = ?, updated_at = ? WHERE id = ?";
+      const params: any[] = [state, Date.now(), conversationId];
+
+      if (userId) {
+        query += " AND user_id = ?";
+        params.push(userId);
+      }
+
+      const stmt = this.db.prepare(query);
+      const result = stmt.run(...params);
+      return (result.changes || 0) > 0;
+    } catch (error: any) {
+      pceLogger.error("Failed to update conversation state", { error: error.message, conversationId, state });
       return false;
     }
   }
@@ -548,6 +684,244 @@ export class ChatHistoryStore {
     } catch (error: any) {
       pceLogger.error("Failed to set last active conversation", { error: error.message, userId, conversationId });
       return false;
+    }
+  }
+
+  /**
+   * Get structured user preferences
+   */
+  async getUserPreferences(userId: string): Promise<UserPreferences> {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT safe_mode, default_env, preferred_time_range, verbosity
+        FROM user_preferences
+        WHERE user_id = ?
+      `);
+      const row = stmt.get(userId) as {
+        safe_mode?: number | null;
+        default_env?: string | null;
+        preferred_time_range?: string | null;
+        verbosity?: VerbosityPreference | null;
+      } | undefined;
+
+      if (!row) return {};
+
+      return {
+        safeMode: row.safe_mode === null || row.safe_mode === undefined ? undefined : row.safe_mode === 1,
+        defaultEnv: row.default_env || undefined,
+        preferredTimeRange: row.preferred_time_range || undefined,
+        verbosity: row.verbosity || undefined,
+      };
+    } catch (error: any) {
+      pceLogger.error("Failed to get user preferences", { error: error.message, userId });
+      return {};
+    }
+  }
+
+  /**
+   * Upsert user preferences (partial updates supported)
+   */
+  async setUserPreferences(userId: string, prefs: UserPreferences): Promise<boolean> {
+    try {
+      const now = Date.now();
+      const stmt = this.db.prepare(`
+        INSERT INTO user_preferences (
+          user_id,
+          safe_mode,
+          default_env,
+          preferred_time_range,
+          verbosity,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          safe_mode = COALESCE(excluded.safe_mode, user_preferences.safe_mode),
+          default_env = COALESCE(excluded.default_env, user_preferences.default_env),
+          preferred_time_range = COALESCE(excluded.preferred_time_range, user_preferences.preferred_time_range),
+          verbosity = COALESCE(excluded.verbosity, user_preferences.verbosity),
+          updated_at = excluded.updated_at
+      `);
+
+      const safeModeValue = prefs.safeMode === undefined ? null : prefs.safeMode ? 1 : 0;
+      stmt.run(
+        userId,
+        safeModeValue,
+        prefs.defaultEnv ?? null,
+        prefs.preferredTimeRange ?? null,
+        prefs.verbosity ?? null,
+        now
+      );
+      return true;
+    } catch (error: any) {
+      pceLogger.error("Failed to set user preferences", { error: error.message, userId });
+      return false;
+    }
+  }
+
+  /**
+   * Get conversation context memory
+   */
+  async getConversationContext(conversationId: string): Promise<ConversationContext> {
+    try {
+      const stmt = this.db.prepare(`
+        SELECT active_host, active_service, last_incident_signature, pending_action,
+               pending_action_id, pending_action_digest, pending_action_created_at, pending_action_summary
+        FROM conversation_context
+        WHERE conversation_id = ?
+      `);
+      const row = stmt.get(conversationId) as {
+        active_host?: string | null;
+        active_service?: string | null;
+        last_incident_signature?: string | null;
+        pending_action?: string | null;
+        pending_action_id?: string | null;
+        pending_action_digest?: string | null;
+        pending_action_created_at?: number | null;
+        pending_action_summary?: string | null;
+      } | undefined;
+
+      if (!row) return {};
+
+      return {
+        activeHost: row.active_host || undefined,
+        activeService: row.active_service || undefined,
+        lastIncidentSignature: row.last_incident_signature || undefined,
+        pendingAction: row.pending_action || undefined,
+        pendingActionId: row.pending_action_id || undefined,
+        pendingActionDigest: row.pending_action_digest || undefined,
+        pendingActionCreatedAt: row.pending_action_created_at || undefined,
+        pendingActionSummary: row.pending_action_summary || undefined,
+      };
+    } catch (error: any) {
+      pceLogger.error("Failed to get conversation context", { error: error.message, conversationId });
+      return {};
+    }
+  }
+
+  /**
+   * Upsert conversation context memory (partial updates supported)
+   * Applies allowlist + provenance logging.
+   */
+  async setConversationContext(
+    conversationId: string,
+    context: ConversationContext,
+    source: MemoryUpdateSource,
+    confidence: number,
+    userId?: string
+  ): Promise<boolean> {
+    const allowedSources: MemoryUpdateSource[] = ["user_explicit", "policy_inference", "tool_verified"];
+    if (!allowedSources.includes(source)) {
+      pceLogger.warn("Memory update blocked due to unknown source", { source, conversationId });
+      return false;
+    }
+
+    const allowedKeys: Array<keyof ConversationContext> = [
+      "activeHost",
+      "activeService",
+      "lastIncidentSignature",
+      "pendingAction",
+      "pendingActionId",
+      "pendingActionDigest",
+      "pendingActionCreatedAt",
+      "pendingActionSummary",
+    ];
+
+    const filtered: ConversationContext = {};
+    for (const key of allowedKeys) {
+      if (context[key] !== undefined) {
+        filtered[key] = context[key];
+      }
+    }
+
+    if (Object.keys(filtered).length === 0) {
+      return true;
+    }
+
+    try {
+      const now = Date.now();
+      const stmt = this.db.prepare(`
+        INSERT INTO conversation_context (
+          conversation_id,
+          active_host,
+          active_service,
+          last_incident_signature,
+          pending_action,
+          pending_action_id,
+          pending_action_digest,
+          pending_action_created_at,
+          pending_action_summary,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(conversation_id) DO UPDATE SET
+          active_host = COALESCE(excluded.active_host, conversation_context.active_host),
+          active_service = COALESCE(excluded.active_service, conversation_context.active_service),
+          last_incident_signature = COALESCE(excluded.last_incident_signature, conversation_context.last_incident_signature),
+          pending_action = COALESCE(excluded.pending_action, conversation_context.pending_action),
+          pending_action_id = COALESCE(excluded.pending_action_id, conversation_context.pending_action_id),
+          pending_action_digest = COALESCE(excluded.pending_action_digest, conversation_context.pending_action_digest),
+          pending_action_created_at = COALESCE(excluded.pending_action_created_at, conversation_context.pending_action_created_at),
+          pending_action_summary = COALESCE(excluded.pending_action_summary, conversation_context.pending_action_summary),
+          updated_at = excluded.updated_at
+      `);
+
+      stmt.run(
+        conversationId,
+        filtered.activeHost ?? null,
+        filtered.activeService ?? null,
+        filtered.lastIncidentSignature ?? null,
+        filtered.pendingAction ?? null,
+        filtered.pendingActionId ?? null,
+        filtered.pendingActionDigest ?? null,
+        filtered.pendingActionCreatedAt ?? null,
+        filtered.pendingActionSummary ?? null,
+        now
+      );
+
+      for (const [key, value] of Object.entries(filtered)) {
+        await this.recordMemoryEvent({
+          conversationId,
+          userId,
+          key,
+          value,
+          source,
+          confidence,
+        });
+      }
+
+      return true;
+    } catch (error: any) {
+      pceLogger.error("Failed to set conversation context", { error: error.message, conversationId });
+      return false;
+    }
+  }
+
+  private async recordMemoryEvent(event: {
+    conversationId?: string;
+    userId?: string;
+    key: string;
+    value: any;
+    source: MemoryUpdateSource;
+    confidence: number;
+  }): Promise<void> {
+    try {
+      const id = crypto.randomUUID();
+      const stmt = this.db.prepare(`
+        INSERT INTO memory_events (id, conversation_id, user_id, key, value, source, confidence, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run(
+        id,
+        event.conversationId ?? null,
+        event.userId ?? null,
+        event.key,
+        typeof event.value === "string" ? event.value : JSON.stringify(event.value),
+        event.source,
+        event.confidence,
+        Date.now()
+      );
+    } catch (error: any) {
+      pceLogger.warn("Failed to record memory event", { error: error.message });
     }
   }
 

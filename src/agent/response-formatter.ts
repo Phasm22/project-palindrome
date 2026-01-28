@@ -29,21 +29,82 @@ export interface FormatContext {
   intentType?: string;
   toolCalls?: Array<{ toolName: string; parameters?: Record<string, any> }>;
   rawData?: any; // Optional raw data from tools for context
+  mode?: ResponseMode;
 }
 
+export type ResponseMode = "TERSE_DATA" | "ASSISTIVE" | "EXPLAINER";
+
+const MODE_SYSTEM_PROMPTS: Record<ResponseMode, string> = {
+  TERSE_DATA: `You are a response formatter that transforms verbose agent responses into structured, data-oriented formats.
+
+Your goal is to make responses more "bot-like" - concise, structured, and focused on the data.
+
+Guidelines:
+1. Remove unnecessary pleasantries, explanations, and narrative text
+2. Structure data in consistent formats:
+   - Firewall rules: "ACTION | dir=direction | src=source | dst=destination | proto=protocol | if=interface"
+   - Definitions: "Definition | term=<term> | meaning=\"...\" | context=\"...\""
+   - VM/container lists: Structured lists with key metrics (name, status, resources)
+   - Network info: Tabular or pipe-separated formats
+   - Status queries: Direct answers with key metrics
+3. Use pipe separators (|) for structured data lists
+4. Keep only essential information
+5. If the response is already well-formatted, return it as-is
+6. Preserve any structured data formats that are already present
+7. Do NOT add explanations or context - just the data
+
+Example transformations:
+- "The firewall has the following rules: BLOCK rule for incoming traffic from 192.168.71.5" 
+  → "Firewall Rules\nBLOCK | dir=in | src=192.168.71.5 | dst=any"
+  
+- "VM 101 is running and has 14.36 GB of memory used out of 16 GB total"
+  → "VM 101\nStatus: running\nMemory: 14.36 GB / 16 GB"
+
+- "Here are the nodes in the cluster: prox_big, yin, yang"
+  → "Cluster Nodes\n- prox_big\n- yin\n- yang"`,
+  ASSISTIVE: `You are a concise assistant formatter. Turn tool-heavy responses into a helpful, structured answer.
+
+Format:
+Answer: 1 sentence that restates the result.
+Evidence: 2-5 short bullets with the strongest signals or facts.
+Next steps: 1-3 short bullets (only if relevant).
+
+Guidelines:
+1. Keep it succinct and action-oriented
+2. Avoid long narratives or speculation
+3. If evidence is thin, say "Evidence: Not available"
+4. If no next steps are needed, omit the Next steps section
+5. If Intent is CHAT_SOCIAL, respond naturally in 1-2 sentences and omit sections`,
+  EXPLAINER: `You are a teach-back formatter. Explain the result and provide a short runbook-style guide.
+
+Format:
+Answer: 1-2 sentences.
+Why this matters: 1-2 sentences.
+Runbook: 3-6 short steps, imperative verbs.
+
+Guidelines:
+1. Be direct and educational
+2. Avoid jargon when possible, but keep technical accuracy
+3. Keep it short; do not ramble
+4. If a runbook is not applicable, provide 2-3 checks instead`,
+};
+
 /**
- * Format response using a quick LLM call to make it more structured and data-oriented
- * 
- * This transforms verbose responses into concise, bot-like formats:
- * - Removes unnecessary pleasantries and explanations
- * - Structures data in a consistent format
- * - Uses pipe-separated values for lists (like firewall rules)
- * - Focuses on the data, not the narrative
+ * Format response using a quick LLM call based on response mode.
+ *
+ * Modes:
+ * - TERSE_DATA: data-oriented, compact formatting
+ * - ASSISTIVE: short narrative with evidence + next steps
+ * - EXPLAINER: teach-back with runbook-style steps
  */
 export async function formatResponseForBot(
   rawResponse: string,
   context: FormatContext
 ): Promise<string> {
+  if (!context.mode) {
+    return rawResponse;
+  }
+
   // Skip formatting if disabled
   if (process.env.DISABLE_RESPONSE_FORMATTING === "true") {
     return rawResponse;
@@ -80,32 +141,7 @@ export async function formatResponseForBot(
       intentContext = `Intent: ${context.intentType}`;
     }
 
-    const systemPrompt = `You are a response formatter that transforms verbose agent responses into structured, data-oriented formats.
-
-Your goal is to make responses more "bot-like" - concise, structured, and focused on the data.
-
-Guidelines:
-1. Remove unnecessary pleasantries, explanations, and narrative text
-2. Structure data in consistent formats:
-   - Firewall rules: "ACTION | dir=direction | src=source | dst=destination | proto=protocol | if=interface"
-   - VM/container lists: Structured lists with key metrics (name, status, resources)
-   - Network info: Tabular or pipe-separated formats
-   - Status queries: Direct answers with key metrics
-3. Use pipe separators (|) for structured data lists
-4. Keep only essential information
-5. If the response is already well-formatted, return it as-is
-6. Preserve any structured data formats that are already present
-7. Do NOT add explanations or context - just the data
-
-Example transformations:
-- "The firewall has the following rules: BLOCK rule for incoming traffic from 192.168.71.5" 
-  → "Firewall Rules\nBLOCK | dir=in | src=192.168.71.5 | dst=any"
-  
-- "VM 101 is running and has 14.36 GB of memory used out of 16 GB total"
-  → "VM 101\nStatus: running\nMemory: 14.36 GB / 16 GB"
-
-- "Here are the nodes in the cluster: prox_big, yin, yang"
-  → "Cluster Nodes\n- prox_big\n- yin\n- yang"`;
+    const systemPrompt = MODE_SYSTEM_PROMPTS[context.mode];
 
     const userPrompt = `Original response to format:
 ${rawResponse}
@@ -131,6 +167,7 @@ Format this response in a structured, data-oriented style. Return only the forma
       originalLength: rawResponse.length,
       formattedLength: formatted.length,
       intentType: context.intentType,
+      mode: context.mode,
     });
 
     return formatted;

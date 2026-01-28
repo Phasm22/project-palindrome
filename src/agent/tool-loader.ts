@@ -11,9 +11,15 @@ import { SSHTool } from "../tools/SSHTool";
 import { MCPOpnsenseTool } from "../tools/MCPOpnsenseTool";
 import { TwinQueryTool } from "../tools/TwinQueryTool";
 import { ActionTool } from "../tools/ActionTool";
+import { SummarizeObservationsTool } from "../tools/SummarizeObservationsTool";
+import { NextStepsTool } from "../tools/NextStepsTool";
+import { AskMissingTool } from "../tools/AskMissingTool";
 
 export function loadTools(): BaseTool[] {
   return [
+    new SummarizeObservationsTool(),
+    new NextStepsTool(),
+    new AskMissingTool(),
     new RunDiagnosticTool(),
     new InfrastructureDiagnosticTool(),
     new LookupUserProfileTool(),

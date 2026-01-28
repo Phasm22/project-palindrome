@@ -51,7 +51,7 @@ export enum ConfidenceLevel {
  * - Regular queries: 0.30 (permissive, informational)
  * - Regular actions: 0.50 (moderate, non-destructive)
  * - Destructive actions: 0.70 (strict, irreversible)
- * - CHAT: 0.30 (conversational, flexible)
+ * - CHAT_SOCIAL/CHAT_REASONING: 0.30 (conversational, flexible)
  */
 export function getConfidenceThreshold(classification: IntentClassification): number {
   const { type, metadata } = classification;
@@ -77,7 +77,7 @@ export function getConfidenceThreshold(classification: IntentClassification): nu
   }
   
   // CHAT is flexible
-  if (type === "CHAT") {
+  if (type === "CHAT_SOCIAL" || type === "CHAT_REASONING") {
     return 0.30;
   }
   
@@ -181,7 +181,8 @@ function routeWithValidation(
     case "QUERY":
       return routeQueryIntent(userInput, classification, requiresValidation);
     
-    case "CHAT":
+    case "CHAT_SOCIAL":
+    case "CHAT_REASONING":
       return {
         route: "llm_reasoning",
         confidence: classification.confidence,

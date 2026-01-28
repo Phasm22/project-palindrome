@@ -38,6 +38,19 @@ const computeQueries = [
   "describe the cluster",
 ];
 
+const socialChat = [
+  "hello",
+  "thanks",
+  "good morning",
+  "bye",
+];
+
+const reasoningChat = [
+  "explain how the firewall works",
+  "why is the node overheating",
+  "plan the next steps for cluster maintenance",
+];
+
 console.log("=== Temperature Query Classification ===");
 for (const query of temperatureQueries) {
   const result = classifyIntent(query);
@@ -62,6 +75,23 @@ for (const query of computeQueries) {
   console.log(`"${query}"`);
   console.log(`  → ${result.type} (confidence: ${result.confidence.toFixed(2)})`);
   console.log(`  → Domain: ${result.metadata?.domain}, QueryType: ${result.metadata?.queryType}`);
+  console.log();
+}
+
+console.log("\n=== Social Chat Classification ===");
+for (const query of socialChat) {
+  const result = classifyIntent(query);
+  console.log(`"${query}"`);
+  console.log(`  → ${result.type} (confidence: ${result.confidence.toFixed(2)})`);
+  console.log();
+}
+
+console.log("\n=== Reasoning Chat Classification ===");
+for (const query of reasoningChat) {
+  const result = classifyIntent(query);
+  console.log(`"${query}"`);
+  console.log(`  → ${result.type} (confidence: ${result.confidence.toFixed(2)})`);
+  console.log(`  → Risk: ${result.risk}, Missing: ${result.missing.join(", ") || "none"}`);
   console.log();
 }
 

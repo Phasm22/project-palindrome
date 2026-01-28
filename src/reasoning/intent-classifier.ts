@@ -1,3 +1,5 @@
+import { getKnownEntities } from "./clarification";
+
 /**
  * Probabilistic Intent Classifier
  * 
@@ -13,12 +15,37 @@
 export type IntentType = 
   | "QUERY"           // Informational queries (temperature, status, list, describe)
   | "ACTION"          // Mutating operations (create, destroy, install, configure)
-  | "CHAT"            // Conversational/ambiguous (needs LLM reasoning)
+  | "CHAT_SOCIAL"     // Social/short chat (hello, thanks)
+  | "CHAT_REASONING"  // Ambiguous problem solving / explanation
   | "CLARIFICATION";  // Genuinely ambiguous (needs user input)
+
+export type RiskLevel = "READ" | "WRITE_LOW" | "WRITE_HIGH" | "DESTRUCTIVE";
+
+export interface IntentEntities {
+  hosts: string[];
+  services: string[];
+  resourceIds: string[];
+}
+
+export interface IntentScope {
+  env?: string;
+  timeRange?: string;
+}
+
+export interface IntentOperation {
+  type?: string;
+  verbs: string[];
+}
 
 export interface IntentClassification {
   type: IntentType;
+  intent: IntentType;
   confidence: number; // 0-1
+  entities: IntentEntities;
+  scope: IntentScope;
+  operation: IntentOperation;
+  risk: RiskLevel;
+  missing: string[];
   metadata?: {
     domain?: "compute" | "network" | "firewall" | "metrics" | "general";
     actionType?: string;
@@ -83,15 +110,31 @@ const INTENT_ARCHETYPES: Record<IntentType, string[]> = {
     "assign vlan",
     "put vm in vlan",
   ],
-  CHAT: [
+  CHAT_SOCIAL: [
     "hello",
+    "hi",
+    "hey",
     "thanks",
+    "thank you",
+    "good morning",
+    "good evening",
+    "bye",
+  ],
+  CHAT_REASONING: [
     "help me",
     "can you",
     "is it possible",
     "explain",
     "how does",
     "what if",
+    "why is",
+    "plan",
+    "roadmap",
+    "i need a subnet for 128 hosts",
+    "subnet big enough for 128 hosts",
+    "what subnet size do i need",
+    "how many hosts in a /24",
+    "cidr for 128 hosts",
   ],
   CLARIFICATION: [
     // This is for genuinely ambiguous cases - usually empty
@@ -165,7 +208,8 @@ export function classifyIntent(userInput: string): IntentClassification {
   const scores: Record<IntentType, number> = {
     QUERY: 0,
     ACTION: 0,
-    CHAT: 0,
+    CHAT_SOCIAL: 0,
+    CHAT_REASONING: 0,
     CLARIFICATION: 0,
   };
   
@@ -185,7 +229,7 @@ export function classifyIntent(userInput: string): IntentClassification {
   }
   
   // Find the highest scoring intent
-  let bestIntent: IntentType = "CHAT"; // Default fallback
+  let bestIntent: IntentType = "CHAT_REASONING"; // Default fallback
   let bestScore = 0;
   
   for (const [intentType, score] of Object.entries(scores)) {
@@ -202,9 +246,18 @@ export function classifyIntent(userInput: string): IntentClassification {
   
   // If max score is low and scores are close together, it's ambiguous
   if (maxScore < 0.3 && (maxScore - avgScore) < 0.1) {
+    const entities = extractEntities(normalized);
+    const scope = extractScope(normalized);
+    const operation = extractOperation(normalized);
     return {
       type: "CLARIFICATION",
+      intent: "CLARIFICATION",
       confidence: maxScore,
+      entities,
+      scope,
+      operation,
+      risk: "READ",
+      missing: ["intent"],
     };
   }
   
@@ -265,9 +318,21 @@ export function classifyIntent(userInput: string): IntentClassification {
     }
   }
   
+  const entities = extractEntities(normalized);
+  const scope = extractScope(normalized);
+  const operation = extractOperation(normalized, metadata);
+  const risk = determineRisk(bestIntent, metadata?.actionType, operation.verbs);
+  const missing = determineMissing(bestIntent, entities, metadata);
+
   return {
     type: bestIntent,
+    intent: bestIntent,
     confidence: bestScore,
+    entities,
+    scope,
+    operation,
+    risk,
+    missing,
     metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
   };
 }
@@ -296,5 +361,162 @@ export function isConfidentClassification(classification: IntentClassification):
   }
   // ACTION and CHAT need higher confidence
   return classification.confidence >= 0.3 && classification.type !== "CLARIFICATION";
+}
+
+function extractEntities(input: string): IntentEntities {
+  const entities: IntentEntities = { hosts: [], services: [], resourceIds: [] };
+  const lower = input.toLowerCase();
+
+  try {
+    const known = getKnownEntities();
+    for (const node of known.nodes ?? []) {
+      const nodeLower = node.toLowerCase();
+      if (nodeLower && new RegExp(`\\b${escapeRegex(nodeLower)}\\b`).test(lower)) {
+        entities.hosts.push(node);
+      }
+    }
+    for (const vm of known.vms ?? []) {
+      const nameLower = (vm.name || "").toLowerCase();
+      if (nameLower && new RegExp(`\\b${escapeRegex(nameLower)}\\b`).test(lower)) {
+        entities.resourceIds.push(String(vm.vmid));
+        entities.hosts.push(vm.node);
+      }
+    }
+  } catch {
+    // Best-effort only; don't fail classification if entity list isn't available.
+  }
+
+  const serviceKeywords = [
+    "opnsense",
+    "proxmox",
+    "grafana",
+    "prometheus",
+    "pihole",
+    "ssh",
+    "docker",
+    "nginx",
+  ];
+  for (const service of serviceKeywords) {
+    if (lower.includes(service)) {
+      entities.services.push(service);
+    }
+  }
+
+  const idMatches = lower.match(/\b(vm|vmid|ct|container)[-\s]?(\d{1,6})\b/g);
+  if (idMatches) {
+    for (const match of idMatches) {
+      const parts = match.split(/[-\s]/);
+      const id = parts[parts.length - 1];
+      if (id && !entities.resourceIds.includes(id)) {
+        entities.resourceIds.push(id);
+      }
+    }
+  }
+
+  entities.hosts = Array.from(new Set(entities.hosts));
+  entities.services = Array.from(new Set(entities.services));
+  entities.resourceIds = Array.from(new Set(entities.resourceIds));
+
+  return entities;
+}
+
+function extractScope(input: string): IntentScope {
+  const scope: IntentScope = {};
+  const lower = input.toLowerCase();
+
+  if (/\b(prod|production)\b/.test(lower)) scope.env = "prod";
+  else if (/\b(staging)\b/.test(lower)) scope.env = "staging";
+  else if (/\b(dev|development)\b/.test(lower)) scope.env = "dev";
+  else if (/\b(lab)\b/.test(lower)) scope.env = "lab";
+
+  const timeRangeMatch =
+    lower.match(/\b(last|past)\s+(\d+)\s*(m|h|d|w|minute|minutes|hour|hours|day|days|week|weeks)\b/) ||
+    lower.match(/\b(\d+)\s*(m|h|d|w)\b/);
+  if (timeRangeMatch) {
+    const num = timeRangeMatch.length >= 4 ? timeRangeMatch[2] : timeRangeMatch[1];
+    const unit = timeRangeMatch.length >= 4 ? timeRangeMatch[3] : timeRangeMatch[2];
+    if (num && unit) {
+      const unitShort = unit.startsWith("m") ? "m" : unit.startsWith("h") ? "h" : unit.startsWith("d") ? "d" : "w";
+      scope.timeRange = `${num}${unitShort}`;
+    }
+  } else if (/\b(today)\b/.test(lower)) {
+    scope.timeRange = "today";
+  } else if (/\b(yesterday)\b/.test(lower)) {
+    scope.timeRange = "yesterday";
+  }
+
+  return scope;
+}
+
+function extractOperation(input: string, metadata?: IntentClassification["metadata"]): IntentOperation {
+  const verbs: string[] = [];
+  const lower = input.toLowerCase();
+  const verbPatterns: Record<string, RegExp> = {
+    create: /\b(create|make|provision|add|spin up)\b/i,
+    destroy: /\b(destroy|delete|remove|terminate|kill)\b/i,
+    start: /\b(start|boot|power on|turn on|launch)\b/i,
+    stop: /\b(stop|shutdown|power off|turn off|halt)\b/i,
+    restart: /\b(restart|reboot|reset|cycle)\b/i,
+    configure: /\b(configure|config|set|assign|update)\b/i,
+    install: /\b(install|setup|set up)\b/i,
+    diagnose: /\b(diagnose|troubleshoot|debug|investigate)\b/i,
+    explain: /\b(explain|teach|walk me through)\b/i,
+  };
+
+  for (const [verb, pattern] of Object.entries(verbPatterns)) {
+    if (pattern.test(lower)) {
+      verbs.push(verb);
+    }
+  }
+
+  return {
+    type: metadata?.actionType || metadata?.queryType,
+    verbs,
+  };
+}
+
+function determineRisk(intent: IntentType, actionType?: string, verbs: string[] = []): RiskLevel {
+  if (intent === "QUERY" || intent === "CHAT_SOCIAL" || intent === "CHAT_REASONING") {
+    return "READ";
+  }
+  if (intent === "CLARIFICATION") {
+    return "READ";
+  }
+  if (intent === "ACTION") {
+    if (isDestructiveAction(actionType)) return "DESTRUCTIVE";
+    if (["configure", "install", "create"].includes(actionType || "") || verbs.includes("configure") || verbs.includes("install") || verbs.includes("create")) {
+      return "WRITE_HIGH";
+    }
+    if (["start", "stop", "restart"].includes(actionType || "") || verbs.some(v => ["start", "stop", "restart"].includes(v))) {
+      return "WRITE_LOW";
+    }
+    return "WRITE_LOW";
+  }
+  return "READ";
+}
+
+function determineMissing(intent: IntentType, entities: IntentEntities, metadata?: IntentClassification["metadata"]): string[] {
+  const missing: string[] = [];
+
+  if (intent === "CLARIFICATION") {
+    missing.push("intent");
+    return missing;
+  }
+
+  if (intent === "ACTION") {
+    const hasTarget = entities.hosts.length > 0 || entities.resourceIds.length > 0 || entities.services.length > 0;
+    if (!hasTarget) {
+      missing.push("target");
+    }
+    if (!metadata?.actionType) {
+      missing.push("operation");
+    }
+  }
+
+  return missing;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 

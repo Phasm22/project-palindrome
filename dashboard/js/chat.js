@@ -365,9 +365,49 @@ function formatAgentResponse(text) {
   let vmList = [];
   let seenVmNames = new Set();
   
+  const tryParsePipeKv = (line) => {
+    if (!line.includes('|') || !line.includes('=')) return null;
+    const parts = line.split('|').map(p => p.trim()).filter(Boolean);
+    if (parts.length < 2) return null;
+    const label = parts[0];
+    const fields = [];
+    for (const part of parts.slice(1)) {
+      const eqIdx = part.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = part.slice(0, eqIdx).trim();
+      let value = part.slice(eqIdx + 1).trim();
+      // Strip surrounding quotes
+      value = value.replace(/^"(.*)"$/, '$1');
+      if (key) fields.push({ key, value });
+    }
+    if (!fields.length) return null;
+    return { label, fields };
+  };
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trim();
+
+    // Key/value pipe format cards (e.g., Definition | term=... | meaning="..." | context="...")
+    const kv = tryParsePipeKv(trimmed);
+    if (kv) {
+      html += `
+        <div class="kv-card">
+          <div class="kv-card-header">
+            <span class="kv-pill">${escapeHtml(kv.label)}</span>
+          </div>
+          <div class="kv-grid">
+            ${kv.fields.map(f => `
+              <div class="kv-row">
+                <div class="kv-key">${escapeHtml(f.key)}</div>
+                <div class="kv-value">${escapeHtml(f.value)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+      continue;
+    }
     
     if (trimmed.endsWith(':') && !trimmed.startsWith('-')) {
       if (inClusterNodes && nodeEntries.length > 0) {
@@ -1257,41 +1297,15 @@ export async function sendChatMessage() {
       }
     }
 
-    const startResponse = await fetch(`${API_URL}/api/agent/query`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        query: message, 
-        userId: 'dashboard-user', 
-        aclGroup: 'admin',
-        conversationId: currentConversationId
-      })
-    });
-
-    if (!startResponse.ok) {
-      throw new Error(`HTTP ${startResponse.status}: ${startResponse.statusText}`);
-    }
-
-    const startResult = await startResponse.json();
-    currentSessionId = startResult.sessionId;
-    
-    if (startResult.conversationId && !currentConversationId) {
-      currentConversationId = startResult.conversationId;
-      setCurrentConversationId(currentConversationId);
-      await saveLastActiveConversation(currentConversationId); // Save to backend
-      await loadConversations();
-    } else if (currentConversationId) {
-      // Refresh conversation list to update message count even if conversation already exists
-      await saveLastActiveConversation(currentConversationId); // Update last active
-      loadConversations();
-    }
-
-    currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
-    
+    // IMPORTANT: subscribe to SSE BEFORE starting the agent.
+    // The agent can return very fast (e.g., greetings/clarifications), and if we subscribe after,
+    // the UI can miss `agent:final` and get stuck in "Thinking..." until refresh.
+    currentSessionId = `session-ui-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     let toolExecutions = [];
     let finalText = '';
     const currentQuery = message;
 
+    currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
     currentEventSource.onmessage = (event) => {
       try {
         const agentEvent = JSON.parse(event.data);
@@ -1427,12 +1441,56 @@ export async function sendChatMessage() {
       return isActionOperation ? 300000 : 120000;
     })());
 
+    const startResponse = await fetch(`${API_URL}/api/agent/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        query: message, 
+        userId: 'dashboard-user', 
+        aclGroup: 'admin',
+        conversationId: currentConversationId,
+        sessionId: currentSessionId
+      })
+    });
+
+    if (!startResponse.ok) {
+      throw new Error(`HTTP ${startResponse.status}: ${startResponse.statusText}`);
+    }
+
+    const startResult = await startResponse.json();
+    // If backend returned a different sessionId (shouldn't), resubscribe.
+    if (startResult.sessionId && startResult.sessionId !== currentSessionId) {
+      currentSessionId = startResult.sessionId;
+      if (currentEventSource) currentEventSource.close();
+      currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
+    }
+    
+    if (startResult.conversationId && !currentConversationId) {
+      currentConversationId = startResult.conversationId;
+      setCurrentConversationId(currentConversationId);
+      await saveLastActiveConversation(currentConversationId); // Save to backend
+      await loadConversations();
+    } else if (currentConversationId) {
+      // Refresh conversation list to update message count even if conversation already exists
+      await saveLastActiveConversation(currentConversationId); // Update last active
+      loadConversations();
+    }
+
   } catch (error) {
     if (currentResponseId) {
       removeChatMessage(currentResponseId);
     }
     
     addChatMessage('assistant', `<div style="color: #ef4444;">Error: ${escapeHtml(error.message)}</div>`);
+    
+    if (currentEventSource) {
+      currentEventSource.close();
+      currentEventSource = null;
+    }
+    if (finalEventTimeout) {
+      clearTimeout(finalEventTimeout);
+      finalEventTimeout = null;
+    }
     
     // Re-enable inputs and buttons
     const inputs = getChatInputs();

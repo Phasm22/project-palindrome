@@ -22,12 +22,6 @@ function extractVmName(text: string): string | null {
     return namedMatch[1];
   }
 
-  // Match patterns like "create X", "create a X" where X is a VM name
-  const createMatch = text.match(/\bcreate\s+(?:a\s+)?(?:vm\s+)?([a-z0-9\-_]+)/i);
-  if (createMatch) {
-    return createMatch[1];
-  }
-
   // Match patterns like "destroy X", "delete X", "remove X" where X is a VM name
   const destroyMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
   if (destroyMatch) {

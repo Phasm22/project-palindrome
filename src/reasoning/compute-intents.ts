@@ -1,6 +1,7 @@
 export type ComputeIntent =
   | { type: "describe_cluster" }
   | { type: "vms_by_node"; nodeName: string }
+  | { type: "running_vms_on_node"; nodeName: string }
   | { type: "vms_without_agent" }
   | { type: "stopped_vms_on_node"; nodeName: string }
   | { type: "find_vm_by_id"; vmId: number };
@@ -64,6 +65,19 @@ function extractVmId(text: string): number | null {
 
 export function detectComputeIntent(userInput: string): ComputeIntent | null {
   const normalized = userInput.toLowerCase();
+
+  // Running VMs on a node: "what is running on yang?", "which vms are running on yin?"
+  if (
+    (normalized.includes("running") || normalized.includes("run ")) &&
+    (normalized.includes("on") || normalized.includes("node")) &&
+    !normalized.includes("temperature") &&
+    !normalized.includes("temp")
+  ) {
+    const nodeName = extractNodeName(userInput);
+    if (nodeName) {
+      return { type: "running_vms_on_node", nodeName };
+    }
+  }
 
   // Check for node-specific queries FIRST (before general "all VMs" pattern)
   // This ensures "what are all the VMs on node yin?" matches vms_by_node, not describe_cluster
