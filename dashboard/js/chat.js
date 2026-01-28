@@ -1746,6 +1746,54 @@ export async function deleteConversation(conversationId) {
   });
 }
 
+export async function deleteAllConversations() {
+  showConfirm({
+    title: 'Delete All Chats',
+    message: 'Delete all conversations and messages for this user? This cannot be undone.',
+    confirmText: 'Delete All',
+    cancelText: 'Cancel',
+    onConfirm: async () => {
+      try {
+        const userId = 'dashboard-user';
+        const response = await fetch(`${API_URL}/api/chat/conversations?userId=${userId}`, {
+          method: 'DELETE',
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        // Clear local state
+        currentConversationId = null;
+        setCurrentConversationId(null);
+        isNewConversationMode = false;
+        await saveLastActiveConversation(null);
+        updateConversationUrl(null);
+
+        // Clear all message containers
+        const containers = getChatMessageContainers();
+        containers.forEach(c => {
+          if (c) {
+            c.innerHTML = '<div class="text-slate-400 text-center py-6 text-sm">All conversations have been deleted. Start a new one to begin chatting.</div>';
+          }
+        });
+
+        // Hide input until a new conversation is created
+        updateInputVisibility(false);
+
+        // Refresh conversation list (will now be empty)
+        await loadConversations();
+      } catch (error) {
+        console.error('Failed to delete all conversations:', error);
+        alert('Failed to delete all conversations: ' + error.message);
+      }
+    },
+    onCancel: () => {
+      // User cancelled, do nothing
+    }
+  });
+}
+
 export async function loadChatHistory(conversationId = null) {
   const containers = getChatMessageContainers();
   if (containers.length === 0) return;
@@ -1880,3 +1928,4 @@ window.selectConversation = selectConversation;
 window.createNewConversation = createNewConversation;
 window.deleteConversation = deleteConversation;
 window.deleteChatMessage = deleteChatMessage;
+window.deleteAllConversations = deleteAllConversations;

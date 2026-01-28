@@ -22,15 +22,28 @@
       <!-- Sidebar Header -->
       <div class="mb-2 flex justify-between items-center pt-4 px-4 pb-2 flex-shrink-0 border-b border-slate-800/50">
         <h3 class="m-0 text-slate-200 text-base font-medium">Conversations</h3>
-        <button 
-          id="new-conversation-btn"
-          onclick="window.createNewConversation()"
-          class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
-          title="New conversation"
-        >
-          <span id="plus-icon"></span>
-          <span>New</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <button 
+            id="delete-all-conversations-btn"
+            onclick="window.deleteAllConversations()"
+            class="bg-transparent border border-red-700/60 text-red-400 hover:bg-red-900/30 hover:text-red-300 px-3 py-1.5 rounded-xl cursor-pointer text-xs font-semibold transition-all duration-200 flex-shrink-0 flex items-center gap-1.5 min-h-[32px]"
+            title="Delete all conversations"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM5 4h14v2H5zM9 3h6v1H9z"/>
+            </svg>
+            <span>Clear</span>
+          </button>
+          <button 
+            id="new-conversation-btn"
+            onclick="window.createNewConversation()"
+            class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
+            title="New conversation"
+          >
+            <span id="plus-icon"></span>
+            <span>New</span>
+          </button>
+        </div>
       </div>
       <!-- Conversation List - Scrollable -->
       <div id="conversation-list" class="flex flex-col gap-2 overflow-y-auto min-h-0 flex-1 px-4 py-4">
@@ -333,6 +346,16 @@
         <div class="px-4 py-3 border-b border-slate-800 flex justify-between items-center">
           <h3 class="m-0 text-slate-100 text-base font-semibold">Chats</h3>
           <div class="flex items-center gap-2">
+            <button 
+              id="delete-all-conversations-btn-mobile"
+              onclick="window.deleteAllConversations()"
+              class="bg-transparent border border-red-700/60 text-red-400 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 hover:bg-red-900/30 hover:text-red-300"
+              title="Delete all conversations"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM5 4h14v2H5zM9 3h6v1H9z"/>
+              </svg>
+            </button>
             <button 
               id="new-conversation-btn-mobile"
               onclick="window.createNewConversation()"

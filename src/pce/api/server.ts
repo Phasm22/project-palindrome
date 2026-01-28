@@ -297,6 +297,10 @@ export class PceApiServer {
       return await this.handleCreateConversation(req);
     }
 
+    if (req.method === "DELETE" && url.pathname === "/api/chat/conversations") {
+      return await this.handleDeleteAllConversations(req);
+    }
+
     if (req.method === "GET" && url.pathname.startsWith("/api/chat/conversations/") && url.pathname.endsWith("/messages")) {
       return await this.handleGetConversationMessages(req, url);
     }
@@ -1820,6 +1824,27 @@ export class PceApiServer {
   }
 
   /**
+   * Handle DELETE /api/chat/conversations?userId=:id - Delete all conversations and messages for a user
+   */
+  private async handleDeleteAllConversations(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId") || "dashboard-user";
+
+      const result = await this.chatHistoryStore.deleteAllUserConversations(userId);
+
+      return this.jsonResponse(200, {
+        success: true,
+        message: "All conversations deleted",
+        data: result,
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to delete all conversations", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
    * Handle GET /api/chat/conversations/:id/messages - Get messages for a conversation
    */
   private async handleGetConversationMessages(req: Request, url: URL): Promise<Response> {
@@ -1863,9 +1888,15 @@ export class PceApiServer {
       const userId = url.searchParams.get("userId") || undefined;
 
       const deleted = await this.chatHistoryStore.deleteConversation(conversationId, userId);
-      
+
+      // Make delete idempotent for better UX in the dashboard:
+      // - If the conversation doesn't exist or is already deleted, still return success.
+      // - This avoids noisy 404s in the UI when state drifts.
       if (!deleted) {
-        return this.jsonResponse(404, { error: "Conversation not found" });
+        return this.jsonResponse(200, {
+          success: true,
+          message: "Conversation not found or already deleted",
+        });
       }
 
       return this.jsonResponse(200, {

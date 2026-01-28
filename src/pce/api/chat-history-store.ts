@@ -170,13 +170,17 @@ export class ChatHistoryStore {
       const hasDefaultEnv = prefInfo.some(col => col.name === "default_env");
       const hasPreferredTimeRange = prefInfo.some(col => col.name === "preferred_time_range");
       const hasVerbosity = prefInfo.some(col => col.name === "verbosity");
+      const hasUpdatedAt = prefInfo.some(col => col.name === "updated_at");
 
-      if (!hasSafeMode || !hasDefaultEnv || !hasPreferredTimeRange || !hasVerbosity) {
+      if (!hasSafeMode || !hasDefaultEnv || !hasPreferredTimeRange || !hasVerbosity || !hasUpdatedAt) {
         pceLogger.info("Migrating user_preferences table: adding preference columns");
         if (!hasSafeMode) this.db.exec("ALTER TABLE user_preferences ADD COLUMN safe_mode INTEGER;");
         if (!hasDefaultEnv) this.db.exec("ALTER TABLE user_preferences ADD COLUMN default_env TEXT;");
         if (!hasPreferredTimeRange) this.db.exec("ALTER TABLE user_preferences ADD COLUMN preferred_time_range TEXT;");
         if (!hasVerbosity) this.db.exec("ALTER TABLE user_preferences ADD COLUMN verbosity TEXT;");
+        // Older databases may not have updated_at; add it if missing.
+        // We don't enforce NOT NULL here to avoid migration failures; application code always writes a value.
+        if (!hasUpdatedAt) this.db.exec("ALTER TABLE user_preferences ADD COLUMN updated_at INTEGER;");
       }
     } catch (error: any) {
       if (!error.message.includes("duplicate column")) {
@@ -582,6 +586,49 @@ export class ChatHistoryStore {
     } catch (error: any) {
       pceLogger.error("Failed to delete user chat history", { error: error.message, userId });
       return 0;
+    }
+  }
+
+  /**
+   * Delete all conversations and chat history for a user.
+   * This is used by the dashboard "Delete all chats" action.
+   */
+  async deleteAllUserConversations(userId: string): Promise<{
+    deletedConversations: number;
+    deletedMessages: number;
+  }> {
+    try {
+      // Delete all messages for this user
+      const deleteMessagesStmt = this.db.prepare(
+        "DELETE FROM chat_messages WHERE user_id = ?"
+      );
+      const messagesResult = deleteMessagesStmt.run(userId);
+
+      // Delete all conversations for this user
+      const deleteConversationsStmt = this.db.prepare(
+        "DELETE FROM conversations WHERE user_id = ?"
+      );
+      const conversationsResult = deleteConversationsStmt.run(userId);
+
+      // Clear last active conversation preference
+      const clearPrefsStmt = this.db.prepare(
+        "UPDATE user_preferences SET last_active_conversation_id = NULL WHERE user_id = ?"
+      );
+      clearPrefsStmt.run(userId);
+
+      return {
+        deletedConversations: conversationsResult.changes || 0,
+        deletedMessages: messagesResult.changes || 0,
+      };
+    } catch (error: any) {
+      pceLogger.error("Failed to delete all user conversations", {
+        error: error.message,
+        userId,
+      });
+      return {
+        deletedConversations: 0,
+        deletedMessages: 0,
+      };
     }
   }
 
