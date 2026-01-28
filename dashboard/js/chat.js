@@ -1,5 +1,5 @@
 import { API_URL, escapeHtml } from './utils.js';
-import { createConversationItem, createButton } from './components.js';
+import { createButton } from './components.js';
 import { showConfirm } from './modal.js';
 
 // Chat state
@@ -346,7 +346,8 @@ function formatAgentResponse(text) {
   
   // Strip markdown bold (**...**) for cleaner output
   const stripBold = (input) => input.replace(/\*\*(.*?)\*\*/g, '$1');
-  text = stripBold(text);
+  const stripAnsi = (input) => input.replace(/\u001b\[[0-9;]*m/g, '');
+  text = stripAnsi(stripBold(text));
   
   // Check if this is a clarification message
   if (text.includes('🔍') && text.includes('Did you mean')) {
@@ -383,6 +384,63 @@ function formatAgentResponse(text) {
     if (!fields.length) return null;
     return { label, fields };
   };
+
+  const parseKeyValueBlock = (blockLines) => {
+    if (!blockLines.length) return null;
+    let idx = 0;
+    let title = null;
+    const first = blockLines[0]?.trim();
+    if (first && /^(error|warning|success|info)$/i.test(first)) {
+      title = first;
+      idx = 1;
+    }
+    const entries = [];
+    while (idx < blockLines.length) {
+      const key = blockLines[idx]?.trim();
+      const valueLine = blockLines[idx + 1];
+      if (!key || valueLine === undefined) break;
+      if (!/^[a-zA-Z][\w-]*$/.test(key)) break;
+      if (key.toLowerCase() === 'message') {
+        const value = blockLines.slice(idx + 1).join('\n').trim();
+        entries.push({ key, value });
+        idx = blockLines.length;
+        break;
+      }
+      entries.push({ key, value: valueLine.trim() });
+      idx += 2;
+    }
+    if (entries.length === 0) return null;
+    return { title, entries };
+  };
+
+  const kvBlock = parseKeyValueBlock(lines);
+  if (kvBlock) {
+    const title = kvBlock.title || 'Result';
+    html += `
+      <div class="kv-card">
+        <div class="kv-card-header">
+          <span class="kv-pill">${escapeHtml(title)}</span>
+        </div>
+        <div class="kv-grid">
+          ${kvBlock.entries.map(entry => {
+            const value = entry.value || '';
+            const isMultiline = value.includes('\n') || value.includes('│') || value.includes('╷');
+            return `
+              <div class="kv-row">
+                <div class="kv-key">${escapeHtml(entry.key)}</div>
+                <div class="kv-value">
+                  ${isMultiline
+                    ? `<pre class="kv-pre">${escapeHtml(value)}</pre>`
+                    : escapeHtml(value)}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+    return html;
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -1506,9 +1564,8 @@ export async function sendChatMessage() {
 }
 
 export async function loadConversations() {
-  const listDiv = document.getElementById('conversation-list');
-  const listDivMobile = document.getElementById('conversation-list-mobile');
-  if (!listDiv && !listDivMobile) return;
+  const selectEl = document.getElementById('conversation-select');
+  if (!selectEl) return;
 
   try {
     const userId = 'dashboard-user';
@@ -1521,48 +1578,46 @@ export async function loadConversations() {
     const result = await response.json();
     const conversations = result.data || [];
 
-    const emptyMessage = '<div class="text-slate-400 text-center py-5 text-sm">No conversations yet. Create a new one to start!</div>';
-    
-    if (conversations.length === 0) {
-      if (listDiv) listDiv.innerHTML = emptyMessage;
-      if (listDivMobile) listDivMobile.innerHTML = emptyMessage;
-      return;
+    // Populate dropdown
+    selectEl.innerHTML = '';
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = conversations.length ? 'Select a conversation…' : 'No conversations yet';
+    selectEl.appendChild(placeholder);
+
+    conversations.forEach((conv) => {
+      const opt = document.createElement('option');
+      opt.value = conv.id;
+      const title = conv.title || 'New Conversation';
+      const count = conv.messageCount || 0;
+      opt.textContent = `${title} (${count})`;
+      selectEl.appendChild(opt);
+    });
+
+    // Keep selection in sync with current conversation
+    if (currentConversationId) {
+      selectEl.value = currentConversationId;
+    } else {
+      selectEl.value = '';
     }
 
-    const renderList = (container) => {
-      if (!container) return;
-      container.innerHTML = '';
-      conversations.forEach(conv => {
-        const item = createConversationItem(
-          {
-            id: conv.id,
-            title: conv.title,
-            messageCount: conv.messageCount
-          },
-          {
-            isActive: currentConversationId === conv.id,
-            onSelect: (id) => window.selectConversation(id),
-            onDelete: (id) => window.deleteConversation(id)
-          }
-        );
-        container.appendChild(item);
+    // Attach change handler once
+    if (!selectEl.dataset.bound) {
+      selectEl.addEventListener('change', async () => {
+        const selected = selectEl.value;
+        if (!selected) return;
+        await selectConversation(selected);
       });
-
-      if (currentConversationId) {
-        const currentItem = container.querySelector(`[data-conversation-id="${currentConversationId}"]`);
-        if (currentItem) {
-          currentItem.scrollIntoView({ block: 'nearest' });
-        }
-      }
-    };
-
-    renderList(listDiv);
-    renderList(listDivMobile);
+      selectEl.dataset.bound = '1';
+    }
   } catch (error) {
     console.error('Failed to load conversations:', error);
-    const errorMessage = '<div class="text-red-400 text-center py-5 text-sm">Failed to load conversations</div>';
-    if (listDiv) listDiv.innerHTML = errorMessage;
-    if (listDivMobile) listDivMobile.innerHTML = errorMessage;
+    selectEl.innerHTML = '';
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Failed to load conversations';
+    selectEl.appendChild(opt);
   }
 }
 
@@ -1611,10 +1666,7 @@ export async function createNewConversation() {
   isCreatingConversation = true;
   
   // Disable buttons visually
-  const newButtons = [
-    document.getElementById('new-conversation-btn'),
-    document.getElementById('new-conversation-btn-mobile')
-  ].filter(Boolean);
+  const newButtons = [document.getElementById('conversation-new-btn')].filter(Boolean);
   
   const reenableButtons = () => {
     newButtons.forEach(btn => {

@@ -16,43 +16,6 @@
   </script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen" style="margin: 0; padding: 0;">
-  <!-- Desktop: Fixed Sidebar (positioned at viewport edge, outside main container, only visible on chat tab) -->
-  <div id="conversation-sidebar" class="hidden fixed h-screen w-64 flex-shrink-0 flex-col border-r border-slate-800 bg-slate-950 overflow-hidden" style="z-index: var(--z-elevated); left: 0; top: 0; margin: 0; padding: 0;">
-    <div class="flex flex-col h-full overflow-y-auto">
-      <!-- Sidebar Header -->
-      <div class="mb-2 flex justify-between items-center pt-4 px-4 pb-2 flex-shrink-0 border-b border-slate-800/50">
-        <h3 class="m-0 text-slate-200 text-base font-medium">Conversations</h3>
-        <div class="flex items-center gap-2">
-          <button 
-            id="delete-all-conversations-btn"
-            onclick="window.deleteAllConversations()"
-            class="bg-transparent border border-red-700/60 text-red-400 hover:bg-red-900/30 hover:text-red-300 px-3 py-1.5 rounded-xl cursor-pointer text-xs font-semibold transition-all duration-200 flex-shrink-0 flex items-center gap-1.5 min-h-[32px]"
-            title="Delete all conversations"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM5 4h14v2H5zM9 3h6v1H9z"/>
-            </svg>
-            <span>Clear</span>
-          </button>
-          <button 
-            id="new-conversation-btn"
-            onclick="window.createNewConversation()"
-            class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-1.5 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex-shrink-0 flex items-center gap-1.5 min-h-[44px]"
-            title="New conversation"
-          >
-            <span id="plus-icon"></span>
-            <span>New</span>
-          </button>
-        </div>
-      </div>
-      <!-- Conversation List - Scrollable -->
-      <div id="conversation-list" class="flex flex-col gap-2 overflow-y-auto min-h-0 flex-1 px-4 py-4">
-        <div class="text-slate-400 text-center py-5 text-sm">
-          Loading conversations...
-        </div>
-      </div>
-    </div>
-  </div>
   
   <div class="mx-auto max-w-7xl px-4 md:px-6 py-3 md:py-6 flex flex-col">
     <!-- Mobile: Dropdown menu for tabs -->
@@ -293,96 +256,82 @@
             <span class="hidden sm:inline text-gradient-shimmer">Palindrome Dashboard</span>
             <span class="sm:hidden text-gradient-shimmer text-lg">Palindrome</span>
           </h1>
+
+          <!-- Conversation controls live in sticky chat nav (desktop) -->
         </div>
       </div>
 
-      <!-- Desktop: Sticky Navigation Bar (only in chat tab) -->
-      <div id="chat-nav-sticky" class="hidden md:block chat-nav-wrapper nav-glass" style="position: -webkit-sticky; position: sticky; top: 0; z-index: var(--z-sticky);">
+      <!-- Desktop: Fixed Navigation Bar (only in chat tab) -->
+      <div id="chat-nav-sticky" class="hidden md:block chat-nav-wrapper nav-glass" style="position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-sticky);">
         <div class="chat-chrome-centered">
-          <div class="flex gap-2 border-b-4 border-slate-600 overflow-x-auto py-3" role="tablist" aria-label="Dashboard tabs">
-            <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
-              <span class="relative z-10">Chat</span>
-              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-            </button>
-            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
-              <span class="relative z-10">Overview</span>
-              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-            </button>
-            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
-              <span class="relative z-10">Tool Executions</span>
-              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-            </button>
-            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
-              <span class="relative z-10">Reasoning Traces</span>
-              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-            </button>
-            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
-              <span class="relative z-10">Ontology Graph</span>
-              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-            </button>
-            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
-              <span class="relative z-10">RAG Diagnostics</span>
-              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-            </button>
-            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
-              <span class="relative z-10">Query</span>
-              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-            </button>
+          <div class="flex items-center justify-between gap-4 py-3 border-b-4 border-slate-600">
+            <div class="flex-1 min-w-0">
+              <div class="flex gap-2 overflow-x-auto" role="tablist" aria-label="Dashboard tabs">
+              <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
+                <span class="relative z-10">Chat</span>
+                <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+              </button>
+              <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
+                <span class="relative z-10">Overview</span>
+                <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+              </button>
+              <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
+                <span class="relative z-10">Tool Executions</span>
+                <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+              </button>
+              <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
+                <span class="relative z-10">Reasoning Traces</span>
+                <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+              </button>
+              <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
+                <span class="relative z-10">Ontology Graph</span>
+                <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+              </button>
+              <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
+                <span class="relative z-10">RAG Diagnostics</span>
+                <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+              </button>
+              <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
+                <span class="relative z-10">Query</span>
+                <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+              </button>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <select
+                id="conversation-select"
+                class="md:min-w-[220px] max-w-[360px] px-4 py-2 bg-slate-950 border border-slate-600 rounded-lg text-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                aria-label="Select conversation"
+              >
+                <option value="">Loading...</option>
+              </select>
+              <button
+                id="conversation-clear-btn"
+                onclick="window.deleteAllConversations()"
+                class="bg-transparent border border-red-700/60 text-red-400 hover:bg-red-900/30 hover:text-red-300 px-3 py-2 rounded-xl cursor-pointer text-xs font-semibold transition-all duration-200 flex items-center gap-2 min-h-[40px]"
+                title="Delete all conversations"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM5 4h14v2H5zM9 3h6v1H9z"/>
+                </svg>
+                Clear
+              </button>
+              <button
+                id="conversation-new-btn"
+                onclick="window.createNewConversation()"
+                class="bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 border border-primary-500 text-white px-3 py-2 rounded-xl cursor-pointer text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 flex items-center gap-2 min-h-[40px]"
+                title="New conversation"
+              >
+                <span id="plus-icon"></span>
+                New
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Mobile: Conversations button - compact -->
-      <button id="sidebar-toggle" class="md:hidden mb-2 bg-transparent border border-slate-700/50 text-slate-400 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 min-h-[32px] self-start" onclick="window.toggleSidebar()">
-        <span id="menu-icon"></span>
-        Chats
-      </button>
-      
-      <!-- Mobile: Overlay backdrop when sidebar is open -->
-      <div id="sidebar-backdrop" class="md:hidden fixed inset-0 bg-black/60 hidden" onclick="window.toggleSidebar()" aria-hidden="true" style="z-index: var(--z-overlay);"></div>
-      
-      <!-- Mobile: Sidebar overlay - iOS style -->
-      <div id="conversation-sidebar-mobile" class="md:hidden fixed inset-0 flex flex-col bg-slate-950 hidden" role="dialog" aria-modal="true" aria-label="Conversations" aria-hidden="true" style="z-index: var(--z-overlay);">
-        <div class="px-4 py-3 border-b border-slate-800 flex justify-between items-center">
-          <h3 class="m-0 text-slate-100 text-base font-semibold">Chats</h3>
-          <div class="flex items-center gap-2">
-            <button 
-              id="delete-all-conversations-btn-mobile"
-              onclick="window.deleteAllConversations()"
-              class="bg-transparent border border-red-700/60 text-red-400 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 hover:bg-red-900/30 hover:text-red-300"
-              title="Delete all conversations"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM5 4h14v2H5zM9 3h6v1H9z"/>
-              </svg>
-            </button>
-            <button 
-              id="new-conversation-btn-mobile"
-              onclick="window.createNewConversation()"
-              class="bg-primary-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1"
-              title="New conversation"
-            >
-              <span id="plus-icon-mobile"></span>
-              New
-            </button>
-            <button 
-              id="sidebar-close-mobile"
-              class="text-slate-400 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
-              onclick="window.toggleSidebar()"
-              title="Close"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div id="conversation-list-mobile" class="flex-1 overflow-y-auto p-3 min-h-0 flex flex-col gap-2">
-          <div class="text-slate-500 text-center py-4 text-xs">
-            Loading...
-          </div>
-        </div>
-      </div>
+      <!-- Conversations sidebar removed (simpler, centered header controls instead) -->
       
       <!-- Desktop: Full Page Chat Layout (sidebar is fixed above) -->
       <div class="hidden md:block chat-desktop-wrapper" style="height: 100%;">

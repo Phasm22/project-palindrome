@@ -121,6 +121,18 @@
     line-height: 1.5;
   }
 
+  .kv-pre {
+    margin: 0;
+    padding: 8px 10px;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(51, 65, 85, 0.5);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.82em;
+    color: rgba(226, 232, 240, 0.9);
+  }
+
   @media (max-width: 640px) {
     .kv-row {
       grid-template-columns: 1fr;
@@ -132,12 +144,12 @@
 
   /* Desktop chat centering */
   @media (min-width: 768px) {
-    /* Reserve space for fixed sidebar */
+    /* Chat nav is fixed; reserve space so content isn't hidden under it */
     #chat {
-      padding-left: var(--sidebar-width);
+      padding-top: 72px;
       box-sizing: border-box;
     }
-    
+
     .chat-banner-wrapper,
     .chat-nav-wrapper,
     .chat-desktop-wrapper {

@@ -108,84 +108,116 @@ export class FirewallIngestionOrchestrator {
       // Check both source and destination for CIDRs
       if (data.action === "pass") {
         // If destination is a CIDR, link to subnet
-        if (data.destination && this.isCidr(data.destination)) {
-          const subnetId = `network-subnet:${data.destination.toLowerCase()}`;
-          relationships.push({
-            type: "ALLOWS",
-            fromId: ruleId,
-            toId: subnetId,
-            metadata: {
-              direction: data.direction,
-              protocol: data.protocol,
-              port: data.destinationPort,
-            },
-            collectedAt: entity.collectedAt,
-          });
-          createdCount++;
-        } else if (data.destination && data.destination !== "any") {
-          skippedCidrInvalid++;
-          pceLogger.debug(`Skipping rule ${ruleId}: destination "${data.destination}" is not a valid CIDR`);
+        if (typeof data.destination === "string" && data.destination.toLowerCase() !== "any") {
+          const destCidrs = this.extractCidrs(data.destination);
+          if (destCidrs.length > 0) {
+            for (const cidr of destCidrs) {
+              const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+              relationships.push({
+                type: "ALLOWS",
+                fromId: ruleId,
+                toId: subnetId,
+                metadata: {
+                  direction: data.direction,
+                  protocol: data.protocol,
+                  port: data.destinationPort,
+                },
+                collectedAt: entity.collectedAt,
+              });
+              createdCount++;
+            }
+          } else {
+            skippedCidrInvalid++;
+            pceLogger.debug(
+              `Skipping rule ${ruleId}: destination "${data.destination}" contains no valid CIDR`
+            );
+          }
         }
         // If source is a CIDR and destination is "any", also link to source subnet
-        if (data.source && this.isCidr(data.source) && (!data.destination || data.destination === "any")) {
-          const subnetId = `network-subnet:${data.source.toLowerCase()}`;
-          relationships.push({
-            type: "ALLOWS",
-            fromId: ruleId,
-            toId: subnetId,
-            metadata: {
-              direction: data.direction,
-              protocol: data.protocol,
-              port: data.sourcePort,
-            },
-            collectedAt: entity.collectedAt,
-          });
-          createdCount++;
-        } else if (data.source && data.source !== "any" && !this.isCidr(data.source)) {
-          skippedCidrInvalid++;
-          pceLogger.debug(`Skipping rule ${ruleId}: source "${data.source}" is not a valid CIDR`);
+        if (!data.destination || (typeof data.destination === "string" && data.destination.toLowerCase() === "any")) {
+          if (typeof data.source === "string" && data.source.toLowerCase() !== "any") {
+            const sourceCidrs = this.extractCidrs(data.source);
+            if (sourceCidrs.length > 0) {
+              for (const cidr of sourceCidrs) {
+                const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+                relationships.push({
+                  type: "ALLOWS",
+                  fromId: ruleId,
+                  toId: subnetId,
+                  metadata: {
+                    direction: data.direction,
+                    protocol: data.protocol,
+                    port: data.sourcePort,
+                  },
+                  collectedAt: entity.collectedAt,
+                });
+                createdCount++;
+              }
+            } else {
+              skippedCidrInvalid++;
+              pceLogger.debug(
+                `Skipping rule ${ruleId}: source "${data.source}" contains no valid CIDR`
+              );
+            }
+          }
         }
       }
 
       // Create BLOCKS relationship for block/reject rules
       // Check both source and destination for CIDRs
       if (data.action === "block" || data.action === "reject") {
-        if (data.destination && this.isCidr(data.destination)) {
-          const subnetId = `network-subnet:${data.destination.toLowerCase()}`;
-          relationships.push({
-            type: "BLOCKS",
-            fromId: ruleId,
-            toId: subnetId,
-            metadata: {
-              direction: data.direction,
-              protocol: data.protocol,
-              port: data.destinationPort,
-            },
-            collectedAt: entity.collectedAt,
-          });
-          createdCount++;
-        } else if (data.destination && data.destination !== "any") {
-          skippedCidrInvalid++;
-          pceLogger.debug(`Skipping rule ${ruleId}: destination "${data.destination}" is not a valid CIDR`);
+        if (typeof data.destination === "string" && data.destination.toLowerCase() !== "any") {
+          const destCidrs = this.extractCidrs(data.destination);
+          if (destCidrs.length > 0) {
+            for (const cidr of destCidrs) {
+              const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+              relationships.push({
+                type: "BLOCKS",
+                fromId: ruleId,
+                toId: subnetId,
+                metadata: {
+                  direction: data.direction,
+                  protocol: data.protocol,
+                  port: data.destinationPort,
+                },
+                collectedAt: entity.collectedAt,
+              });
+              createdCount++;
+            }
+          } else {
+            skippedCidrInvalid++;
+            pceLogger.debug(
+              `Skipping rule ${ruleId}: destination "${data.destination}" contains no valid CIDR`
+            );
+          }
         }
         // If source is a CIDR and destination is "any", also link to source subnet
-        if (data.source && this.isCidr(data.source) && (!data.destination || data.destination === "any")) {
-          const subnetId = `network-subnet:${data.source.toLowerCase()}`;
-          relationships.push({
-            type: "BLOCKS",
-            fromId: ruleId,
-            toId: subnetId,
-            metadata: {
-              direction: data.direction,
-              protocol: data.protocol,
-              port: data.sourcePort,
-            },
-            collectedAt: entity.collectedAt,
-          });
-          createdCount++;
-        } else if (data.source && data.source !== "any" && !this.isCidr(data.source)) {
-          skippedCidrInvalid++;
-          pceLogger.debug(`Skipping rule ${ruleId}: source "${data.source}" is not a valid CIDR`);
+        if (!data.destination || (typeof data.destination === "string" && data.destination.toLowerCase() === "any")) {
+          if (typeof data.source === "string" && data.source.toLowerCase() !== "any") {
+            const sourceCidrs = this.extractCidrs(data.source);
+            if (sourceCidrs.length > 0) {
+              for (const cidr of sourceCidrs) {
+                const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+                relationships.push({
+                  type: "BLOCKS",
+                  fromId: ruleId,
+                  toId: subnetId,
+                  metadata: {
+                    direction: data.direction,
+                    protocol: data.protocol,
+                    port: data.sourcePort,
+                  },
+                  collectedAt: entity.collectedAt,
+                });
+                createdCount++;
+              }
+            } else {
+              skippedCidrInvalid++;
+              pceLogger.debug(
+                `Skipping rule ${ruleId}: source "${data.source}" contains no valid CIDR`
+              );
+            }
+          }
         }
       }
     }
@@ -221,11 +253,11 @@ export class FirewallIngestionOrchestrator {
     for (const entity of entities) {
       if (entity.type !== "firewall_rule") continue;
       const data = entity.data || {};
-      if (data.source && this.isCidr(data.source)) {
-        subnetIds.add(`network-subnet:${data.source.toLowerCase()}`);
+      for (const cidr of this.extractCidrs(data.source)) {
+        subnetIds.add(`network-subnet:${cidr.toLowerCase()}`);
       }
-      if (data.destination && this.isCidr(data.destination)) {
-        subnetIds.add(`network-subnet:${data.destination.toLowerCase()}`);
+      for (const cidr of this.extractCidrs(data.destination)) {
+        subnetIds.add(`network-subnet:${cidr.toLowerCase()}`);
       }
     }
 
@@ -264,21 +296,78 @@ export class FirewallIngestionOrchestrator {
     }
   }
 
-  private isCidr(str: string): boolean {
-    if (!str || typeof str !== "string") return false;
-    // Handle redacted IPs like "IP-[REDACTED]/22" - treat as CIDR if it has /mask
-    if (str.includes("/") && str.match(/\/\d+$/)) {
-      return true;
+  /**
+   * Extract and normalize one-or-more CIDRs from a pfctl-derived field.
+   *
+   * pfctl rules can contain:
+   * - single IPs (no mask)
+   * - CIDRs
+   * - sets like "{ 10.0.0.0/8, 172.16.0.0/22 }"
+   * - redacted values like "IP-[REDACTED]/22"
+   */
+  private extractCidrs(input: unknown): string[] {
+    if (typeof input !== "string") return [];
+    const raw = input.trim();
+    if (!raw) return [];
+    if (raw.toLowerCase() === "any") return [];
+
+    const cidrs: string[] = [];
+
+    // Preserve redacted CIDR markers if they include a mask
+    const redactedMatch = raw.match(/\bIP-\[REDACTED\]\/\d{1,3}\b/i);
+    if (redactedMatch) {
+      cidrs.push(redactedMatch[0]);
     }
-    // Standard IPv4 CIDR
-    if (/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(str)) {
-      return true;
+
+    // IPv4 tokens, with optional /mask
+    const ipv4Re = /\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/g;
+    for (const match of raw.matchAll(ipv4Re)) {
+      const normalized = this.normalizeIpv4CidrToken(match[0]);
+      if (normalized) cidrs.push(normalized);
     }
-    // IPv6 CIDR
-    if (/^[0-9a-f:]+::\/\d+$/i.test(str)) {
-      return true;
+
+    // IPv6 tokens, with optional /mask
+    const ipv6Re = /\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(?:\/\d{1,3})?\b/g;
+    for (const match of raw.matchAll(ipv6Re)) {
+      const normalized = this.normalizeIpv6CidrToken(match[0]);
+      if (normalized) cidrs.push(normalized);
     }
-    return false;
+
+    // De-dupe while preserving order
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const c of cidrs) {
+      const key = c.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(c);
+    }
+    return out;
+  }
+
+  private normalizeIpv4CidrToken(token: string): string | null {
+    const [ipPart, maskPart] = token.split("/");
+    if (!ipPart) return null;
+    const octets = ipPart.split(".").map((n) => Number(n));
+    if (octets.length !== 4) return null;
+    if (octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return null;
+
+    const mask = maskPart === undefined ? 32 : Number(maskPart);
+    if (!Number.isInteger(mask) || mask < 0 || mask > 32) return null;
+
+    return `${octets.join(".")}/${mask}`;
+  }
+
+  private normalizeIpv6CidrToken(token: string): string | null {
+    // We don't fully validate IPv6 here; we only normalize the mask and keep the address text.
+    const [addr, maskPart] = token.split("/");
+    if (!addr) return null;
+    if (!addr.includes(":")) return null;
+
+    const mask = maskPart === undefined ? 128 : Number(maskPart);
+    if (!Number.isInteger(mask) || mask < 0 || mask > 128) return null;
+
+    return `${addr}/${mask}`;
   }
 
   private createContext(toolName: string): ExecutionContext {

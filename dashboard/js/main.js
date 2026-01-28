@@ -169,13 +169,22 @@ function updateTabUI(tabName, clickedElement = null) {
         
         // Clean up styles after animation completes
         setTimeout(() => {
+          // IMPORTANT: remove transform/opacity so we don't create a transformed containing block.
+          // Transformed ancestors break `position: fixed` (it becomes fixed-to-ancestor instead of viewport).
           targetTabContent.style.transition = '';
+          targetTabContent.style.opacity = '';
+          targetTabContent.style.transform = '';
         }, 300);
       });
     } else {
       // Already visible, just ensure it's fully opaque
       targetTabContent.style.opacity = '1';
       targetTabContent.style.transform = 'translateY(0)';
+      // Don't leave a transform on the element (same reason as above).
+      setTimeout(() => {
+        targetTabContent.style.opacity = '';
+        targetTabContent.style.transform = '';
+      }, 0);
     }
   }
   
@@ -199,14 +208,6 @@ function updateTabUI(tabName, clickedElement = null) {
   if (tabName === 'chat') {
     // Load conversations when switching to chat tab
     loadConversations();
-    // Close sidebar on mobile when switching to chat (if open)
-    if (window.innerWidth < 768) {
-      const sidebarMobile = document.getElementById('conversation-sidebar-mobile');
-      const backdrop = document.getElementById('sidebar-backdrop');
-      if (sidebarMobile && !sidebarMobile.classList.contains('hidden')) {
-        window.toggleSidebar();
-      }
-    }
     // Focus chat input when switching to chat tab
     setTimeout(() => {
       const chatInput = document.getElementById('chat-input');
@@ -248,20 +249,6 @@ function updateTabUI(tabName, clickedElement = null) {
       if (chatNav) {
         chatNav.style.display = 'none';
       }
-    }
-  }
-  
-  // Show/hide desktop sidebar based on active tab (desktop only)
-  const desktopSidebar = document.getElementById('conversation-sidebar');
-  if (desktopSidebar && window.innerWidth >= 768) {
-    if (tabName === 'chat') {
-      // Show sidebar on chat tab
-      desktopSidebar.classList.remove('hidden');
-      desktopSidebar.classList.add('flex');
-    } else {
-      // Hide sidebar on all other tabs
-      desktopSidebar.classList.add('hidden');
-      desktopSidebar.classList.remove('flex');
     }
   }
   
@@ -308,120 +295,7 @@ window.handleChatInputKeydown = function(event) {
   }
 };
 
-// Sidebar state management
-let sidebarState = {
-  isOpen: false,
-  focusTrap: null,
-  escapeHandler: null,
-  previousActiveElement: null
-};
-
-// Focus trap for sidebar
-function trapSidebarFocus(sidebar) {
-  const focusableElements = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-  const focusable = Array.from(sidebar.querySelectorAll(focusableElements));
-  const firstFocusable = focusable[0];
-  const lastFocusable = focusable[focusable.length - 1];
-  
-  function handleTab(e) {
-    if (e.key !== 'Tab') return;
-    
-    if (e.shiftKey) {
-      if (document.activeElement === firstFocusable) {
-        e.preventDefault();
-        lastFocusable?.focus();
-      }
-    } else {
-      if (document.activeElement === lastFocusable) {
-        e.preventDefault();
-        firstFocusable?.focus();
-      }
-    }
-  }
-  
-  sidebar.addEventListener('keydown', handleTab);
-  return () => sidebar.removeEventListener('keydown', handleTab);
-}
-
-// Sidebar toggle function with accessibility - uses LayoutStore for state
-window.toggleSidebar = function() {
-  const sidebarMobile = document.getElementById('conversation-sidebar-mobile');
-  const backdrop = document.getElementById('sidebar-backdrop');
-  
-  if (sidebarMobile && backdrop) {
-    const currentState = layoutStore.getState();
-    const isOpening = !currentState.sidebarOpen;
-    
-    // Update LayoutStore state
-    layoutStore.setSidebarOpen(isOpening);
-    
-    if (isOpening) {
-      // Opening sidebar
-      sidebarState.previousActiveElement = document.activeElement;
-      sidebarMobile.classList.remove('hidden');
-      sidebarMobile.classList.add('flex');
-      backdrop.classList.remove('hidden');
-      
-      // Set ARIA attributes
-      sidebarMobile.setAttribute('aria-hidden', 'false');
-      backdrop.setAttribute('aria-hidden', 'false');
-      
-      // Lock body scroll on mobile
-      document.body.classList.add('overflow-hidden');
-      
-      // Trap focus
-      sidebarState.focusTrap = trapSidebarFocus(sidebarMobile);
-      
-      // Focus first focusable element
-      const firstFocusable = sidebarMobile.querySelector('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
-      if (firstFocusable) {
-        firstFocusable.focus();
-      }
-      
-      // Escape key handler
-      sidebarState.escapeHandler = (e) => {
-        if (e.key === 'Escape') {
-          window.toggleSidebar();
-        }
-      };
-      document.addEventListener('keydown', sidebarState.escapeHandler);
-      
-      sidebarState.isOpen = true;
-    } else {
-      // Closing sidebar
-      sidebarMobile.classList.add('hidden');
-      sidebarMobile.classList.remove('flex');
-      backdrop.classList.add('hidden');
-      
-      // Set ARIA attributes
-      sidebarMobile.setAttribute('aria-hidden', 'true');
-      backdrop.setAttribute('aria-hidden', 'true');
-      
-      // Restore body scroll
-      document.body.classList.remove('overflow-hidden');
-      
-      // Remove focus trap
-      if (sidebarState.focusTrap) {
-        sidebarState.focusTrap();
-        sidebarState.focusTrap = null;
-      }
-      
-      // Remove escape handler
-      if (sidebarState.escapeHandler) {
-        document.removeEventListener('keydown', sidebarState.escapeHandler);
-        sidebarState.escapeHandler = null;
-      }
-      
-      // Restore focus
-      if (sidebarState.previousActiveElement) {
-        sidebarState.previousActiveElement.focus();
-        sidebarState.previousActiveElement = null;
-      }
-      
-      sidebarState.isOpen = false;
-    }
-  }
-};
+// Conversations sidebar removed (simpler header controls + dropdown)
 
 // Load initial data when page loads
 window.addEventListener('DOMContentLoaded', async () => {
@@ -439,24 +313,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (window.innerWidth >= 768) {
     const sharedNav = document.getElementById('desktop-nav-shared');
     const chatNav = document.getElementById('chat-nav-sticky');
-    const desktopSidebar = document.getElementById('conversation-sidebar');
     const activeTab = getActiveTabFromURL();
     if (activeTab === 'chat') {
       if (sharedNav) sharedNav.style.display = 'none';
       if (chatNav) chatNav.style.display = 'block';
-      // Show sidebar on chat tab
-      if (desktopSidebar) {
-        desktopSidebar.classList.remove('hidden');
-        desktopSidebar.classList.add('flex');
-      }
     } else {
       if (sharedNav) sharedNav.style.display = 'flex';
       if (chatNav) chatNav.style.display = 'none';
-      // Hide sidebar on other tabs
-      if (desktopSidebar) {
-        desktopSidebar.classList.add('hidden');
-        desktopSidebar.classList.remove('flex');
-      }
     }
   }
   
@@ -538,24 +401,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
   
-  // Menu icon
-  const menuIcon = document.getElementById('menu-icon');
-  if (menuIcon) {
-    const icon = createIcon('Menu', { size: 20, color: 'currentColor' });
-    menuIcon.appendChild(icon);
-  }
-  
   // Plus icon
   const plusIcon = document.getElementById('plus-icon');
   if (plusIcon) {
     const icon = createIcon('Plus', { size: 14, color: 'currentColor' });
     plusIcon.appendChild(icon);
-  }
-  
-  const plusIconMobile = document.getElementById('plus-icon-mobile');
-  if (plusIconMobile) {
-    const icon = createIcon('Plus', { size: 14, color: 'currentColor' });
-    plusIconMobile.appendChild(icon);
   }
   
   // Send icons (mobile + desktop)
@@ -620,7 +470,10 @@ window.addEventListener('DOMContentLoaded', async () => {
         el.style.transform = 'translateY(0)';
         // Clean up after animation
         setTimeout(() => {
+          // IMPORTANT: clear transform so we don't break fixed positioning.
           el.style.transition = '';
+          el.style.opacity = '';
+          el.style.transform = '';
         }, 500);
       }, 100);
     }

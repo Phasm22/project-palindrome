@@ -7,11 +7,12 @@ const viewportHeight = Number(process.env.CENTER_CHECK_HEIGHT ?? "900");
 const threshold = Number(process.env.CENTER_CHECK_THRESHOLD ?? "2");
 
 const targets = [
-  { name: "banner-title", selector: "#chat .chat-banner-wrapper .chat-chrome-centered h1" },
-  { name: "chat-nav", selector: "#chat #chat-nav-sticky .chat-chrome-centered [role='tablist']" },
-  { name: "chat-messages", selector: "#chat-messages-desktop" },
-  { name: "chat-input-wrapper", selector: "#chat .chat-input-wrapper" },
-  { name: "chat-input-textarea", selector: "#chat .chat-desktop-container textarea#chat-input-desktop" },
+  { name: "banner-title", selector: "#chat .chat-banner-wrapper .chat-chrome-centered h1", required: true },
+  { name: "chat-nav", selector: "#chat #chat-nav-sticky .chat-chrome-centered > div", required: true },
+  // These can be hidden when no conversation is selected; treat as optional.
+  { name: "chat-messages", selector: "#chat-messages-desktop", required: false },
+  { name: "chat-input-wrapper", selector: "#chat .chat-input-wrapper", required: false },
+  { name: "chat-input-textarea", selector: "#chat .chat-desktop-container textarea#chat-input-desktop", required: false },
 ];
 
 const maxAlpha = Number(process.env.CENTER_CHECK_MAX_ALPHA ?? "0.45");
@@ -24,6 +25,7 @@ const styleChecks = [
 type MeasuredItem = {
   name: string;
   selector: string;
+  required?: boolean;
   top?: number;
   left?: number;
   width?: number;
@@ -39,16 +41,12 @@ const page = await browser.newPage({
 
 try {
   await page.goto(url, { waitUntil: "networkidle" });
-  await page.waitForSelector("#chat-messages-desktop", { timeout: 10000 });
+  await page.waitForSelector("#conversation-select", { timeout: 10000 });
+  await page.waitForSelector("#conversation-new-btn", { timeout: 10000 });
 
   const results = await page.evaluate(({ selectors, styles }) => {
-    const sidebar = document.querySelector("#conversation-sidebar");
-    const sidebarRect = sidebar?.getBoundingClientRect();
-    const sidebarWidth = sidebarRect?.width ?? 0;
     const viewportWidth = window.innerWidth;
-    const contentLeft = sidebarWidth;
-    const contentWidth = Math.max(0, viewportWidth - sidebarWidth);
-    const contentCenter = contentLeft + contentWidth / 2;
+    const contentCenter = viewportWidth / 2;
 
     const items = selectors.map((item: MeasuredItem) => {
       const el = document.querySelector(item.selector);
@@ -56,6 +54,10 @@ try {
         return { ...item, found: false };
       }
       const rect = el.getBoundingClientRect();
+      // Treat display:none (or fully collapsed) as not found for layout checks.
+      if (rect.width === 0 && rect.height === 0) {
+        return { ...item, found: false };
+      }
       return {
         ...item,
         found: true,
@@ -80,25 +82,88 @@ try {
       };
     });
 
+    const sidebarAbsent = !document.querySelector("#conversation-sidebar");
+
+    const buttonChecks = (() => {
+      const selectors = ["#conversation-new-btn", "#conversation-clear-btn"];
+      return selectors.map((selector) => {
+        const el = document.querySelector(selector) as HTMLElement | null;
+        if (!el) return { selector, found: false as const };
+        const rect = el.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const topEl = document.elementFromPoint(cx, cy);
+        const clickable = topEl ? el.contains(topEl) : false;
+        const inViewport =
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.top >= 0 &&
+          rect.left >= 0 &&
+          rect.bottom <= window.innerHeight &&
+          rect.right <= window.innerWidth;
+        return {
+          selector,
+          found: true as const,
+          inViewport,
+          clickable,
+          rect: {
+            top: rect.top,
+            left: rect.left,
+            right: rect.right,
+            bottom: rect.bottom,
+            width: rect.width,
+            height: rect.height,
+          },
+        };
+      });
+    })();
+
     return {
       viewport: { width: viewportWidth, height: window.innerHeight },
-      sidebarWidth,
       contentCenter,
       items,
       bgChecks,
+      sidebarAbsent,
+      buttonChecks,
     };
   }, { selectors: targets, styles: styleChecks });
 
   console.log(`URL: ${url}`);
   console.log(`Viewport: ${results.viewport.width}x${results.viewport.height}`);
-  console.log(`Sidebar width: ${results.sidebarWidth}px`);
   console.log(`Content center X: ${results.contentCenter.toFixed(2)}px`);
   console.log(`Threshold: ${threshold}px`);
   console.log("");
 
   let failed = false;
+
+  // Sidebar should be fully removed.
+  console.log(`[${results.sidebarAbsent ? "OK" : "OFF"}] conversation sidebar removed`);
+  if (!results.sidebarAbsent) failed = true;
+
+  // Sidebar header buttons should be visible and clickable (not covered by other layers)
+  console.log("");
+  for (const btn of results.buttonChecks ?? []) {
+    if (!btn.found) {
+      failed = true;
+      console.log(`[MISSING] button (${btn.selector})`);
+      continue;
+    }
+    const ok = Boolean(btn.inViewport && btn.clickable);
+    const rect = (btn as any).rect;
+    console.log(
+      `[${ok ? "OK" : "OFF"}] button ${btn.selector} inViewport=${btn.inViewport} clickable=${btn.clickable}` +
+        (rect ? ` rect=${JSON.stringify(rect)}` : "")
+    );
+    if (!ok) failed = true;
+  }
+
+  console.log("");
   for (const item of results.items) {
     if (!item.found || item.centerX === undefined) {
+      if (item.required === false) {
+        console.log(`[SKIP] ${item.name} (${item.selector})`);
+        continue;
+      }
       failed = true;
       console.log(`[MISSING] ${item.name} (${item.selector})`);
       continue;

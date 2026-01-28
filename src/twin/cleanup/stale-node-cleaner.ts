@@ -68,6 +68,15 @@ export class StaleNodeCleaner {
     } catch (error: any) {
       pceLogger.error("Stale node cleanup failed", { error: error.message });
       throw error;
+    } finally {
+      try {
+        await this.graphStore.close();
+      } catch (error: any) {
+        // Don't mask cleanup results, but do log for observability
+        pceLogger.warn("Failed to close Neo4j connection after stale cleanup", {
+          error: error?.message || String(error),
+        });
+      }
     }
   }
 
@@ -499,6 +508,10 @@ export class StaleNodeCleaner {
       // Get all storage from all configured Proxmox clusters
       const allConfigs = this.getAllProxmoxConfigs();
       const proxmoxStorageMap = new Map<string, Set<string>>(); // node -> storage names
+      // Nodes we couldn't fetch storage for (to avoid false "stale" deletions)
+      // Keyed by normalized node name (lowercase) for matching twin IDs.
+      const unreachableNodeKeys = new Set<string>();
+      const unreachableNodeKeysReported = new Set<string>();
 
       for (const config of allConfigs) {
         try {
@@ -522,19 +535,29 @@ export class StaleNodeCleaner {
 
           // Fetch storage for each node
           for (const node of clusterNodes) {
-            const nodeName = (node.node || node.name)?.toLowerCase();
-            if (!nodeName) continue;
+            const nodeApiName = (node.node || node.name) as string | undefined;
+            if (!nodeApiName) continue;
+            const nodeKey = nodeApiName.toLowerCase();
 
             try {
-              const storageResult = await client.get(`/nodes/${nodeName}/storage`);
+              // IMPORTANT: Proxmox node names can be case-sensitive.
+              // Call the API with the exact node name returned by Proxmox,
+              // but store keys normalized for matching twin IDs.
+              const storageResult = await client.get(`/nodes/${nodeApiName}/storage`);
               const storageList = storageResult.data?.data || [];
               const storageNames = new Set(
                 storageList.map((s: any) => s.storage?.toLowerCase()).filter(Boolean)
               );
-              proxmoxStorageMap.set(nodeName, storageNames);
+              proxmoxStorageMap.set(nodeKey, storageNames);
+              unreachableNodeKeys.delete(nodeKey);
             } catch (error: any) {
-              pceLogger.debug(`Failed to fetch storage for node ${nodeName}`, {
+              // Don't treat this as "no storage" — treat as "unknown" to avoid deletions
+              if (!proxmoxStorageMap.has(nodeKey)) {
+                unreachableNodeKeys.add(nodeKey);
+              }
+              pceLogger.debug(`Failed to fetch storage for node ${nodeApiName}`, {
                 error: error.message,
+                status: error?.response?.status,
               });
             }
           }
@@ -547,6 +570,7 @@ export class StaleNodeCleaner {
 
       // Find stale storage
       const staleStorageIds: string[] = [];
+      let skippedDueToUnreachableNode = 0;
 
       for (const twinStorageEntity of twinStorage) {
         // Extract node and storage name from ID: "storage:node:storageName"
@@ -558,6 +582,17 @@ export class StaleNodeCleaner {
 
         if (!nodeName || !storageName) continue;
 
+        if (unreachableNodeKeys.has(nodeName)) {
+          skippedDueToUnreachableNode++;
+          if (!unreachableNodeKeysReported.has(nodeName)) {
+            unreachableNodeKeysReported.add(nodeName);
+            result.details.push(
+              `Skipped stale-check for storage on node ${nodeName}: could not fetch storage from Proxmox (node unreachable / API error)`
+            );
+          }
+          continue;
+        }
+
         const nodeStorageSet = proxmoxStorageMap.get(nodeName);
         if (!nodeStorageSet || !nodeStorageSet.has(storageName)) {
           staleStorageIds.push(twinStorageEntity.id);
@@ -565,6 +600,12 @@ export class StaleNodeCleaner {
             `Storage ${twinStorageEntity.name || twinStorageEntity.id} not found on node ${nodeName}`
           );
         }
+      }
+
+      if (skippedDueToUnreachableNode > 0) {
+        result.details.push(
+          `Skipped ${skippedDueToUnreachableNode} storage stale-checks due to Proxmox node storage fetch failures (avoids false deletions)`
+        );
       }
 
       if (staleStorageIds.length > 0) {

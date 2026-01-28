@@ -153,18 +153,18 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     let source: string | null = null;
     if (idx < tokens.length && tokens[idx] === "from") {
       idx++;
-      if (idx < tokens.length) {
-        source = tokens[idx++];
-      }
+      const parsed = this.parseAddressSpec(tokens, idx);
+      source = parsed.spec;
+      idx = parsed.nextIdx;
     }
 
     // Parse "to [destination]"
     let destination: string | null = null;
     if (idx < tokens.length && tokens[idx] === "to") {
       idx++;
-      if (idx < tokens.length) {
-        destination = tokens[idx++];
-      }
+      const parsed = this.parseAddressSpec(tokens, idx);
+      destination = parsed.spec;
+      idx = parsed.nextIdx;
     }
 
     // Parse port (optional)
@@ -273,18 +273,18 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     let source: string | null = null;
     if (idx < tokens.length && tokens[idx] === "from") {
       idx++;
-      if (idx < tokens.length) {
-        source = tokens[idx++];
-      }
+      const parsed = this.parseAddressSpec(tokens, idx);
+      source = parsed.spec;
+      idx = parsed.nextIdx;
     }
 
     // Parse "to [destination]"
     let destination: string | null = null;
     if (idx < tokens.length && tokens[idx] === "to") {
       idx++;
-      if (idx < tokens.length) {
-        destination = tokens[idx++];
-      }
+      const parsed = this.parseAddressSpec(tokens, idx);
+      destination = parsed.spec;
+      idx = parsed.nextIdx;
     }
 
     // Parse port (for rdr)
@@ -370,6 +370,44 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
       tokens.push(current);
     }
     return tokens;
+  }
+
+  /**
+   * Parse a pfctl address spec starting at `startIdx`.
+   *
+   * pfctl can emit single tokens (e.g. "any", "192.168.1.0/24", "(em0)", "<alias>")
+   * or sets like "{ 10.0.0.0/8, 172.16.0.0/22 }" which span multiple tokens.
+   *
+   * We return a string that preserves the full spec (so later stages can extract CIDRs),
+   * and the next token index after the spec.
+   */
+  private parseAddressSpec(
+    tokens: string[],
+    startIdx: number
+  ): { spec: string | null; nextIdx: number } {
+    if (startIdx >= tokens.length) return { spec: null, nextIdx: startIdx };
+
+    const first = tokens[startIdx];
+    if (!first) return { spec: null, nextIdx: startIdx + 1 };
+
+    // Multi-token set: "{ ... }" (sometimes "{foo" or "bar}" depending on spacing)
+    if (first === "{" || first.startsWith("{")) {
+      const parts: string[] = [];
+      let i = startIdx;
+      while (i < tokens.length) {
+        const t = tokens[i];
+        parts.push(t);
+        if (t.includes("}")) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      return { spec: parts.join(" "), nextIdx: i };
+    }
+
+    // Default: single token
+    return { spec: first, nextIdx: startIdx + 1 };
   }
 
   /**
