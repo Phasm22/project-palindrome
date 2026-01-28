@@ -6,6 +6,7 @@ export enum TwinEntityType {
   NETWORK_INTERFACE = "network_interface",
   NETWORK_SUBNET = "network_subnet",
   FIREWALL_RULE = "firewall_rule",
+  STORAGE = "storage",
 }
 
 const BaseTwinEntitySchema = z.object({
@@ -84,12 +85,30 @@ export const FirewallRuleEntitySchema = BaseTwinEntitySchema.extend({
   }),
 });
 
+export const StorageEntitySchema = BaseTwinEntitySchema.extend({
+  type: z.literal(TwinEntityType.STORAGE),
+  data: z.object({
+    nodeName: z.string(), // Node where storage is located
+    storageName: z.string(), // Storage identifier (e.g., "local", "local-lvm", "nfs-share")
+    storageType: z.string(), // "dir", "lvm", "lvmthin", "nfs", "cephfs", etc.
+    content: z.array(z.string()).default([]), // ["images", "iso", "backup", etc.]
+    shared: z.boolean().default(false), // Whether storage is shared across nodes
+    active: z.boolean().default(true),
+    enabled: z.boolean().default(true),
+    usedBytes: z.number().optional(), // Storage used in bytes
+    availBytes: z.number().optional(), // Storage available in bytes
+    totalBytes: z.number().optional(), // Total storage in bytes
+    usedFraction: z.number().optional(), // Used fraction (0.0-1.0)
+  }),
+});
+
 export const TwinEntitySchema = z.union([
   ComputeNodeEntitySchema,
   ComputeVmEntitySchema,
   NetworkInterfaceEntitySchema,
   NetworkSubnetEntitySchema,
   FirewallRuleEntitySchema,
+  StorageEntitySchema,
 ]);
 
 export type TwinEntity = z.infer<typeof TwinEntitySchema>;
@@ -98,4 +117,5 @@ export type ComputeVmEntity = z.infer<typeof ComputeVmEntitySchema>;
 export type NetworkInterfaceEntity = z.infer<typeof NetworkInterfaceEntitySchema>;
 export type NetworkSubnetEntity = z.infer<typeof NetworkSubnetEntitySchema>;
 export type FirewallRuleEntity = z.infer<typeof FirewallRuleEntitySchema>;
+export type StorageEntity = z.infer<typeof StorageEntitySchema>;
 

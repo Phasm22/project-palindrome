@@ -37,6 +37,10 @@ async function runIngestion(docPath: string) {
   const redactor = new Redactor();
   const embeddingService = new EmbeddingService();
   const vectorStore = new QdrantVectorStore();
+  
+  // Clear vector store for test isolation
+  await vectorStore.clearCollection();
+  
   await vectorStore.initializeCollection(embeddingService.getDimension());
   const ingestionPipeline = new IngestionPipeline(
     snapshotLog,
@@ -57,6 +61,10 @@ async function runIngestion(docPath: string) {
 
   const graphStore = new Neo4jGraphStore();
   await graphStore.connect();
+  
+  // Clear graph store for test isolation
+  await graphStore.wipeAll();
+  
   const graphPipeline = new GraphIngestionPipeline(
     snapshotLog,
     rawStorage,

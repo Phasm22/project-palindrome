@@ -17,18 +17,11 @@
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
   <div class="mx-auto max-w-7xl px-4 md:px-6 py-3 md:py-6 flex flex-col">
-    <h1 class="text-xl md:text-3xl lg:text-4xl font-title-bold mb-2 md:mb-8 flex items-center gap-2 md:gap-3 animate-slide-up">
-      <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-16 md:h-16 lg:w-20 lg:h-20 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback').style.display='block';">
-      <span id="header-icon-fallback" class="text-primary-500 w-6 h-6 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
-      <span class="hidden sm:inline text-gradient-shimmer">Palindrome Dashboard</span>
-      <span class="sm:hidden text-gradient-shimmer text-lg">Palindrome</span>
-    </h1>
-
     <!-- Mobile: Dropdown menu for tabs -->
     <div class="md:hidden mb-2" id="mobile-tab-dropdown-container"></div>
 
-    <!-- Desktop: Horizontal tabs -->
-    <div class="hidden md:flex gap-2 mb-6 border-b-4 border-slate-600 overflow-x-auto" role="tablist" aria-label="Dashboard tabs">
+    <!-- Desktop: Navigation Bar (non-sticky for non-chat tabs) -->
+    <div id="desktop-nav-shared" class="hidden md:flex gap-2 border-b-4 border-slate-600 overflow-x-auto" style="background: rgba(2, 6, 24, 0.95); backdrop-filter: blur(8px); margin: 0 -1.5rem; padding: 0 1.5rem; padding-top: 0.75rem; padding-bottom: 0.75rem; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);" role="tablist" aria-label="Dashboard tabs">
       <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
         <span class="relative z-10">Chat</span>
         <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
@@ -239,6 +232,52 @@
     <!-- Chat Tab -->
     <!-- Chat Tab - iOS-style on mobile (no card), card on desktop -->
     <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col" role="tabpanel" aria-labelledby="chat-tab" aria-hidden="false">
+      <!-- Banner - scrolls with page (only in chat tab) -->
+      <div class="mx-auto max-w-7xl px-4 md:px-6 pt-3 md:pt-6 pb-2 md:pb-4">
+        <h1 class="text-xl md:text-3xl lg:text-4xl font-title-bold mb-2 md:mb-4 flex items-center gap-2 md:gap-3 animate-slide-up">
+          <img id="header-logo-chat" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-16 md:h-16 lg:w-20 lg:h-20 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback-chat').style.display='block';">
+          <span id="header-icon-fallback-chat" class="text-primary-500 w-6 h-6 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
+          <span class="hidden sm:inline text-gradient-shimmer">Palindrome Dashboard</span>
+          <span class="sm:hidden text-gradient-shimmer text-lg">Palindrome</span>
+        </h1>
+      </div>
+
+      <!-- Desktop: Sticky Navigation Bar (only in chat tab) -->
+      <div id="chat-nav-sticky" class="hidden md:block" style="position: -webkit-sticky; position: sticky; top: 0; z-index: 30; background: rgba(2, 6, 24, 0.95); backdrop-filter: blur(8px); box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3); margin-left: -1.5rem; margin-right: -1.5rem; width: calc(100% + 3rem); align-self: stretch;">
+        <div class="mx-auto max-w-7xl px-4 md:px-6">
+          <div class="flex gap-2 border-b-4 border-slate-600 overflow-x-auto py-3" role="tablist" aria-label="Dashboard tabs">
+            <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
+              <span class="relative z-10">Chat</span>
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+            </button>
+            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
+              <span class="relative z-10">Overview</span>
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+            </button>
+            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
+              <span class="relative z-10">Tool Executions</span>
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+            </button>
+            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
+              <span class="relative z-10">Reasoning Traces</span>
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+            </button>
+            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
+              <span class="relative z-10">Ontology Graph</span>
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+            </button>
+            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
+              <span class="relative z-10">RAG Diagnostics</span>
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+            </button>
+            <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
+              <span class="relative z-10">Query</span>
+              <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Mobile: Conversations button - compact -->
       <button id="sidebar-toggle" class="md:hidden mb-2 bg-transparent border border-slate-700/50 text-slate-400 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 min-h-[32px] self-start" onclick="window.toggleSidebar()">
         <span id="menu-icon"></span>
@@ -281,11 +320,12 @@
         </div>
       </div>
       
-      <!-- Desktop: Card wrapper -->
-      <div class="hidden md:flex card-elevated bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 flex-1 min-h-0 flex-row gap-6">
-        <!-- Desktop Conversation Sidebar -->
-        <div id="conversation-sidebar" class="flex w-64 flex-col rounded-lg bg-slate-950 min-w-0 flex-shrink-0">
-          <div class="p-4 border-b-2 border-slate-600 flex justify-between items-center flex-shrink-0">
+      <!-- Desktop: Sidebar + Full Page Chat Layout -->
+      <div class="hidden md:flex flex-1 min-h-0 relative" style="margin: 0 -1.5rem -1.5rem; width: calc(100% + 3rem);">
+        <!-- Desktop Conversation Sidebar - Sticky Left -->
+        <div id="conversation-sidebar" class="sticky top-0 h-screen w-64 flex-shrink-0 flex flex-col pl-6 pr-4 overflow-y-auto" style="max-height: 100vh;">
+          <!-- Sidebar Header - Floating -->
+          <div class="mb-2 flex justify-between items-center pt-2 flex-shrink-0">
             <h3 class="m-0 text-slate-200 text-base font-semibold">Conversations</h3>
             <button 
               id="new-conversation-btn"
@@ -297,22 +337,39 @@
               <span>New</span>
             </button>
           </div>
-          <div id="conversation-list" class="flex-1 overflow-y-auto p-4 min-h-0 flex flex-col gap-2">
+          <!-- Conversation List - Background only spans list height -->
+          <div id="conversation-list" class="flex flex-col gap-2 overflow-y-auto min-h-0 flex-1" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border: 1px solid #334155; border-radius: 0.75rem; padding: 1rem;">
             <div class="text-slate-400 text-center py-5 text-sm">
               Loading conversations...
             </div>
           </div>
         </div>
         
-        <!-- Desktop Chat Area -->
-        <div class="flex-1 flex flex-col min-w-0">
-          <div id="chat-messages-desktop" class="flex-1 overflow-y-auto px-4 py-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-xl mb-4 min-h-0 relative">
+        <!-- Desktop Chat Area - Full page, no box -->
+        <div class="flex-1 flex flex-col min-w-0 max-w-4xl mx-auto relative w-full">
+          <!-- Fade overlay at top -->
+          <div class="absolute top-0 left-0 right-0 h-16 bg-gradient-to-b from-slate-950 via-slate-950/80 to-transparent pointer-events-none z-10"></div>
+          
+          <!-- Scroll to bottom button -->
+          <button 
+            id="scroll-to-bottom-btn"
+            onclick="window.scrollChatToBottom()"
+            class="hidden fixed bottom-24 right-8 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white p-3 rounded-full shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-110 active:scale-95 z-20 flex items-center justify-center"
+            style="width: 48px; height: 48px;"
+            title="Scroll to bottom"
+          >
+            <span id="scroll-to-bottom-icon"></span>
+          </button>
+          
+          <!-- Chat messages - full page height, natural scroll -->
+          <div id="chat-messages-desktop" class="flex-1 px-4 py-6 mb-4 relative" style="min-height: calc(100vh - 180px);">
             <div class="text-slate-400 text-center py-6 text-sm">
               Select a conversation or create a new one to start chatting.
             </div>
           </div>
 
-          <div class="flex gap-3 items-end">
+          <!-- Input area - fixed at bottom -->
+          <div class="flex gap-3 items-end flex-shrink-0 pb-6 px-4">
             <textarea 
               id="chat-input-desktop" 
               placeholder="Ask me anything about your infrastructure..." 

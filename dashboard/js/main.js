@@ -221,6 +221,29 @@ window.switchTab = function(tabName, clickedElement) {
     }
   }
   
+  // Show/hide nav bars based on active tab (desktop only)
+  const sharedNav = document.getElementById('desktop-nav-shared');
+  const chatNav = document.getElementById('chat-nav-sticky');
+  if (window.innerWidth >= 768) {
+    if (tabName === 'chat') {
+      // Hide shared nav, show chat-specific sticky nav
+      if (sharedNav) {
+        sharedNav.style.display = 'none';
+      }
+      if (chatNav) {
+        chatNav.style.display = 'block';
+      }
+    } else {
+      // Show shared nav, hide chat-specific nav
+      if (sharedNav) {
+        sharedNav.style.display = 'flex';
+      }
+      if (chatNav) {
+        chatNav.style.display = 'none';
+      }
+    }
+  }
+  
   // Update mobile dropdown selector
   updateDropdown(tabName);
 };
@@ -368,12 +391,20 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Initialize custom dropdown for mobile tabs
   createCustomDropdown('mobile-tab-dropdown-container', 'chat');
   
+  // Set initial nav state (chat is default tab)
+  if (window.innerWidth >= 768) {
+    const sharedNav = document.getElementById('desktop-nav-shared');
+    const chatNav = document.getElementById('chat-nav-sticky');
+    if (sharedNav) sharedNav.style.display = 'none';
+    if (chatNav) chatNav.style.display = 'block';
+  }
+  
   // Initialize icons
   const { createIcon } = await import('./icons.js');
   
-  // Header logo - check if logo exists, otherwise use fallback icon
-  const headerLogo = document.getElementById('header-logo');
-  const headerIconFallback = document.getElementById('header-icon-fallback');
+  // Header logo - check if logo exists, otherwise use fallback icon (chat tab)
+  const headerLogo = document.getElementById('header-logo-chat') || document.getElementById('header-logo');
+  const headerIconFallback = document.getElementById('header-icon-fallback-chat') || document.getElementById('header-icon-fallback');
   
   if (headerLogo) {
     // Check if logo loaded successfully
@@ -470,6 +501,30 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (sendIconDesktop) {
     const icon = createIcon('Send', { size: 18, color: 'currentColor' });
     sendIconDesktop.appendChild(icon);
+  }
+  
+  // Scroll to bottom button icon
+  const scrollToBottomIcon = document.getElementById('scroll-to-bottom-icon');
+  if (scrollToBottomIcon) {
+    const icon = createIcon('ChevronDown', { size: 20, color: 'currentColor' });
+    scrollToBottomIcon.appendChild(icon);
+    
+    // Initialize button visibility check after a delay
+    setTimeout(() => {
+      const btn = document.getElementById('scroll-to-bottom-btn');
+      if (btn) {
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const windowHeight = window.innerHeight;
+        const documentHeight = document.documentElement.scrollHeight;
+        const distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+        const threshold = Math.max(windowHeight, 200);
+        if (distanceFromBottom > threshold) {
+          btn.classList.remove('hidden');
+        } else {
+          btn.classList.add('hidden');
+        }
+      }
+    }, 500);
   }
   
   // Navigation icons for overview (desktop floating nav)

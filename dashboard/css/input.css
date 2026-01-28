@@ -76,22 +76,13 @@
 }
 
 @layer components {
-  /* Card with elevation and hover effects - subtle borders */
+  /* Card with elevation - static container, no hover effects */
   .card-elevated {
     border: 1px solid #334155;
     box-shadow: 
       0 1px 3px rgba(0,0,0,0.3),
       0 10px 30px rgba(0,0,0,0.2),
       inset 0 1px 0 rgba(255,255,255,0.05);
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  
-  .card-elevated:hover {
-    border-color: #475569;
-    box-shadow: 
-      0 4px 6px rgba(0,0,0,0.4),
-      0 15px 40px rgba(0,0,0,0.3);
-    transform: translateY(-2px);
   }
   
   /* Button with glow effect - only for primary CTAs */
@@ -329,34 +320,14 @@
     }
   }
   
-  /* Stat card */
+  /* Stat card - static display, no hover effects */
   .stat-card {
     background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
     padding: 1.5rem;
     border-radius: 1rem;
     border: 2px solid #475569;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     position: relative;
     overflow: hidden;
-  }
-  
-  .stat-card::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(135deg, rgba(249, 115, 22, 0.05) 0%, transparent 100%);
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-  
-  .stat-card:hover {
-    border-color: rgba(249, 115, 22, 0.7);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 6px rgba(0,0,0,0.4), 0 15px 40px rgba(0,0,0,0.3), 0 0 20px rgba(249, 115, 22, 0.2);
-  }
-  
-  .stat-card:hover::before {
-    opacity: 1;
   }
   
   .stat-label {

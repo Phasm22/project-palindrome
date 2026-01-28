@@ -11,6 +11,7 @@
 import type { ProxmoxReadOnlyParams } from "./proxmox-readonly-tool";
 import { ProxmoxReadOnlyTool } from "./proxmox-readonly-tool";
 import { ProxmoxClient } from "../client";
+import { fetchNodeTemperature, getSummaryTemperature } from "./temperature-fetcher";
 
 export interface ProxmoxDocument {
   content: string;
@@ -130,8 +131,9 @@ export async function generateNodeProfileDocument(
             );
             if (!retryResult.error) {
               // Use the corrected result
-              const status = retryResult.data || {};
-              return buildNodeProfileDocument(node, status);
+              statusResult.data = retryResult.data;
+              statusResult.error = null;
+              // Continue with normal flow below
             }
           }
         }
@@ -185,6 +187,39 @@ export async function generateNodeProfileDocument(
     lines.push(`- Kernel: ${status.kversion}`);
     lines.push(`- PVE Version: ${status.pveversion || "N/A"}`);
     lines.push("");
+  }
+
+  // Fetch temperature data via SSH
+  try {
+    const tempData = await fetchNodeTemperature(node);
+    if (tempData && tempData.temperatures.length > 0) {
+      const summary = getSummaryTemperature(tempData);
+      lines.push("## Temperature");
+      if (summary) {
+        lines.push(`- Maximum: ${summary.max.toFixed(1)}°C`);
+        lines.push(`- Average: ${summary.avg.toFixed(1)}°C`);
+        lines.push(`- Sensors: ${summary.sensors}`);
+      }
+      
+      // Include individual sensor readings
+      if (tempData.temperatures.length <= 5) {
+        // If few sensors, list them all
+        for (const reading of tempData.temperatures) {
+          const label = reading.label || reading.sensor.split("/").pop() || reading.sensor;
+          let tempLine = `- ${label}: ${reading.value.toFixed(1)}°C`;
+          if (reading.max) tempLine += ` (max: ${reading.max.toFixed(1)}°C)`;
+          if (reading.crit) tempLine += ` (crit: ${reading.crit.toFixed(1)}°C)`;
+          lines.push(tempLine);
+        }
+      } else {
+        // If many sensors, just show summary
+        lines.push(`- Individual sensors: ${tempData.temperatures.length} sensors monitored`);
+      }
+      lines.push("");
+    }
+  } catch (error: any) {
+    // Temperature fetch is optional - don't fail the whole document generation
+    pceLogger.debug(`Failed to fetch temperature for node ${node}`, { error: error.message });
   }
 
   return {

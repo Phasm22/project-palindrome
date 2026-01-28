@@ -1,0 +1,57 @@
+# Dashboard UI: Hover Effects Policy
+
+**Glob pattern:** `dashboard/**/*.{ts,tsx,js,jsx,css,html}`
+
+## Core Principle
+
+**Static tiles and cards should NOT have hover effects unless they perform an action or reveal information on hover.**
+
+## Rules
+
+1. **No hover effects on static display cards:**
+   - Statistics cards that only show data (e.g., "Total Nodes", "Error Rate", "Avg Duration")
+   - Information panels that don't respond to interaction
+   - Static metric displays
+   - Read-only data containers
+
+2. **Hover effects ARE allowed for:**
+   - Interactive buttons (click actions)
+   - Clickable cards that navigate or trigger actions
+   - Filter/legend items that reveal or filter content on hover/click
+   - Expandable sections (details/summary elements)
+   - Cards that show tooltips or additional info on hover
+
+3. **Implementation:**
+   - Remove `hover:` classes from static cards
+   - Remove `transition-all` or `transition-*` from static cards (unless needed for other animations)
+   - Keep hover effects only on interactive elements
+   - Use `cursor-pointer` only for clickable elements
+
+## Examples
+
+**❌ Bad (static card with hover):**
+```html
+<div class="stat-card hover:border-primary-500 hover:bg-slate-800">
+  <div>Total Nodes: 78</div>
+</div>
+```
+
+**✅ Good (static card without hover):**
+```html
+<div class="stat-card">
+  <div>Total Nodes: 78</div>
+</div>
+```
+
+**✅ Good (interactive card with hover):**
+```html
+<button class="card hover:border-primary-500 cursor-pointer" onclick="doAction()">
+  Click to filter
+</button>
+```
+
+## CSS Classes
+
+- `.stat-card` - Should NOT have hover effects (static display)
+- `.card-elevated` - Check usage: if used for static containers, remove hover; if interactive, keep hover
+- Interactive elements - Keep hover effects for better UX

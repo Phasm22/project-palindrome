@@ -130,16 +130,9 @@ export function createCard(content, options = {}) {
   } = options;
 
   const card = document.createElement('div');
-  const baseClasses = `group relative bg-gradient-to-br from-slate-900 to-slate-800 border-2 border-slate-700 rounded-2xl ${padding} transition-all duration-300`;
-  const elevatedClasses = elevated ? 'card-elevated hover:border-primary-500/50' : '';
+  const baseClasses = `group relative bg-gradient-to-br from-slate-900 to-slate-800 border-2 border-slate-700 rounded-2xl ${padding}`;
+  const elevatedClasses = elevated ? 'card-elevated' : '';
   card.className = `${baseClasses} ${elevatedClasses} ${className}`;
-
-  // Add gradient overlay on hover
-  if (elevated) {
-    const overlay = document.createElement('div');
-    overlay.className = 'absolute inset-0 bg-gradient-to-br from-primary-500/5 to-transparent rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none';
-    card.appendChild(overlay);
-  }
 
   const contentWrapper = document.createElement('div');
   contentWrapper.className = 'relative z-10';

@@ -35,7 +35,7 @@ function formatVmList(
 
   for (const vm of vms) {
     const label = vm.name || vm.id || "Unnamed compute entity";
-    const vmType = vm.vmKind === "lxc" ? "LXC container" : "QEMU VM";
+    const vmType = vm.vmKind === "lxc" ? "LXC" : "VM";
     const state = vm.state ? vm.state : "unknown state";
     lines.push(`- ${label} (${vmType}, ${state})`);
 
@@ -101,7 +101,7 @@ export async function listVmsByNodeChain(
   // Handle special cases
   const finalNodeName = normalizedNode === "Proxbig" ? "proxBig" : 
                        normalizedNode === "Yang" ? "YANG" :
-                       normalizedNode === "Yin" ? "YIN" : normalizedNode;
+                       normalizedNode === "Yin" ? "yin" : normalizedNode;
 
   // Query for all VM types (qemu and lxc) to get complete list
   const [qemuResult, lxcResult] = await Promise.all([
@@ -142,36 +142,14 @@ export async function listVmsByNodeChain(
     return aId - bId;
   });
 
-  // Format response with VM IDs prominently displayed
-  const lines = [`VM IDs on node ${finalNodeName}:`];
+  // Format response - NO nodes section, only VMs
+  // Use same format as formatVmList for consistency
   if (!allVms.length) {
-    lines.push("- No VMs found in the digital twin for this node.");
-    lines.push("\nNote: The twin may be incomplete. Run Proxmox ingestion to sync all VMs.");
-    return lines.join("\n");
+    return "No VMs found in the digital twin for this node.\n\nNote: The twin may be incomplete. Run Proxmox ingestion to sync all VMs.";
   }
 
-  // Group by VM ID for clarity
-  for (const vm of allVms) {
-    const label = vm.name || "Unnamed VM";
-    const vmId = vm.id ? vm.id.split(':').pop() : "unknown";
-    const vmType = vm.vmKind === "lxc" ? "LXC container" : "QEMU VM";
-    const state = vm.state ? vm.state : "unknown state";
-    lines.push(`- VM ${vmId}: ${label} (${vmType}, ${state})`);
-    
-    const detailParts = [
-      vm.nodeName ? `node=${vm.nodeName}` : null,
-      `trace=${vm.id ?? "unknown"}`,
-    ].filter(Boolean);
-    if (detailParts.length > 0) {
-      lines.push(`  - Details: ${detailParts.join(" | ")}`);
-    }
-  }
-
-  lines.push(
-    "\nTip: Use twin_query with the trace ID above to retrieve raw fields for auditing."
-  );
-  lines.push("Note: If VMs are missing, the digital twin may need to be synced. Run Proxmox ingestion to update.");
-  return lines.join("\n");
+  // Use formatVmList helper for consistent formatting (no nodes)
+  return formatVmList("VMs on node " + finalNodeName + ":", allVms);
 }
 
 export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolSession): Promise<string> {

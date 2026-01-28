@@ -116,20 +116,28 @@ export async function loadGraph() {
     // Add nodes
     data.nodes.forEach(n => {
       const nodeId = n.id || n.properties?.id || Math.random().toString();
-      const nodeType = (n.type || n.labels?.[0] || 'unknown').toLowerCase();
+      // Normalize type - prioritize entityType, then type, then labels
+      const rawType = n.entityType || n.type || n.labels?.[0] || 'unknown';
+      const nodeType = String(rawType).toLowerCase();
       const degree = nodeDegrees[nodeId] || 0;
       const size = Math.max(8, Math.min(30, 8 + (degree / maxDegree) * 22)); // Size by degree: 8-30px
       
       const color = nodeTypeColors[nodeType] || nodeTypeColors['unknown'];
       
+      // Use displayName or name for label
+      const label = n.displayName || n.name || n.properties?.displayName || n.properties?.name || nodeId || 'Unknown';
+      
       graph.addNode(nodeId, {
-      label: n.name || n.properties?.name || n.id || 'Unknown',
+        label: label,
         size: size,
         color: color,
-        nodeType: nodeType, // Use nodeType instead of type to avoid Sigma.js renderer selection
+        nodeType: nodeType, // Normalized lowercase type for filtering
+        entityType: nodeType, // Also store as entityType for consistency
         degree: degree,
         x: Math.random() * 1000,
         y: Math.random() * 1000,
+        // Store all node data for tooltip
+        ...n,
         ...n.properties,
       });
     });
@@ -156,12 +164,15 @@ export async function loadGraph() {
     const nodeTypes = {};
     const edgeTypes = {};
     graph.forEachNode((node, attrs) => {
-      const type = attrs.nodeType || attrs.type || 'unknown';
+      // Get the actual entity type (prioritize entityType, then nodeType, then type)
+      const type = (attrs.entityType || attrs.nodeType || attrs.type || 'unknown').toLowerCase();
       nodeTypes[type] = (nodeTypes[type] || 0) + 1;
     });
     graph.forEachEdge((edge, attrs) => {
-      const type = attrs.type || 'unknown';
-      edgeTypes[type] = (edgeTypes[type] || 0) + 1;
+      const type = attrs.type || attrs.label || 'unknown';
+      if (type && type !== 'unknown' && type !== '') {
+        edgeTypes[type] = (edgeTypes[type] || 0) + 1;
+      }
     });
     
     const totalNodes = graph.order;
@@ -176,16 +187,16 @@ export async function loadGraph() {
         <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative min-h-[400px] md:h-[600px] lg:h-[800px] overflow-hidden" style="position: relative;">
           <!-- Zoom Controls -->
           <div class="absolute top-4 right-4 z-10 flex flex-col gap-2">
-            <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Zoom In">
+            <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Zoom In">
               <span class="zoom-icon-in"></span>
             </button>
-            <button id="zoom-out" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Zoom Out">
+            <button id="zoom-out" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Zoom Out">
               <span class="zoom-icon-out"></span>
             </button>
-            <button id="zoom-fit" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Fit to Screen">
+            <button id="zoom-fit" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Fit to Screen">
               <span class="zoom-icon-fit"></span>
             </button>
-            <button id="zoom-reset" class="bg-gradient-to-br from-slate-800 to-slate-700 hover:from-slate-700 hover:to-slate-600 border-2 border-slate-600 hover:border-primary-500 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-110 active:scale-95" title="Reset View">
+            <button id="zoom-reset" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Reset View">
               <span class="zoom-icon-reset"></span>
             </button>
           </div>
@@ -196,9 +207,10 @@ export async function loadGraph() {
               type="text" 
               id="node-search" 
               placeholder="Search nodes..." 
-              class="w-full px-4 py-2 bg-slate-800 border border-slate-600 rounded-lg text-slate-200 placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              class="w-full px-4 py-2.5 bg-slate-700/30 backdrop-blur-lg border border-slate-400/40 rounded-xl text-slate-100 placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:border-primary-500/80 shadow-xl transition-all"
+              style="box-shadow: inset 0 2px 4px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1), 0 4px 16px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05); background: linear-gradient(135deg, rgba(51,65,85,0.4) 0%, rgba(30,41,59,0.5) 100%);"
             />
-            <div id="search-results" class="mt-2 bg-slate-800 border border-slate-600 rounded-lg max-h-48 overflow-y-auto hidden"></div>
+            <div id="search-results" class="mt-2 bg-slate-700/30 backdrop-blur-lg border border-slate-400/40 rounded-xl max-h-48 overflow-y-auto hidden shadow-xl" style="box-shadow: 0 4px 16px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1); background: linear-gradient(135deg, rgba(51,65,85,0.4) 0%, rgba(30,41,59,0.5) 100%);"></div>
           </div>
           
           <div id="sigma-container" style="position: absolute; inset: 0; width: 100%; height: 100%;"></div>
@@ -207,22 +219,22 @@ export async function loadGraph() {
         <!-- Statistics and Legend Sidebar -->
         <div class="w-full md:w-80 flex flex-col gap-4 overflow-y-auto">
           <!-- Statistics Panel -->
-          <div class="bg-slate-950 border border-slate-700 rounded-lg p-4">
+          <div class="bg-slate-950/90 border-2 border-slate-500 rounded-xl p-4 shadow-sm">
             <h3 class="m-0 mb-4 text-slate-200 text-base font-semibold">Statistics</h3>
-            <div class="grid grid-cols-2 gap-3 mb-4">
-              <div class="p-3 bg-slate-900 rounded-lg text-center">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <div class="p-4 bg-slate-900/90 border-2 border-slate-500 rounded-xl text-center shadow-sm">
                 <div class="text-slate-400 text-xs mb-1">Total Nodes</div>
                 <div class="text-slate-100 text-2xl font-bold">${totalNodes}</div>
               </div>
-              <div class="p-3 bg-slate-900 rounded-lg text-center">
+              <div class="p-4 bg-slate-900/90 border-2 border-slate-500 rounded-xl text-center shadow-sm">
                 <div class="text-slate-400 text-xs mb-1">Total Edges</div>
                 <div class="text-slate-100 text-2xl font-bold">${totalEdges}</div>
               </div>
-              <div class="p-3 bg-slate-900 rounded-lg text-center">
+              <div class="p-4 bg-slate-900/90 border-2 border-slate-500 rounded-xl text-center shadow-sm">
                 <div class="text-slate-400 text-xs mb-1">Node Types</div>
                 <div class="text-slate-100 text-2xl font-bold">${uniqueNodeTypes}</div>
               </div>
-              <div class="p-3 bg-slate-900 rounded-lg text-center">
+              <div class="p-4 bg-slate-900/90 border-2 border-slate-500 rounded-xl text-center shadow-sm">
                 <div class="text-slate-400 text-xs mb-1">Edge Types</div>
                 <div class="text-slate-100 text-2xl font-bold">${uniqueEdgeTypes}</div>
               </div>
@@ -230,15 +242,17 @@ export async function loadGraph() {
           </div>
           
           <!-- Node Types Legend -->
-          <details class="bg-slate-950 border border-slate-700 rounded-lg p-4" open>
+          <details class="bg-slate-950/90 border-2 border-slate-500 rounded-xl p-4 shadow-sm" open>
             <summary class="cursor-pointer text-slate-200 font-semibold mb-3 text-base">Node Types</summary>
             <div class="flex flex-col gap-2">
               ${Object.entries(nodeTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => {
                 const color = nodeTypeColors[type] || nodeTypeColors['unknown'];
+                // Format type for display (replace underscores, capitalize)
+                const displayType = type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
                 return `
                 <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-type="${type}">
                   <div class="w-4 h-4 rounded-full" style="background: ${color}; border: 2px solid #334155;"></div>
-                  <div class="flex-1 text-slate-200 text-sm">${type}</div>
+                  <div class="flex-1 text-slate-200 text-sm">${displayType}</div>
                   <div class="text-slate-400 text-xs font-semibold">${count}</div>
                 </div>
               `;
@@ -246,8 +260,9 @@ export async function loadGraph() {
             </div>
           </details>
           
+          ${uniqueEdgeTypes > 0 ? `
           <!-- Edge Types Legend -->
-          <details class="bg-slate-950 border border-slate-700 rounded-lg p-4">
+          <details class="bg-slate-950/90 border-2 border-slate-500 rounded-xl p-4 shadow-sm">
             <summary class="cursor-pointer text-slate-200 font-semibold mb-3 text-base">Relationship Types</summary>
             <div class="flex flex-col gap-2">
               ${Object.entries(edgeTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => `
@@ -259,9 +274,10 @@ export async function loadGraph() {
               `).join('')}
             </div>
           </details>
+          ` : ''}
           
           <!-- Info Panel -->
-          <details class="bg-slate-950 border border-slate-700 rounded-lg p-4">
+          <details class="bg-slate-950/90 border-2 border-slate-500 rounded-xl p-4 shadow-sm">
             <summary class="cursor-pointer text-slate-200 font-semibold mb-3 text-base">About</summary>
             <div class="text-slate-400 text-sm leading-relaxed">
               <p class="m-0 mb-3">This graph visualizes the digital twin ontology, showing entities (nodes) and their relationships (edges).</p>
@@ -602,14 +618,55 @@ function initSigma() {
       animation: slide-up-fade 0.2s ease-out;
     `;
     
-    // Build accessible tooltip content
-    const label = nodeData.label || node;
+    // Build accessible tooltip content with meaningful data
+    const label = nodeData.label || nodeData.displayName || node;
+    const entityType = nodeData.entityType || nodeData.type || nodeData.nodeType || 'unknown';
+    
     let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${label}</strong><br>`;
-    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${nodeData.type || 'unknown'}</span><br>`;
-    tooltipContent += `<span style="color: ${colorPalette.textMuted}">Degree:</span> <span style="color: ${colorPalette.text}">${nodeData.degree || 0}</span><br>`;
-    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}">${nodeData.id}</span><br>`;
-    if (nodeData.purpose) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Purpose:</span> <span style="color: ${colorPalette.text}">${nodeData.purpose}</span><br>`;
-    if (nodeData.role) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Role:</span> <span style="color: ${colorPalette.text}">${nodeData.role}</span><br>`;
+    
+    // Show meaningful data based on entity type
+    if (entityType === 'compute_node') {
+      if (nodeData.status) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Status:</span> <span style="color: ${nodeData.status === 'online' ? colorPalette.success : colorPalette.error}">${nodeData.status}</span><br>`;
+      if (nodeData.data?.cpuTotalCores) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CPU Cores:</span> <span style="color: ${colorPalette.text}">${nodeData.data.cpuTotalCores}</span><br>`;
+      if (nodeData.data?.memoryTotalBytes) {
+        const memGB = (nodeData.data.memoryTotalBytes / (1024 ** 3)).toFixed(1);
+        tooltipContent += `<span style="color: ${colorPalette.textMuted}">Memory:</span> <span style="color: ${colorPalette.text}">${memGB} GB</span><br>`;
+      }
+    } else if (entityType === 'compute_vm') {
+      if (nodeData.state) tooltipContent += `<span style="color: ${colorPalette.textMuted}">State:</span> <span style="color: ${nodeData.state === 'running' ? colorPalette.success : colorPalette.error}">${nodeData.state}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
+      if (nodeData.vmKind) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Kind:</span> <span style="color: ${colorPalette.text}">${nodeData.vmKind.toUpperCase()}</span><br>`;
+      if (nodeData.data?.agentAvailable !== undefined) {
+        tooltipContent += `<span style="color: ${colorPalette.textMuted}">Agent:</span> <span style="color: ${nodeData.data.agentAvailable ? colorPalette.success : colorPalette.warning}">${nodeData.data.agentAvailable ? 'Available' : 'Missing'}</span><br>`;
+      }
+    } else if (entityType === 'network_interface') {
+      if (nodeData.status) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Status:</span> <span style="color: ${nodeData.status === 'up' ? colorPalette.success : colorPalette.error}">${nodeData.status}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
+      if (nodeData.primaryIp) tooltipContent += `<span style="color: ${colorPalette.textMuted}">IP:</span> <span style="color: ${colorPalette.text}">${nodeData.primaryIp}</span><br>`;
+      if (nodeData.data?.vlan) tooltipContent += `<span style="color: ${colorPalette.textMuted}">VLAN:</span> <span style="color: ${colorPalette.text}">${nodeData.data.vlan}</span><br>`;
+    } else if (entityType === 'network_subnet') {
+      if (nodeData.cidr) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CIDR:</span> <span style="color: ${colorPalette.text}">${nodeData.cidr}</span><br>`;
+      if (nodeData.gateway) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Gateway:</span> <span style="color: ${colorPalette.text}">${nodeData.gateway}</span><br>`;
+    } else if (entityType === 'firewall_rule') {
+      if (nodeData.action) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Action:</span> <span style="color: ${nodeData.action === 'pass' ? colorPalette.success : colorPalette.error}">${nodeData.action}</span><br>`;
+      if (nodeData.source) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Source:</span> <span style="color: ${colorPalette.text}">${nodeData.source}</span><br>`;
+      if (nodeData.destination) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Destination:</span> <span style="color: ${colorPalette.text}">${nodeData.destination}</span><br>`;
+      if (nodeData.protocol) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Protocol:</span> <span style="color: ${colorPalette.text}">${nodeData.protocol.toUpperCase()}</span><br>`;
+    } else if (entityType === 'storage') {
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
+      if (nodeData.data?.storageType) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${nodeData.data.storageType}</span><br>`;
+      if (nodeData.data?.totalBytes) {
+        const totalGB = (nodeData.data.totalBytes / (1024 ** 3)).toFixed(1);
+        const usedGB = nodeData.data.usedBytes ? (nodeData.data.usedBytes / (1024 ** 3)).toFixed(1) : '0';
+        tooltipContent += `<span style="color: ${colorPalette.textMuted}">Storage:</span> <span style="color: ${colorPalette.text}">${usedGB} / ${totalGB} GB</span><br>`;
+      }
+    } else {
+      // Fallback for other node types - show type but not degree
+      tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${entityType}</span><br>`;
+    }
+    
+    // Always show ID for reference
+    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}; font-size: 10px;">${nodeData.id}</span><br>`;
     
     tooltip.innerHTML = tooltipContent;
     document.body.appendChild(tooltip);
@@ -823,11 +880,14 @@ function setupFilters() {
   document.querySelectorAll('[data-filter-type]').forEach(el => {
     el.addEventListener('click', () => {
       const type = el.getAttribute('data-filter-type');
+      if (!type) return;
+      
       const nodesToShow = new Set();
       
       graph.forEachNode((node, attrs) => {
-        const nodeType = attrs.nodeType || attrs.type;
-        if (nodeType === type) {
+        // Check all possible type attributes (nodeType, entityType, type)
+        const nodeType = attrs.nodeType || attrs.entityType || attrs.type;
+        if (nodeType && nodeType.toLowerCase() === type.toLowerCase()) {
           nodesToShow.add(node);
           // Add connected nodes
           graph.forEachNeighbor(node, neighbor => {

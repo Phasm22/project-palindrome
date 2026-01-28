@@ -2,6 +2,7 @@ import { NetworkIngestionOrchestrator } from "../ingestion/network-ingestion";
 import { FirewallIngestionOrchestrator } from "../ingestion/firewall-ingestion";
 import { pceLogger as logger } from "../utils/logger";
 import { MetricsCollector } from "../metrics/collector";
+import { StaleNodeCleaner } from "../../twin/cleanup/stale-node-cleaner";
 import { $ } from "bun";
 
 /**
@@ -176,6 +177,31 @@ export class IngestionScheduler {
       this.metricsCollector.record("ingestion_scheduler_success_count", this.successCount);
       this.metricsCollector.record("ingestion_scheduler_failure_count", this.failureCount);
       
+      // Step 4: Clean stale nodes after ingestion
+      const cleanupStart = Date.now();
+      try {
+        logger.info("Running stale node cleanup...");
+        const cleaner = new StaleNodeCleaner();
+        const cleanupResults = await cleaner.cleanAll({ maxAgeMinutes: 10 });
+        const cleanupDuration = Date.now() - cleanupStart;
+        
+        const totalDeleted = cleanupResults.reduce((sum, r) => sum + r.deleted, 0);
+        if (totalDeleted > 0) {
+          logger.info("Stale node cleanup completed", {
+            durationMs: cleanupDuration,
+            deleted: totalDeleted,
+            results: cleanupResults.map(r => ({ type: r.entityType, deleted: r.deleted })),
+          });
+          this.metricsCollector.record("ingestion_scheduler_cleanup_deleted", totalDeleted);
+        } else {
+          logger.debug("No stale nodes found during cleanup");
+        }
+        this.metricsCollector.record("ingestion_scheduler_cleanup_duration_ms", cleanupDuration);
+      } catch (error: any) {
+        logger.warn("Stale node cleanup failed", { error: error.message });
+        // Don't fail ingestion if cleanup fails
+      }
+
       logger.info("Scheduled ingestion completed", {
         durationMs: duration,
         proxmoxDuration,

@@ -119,28 +119,31 @@ export class PceApiServer {
       url: `http://localhost:${this.server.port}`,
     });
 
-    // HTTPS server (optional, if certs exist)
-    const certPath = `${process.cwd()}/certs/cert.pem`;
-    const keyPath = `${process.cwd()}/certs/key.pem`;
-    const certFile = Bun.file(certPath);
-    const keyFile = Bun.file(keyPath);
-    
-    if (await certFile.exists() && await keyFile.exists()) {
-      const httpsPort = this.options.port + 443; // 4000 -> 4443
-      Bun.serve({
-        hostname: "0.0.0.0",
-        port: httpsPort,
-        fetch: (req, server) => this.handleRequest(req, server),
-        idleTimeout: 255,
-        tls: {
-          cert: certFile,
-          key: keyFile,
-        },
-      });
-      pceLogger.info("PCE API HTTPS server started", {
-        port: httpsPort,
-        url: `https://localhost:${httpsPort}`,
-      });
+    // HTTPS server (optional, if certs exist and port is not 0)
+    // Skip HTTPS when port is 0 (random port) to avoid permission issues
+    if (this.options.port !== 0) {
+      const certPath = `${process.cwd()}/certs/cert.pem`;
+      const keyPath = `${process.cwd()}/certs/key.pem`;
+      const certFile = Bun.file(certPath);
+      const keyFile = Bun.file(keyPath);
+      
+      if (await certFile.exists() && await keyFile.exists()) {
+        const httpsPort = this.options.port + 443; // 4000 -> 4443
+        Bun.serve({
+          hostname: "0.0.0.0",
+          port: httpsPort,
+          fetch: (req, server) => this.handleRequest(req, server),
+          idleTimeout: 255,
+          tls: {
+            cert: certFile,
+            key: keyFile,
+          },
+        });
+        pceLogger.info("PCE API HTTPS server started", {
+          port: httpsPort,
+          url: `https://localhost:${httpsPort}`,
+        });
+      }
     }
   }
 
@@ -733,8 +736,9 @@ export class PceApiServer {
       
       // Use neo4j.int() to ensure integer type for LIMIT clause
       const { int } = await import("neo4j-driver");
+      // Query TwinEntity nodes with their actual properties
       const result = await queryInterface.executeQuery(`
-        MATCH (n)-[r]->(m)
+        MATCH (n:TwinEntity)-[r]->(m:TwinEntity)
         RETURN n, r, m
         LIMIT $limit
       `, { limit: int(limitValue) });

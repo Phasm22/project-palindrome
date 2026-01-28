@@ -32,6 +32,7 @@ import {
   ParserRegistry,
   ProxmoxNodeParser,
   ProxmoxVmParser,
+  ProxmoxStorageParser,
 } from "../../parsers";
 import { TwinUpdateService } from "../../twin";
 import type { ExecutionContext } from "../../types/execution";
@@ -103,6 +104,7 @@ export class ProxmoxIngestionOrchestrator {
   private parserRegistry: ParserRegistry;
   private nodeParser: ProxmoxNodeParser;
   private vmParser: ProxmoxVmParser;
+  private storageParser: ProxmoxStorageParser;
   private twinUpdater: TwinUpdateService;
   private proxmoxTool: ProxmoxReadOnlyTool;
 
@@ -120,8 +122,10 @@ export class ProxmoxIngestionOrchestrator {
     this.parserRegistry = new ParserRegistry();
     this.nodeParser = new ProxmoxNodeParser();
     this.vmParser = new ProxmoxVmParser();
+    this.storageParser = new ProxmoxStorageParser();
     this.parserRegistry.register(this.nodeParser);
     this.parserRegistry.register(this.vmParser);
+    this.parserRegistry.register(this.storageParser);
     this.twinUpdater = new TwinUpdateService(this.graphStore);
     this.proxmoxTool = new ProxmoxReadOnlyTool();
   }
@@ -233,7 +237,11 @@ export class ProxmoxIngestionOrchestrator {
         nodes.push({
           id: nodeId,
           type: NodeType.PVE_NODE,
-          attributes: nodePayload,
+          attributes: {
+            ...nodePayload,
+            // Ensure temperature is included if present
+            temperature: nodePayload.temperature,
+          },
           versionHash: nodeVersionHash,
           sourcePath: `proxmox://node/${doc.metadata.node}`,
           aclGroup: options.aclGroup,
@@ -331,6 +339,50 @@ export class ProxmoxIngestionOrchestrator {
             const unit = match[2].toLowerCase();
             profile.maxmem = unit === "gb" ? value * 1024 * 1024 * 1024 : value * 1024 * 1024;
           }
+        }
+      } else if (line.startsWith("## Temperature")) {
+        // Parse temperature section
+        const tempReadings: any[] = [];
+        let maxTemp: number | undefined;
+        let avgTemp: number | undefined;
+        
+        // Look ahead for temperature data
+        for (let j = i + 1; j < lines.length && !lines[j].trim().startsWith("##"); j++) {
+          const tempLine = lines[j].trim();
+          if (tempLine.startsWith("- Maximum:")) {
+            const match = tempLine.match(/([\d.]+)°C/);
+            if (match) {
+              maxTemp = parseFloat(match[1]);
+            }
+          } else if (tempLine.startsWith("- Average:")) {
+            const match = tempLine.match(/([\d.]+)°C/);
+            if (match) {
+              avgTemp = parseFloat(match[1]);
+            }
+          } else if (tempLine.includes(":") && tempLine.includes("°C")) {
+            // Individual sensor reading: "- label: 45.0°C (max: 80.0°C)"
+            const sensorMatch = tempLine.match(/^-\s*([^:]+):\s*([\d.]+)°C/);
+            if (sensorMatch) {
+              const label = sensorMatch[1].trim();
+              const value = parseFloat(sensorMatch[2]);
+              const maxMatch = tempLine.match(/max:\s*([\d.]+)°C/);
+              const critMatch = tempLine.match(/crit:\s*([\d.]+)°C/);
+              tempReadings.push({
+                sensor: label,
+                value,
+                max: maxMatch ? parseFloat(maxMatch[1]) : undefined,
+                crit: critMatch ? parseFloat(critMatch[1]) : undefined,
+              });
+            }
+          }
+        }
+        
+        if (maxTemp !== undefined || tempReadings.length > 0) {
+          profile.temperature = {
+            max: maxTemp,
+            average: avgTemp,
+            sensors: tempReadings.length > 0 ? tempReadings : undefined,
+          };
         }
       }
     }
@@ -487,6 +539,41 @@ export class ProxmoxIngestionOrchestrator {
     return { vms };
   }
 
+  private async fetchStorageInventory(nodeNames: string[]): Promise<Array<{ node: string; storage: any[] }>> {
+    const storageData: Array<{ node: string; storage: any[] }> = [];
+
+    await Promise.all(
+      nodeNames.map(async (node) => {
+        try {
+          const result = await this.proxmoxTool.execute(
+            { action: "node_storage", node },
+            this.createToolContext(`node_storage:${node}`)
+          );
+
+          if (result.error) {
+            pceLogger.warn("Failed to fetch storage inventory for node", {
+              node,
+              error: result.error,
+            });
+            return;
+          }
+
+          const storageList = result.data?.storage ?? [];
+          if (storageList.length > 0) {
+            storageData.push({ node, storage: storageList });
+          }
+        } catch (error: any) {
+          pceLogger.warn("Error fetching storage for node", {
+            node,
+            error: error.message,
+          });
+        }
+      })
+    );
+
+    return storageData;
+  }
+
   private async ingestTwinInventory(): Promise<void> {
     const collectedAt = new Date();
     const nodeData = await this.fetchNodeInventory();
@@ -505,10 +592,26 @@ export class ProxmoxIngestionOrchestrator {
       collectedAt,
     });
 
-    const entities = [...nodeResult.entities, ...vmResult.entities];
+    // Fetch and parse storage for each node
+    const storageDataList = await this.fetchStorageInventory(nodeNames);
+    const storageResults = await Promise.all(
+      storageDataList.map((storageData) =>
+        this.storageParser.parse(storageData, {
+          source: "proxmox_readonly.node_storage",
+          collectedAt,
+        })
+      )
+    );
+
+    const entities = [
+      ...nodeResult.entities,
+      ...vmResult.entities,
+      ...storageResults.flatMap((r) => r.entities),
+    ];
     const relationships = [
       ...nodeResult.relationships,
       ...vmResult.relationships,
+      ...storageResults.flatMap((r) => r.relationships),
     ];
 
     if (!entities.length && !relationships.length) {
@@ -521,6 +624,7 @@ export class ProxmoxIngestionOrchestrator {
     pceLogger.info("Twin ingestion complete", {
       entities: entities.length,
       relationships: relationships.length,
+      storageEntities: storageResults.reduce((sum, r) => sum + r.entities.length, 0),
     });
   }
 

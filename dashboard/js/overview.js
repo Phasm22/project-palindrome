@@ -1,6 +1,87 @@
 import { API_URL, renderResponsiveTable } from './utils.js';
 import { createSkeletonStatsGrid } from './skeletons.js';
 
+/**
+ * Format duration in milliseconds to a human-readable string
+ * Examples: 8810ms -> "8.81s", 150ms -> "150ms", 120000ms -> "2m"
+ */
+function formatDuration(ms) {
+  if (!ms || ms === 0) return '0ms';
+  
+  const seconds = ms / 1000;
+  const minutes = seconds / 60;
+  const hours = minutes / 60;
+  
+  if (hours >= 1) {
+    const h = Math.floor(hours);
+    const m = Math.floor(minutes % 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  
+  if (minutes >= 1) {
+    const m = Math.floor(minutes);
+    const s = Math.floor(seconds % 60);
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }
+  
+  if (seconds >= 1) {
+    // Show 1-2 decimal places for seconds
+    if (seconds < 10) {
+      return `${seconds.toFixed(2)}s`;
+    }
+    return `${seconds.toFixed(1)}s`;
+  }
+  
+  // Less than 1 second, show milliseconds
+  return `${Math.round(ms)}ms`;
+}
+
+/**
+ * Format a date to relative time (e.g., "5 minutes ago", "2 hours ago", "3 days ago")
+ */
+function formatRelativeTime(dateString) {
+  if (!dateString) return 'Never';
+  
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return 'Invalid date';
+  
+  const now = new Date();
+  const diffMs = now - date;
+  const diffSeconds = Math.floor(diffMs / 1000);
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffHours = Math.floor(diffMinutes / 60);
+  const diffDays = Math.floor(diffHours / 24);
+  const diffWeeks = Math.floor(diffDays / 7);
+  const diffMonths = Math.floor(diffDays / 30);
+  const diffYears = Math.floor(diffDays / 365);
+  
+  if (diffSeconds < 60) {
+    return diffSeconds <= 0 ? 'just now' : `${diffSeconds} second${diffSeconds !== 1 ? 's' : ''} ago`;
+  }
+  
+  if (diffMinutes < 60) {
+    return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`;
+  }
+  
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+  }
+  
+  if (diffDays < 7) {
+    return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+  }
+  
+  if (diffWeeks < 4) {
+    return `${diffWeeks} week${diffWeeks !== 1 ? 's' : ''} ago`;
+  }
+  
+  if (diffMonths < 12) {
+    return `${diffMonths} month${diffMonths !== 1 ? 's' : ''} ago`;
+  }
+  
+  return `${diffYears} year${diffYears !== 1 ? 's' : ''} ago`;
+}
+
 export async function loadExecutionStats() {
   const element = document.getElementById('execution-stats');
   if (!element) return;
@@ -29,7 +110,7 @@ export async function loadExecutionStats() {
         </div>
         <div class="stat-card">
           <div class="stat-label">Avg Duration</div>
-          <div class="stat-value">${Math.round(stats.avgDurationMs || 0)}ms</div>
+          <div class="stat-value">${formatDuration(stats.avgDurationMs || 0)}</div>
         </div>
       </div>
       ${ingestion.active !== undefined ? `
@@ -57,12 +138,12 @@ export async function loadExecutionStats() {
             </div>
             <div class="stat-card">
               <div class="stat-label">Avg Duration</div>
-              <div class="stat-value">${Math.round(ingestion.avgDurationMs || 0)}ms</div>
+              <div class="stat-value">${formatDuration(ingestion.avgDurationMs || 0)}</div>
             </div>
             ${ingestion.lastRun ? `
               <div class="stat-card">
                 <div class="stat-label">Last Run</div>
-                <div class="stat-value" style="font-size: 0.9em;">${new Date(ingestion.lastRun).toLocaleString()}</div>
+                <div class="stat-value" style="font-size: 0.9em;">${formatRelativeTime(ingestion.lastRun)}</div>
               </div>
             ` : ''}
           </div>
@@ -73,19 +154,19 @@ export async function loadExecutionStats() {
                 ${ingestion.proxmoxAvgDurationMs ? `
                   <div>
                     <span style="color: #94a3b8;">Proxmox:</span>
-                    <span style="color: #e2e8f0; margin-left: 8px;">${Math.round(ingestion.proxmoxAvgDurationMs)}ms</span>
+                    <span style="color: #e2e8f0; margin-left: 8px;">${formatDuration(ingestion.proxmoxAvgDurationMs)}</span>
                   </div>
                 ` : ''}
                 ${ingestion.networkAvgDurationMs ? `
                   <div>
                     <span style="color: #94a3b8;">Network:</span>
-                    <span style="color: #e2e8f0; margin-left: 8px;">${Math.round(ingestion.networkAvgDurationMs)}ms</span>
+                    <span style="color: #e2e8f0; margin-left: 8px;">${formatDuration(ingestion.networkAvgDurationMs)}</span>
                   </div>
                 ` : ''}
                 ${ingestion.firewallAvgDurationMs ? `
                   <div>
                     <span style="color: #94a3b8;">Firewall:</span>
-                    <span style="color: #e2e8f0; margin-left: 8px;">${Math.round(ingestion.firewallAvgDurationMs)}ms</span>
+                    <span style="color: #e2e8f0; margin-left: 8px;">${formatDuration(ingestion.firewallAvgDurationMs)}</span>
                   </div>
                 ` : ''}
               </div>

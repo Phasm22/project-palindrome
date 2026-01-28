@@ -68,7 +68,7 @@ export class GraphQueryInterface {
             const nodeId = value.properties.id || (value.identity ? value.identity.toString() : null);
             if (!nodeId) return;
 
-            // Parse attributes JSON string back to object
+            // Parse attributes JSON string back to object (for knowledge graph nodes)
             let attributes = {};
             if (value.properties.attributes) {
               try {
@@ -80,14 +80,45 @@ export class GraphQueryInterface {
               }
             }
 
-            const nodeData = {
+            // For TwinEntity nodes, extract meaningful properties directly
+            // TwinEntity nodes have properties like: type, displayName, status, state, nodeName, etc.
+            const nodeData: any = {
               id: nodeId,
               type: value.labels[0] || "Entity",
+              name: value.properties.displayName || value.properties.name || nodeId,
               attributes,
               versionHash: value.properties.versionHash,
               sourcePath: value.properties.sourcePath,
               aclGroup: value.properties.aclGroup,
             };
+
+            // Extract TwinEntity-specific properties if this is a TwinEntity
+            if (value.labels.includes('TwinEntity')) {
+              // Parse dataJson if it exists
+              if (value.properties.dataJson) {
+                try {
+                  nodeData.data = typeof value.properties.dataJson === 'string'
+                    ? JSON.parse(value.properties.dataJson)
+                    : value.properties.dataJson;
+                } catch {
+                  nodeData.data = {};
+                }
+              }
+              
+              // Add denormalized properties for easy access
+              if (value.properties.type) nodeData.entityType = value.properties.type;
+              if (value.properties.displayName) nodeData.displayName = value.properties.displayName;
+              if (value.properties.status !== null && value.properties.status !== undefined) nodeData.status = value.properties.status;
+              if (value.properties.state !== null && value.properties.state !== undefined) nodeData.state = value.properties.state;
+              if (value.properties.nodeName) nodeData.nodeName = value.properties.nodeName;
+              if (value.properties.vmKind) nodeData.vmKind = value.properties.vmKind;
+              if (value.properties.primaryIp) nodeData.primaryIp = value.properties.primaryIp;
+              if (value.properties.cidr) nodeData.cidr = value.properties.cidr;
+              if (value.properties.action) nodeData.action = value.properties.action;
+              if (value.properties.source) nodeData.source = value.properties.source;
+              if (value.properties.destination) nodeData.destination = value.properties.destination;
+              if (value.properties.collectedAt) nodeData.collectedAt = value.properties.collectedAt;
+            }
 
             nodes.set(nodeId, nodeData);
             recordNodes.set(nodeId, nodeData);

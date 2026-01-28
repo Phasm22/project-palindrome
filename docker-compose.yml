@@ -81,7 +81,8 @@ services:
       # Increase file descriptors for large graph queries
       nofile: 65536
     healthcheck:
-      test: ["CMD", "curl", "-fsSL", "http://localhost:7474/db/data/"]
+      # Use wget instead of curl (curl not available in neo4j container)
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:7474"]
       interval: 60s  # Faster check on NVMe
       timeout: 3s    # NVMe latency is low
       retries: 3
@@ -182,7 +183,8 @@ services:
     # CPU pinning: Share cores with Grafana (low priority)
     # Can use any available core, but prefer not to conflict with Ollama
     healthcheck:
-      test: ["CMD", "curl", "-fsSL", "http://localhost:9090/-/healthy"]
+      # Use wget instead of curl (curl not available in prometheus container)
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
       interval: 60s  # Faster check on NVMe
       timeout: 3s    # Low latency
       retries: 3

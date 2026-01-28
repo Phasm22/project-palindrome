@@ -479,6 +479,28 @@ export class QdrantVectorStore {
   }
 
   /**
+   * Clear all points from collection (for test isolation)
+   * Deletes and recreates the collection
+   */
+  async clearCollection(): Promise<void> {
+    try {
+      const collections = await this.client.getCollections();
+      const existing = collections.collections.find((c: any) => c.name === this.collectionName);
+      
+      if (existing) {
+        await this.client.deleteCollection(this.collectionName);
+        pceLogger.info(`Cleared collection '${this.collectionName}' for test isolation`);
+      }
+      
+      // Recreate collection with same dimension
+      await this.initializeCollection(this.vectorDimension);
+    } catch (error: any) {
+      pceLogger.error("Failed to clear collection", { error: error.message });
+      throw error;
+    }
+  }
+
+  /**
    * Get collection info
    */
   async getCollectionInfo(): Promise<any> {

@@ -15,21 +15,93 @@ let shouldAutoScroll = true; // Whether to auto-scroll to bottom
 let scrollLockTimeout = null;
 let scrollHandlersAttached = false;
 let scrollScheduled = false; // Prevent multiple scroll operations
+let scrollToBottomBtn = null; // Scroll to bottom button reference
 
 /**
  * Global scroll handler - detects when user scrolls up during async operations
  */
 function handleScrollDuringAsync(e) {
-  if (!isAsyncOperationActive) return;
+  // Handle both container scroll and window scroll
+  const messagesDiv = e.target === window ? null : e.target;
   
-  const messagesDiv = e.target;
-  const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+  if (isAsyncOperationActive) {
+    let distanceFromBottom;
+    if (messagesDiv) {
+      distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+    } else {
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const windowHeight = window.innerHeight;
+      const documentHeight = document.documentElement.scrollHeight;
+      distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+    }
+    
+    // If user scrolled up more than 150px from bottom, disable auto-scroll
+    if (distanceFromBottom > 150) {
+      shouldAutoScroll = false;
+    }
+  }
   
-  // If user scrolled up more than 150px from bottom, disable auto-scroll
-  if (distanceFromBottom > 150) {
-    shouldAutoScroll = false;
+  // Always update scroll-to-bottom button visibility
+  updateScrollToBottomButton(messagesDiv);
+}
+
+/**
+ * Update scroll-to-bottom button visibility based on scroll position
+ */
+function updateScrollToBottomButton(messagesDiv) {
+  if (!scrollToBottomBtn) {
+    scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
+  }
+  if (!scrollToBottomBtn) return;
+  
+  // Always check window scroll for desktop (full-page chat)
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+  const windowHeight = window.innerHeight;
+  const documentHeight = document.documentElement.scrollHeight;
+  const distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+  
+  // Show button when more than 1 viewport height from bottom (or 200px minimum)
+  const threshold = Math.max(windowHeight, 200);
+  
+  if (distanceFromBottom > threshold) {
+    scrollToBottomBtn.classList.remove('hidden');
+  } else {
+    scrollToBottomBtn.classList.add('hidden');
   }
 }
+
+/**
+ * Scroll chat to bottom (called by button)
+ */
+window.scrollChatToBottom = function() {
+  // Always scroll the window for full-page chat
+  window.scrollTo({
+    top: document.documentElement.scrollHeight,
+    behavior: 'smooth'
+  });
+  
+  // Also handle container scroll for mobile
+  const containers = getChatMessageContainers();
+  containers.forEach(container => {
+    if (container && (container.style.maxHeight || container.classList.contains('overflow-y-auto'))) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  });
+  
+  shouldAutoScroll = true;
+  
+  // Hide button after scrolling
+  if (scrollToBottomBtn) {
+    setTimeout(() => {
+      if (scrollToBottomBtn) {
+        scrollToBottomBtn.classList.add('hidden');
+      }
+    }, 500);
+  }
+};
 
 // Helper: Get all chat message containers (mobile + desktop)
 function getChatMessageContainers() {
@@ -292,8 +364,10 @@ function formatAgentResponse(text) {
       
       const sectionName = trimmed.replace(':', '');
       if (sectionName === 'Cluster Nodes') {
-        inClusterNodes = true;
+        // Skip rendering Cluster Nodes section - user doesn't want to see nodes
+        inClusterNodes = false;
         inClusterVms = false;
+        continue;
       } else if (sectionName === 'Cluster VMs' || sectionName.includes('VMs')) {
         inClusterNodes = false;
         inClusterVms = true;
@@ -305,12 +379,8 @@ function formatAgentResponse(text) {
       continue;
     }
     
+    // Skip node entries - don't render them even if they appear in response
     if (inClusterNodes && trimmed.startsWith('- ')) {
-      const nodeMatch = trimmed.match(/^- (.+?) \(id=(.+?), vms=(\d+), status=(.+?)\)/);
-      if (nodeMatch) {
-        const [, name, id, vmCount, status] = nodeMatch;
-        nodeEntries.push({ name: name.trim(), id: id.trim(), vmCount: parseInt(vmCount), status: status.trim() });
-      }
       continue;
     }
     
@@ -337,13 +407,16 @@ function formatAgentResponse(text) {
         inVmEntry = true;
         currentVmName = vmName;
         const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-        const typeColor = vmType === 'QEMU VM' ? '#f97316' : '#ea580c';
+        // Shorten type tags: "QEMU VM" -> "VM", "LXC container" -> "LXC"
+        const shortType = vmType.includes('QEMU') || vmType === 'QEMU VM' ? 'VM' : 
+                         vmType.includes('LXC') || vmType === 'LXC container' ? 'LXC' : vmType.trim();
+        const typeColor = shortType === 'VM' ? '#f97316' : '#ea580c';
         currentVmHtml = `
           <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 2px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
               <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(vmName)}</strong>
-              <span style="background: ${typeColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
-              <span style="background: ${stateColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(state.trim())}</span>
+              <span style="background: ${typeColor}; color: white; padding: 1px 6px; border-radius: 3px; font-size: 0.6em; font-weight: 500;">${escapeHtml(shortType)}</span>
+              <span style="width: 8px; height: 8px; border-radius: 50%; background: ${stateColor}; display: inline-block;" title="${escapeHtml(state.trim())}"></span>
             </div>
         `;
       }
@@ -355,13 +428,16 @@ function formatAgentResponse(text) {
       if (nestedVmMatch && inVmEntry && currentVmHtml) {
         const [, name, vmType, state] = nestedVmMatch;
         const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-        const typeColor = vmType === 'QEMU VM' ? '#f97316' : '#ea580c';
+        // Shorten type tags: "QEMU VM" -> "VM", "LXC container" -> "LXC"
+        const shortType = vmType.includes('QEMU') || vmType === 'QEMU VM' ? 'VM' : 
+                         vmType.includes('LXC') || vmType === 'LXC container' ? 'LXC' : vmType.trim();
+        const typeColor = shortType === 'VM' ? '#f97316' : '#ea580c';
         currentVmHtml += `
           <div style="margin-top: 8px; margin-left: 16px; padding: 8px; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 4px; border-left: 2px solid ${typeColor};">
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
               <strong style="color: #cbd5e1; font-size: 0.95em;">${escapeHtml(name.trim())}</strong>
-              <span style="background: ${typeColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(vmType.trim())}</span>
-              <span style="background: ${stateColor}; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; font-weight: 600;">${escapeHtml(state.trim())}</span>
+              <span style="background: ${typeColor}; color: white; padding: 1px 5px; border-radius: 3px; font-size: 0.55em; font-weight: 500;">${escapeHtml(shortType)}</span>
+              <span style="width: 7px; height: 7px; border-radius: 50%; background: ${stateColor}; display: inline-block;" title="${escapeHtml(state.trim())}"></span>
             </div>
           </div>
         `;
@@ -409,11 +485,11 @@ function formatAgentResponse(text) {
     }
     
     if (trimmed.startsWith('Tip:')) {
-      html += `<div style="margin-top: 16px; padding: 10px; background: #431407; border-left: 2px solid #f97316; border-radius: 4px; font-size: 0.875em; color: #fed7aa;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px; color: #fdba74;">
+      html += `<div style="margin-top: 16px; padding: 10px; background: #1e293b; border-left: 2px solid #f97316; border-radius: 4px; font-size: 0.875em; color: #cbd5e1;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px; color: #f97316;">
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
         </svg>
-        <strong style="color: #93c5fd;">Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
+        <strong style="color: #f97316;">Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
       </div>`;
       continue;
     }
@@ -530,8 +606,22 @@ function updateChatMessage(messageId, newContent) {
     }
     
     // Check if user scrolled up (more than 150px from bottom)
-    const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
-    const wasNearBottom = distanceFromBottom < 150;
+    // Handle both container scroll and window scroll
+    let distanceFromBottom;
+    let wasNearBottom;
+    
+    if (messagesDiv && (messagesDiv.style.maxHeight || messagesDiv.classList.contains('overflow-y-auto'))) {
+      // Container scroll
+      distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+      wasNearBottom = distanceFromBottom < 150;
+    } else {
+      // Window scroll
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const windowHeight = window.innerHeight;
+      const documentHeight = document.documentElement.scrollHeight;
+      distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+      wasNearBottom = distanceFromBottom < 150;
+    }
     
     // If async operation is active and user hasn't scrolled up, lock to bottom
     const shouldLockScroll = isAsyncOperationActive && (wasNearBottom || shouldAutoScroll);
@@ -548,7 +638,21 @@ function updateChatMessage(messageId, newContent) {
     scrollScheduled = true;
     requestAnimationFrame(() => {
       containersToScroll.forEach(messagesDiv => {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        if (messagesDiv) {
+          // Check if it's a container scroll or page scroll
+          if (!messagesDiv.style.maxHeight || messagesDiv.style.maxHeight === '' || !messagesDiv.classList.contains('overflow-y-auto')) {
+            // Page scroll
+            window.scrollTo({
+              top: document.documentElement.scrollHeight,
+              behavior: 'auto'
+            });
+          } else {
+            // Container scroll
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+          }
+          // Update scroll button visibility
+          updateScrollToBottomButton(messagesDiv);
+        }
       });
       scrollScheduled = false;
     });
@@ -573,7 +677,17 @@ function lockScrollToBottom() {
     requestAnimationFrame(() => {
       getChatMessageContainers().forEach(messagesDiv => {
         if (!messagesDiv) return;
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        // Check if it's container scroll or page scroll
+        if (!messagesDiv.style.maxHeight || messagesDiv.style.maxHeight === '' || !messagesDiv.classList.contains('overflow-y-auto')) {
+          // Page scroll
+          window.scrollTo({
+            top: document.documentElement.scrollHeight,
+            behavior: 'auto'
+          });
+        } else {
+          // Container scroll
+          messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
       });
       scrollScheduled = false;
     });
@@ -581,11 +695,16 @@ function lockScrollToBottom() {
   
   // Attach scroll listeners once if not already attached
   if (!scrollHandlersAttached) {
+    // Attach to chat containers (for mobile)
     getChatMessageContainers().forEach(messagesDiv => {
-      if (messagesDiv) {
+      if (messagesDiv && (messagesDiv.style.maxHeight || messagesDiv.classList.contains('overflow-y-auto'))) {
         messagesDiv.addEventListener('scroll', handleScrollDuringAsync, { passive: true });
       }
     });
+    // Always attach to window scroll for full-page scrolling (desktop)
+    window.addEventListener('scroll', handleScrollDuringAsync, { passive: true });
+    // Initial check for scroll-to-bottom button visibility
+    updateScrollToBottomButton(null);
     scrollHandlersAttached = true;
   }
 }
@@ -740,8 +859,23 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
   
   containers.forEach(messagesDiv => {
     const clone = messageDiv.cloneNode(true);
-    const distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
-    const wasNearBottom = distanceFromBottom < 150;
+    
+    // Check scroll position - handle both container and window scroll
+    let distanceFromBottom;
+    let wasNearBottom;
+    
+    if (messagesDiv && (messagesDiv.style.maxHeight || messagesDiv.classList.contains('overflow-y-auto'))) {
+      // Container scroll
+      distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
+      wasNearBottom = distanceFromBottom < 150;
+    } else {
+      // Window scroll
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const windowHeight = window.innerHeight;
+      const documentHeight = document.documentElement.scrollHeight;
+      distanceFromBottom = documentHeight - (scrollTop + windowHeight);
+      wasNearBottom = distanceFromBottom < 150;
+    }
     
     messagesDiv.appendChild(clone);
     
@@ -757,7 +891,21 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     scrollScheduled = true;
     requestAnimationFrame(() => {
       containersToScroll.forEach(messagesDiv => {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        if (messagesDiv) {
+          // Check if it's container scroll or page scroll
+          if (!messagesDiv.style.maxHeight || messagesDiv.style.maxHeight === '' || !messagesDiv.classList.contains('overflow-y-auto')) {
+            // Page scroll
+            window.scrollTo({
+              top: document.documentElement.scrollHeight,
+              behavior: 'auto'
+            });
+          } else {
+            // Container scroll
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+          }
+          // Update scroll button visibility
+          updateScrollToBottomButton(messagesDiv);
+        }
       });
       scrollScheduled = false;
     });
@@ -1482,15 +1630,37 @@ export async function loadChatHistory(conversationId = null) {
       }
     });
 
-    // Scroll to bottom in all containers
+    // Scroll to bottom in all containers (OpenAI style - start at bottom)
     // Disable async scroll lock during history load (not an async operation)
     const wasAsyncActive = isAsyncOperationActive;
     isAsyncOperationActive = false;
-    containers.forEach(c => {
+    
+    // Always scroll page to bottom for full-page chat
+    requestAnimationFrame(() => {
+      window.scrollTo({
+        top: document.documentElement.scrollHeight,
+        behavior: 'auto'
+      });
       requestAnimationFrame(() => {
-        c.scrollTop = c.scrollHeight;
+        window.scrollTo({
+          top: document.documentElement.scrollHeight,
+          behavior: 'auto'
+        });
+        // Update button visibility after scroll
+        updateScrollToBottomButton(null);
       });
     });
+    
+    // Also handle container scroll for mobile
+    containers.forEach(c => {
+      if (c && (c.style.maxHeight || c.classList.contains('overflow-y-auto'))) {
+        requestAnimationFrame(() => {
+          c.scrollTop = c.scrollHeight;
+          updateScrollToBottomButton(c);
+        });
+      }
+    });
+    
     // Restore async state
     isAsyncOperationActive = wasAsyncActive;
   } catch (error) {

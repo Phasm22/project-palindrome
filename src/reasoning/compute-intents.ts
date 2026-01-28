@@ -65,12 +65,29 @@ function extractVmId(text: string): number | null {
 export function detectComputeIntent(userInput: string): ComputeIntent | null {
   const normalized = userInput.toLowerCase();
 
+  // Check for node-specific queries FIRST (before general "all VMs" pattern)
+  // This ensures "what are all the VMs on node yin?" matches vms_by_node, not describe_cluster
+  if ((normalized.includes("what are") || normalized.includes("show") || normalized.includes("list") || 
+       normalized.includes("which")) && normalized.includes("vm") && 
+      (normalized.includes("on") || normalized.includes("node"))) {
+    const nodeName = extractNodeName(userInput);
+    if (nodeName) {
+      return { type: "vms_by_node", nodeName };
+    }
+  }
+
   if (normalized.includes("describe") && normalized.includes("cluster")) {
     return { type: "describe_cluster" };
   }
 
   // Match "all VMs" or "all virtual machines" (whole word "all", not substring)
+  // BUT only if NOT asking about a specific node
   if (/\ball\b/.test(normalized) && (normalized.includes("vm") || normalized.includes("virtual machine"))) {
+    // Check if this is asking about a specific node - if so, use vms_by_node instead
+    const nodeName = extractNodeName(userInput);
+    if (nodeName) {
+      return { type: "vms_by_node", nodeName };
+    }
     return { type: "describe_cluster" };
   }
 
@@ -108,23 +125,7 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
     }
   }
 
-  // Handle "what are" queries about VMs on a node
-  if (normalized.includes("what are") && normalized.includes("vm") && 
-      (normalized.includes("on") || normalized.includes("node"))) {
-    const nodeName = extractNodeName(userInput);
-    if (nodeName) {
-      return { type: "vms_by_node", nodeName };
-    }
-  }
-
-  // Handle "show me" queries about VMs on a node
-  if (normalized.includes("show") && normalized.includes("vm") && 
-      (normalized.includes("on") || normalized.includes("node"))) {
-    const nodeName = extractNodeName(userInput);
-    if (nodeName) {
-      return { type: "vms_by_node", nodeName };
-    }
-  }
+  // These are now handled above in the priority check
 
   // Handle queries about a specific VM by ID: "what is vm 101?", "what is the name of vm 101?", "tell me about vm 101", etc.
   // Only match if it's NOT asking about VMs on a specific node (those are handled above)
