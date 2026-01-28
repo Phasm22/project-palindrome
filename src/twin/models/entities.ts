@@ -25,6 +25,19 @@ export const ComputeNodeEntitySchema = BaseTwinEntitySchema.extend({
     status: z.enum(["online", "degraded", "offline"]).optional(),
     cpuTotalCores: z.number().optional(),
     memoryTotalBytes: z.number().optional(),
+    temperature: z.object({
+      max: z.number().optional(),
+      average: z.number().optional(),
+      sensors: z.number().optional(),
+      readings: z.array(z.object({
+        sensor: z.string(),
+        label: z.string().optional(),
+        value: z.number(),
+        unit: z.literal("celsius"),
+        max: z.number().optional(),
+        crit: z.number().optional(),
+      })).optional(),
+    }).optional(),
   }),
 });
 

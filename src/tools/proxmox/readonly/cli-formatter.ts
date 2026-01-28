@@ -151,6 +151,39 @@ function formatDetailOutput(data: any, action: string): string {
     if (data.uptime_iso8601) {
       lines.push(`Uptime: ${data.uptime_iso8601}`);
     }
+  } else if (action === "node_temperature") {
+    lines.push(`Node: ${data.node || "N/A"}`);
+    lines.push("─".repeat(80));
+    if (data.available && data.temperature) {
+      const temp = data.temperature;
+      if (temp.max !== undefined) {
+        lines.push(`Maximum Temperature: ${temp.max.toFixed(1)}°C`);
+      }
+      if (temp.average !== undefined) {
+        lines.push(`Average Temperature: ${temp.average.toFixed(1)}°C`);
+      }
+      if (temp.sensors !== undefined) {
+        lines.push(`Sensors: ${temp.sensors}`);
+      }
+      if (temp.readings && temp.readings.length > 0) {
+        lines.push("");
+        lines.push("Sensor Readings:");
+        for (const reading of temp.readings) {
+          let readingLine = `  ${reading.label || reading.sensor}: ${reading.value.toFixed(1)}°C`;
+          if (reading.max) readingLine += ` (max: ${reading.max.toFixed(1)}°C)`;
+          if (reading.crit) readingLine += ` (crit: ${reading.crit.toFixed(1)}°C)`;
+          lines.push(readingLine);
+        }
+      }
+    } else {
+      lines.push(`Temperature: Not available`);
+      if (data.message) {
+        lines.push(`Reason: ${data.message}`);
+      }
+      if (data.error) {
+        lines.push(`Error: ${data.error}`);
+      }
+    }
   } else if (action.startsWith("get_vm_")) {
     lines.push(`VM ${data.vmid || "N/A"} on ${data.node || "N/A"}`);
     if (data.name) {

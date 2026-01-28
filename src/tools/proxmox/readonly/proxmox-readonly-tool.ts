@@ -7,6 +7,7 @@ import { ProxmoxClient } from "../client";
 import { normalizeProxmoxResponse, normalizeMemory } from "./normalization";
 import { pceLogger } from "../../../pce/utils/logger";
 import { promises as dns } from "dns";
+import { fetchNodeTemperature, getSummaryTemperature } from "./temperature-fetcher";
 
 /**
  * Schema for Proxmox read-only tool parameters
@@ -15,7 +16,7 @@ import { promises as dns } from "dns";
 export const ProxmoxReadOnlyParams = z.object({
   action: z
     .enum([
-      // Node-Level (7 actions)
+      // Node-Level (8 actions)
       "list_nodes",
       "node_status",
       "node_storage",
@@ -23,6 +24,7 @@ export const ProxmoxReadOnlyParams = z.object({
       "node_tasks",
       "node_disks",
       "node_network_interfaces",
+      "node_temperature",
 
       // VM-Level (7 actions)
       "list_vms",
@@ -123,11 +125,16 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           description: "Get LXC container configuration",
           parameters: { action: "get_lxc_config", node: "YANG", vmid: 100 },
         },
+        {
+          description: "Get node temperature via hardware sensors",
+          parameters: { action: "node_temperature", node: "proxBig" },
+        },
       ],
       notes: [
         "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
         "All responses are structured JSON objects with normalized data (memory in MB/GB, timestamps in ISO8601).",
         "get_vm_ip requires guest agent enabled in VM config and API token with VM.Monitor + VM.Audit permissions. Returns 403 if permissions insufficient or guest agent unavailable.",
+        "node_temperature fetches temperature data via SSH sensors command. Requires SSH access to the node.",
         "Internal IP addresses, MAC addresses, and credentials are automatically sanitized from responses.",
       ],
     });
@@ -290,6 +297,14 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           networkResult.data._hint = `Note: Node name "${originalNodeNetwork}" was normalized to "${normalizedNodeNetwork}". For future queries, use the exact node name "${normalizedNodeNetwork}" or call "list_nodes" first to see available nodes.`;
         }
         return networkResult;
+
+      case "node_temperature":
+        if (!params.node) {
+          throw new Error("node parameter required for node_temperature");
+        }
+        const originalNodeTemp = params.node;
+        const normalizedNodeTemp = await this.normalizeNodeName(client, params.node);
+        return this.getNodeTemperature(normalizedNodeTemp);
 
       case "list_vms": {
         // If node is not provided, use cluster_resources to list all VMs across the cluster
@@ -1028,6 +1043,74 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       data: { node, interfaces: normalized, count: normalized.length },
       metadata: result.metadata,
     };
+  }
+
+  /**
+   * Get node temperature via SSH sensors
+   */
+  private async getNodeTemperature(
+    node: string
+  ): Promise<{ data: any; metadata: any }> {
+    try {
+      const tempData = await fetchNodeTemperature(node);
+      
+      if (!tempData || tempData.temperatures.length === 0) {
+        return {
+          data: {
+            node,
+            temperature: null,
+            available: false,
+            message: "Temperature data not available via sensors",
+          },
+          metadata: {
+            source: "ssh_sensors",
+            timestamp: new Date().toISOString(),
+          },
+        };
+      }
+
+      const summary = getSummaryTemperature(tempData);
+      
+      return {
+        data: {
+          node,
+          temperature: {
+            max: summary?.max,
+            average: summary?.avg,
+            sensors: tempData.temperatures.length,
+            readings: tempData.temperatures.map((t) => ({
+              sensor: t.sensor,
+              label: t.label || t.sensor.split("/").pop(),
+              value: t.value,
+              unit: t.unit,
+              max: t.max,
+              crit: t.crit,
+            })),
+          },
+          available: true,
+        },
+        metadata: {
+          source: "ssh_sensors",
+          timestamp: tempData.timestamp,
+        },
+      };
+    } catch (error: any) {
+      pceLogger.warn(`Failed to fetch temperature for node ${node}`, {
+        error: error.message,
+      });
+      return {
+        data: {
+          node,
+          temperature: null,
+          available: false,
+          error: error.message,
+        },
+        metadata: {
+          source: "ssh_sensors",
+          timestamp: new Date().toISOString(),
+        },
+      };
+    }
   }
 
   /**

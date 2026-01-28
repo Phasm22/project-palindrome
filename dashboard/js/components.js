@@ -223,20 +223,20 @@ export function createConversationItem(conversation, options = {}) {
   const item = document.createElement('div');
   item.className = `flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors group ${
     isActive 
-      ? 'bg-slate-800/80 border border-primary-500/30 text-primary-400' 
-      : 'bg-slate-800/60 hover:bg-slate-800/80 border border-slate-700/50 text-slate-200'
+      ? 'bg-slate-900/70 border border-primary-500/40 text-slate-100' 
+      : 'bg-slate-900/60 hover:bg-slate-900/80 border border-slate-800 text-slate-200'
   }`;
 
   const content = document.createElement('div');
   content.className = 'flex-1 min-w-0';
   
   const title = document.createElement('div');
-  title.className = 'font-medium text-sm truncate';
+  title.className = 'font-normal text-sm text-slate-200 truncate';
   title.textContent = conversation.title || 'New Conversation';
   content.appendChild(title);
 
   const meta = document.createElement('div');
-  meta.className = 'text-xs text-slate-400 mt-1';
+  meta.className = 'text-xs text-slate-500 mt-1';
   meta.textContent = `${conversation.messageCount || 0} message${conversation.messageCount !== 1 ? 's' : ''}`;
   content.appendChild(meta);
 

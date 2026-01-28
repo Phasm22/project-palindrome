@@ -38,7 +38,8 @@ export function createCustomDropdown(containerId, currentTab = 'chat') {
   
   // Create dropdown menu
   const menu = document.createElement('div');
-  menu.className = 'absolute top-full left-0 right-0 mt-2 bg-slate-900 border-2 border-slate-600 rounded-xl shadow-xl z-50 max-h-[70vh] overflow-y-auto hidden';
+  menu.className = 'absolute top-full left-0 right-0 mt-2 bg-slate-900 border-2 border-slate-600 rounded-xl shadow-xl max-h-[70vh] overflow-y-auto hidden';
+  menu.style.cssText = `z-index: var(--z-dropdown);`;
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-orientation', 'vertical');
   

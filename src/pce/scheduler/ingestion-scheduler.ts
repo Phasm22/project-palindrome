@@ -11,10 +11,47 @@ import { $ } from "bun";
  * Runs periodic ingestion to keep the digital twin and vector store up to date.
  * Currently runs full ingestion every 5 minutes.
  */
+export interface IngestionRunDetails {
+  timestamp: Date;
+  duration: number;
+  success: boolean;
+  proxmox: {
+    success: boolean;
+    duration: number;
+    error?: string;
+  };
+  network: {
+    success: boolean;
+    duration: number;
+    entities?: number;
+    relationships?: number;
+    error?: string;
+  };
+  firewall: {
+    success: boolean;
+    duration: number;
+    entities?: number;
+    relationships?: number;
+    error?: string;
+  };
+  cleanup: {
+    duration: number;
+    deleted: number;
+    error?: string;
+  };
+  temperature?: {
+    nodesWithTemp: number;
+    nodesWithoutTemp: number;
+  };
+}
+
 export class IngestionScheduler {
   private interval: NodeJS.Timeout | null = null;
   private isRunning = false;
   private lastRun: Date | null = null;
+  private lastRunDetails: IngestionRunDetails | null = null;
+  private runHistory: IngestionRunDetails[] = [];
+  private maxHistorySize = 20; // Keep last 20 runs
   private intervalMs: number;
   private metricsCollector: MetricsCollector;
   private runCount = 0;
@@ -74,6 +111,27 @@ export class IngestionScheduler {
   }
 
   /**
+   * Get last run details
+   */
+  getLastRunDetails(): IngestionRunDetails | null {
+    return this.lastRunDetails;
+  }
+
+  /**
+   * Get run history
+   */
+  getRunHistory(limit: number = 10): IngestionRunDetails[] {
+    return this.runHistory.slice(-limit);
+  }
+
+  /**
+   * Check if currently running
+   */
+  getIsRunning(): boolean {
+    return this.isRunning;
+  }
+
+  /**
    * Run full ingestion (Proxmox + Network + Firewall)
    */
   private async runIngestion() {
@@ -93,6 +151,14 @@ export class IngestionScheduler {
     let proxmoxDuration = 0;
     let networkDuration = 0;
     let firewallDuration = 0;
+    let proxmoxError: string | undefined;
+    let networkError: string | undefined;
+    let networkEntities = 0;
+    let networkRelationships = 0;
+    let firewallError: string | undefined;
+    let firewallEntities = 0;
+    let firewallRelationships = 0;
+    let temperatureStats: { nodesWithTemp: number; nodesWithoutTemp: number } | undefined;
 
     try {
       logger.info("Starting scheduled ingestion");
@@ -101,17 +167,28 @@ export class IngestionScheduler {
       const proxmoxStart = Date.now();
       try {
         logger.info("Running Proxmox ingestion...");
-        await $`bun run scripts/ingest-proxmox.ts`.quiet();
+        const result = await $`bun run scripts/ingest-proxmox.ts`.quiet();
         proxmoxDuration = Date.now() - proxmoxStart;
         proxmoxSuccess = true;
         logger.info("Proxmox ingestion completed");
         this.metricsCollector.record("ingestion_scheduler_proxmox_duration_ms", proxmoxDuration, { status: "success" });
         this.metricsCollector.record("ingestion_scheduler_proxmox_success", 1);
+        
+        // Try to extract temperature stats from logs (if available)
+        // This is a best-effort - we'll track it better in future iterations
       } catch (error: any) {
         proxmoxDuration = Date.now() - proxmoxStart;
+        proxmoxError = error.message || String(error);
+        if (error.stderr) {
+          const stderrStr = error.stderr.toString();
+          if (stderrStr.length < 500) {
+            proxmoxError = stderrStr;
+          } else {
+            proxmoxError = `${error.message} (see logs for details)`;
+          }
+        }
         logger.error("Proxmox ingestion failed", {
-          error: error.message,
-          stderr: error.stderr?.toString(),
+          error: proxmoxError,
         });
         this.metricsCollector.record("ingestion_scheduler_proxmox_duration_ms", proxmoxDuration, { status: "failure" });
         this.metricsCollector.record("ingestion_scheduler_proxmox_failure", 1);
@@ -126,12 +203,14 @@ export class IngestionScheduler {
         await networkOrchestrator.ingestNetwork();
         networkDuration = Date.now() - networkStart;
         networkSuccess = true;
+        // Note: Network ingestion doesn't return counts, but we can track from logs
         logger.info("Network ingestion completed");
         this.metricsCollector.record("ingestion_scheduler_network_duration_ms", networkDuration, { status: "success" });
         this.metricsCollector.record("ingestion_scheduler_network_success", 1);
       } catch (error: any) {
         networkDuration = Date.now() - networkStart;
-        logger.error("Network ingestion failed", { error: error.message });
+        networkError = error.message || String(error);
+        logger.error("Network ingestion failed", { error: networkError });
         this.metricsCollector.record("ingestion_scheduler_network_duration_ms", networkDuration, { status: "failure" });
         this.metricsCollector.record("ingestion_scheduler_network_failure", 1);
       } finally {
@@ -147,12 +226,14 @@ export class IngestionScheduler {
         await firewallOrchestrator.ingestFirewall();
         firewallDuration = Date.now() - firewallStart;
         firewallSuccess = true;
+        // Note: Firewall ingestion doesn't return counts, but we can track from logs
         logger.info("Firewall ingestion completed");
         this.metricsCollector.record("ingestion_scheduler_firewall_duration_ms", firewallDuration, { status: "success" });
         this.metricsCollector.record("ingestion_scheduler_firewall_success", 1);
       } catch (error: any) {
         firewallDuration = Date.now() - firewallStart;
-        logger.error("Firewall ingestion failed", { error: error.message });
+        firewallError = error.message || String(error);
+        logger.error("Firewall ingestion failed", { error: firewallError });
         this.metricsCollector.record("ingestion_scheduler_firewall_duration_ms", firewallDuration, { status: "failure" });
         this.metricsCollector.record("ingestion_scheduler_firewall_failure", 1);
       } finally {
@@ -162,6 +243,34 @@ export class IngestionScheduler {
       const duration = Date.now() - startTime;
       this.lastRun = new Date();
       
+      // Step 4: Clean stale nodes after ingestion
+      const cleanupStart = Date.now();
+      let cleanupDeleted = 0;
+      let cleanupError: string | undefined;
+      try {
+        logger.info("Running stale node cleanup...");
+        const cleaner = new StaleNodeCleaner();
+        const cleanupResults = await cleaner.cleanAll({ maxAgeMinutes: 10 });
+        const cleanupDuration = Date.now() - cleanupStart;
+        
+        cleanupDeleted = cleanupResults.reduce((sum, r) => sum + r.deleted, 0);
+        if (cleanupDeleted > 0) {
+          logger.info("Stale node cleanup completed", {
+            durationMs: cleanupDuration,
+            deleted: cleanupDeleted,
+            results: cleanupResults.map(r => ({ type: r.entityType, deleted: r.deleted })),
+          });
+          this.metricsCollector.record("ingestion_scheduler_cleanup_deleted", cleanupDeleted);
+        } else {
+          logger.debug("No stale nodes found during cleanup");
+        }
+        this.metricsCollector.record("ingestion_scheduler_cleanup_duration_ms", cleanupDuration);
+      } catch (error: any) {
+        cleanupError = error.message || String(error);
+        logger.warn("Stale node cleanup failed", { error: cleanupError });
+        // Don't fail ingestion if cleanup fails
+      }
+
       // Record overall metrics
       const overallSuccess = proxmoxSuccess && networkSuccess && firewallSuccess;
       if (overallSuccess) {
@@ -176,30 +285,45 @@ export class IngestionScheduler {
       this.metricsCollector.record("ingestion_scheduler_run_count", this.runCount);
       this.metricsCollector.record("ingestion_scheduler_success_count", this.successCount);
       this.metricsCollector.record("ingestion_scheduler_failure_count", this.failureCount);
+
+      // Store run details
+      const runDetails: IngestionRunDetails = {
+        timestamp: this.lastRun,
+        duration,
+        success: overallSuccess,
+        proxmox: {
+          success: proxmoxSuccess,
+          duration: proxmoxDuration,
+          error: proxmoxError,
+        },
+        network: {
+          success: networkSuccess,
+          duration: networkDuration,
+          entities: networkEntities,
+          relationships: networkRelationships,
+          error: networkError,
+        },
+        firewall: {
+          success: firewallSuccess,
+          duration: firewallDuration,
+          entities: firewallEntities,
+          relationships: firewallRelationships,
+          error: firewallError,
+        },
+        cleanup: {
+          duration: Date.now() - cleanupStart,
+          deleted: cleanupDeleted,
+          error: cleanupError,
+        },
+        temperature: temperatureStats,
+      };
+
+      this.lastRunDetails = runDetails;
+      this.runHistory.push(runDetails);
       
-      // Step 4: Clean stale nodes after ingestion
-      const cleanupStart = Date.now();
-      try {
-        logger.info("Running stale node cleanup...");
-        const cleaner = new StaleNodeCleaner();
-        const cleanupResults = await cleaner.cleanAll({ maxAgeMinutes: 10 });
-        const cleanupDuration = Date.now() - cleanupStart;
-        
-        const totalDeleted = cleanupResults.reduce((sum, r) => sum + r.deleted, 0);
-        if (totalDeleted > 0) {
-          logger.info("Stale node cleanup completed", {
-            durationMs: cleanupDuration,
-            deleted: totalDeleted,
-            results: cleanupResults.map(r => ({ type: r.entityType, deleted: r.deleted })),
-          });
-          this.metricsCollector.record("ingestion_scheduler_cleanup_deleted", totalDeleted);
-        } else {
-          logger.debug("No stale nodes found during cleanup");
-        }
-        this.metricsCollector.record("ingestion_scheduler_cleanup_duration_ms", cleanupDuration);
-      } catch (error: any) {
-        logger.warn("Stale node cleanup failed", { error: error.message });
-        // Don't fail ingestion if cleanup fails
+      // Keep only last N runs
+      if (this.runHistory.length > this.maxHistorySize) {
+        this.runHistory.shift();
       }
 
       logger.info("Scheduled ingestion completed", {

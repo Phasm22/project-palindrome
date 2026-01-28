@@ -2,6 +2,13 @@ import { API_URL } from './utils.js';
 import { addTooltip, createModal } from './ui-helpers.js';
 import { createSkeletonLoader } from './skeletons.js';
 
+function formatDurationMs(ms) {
+  if (!ms && ms !== 0) return '0s';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+}
+
 // Format tool results for readable display
 function formatToolResult(dataPreview, toolName) {
   if (!dataPreview) return '';
@@ -284,7 +291,7 @@ function formatTraceHtml(trace, isLast = false) {
           <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.75rem; color: #94a3b8;">
             <span>${trace.totalSteps} step${trace.totalSteps !== 1 ? 's' : ''}</span>
             <span>${trace.totalToolCalls} tool${trace.totalToolCalls !== 1 ? 's' : ''}</span>
-            <span>${trace.durationMs}ms</span>
+            <span>${formatDurationMs(trace.durationMs)}</span>
             <span style="color: #64748b;">${new Date(trace.timestamp).toLocaleString()}</span>
           </div>
         </div>
@@ -318,7 +325,7 @@ function formatTraceHtml(trace, isLast = false) {
                       <span class="status-badge ${tc.result.success ? 'status-success' : 'status-error'}" style="font-size: 0.7rem; padding: 2px 6px;">
                         ${tc.result.success ? 'Success' : 'Failed'}
                       </span>
-                      <span style="color: #94a3b8; font-size: 0.75rem;">${tc.durationMs}ms</span>
+                      <span style="color: #94a3b8; font-size: 0.75rem;">${formatDurationMs(tc.durationMs)}</span>
                       ${tc.result.error ? `
                         <span style="color: #ef4444; font-size: 0.75rem; margin-left: auto;">Error</span>
                       ` : ''}

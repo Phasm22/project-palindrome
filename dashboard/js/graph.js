@@ -310,8 +310,19 @@ export async function loadGraph() {
         }
       });
       
-      // Initialize zoom control icons
+      // Initialize zoom control icons - clear existing first to prevent duplicates
       const { createIcon } = await import('./icons.js');
+      
+      // Clear existing icons before adding new ones (prevents duplicates on reload)
+      document.querySelectorAll('.zoom-icon-in, .zoom-icon-out, .zoom-icon-fit, .zoom-icon-reset').forEach(el => {
+        // Remove all SVG children (icons)
+        Array.from(el.children).forEach(child => {
+          if (child.tagName === 'svg') {
+            child.remove();
+          }
+        });
+      });
+      
       document.querySelectorAll('.zoom-icon-in').forEach(el => {
         const icon = createIcon('ZoomIn', { size: 16, color: 'currentColor' });
         el.appendChild(icon);
@@ -611,7 +622,7 @@ function initSigma() {
       border: 2px solid ${colorPalette.primary};
       font-size: 12px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      z-index: 1000;
+      z-index: var(--z-tooltip);
       pointer-events: none;
       box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4), 0 0 20px rgba(249, 115, 22, 0.3);
       max-width: 300px;

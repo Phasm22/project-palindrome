@@ -8,6 +8,8 @@ let currentSessionId = null;
 let currentResponseId = null;
 let finalEventTimeout = null;
 let currentConversationId = null;
+let isNewConversationMode = false; // True when user clicked "New" but hasn't sent a message yet
+let isCreatingConversation = false; // Prevent spamming New Chat button
 
 // Scroll lock state - track async operations and user scroll behavior
 let isAsyncOperationActive = false;
@@ -176,6 +178,10 @@ export async function restoreConversation() {
   const urlConversationId = getConversationFromUrl();
   if (urlConversationId) {
     currentConversationId = urlConversationId;
+    setCurrentConversationId(urlConversationId);
+    isNewConversationMode = false;
+    // Load the conversation and show input
+    await selectConversation(urlConversationId);
     return urlConversationId;
   }
   
@@ -185,6 +191,8 @@ export async function restoreConversation() {
     const response = await fetch(`${API_URL}/api/user/preferences?userId=${userId}`);
     
     if (!response.ok) {
+      // No saved conversation - hide input
+      updateInputVisibility(false);
       return null;
     }
 
@@ -193,12 +201,21 @@ export async function restoreConversation() {
     
     if (conversationId) {
       currentConversationId = conversationId;
+      setCurrentConversationId(conversationId);
+      isNewConversationMode = false;
       // Update URL to match backend preference
       updateConversationUrl(conversationId);
+      // Load the conversation and show input
+      await selectConversation(conversationId);
       return conversationId;
+    } else {
+      // No saved conversation - hide input
+      updateInputVisibility(false);
     }
   } catch (error) {
     console.error('Failed to restore conversation:', error);
+    // On error, hide input
+    updateInputVisibility(false);
   }
   
   return null;
@@ -1212,6 +1229,7 @@ export async function sendChatMessage() {
   `, true);
 
   try {
+    // Create conversation only when first message is sent (not when clicking "New")
     if (!currentConversationId) {
       try {
         const createResponse = await fetch(`${API_URL}/api/chat/conversations`, {
@@ -1223,11 +1241,19 @@ export async function sendChatMessage() {
           const createResult = await createResponse.json();
           currentConversationId = createResult.data.id;
           setCurrentConversationId(currentConversationId);
+          isNewConversationMode = false; // No longer in "new" mode, we have a real conversation
           await saveLastActiveConversation(currentConversationId); // Save to backend
+          updateConversationUrl(currentConversationId); // Update URL
           await loadConversations();
+        } else {
+          throw new Error(`Failed to create conversation: ${createResponse.status} ${createResponse.statusText}`);
         }
       } catch (error) {
         console.error('Failed to create conversation:', error);
+        // Re-enable inputs on error
+        inputs.forEach(i => { i.disabled = false; });
+        buttons.forEach(b => { b.disabled = false; });
+        throw error; // Re-throw to show error message
       }
     }
 
@@ -1485,12 +1511,14 @@ export async function loadConversations() {
 export async function selectConversation(conversationId) {
   currentConversationId = conversationId;
   setCurrentConversationId(conversationId);
+  isNewConversationMode = false; // No longer in "new" mode when selecting existing conversation
   await saveLastActiveConversation(conversationId); // Save to backend
   
   // Update URL for sharing/bookmarking
   updateConversationUrl(conversationId);
   
   await loadChatHistory(conversationId);
+  updateInputVisibility(true); // Show input when conversation is selected
   loadConversations();
 }
 
@@ -1512,27 +1540,104 @@ function getConversationFromUrl() {
   return url.searchParams.get('conversation');
 }
 
+/**
+ * Prepare UI for a new conversation (doesn't create backend conversation yet)
+ * Backend conversation is created only when first message is sent
+ */
 export async function createNewConversation() {
-  try {
-    const userId = 'dashboard-user';
-    const response = await fetch(`${API_URL}/api/chat/conversations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const result = await response.json();
-    const newConversationId = result.data.id;
-
-    await selectConversation(newConversationId);
-  } catch (error) {
-    console.error('Failed to create conversation:', error);
-    alert('Failed to create conversation: ' + error.message);
+  // Prevent spamming the button
+  if (isCreatingConversation) {
+    return;
   }
+  
+  isCreatingConversation = true;
+  
+  // Disable buttons visually
+  const newButtons = [
+    document.getElementById('new-conversation-btn'),
+    document.getElementById('new-conversation-btn-mobile')
+  ].filter(Boolean);
+  
+  const reenableButtons = () => {
+    newButtons.forEach(btn => {
+      if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.style.cursor = '';
+      }
+    });
+  };
+  
+  newButtons.forEach(btn => {
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      btn.style.cursor = 'not-allowed';
+    }
+  });
+  
+  try {
+    // Clear current conversation state
+    currentConversationId = null;
+    setCurrentConversationId(null);
+    isNewConversationMode = true;
+    
+    // Clear URL conversation param
+    updateConversationUrl(null);
+    
+    // Clear chat messages
+    const containers = getChatMessageContainers();
+    containers.forEach(c => {
+      if (c) {
+        c.innerHTML = '<div class="text-slate-400 text-center py-6 text-sm">Start a new conversation...</div>';
+      }
+    });
+    
+    // Show input box (it will be shown by updateInputVisibility)
+    updateInputVisibility(true);
+    
+    // Focus input
+    const primaryInput = getPrimaryChatInput();
+    if (primaryInput) {
+      setTimeout(() => primaryInput.focus(), 100);
+    }
+    
+    // Refresh conversation list to update active state
+    await loadConversations();
+  } catch (error) {
+    console.error('Failed to prepare new conversation:', error);
+    alert('Failed to prepare new conversation: ' + error.message);
+  } finally {
+    // Re-enable button after a short delay to prevent rapid clicking
+    setTimeout(() => {
+      isCreatingConversation = false;
+      reenableButtons();
+    }, 500);
+  }
+}
+
+/**
+ * Update input box visibility based on conversation state
+ * @param {boolean} forceShow - Force show even if no conversation (for new conversation mode)
+ */
+function updateInputVisibility(forceShow = false) {
+  const hasActiveConversation = currentConversationId !== null;
+  const shouldShow = forceShow || hasActiveConversation || isNewConversationMode;
+  
+  const inputContainers = [
+    document.querySelector('#chat-input-desktop')?.parentElement,
+    document.querySelector('#chat-input')?.parentElement
+  ].filter(Boolean);
+  
+  inputContainers.forEach(container => {
+    if (container) {
+      if (shouldShow) {
+        container.style.display = '';
+      } else {
+        container.style.display = 'none';
+      }
+    }
+  });
 }
 
 export async function deleteConversation(conversationId) {
@@ -1555,12 +1660,20 @@ export async function deleteConversation(conversationId) {
     if (currentConversationId === conversationId) {
       currentConversationId = null;
       setCurrentConversationId(null);
+      isNewConversationMode = false;
       await saveLastActiveConversation(null); // Clear from backend
       updateConversationUrl(null); // Clear from URL
-      const messagesDiv = document.getElementById('chat-messages');
-      if (messagesDiv) {
-        messagesDiv.innerHTML = '<div style="color: #94a3b8; text-align: center; padding: 20px;">Select a conversation or create a new one to start chatting.</div>';
-      }
+      
+      // Clear all message containers
+      const containers = getChatMessageContainers();
+      containers.forEach(c => {
+        if (c) {
+          c.innerHTML = '<div class="text-slate-400 text-center py-6 text-sm">Select a conversation or create a new one to start chatting.</div>';
+        }
+      });
+      
+      // Hide input when no conversation is selected
+      updateInputVisibility(false);
     }
 
         await loadConversations();
@@ -1580,12 +1693,14 @@ export async function loadChatHistory(conversationId = null) {
   if (containers.length === 0) return;
 
   if (!conversationId) {
-    // Hide containers when no conversation is selected
+    // Show placeholder when no conversation is selected
     containers.forEach(c => {
       if (c) {
-        c.style.display = 'none';
+        c.innerHTML = '<div class="text-slate-400 text-center py-6 text-sm">Select a conversation or create a new one to start chatting.</div>';
+        c.style.display = '';
       }
     });
+    updateInputVisibility(false); // Hide input when no conversation
     return;
   }
 
@@ -1620,6 +1735,9 @@ export async function loadChatHistory(conversationId = null) {
         c.style.display = '';
       }
     });
+    
+    // Show input when conversation has messages
+    updateInputVisibility(true);
 
     messages.forEach(msg => {
       if (msg.role === 'user') {

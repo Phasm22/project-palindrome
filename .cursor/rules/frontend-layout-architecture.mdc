@@ -1,0 +1,191 @@
+---
+description: Enforce frontend layout architecture principles: URL as source of truth, portal roots for overlays, clear state boundaries, and framework-agnostic component patterns.
+globs: "dashboard/**/*.{ts,tsx,js,jsx,html}, src/**/components/**/*.{ts,tsx,js,jsx}"
+alwaysApply: false
+---
+
+# Frontend Layout Architecture Rules
+
+**Reference**: See `/docs/technical/FRONTEND_LAYOUT_ARCHITECTURE.md` for complete architecture documentation.
+
+## Core Principles
+
+### 1. URL as Source of Truth for Navigation
+
+**❌ WRONG**: Storing route/tab state separately from URL
+```javascript
+// Don't do this
+const state = {
+  activeTab: 'chat',
+  currentRoute: '/chat'
+};
+```
+
+**✅ CORRECT**: Derive navigation state from URL
+```javascript
+// Derive from URL
+function getActiveTab() {
+  const route = window.location.pathname;
+  return routeToTabMap[route] || 'chat';
+}
+
+// Update URL to navigate
+function navigateToRoute(route) {
+  window.history.pushState({}, '', route);
+  // Components react to URL change
+}
+```
+
+**Rules**:
+- Never store `activeTab` or `currentRoute` in component state
+- Always derive navigation state from `window.location.pathname` or `window.location.hash`
+- Use `window.history.pushState()` or router library to navigate
+- Listen for `popstate` events to handle browser back/forward
+
+### 2. Portal Root for All Overlays
+
+**❌ WRONG**: Rendering modals/tooltips inside component DOM
+```javascript
+// Don't do this - modal inherits parent stacking context
+function showModal() {
+  const modal = document.createElement('div');
+  this.container.appendChild(modal); // Wrong!
+}
+```
+
+**✅ CORRECT**: Render all overlays in portal root
+```javascript
+// Portal root must exist in HTML
+// <div id="portal-root"></div>
+
+function createPortal(element, targetId = 'portal-root') {
+  const portalRoot = document.getElementById(targetId) || createPortalRoot(targetId);
+  return portalRoot.appendChild(element);
+}
+
+function showModal(content) {
+  const modal = document.createElement('div');
+  modal.style.zIndex = 'var(--z-modal)';
+  createPortal(modal); // Renders in portal-root
+}
+```
+
+**Rules**:
+- All modals, tooltips, dropdowns, notifications must render in `#portal-root`
+- Never append overlays to component containers
+- Use z-index tokens: `--z-modal`, `--z-tooltip`, `--z-dropdown`, etc.
+- Portal root must exist in HTML: `<div id="portal-root"></div>`
+
+### 3. State Boundaries
+
+**Layout State** (managed by LayoutStore):
+- Sidebar visibility/collapse
+- Mobile menu state
+- Theme preference
+- Responsive breakpoint detection
+
+**Page State** (managed by page components):
+- Page-specific data (conversations, executions, etc.)
+- Page loading states
+- Page filters/search
+
+**Feature State** (managed by feature components):
+- Component-specific UI state
+- Form inputs
+- Component interactions
+
+**Rules**:
+- State lives at the lowest level that needs it
+- Only lift state up when multiple components need it
+- Layout state ≠ Page state ≠ Feature state
+- Don't mix concerns across boundaries
+
+### 4. Component Structure
+
+**Framework-Agnostic**: Components can be vanilla JS, React, Vue, etc. Follow these patterns:
+
+**Vanilla JavaScript**:
+```javascript
+class Component {
+  constructor(element, options) {
+    this.element = element;
+    this.state = {};
+    this.init();
+  }
+  
+  render() { /* DOM manipulation */ }
+  destroy() { /* Cleanup */ }
+}
+```
+
+**React**:
+```typescript
+function Component({ props }) {
+  const [state, setState] = useState({});
+  useEffect(() => { return () => cleanup(); }, []);
+  return <div>...</div>;
+}
+```
+
+**Rules**:
+- Components must have clear lifecycle: init → render → destroy/cleanup
+- Use consistent naming: `ComponentName` for classes/components
+- Keep components focused on single responsibility
+- Document component API (props, state, methods)
+
+### 5. Z-Index Layering
+
+Use consistent z-index tokens:
+```css
+--z-base: 0;
+--z-elevated: 10;
+--z-sticky: 20;
+--z-dropdown: 30;
+--z-overlay: 40;
+--z-modal: 50;
+--z-tooltip: 60;
+--z-notification: 70;
+```
+
+**Rules**:
+- Never use arbitrary z-index values (e.g., `z-index: 9999`)
+- Use CSS custom properties for z-index
+- All overlays in portal root use these tokens
+- Sticky elements use `--z-sticky`
+
+## File Structure
+
+Follow this structure:
+```
+dashboard/
+├── components/
+│   ├── layout/        # AppShell, Header, Navigation, Sidebar, ContentArea
+│   ├── pages/         # ChatPage, OverviewPage, etc.
+│   ├── features/      # ConversationList, MessageList, etc.
+│   └── primitives/    # Button, Card, Modal, Badge, etc.
+├── stores/
+│   └── layout-store.js  # Layout state management
+├── utils/
+│   ├── routing.js      # Route utilities (derive from URL)
+│   └── portal.js       # Portal rendering utilities
+└── styles/
+    └── tokens.css      # Design tokens (z-index, colors, spacing)
+```
+
+## Common Mistakes to Avoid
+
+1. **Duplicate route state**: Don't store route in state when URL already has it
+2. **Overlays in wrong DOM**: Don't render modals inside component trees
+3. **Mixed state concerns**: Don't put page data in layout state
+4. **Arbitrary z-index**: Don't use `z-index: 9999` - use tokens
+5. **Framework lock-in**: Keep components framework-agnostic where possible
+
+## Verification Checklist
+
+When implementing components, verify:
+- [ ] Navigation state derived from URL, not stored separately
+- [ ] Overlays render in `#portal-root`, not component DOM
+- [ ] State boundaries respected (layout vs page vs feature)
+- [ ] Z-index uses tokens, not arbitrary values
+- [ ] Components have clear lifecycle (init/render/destroy)
+- [ ] Portal root exists in HTML

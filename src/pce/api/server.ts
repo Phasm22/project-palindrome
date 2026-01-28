@@ -251,6 +251,10 @@ export class PceApiServer {
       return await this.handleReasoningTrace(req, url.pathname);
     }
 
+    if (req.method === "GET" && url.pathname === "/api/dashboard/ingestion-status") {
+      return await this.handleIngestionStatus(req);
+    }
+
     // Unified query endpoints
     if (req.method === "POST" && url.pathname === "/api/dashboard/query/rag") {
       return await this.handleDashboardRagQuery(req);
@@ -1113,6 +1117,96 @@ export class PceApiServer {
       lastRun: this.ingestionScheduler.getLastRun()?.toISOString() || null,
       intervalMinutes: 5,
     };
+  }
+
+  /**
+   * Handle GET /api/dashboard/ingestion-status - Get detailed ingestion status
+   */
+  private async handleIngestionStatus(req: Request): Promise<Response> {
+    try {
+      if (!this.ingestionScheduler) {
+        return this.jsonResponse(200, {
+          active: false,
+          message: "Ingestion scheduler not initialized",
+        });
+      }
+
+      const lastRunDetails = this.ingestionScheduler.getLastRunDetails();
+      const runHistory = this.ingestionScheduler.getRunHistory(10);
+      const isRunning = this.ingestionScheduler.getIsRunning();
+      const lastRun = this.ingestionScheduler.getLastRun();
+      const metricsSnapshot = this.metricsCollector.getSnapshot(300_000); // Last 5 minutes
+
+      // Calculate next run time
+      const intervalMs = 5 * 60 * 1000; // 5 minutes
+      const nextRun = lastRun 
+        ? new Date(lastRun.getTime() + intervalMs)
+        : null;
+
+      // Get metrics
+      const runCount = metricsSnapshot.metrics["ingestion_scheduler_run_count"]?.latest || 0;
+      const successCount = metricsSnapshot.metrics["ingestion_scheduler_success_count"]?.latest || 0;
+      const failureCount = metricsSnapshot.metrics["ingestion_scheduler_failure_count"]?.latest || 0;
+      const avgDuration = metricsSnapshot.metrics["ingestion_scheduler_run_duration_ms"]?.avg || 0;
+      const proxmoxAvgDuration = metricsSnapshot.metrics["ingestion_scheduler_proxmox_duration_ms"]?.avg || 0;
+      const networkAvgDuration = metricsSnapshot.metrics["ingestion_scheduler_network_duration_ms"]?.avg || 0;
+      const firewallAvgDuration = metricsSnapshot.metrics["ingestion_scheduler_firewall_duration_ms"]?.avg || 0;
+      const cleanupDeleted = metricsSnapshot.metrics["ingestion_scheduler_cleanup_deleted"]?.latest || 0;
+
+      return this.jsonResponse(200, {
+        active: this.ingestionScheduler.isActive(),
+        isRunning,
+        intervalMinutes: 5,
+        lastRun: lastRun?.toISOString() || null,
+        nextRun: nextRun?.toISOString() || null,
+        lastRunDetails: lastRunDetails ? {
+          timestamp: lastRunDetails.timestamp.toISOString(),
+          duration: lastRunDetails.duration,
+          success: lastRunDetails.success,
+          proxmox: lastRunDetails.proxmox,
+          network: lastRunDetails.network,
+          firewall: lastRunDetails.firewall,
+          cleanup: lastRunDetails.cleanup,
+          temperature: lastRunDetails.temperature,
+        } : null,
+        runHistory: runHistory.map(run => ({
+          timestamp: run.timestamp.toISOString(),
+          duration: run.duration,
+          success: run.success,
+          proxmox: { success: run.proxmox.success, duration: run.proxmox.duration, error: run.proxmox.error },
+          network: { 
+            success: run.network.success, 
+            duration: run.network.duration, 
+            entities: run.network.entities,
+            relationships: run.network.relationships,
+            error: run.network.error 
+          },
+          firewall: { 
+            success: run.firewall.success, 
+            duration: run.firewall.duration, 
+            entities: run.firewall.entities,
+            relationships: run.firewall.relationships,
+            error: run.firewall.error 
+          },
+          cleanup: run.cleanup,
+          temperature: run.temperature,
+        })),
+        statistics: {
+          totalRuns: runCount,
+          successCount,
+          failureCount,
+          successRate: runCount > 0 ? (successCount / runCount) * 100 : 0,
+          avgDurationMs: avgDuration,
+          proxmoxAvgDurationMs: proxmoxAvgDuration,
+          networkAvgDurationMs: networkAvgDuration,
+          firewallAvgDurationMs: firewallAvgDuration,
+          totalCleanupDeleted: cleanupDeleted,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch ingestion status", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
   }
 
   private async handleReasoningTraces(req: Request): Promise<Response> {

@@ -50,6 +50,7 @@ import {
 } from "../reasoning/clarification";
 import { classifyAndRoute } from "../reasoning/intent-router";
 import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../reasoning/failure-reclassification";
+import { formatResponseForBot, detectResponseIntent, type FormatContext } from "./response-formatter";
 
 let openaiClient: OpenAI | null = null;
 
@@ -520,7 +521,18 @@ export async function runAgent(
         });
         
         // Clean up the RAG answer (remove verbose citations, formatting)
-        const cleanedAnswer = cleanupRagAnswer(ragPayload.answer);
+        let cleanedAnswer = cleanupRagAnswer(ragPayload.answer);
+        
+        // Format response for bot-like style
+        try {
+          const intentType = detectResponseIntent(userInput);
+          cleanedAnswer = await formatResponseForBot(cleanedAnswer, {
+            userQuery: userInput,
+            intentType,
+          });
+        } catch (error: any) {
+          logger.warn("Failed to format RAG answer", { error: error.message });
+        }
         
         // Record trace
         try {
@@ -700,9 +712,22 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       if (exposureAnswer) {
         logger.info("Responding via twin-first exposure reasoning chain.");
         emitStepEvent({ intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
-        const traceId = await recordEarlyReturnTrace(exposureAnswer, exposureIntent.type, 1);
-        emitFinalEvent(exposureAnswer, { intent: exposureIntent.type, traceId });
-        return { text: exposureAnswer };
+        
+        // Format exposure response for bot-like style
+        let formattedAnswer = exposureAnswer;
+        try {
+          formattedAnswer = await formatResponseForBot(exposureAnswer, {
+            userQuery: userInput,
+            intentType: "exposure_analysis",
+            toolCalls: [{ toolName: "twin_query", parameters: { operation: exposureIntent.type } }],
+          });
+        } catch (error: any) {
+          logger.warn("Failed to format exposure answer", { error: error.message });
+        }
+        
+        const traceId = await recordEarlyReturnTrace(formattedAnswer, exposureIntent.type, 1);
+        emitFinalEvent(formattedAnswer, { intent: exposureIntent.type, traceId });
+        return { text: formattedAnswer };
       }
     }
 
@@ -729,9 +754,22 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       if (twinAnswer) {
         logger.info("Responding via twin-first reasoning chain (no LLM needed).");
         emitStepEvent({ intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
-        const traceId = await recordEarlyReturnTrace(twinAnswer, computeIntent.type, 1);
-        emitFinalEvent(twinAnswer, { intent: computeIntent.type, traceId });
-        return { text: twinAnswer };
+        
+        // Format compute response for bot-like style
+        let formattedAnswer = twinAnswer;
+        try {
+          formattedAnswer = await formatResponseForBot(twinAnswer, {
+            userQuery: userInput,
+            intentType: "compute_status",
+            toolCalls: [{ toolName: "twin_query", parameters: { operation: computeIntent.type } }],
+          });
+        } catch (error: any) {
+          logger.warn("Failed to format compute answer", { error: error.message });
+        }
+        
+        const traceId = await recordEarlyReturnTrace(formattedAnswer, computeIntent.type, 1);
+        emitFinalEvent(formattedAnswer, { intent: computeIntent.type, traceId });
+        return { text: formattedAnswer };
       }
     }
 
@@ -743,9 +781,22 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       if (firewallAnswer) {
         logger.info("Responding via twin-first firewall reasoning chain.");
         emitStepEvent({ intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
-        const traceId = await recordEarlyReturnTrace(firewallAnswer, firewallIntent.type, 1);
-        emitFinalEvent(firewallAnswer, { intent: firewallIntent.type, traceId });
-        return { text: firewallAnswer };
+        
+        // Format firewall response for bot-like style
+        let formattedAnswer = firewallAnswer;
+        try {
+          formattedAnswer = await formatResponseForBot(firewallAnswer, {
+            userQuery: userInput,
+            intentType: "firewall_rules",
+            toolCalls: [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }],
+          });
+        } catch (error: any) {
+          logger.warn("Failed to format firewall answer", { error: error.message });
+        }
+        
+        const traceId = await recordEarlyReturnTrace(formattedAnswer, firewallIntent.type, 1);
+        emitFinalEvent(formattedAnswer, { intent: firewallIntent.type, traceId });
+        return { text: formattedAnswer };
       }
     }
     // Only check network intent if no action, exposure, compute, or firewall intent was detected
@@ -755,9 +806,22 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       if (networkAnswer) {
         logger.info("Responding via twin-first network reasoning chain.");
         emitStepEvent({ intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
-        const traceId = await recordEarlyReturnTrace(networkAnswer, networkIntent.type, 1);
-        emitFinalEvent(networkAnswer, { intent: networkIntent.type, traceId });
-        return { text: networkAnswer };
+        
+        // Format network response for bot-like style
+        let formattedAnswer = networkAnswer;
+        try {
+          formattedAnswer = await formatResponseForBot(networkAnswer, {
+            userQuery: userInput,
+            intentType: "network_info",
+            toolCalls: [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }],
+          });
+        } catch (error: any) {
+          logger.warn("Failed to format network answer", { error: error.message });
+        }
+        
+        const traceId = await recordEarlyReturnTrace(formattedAnswer, networkIntent.type, 1);
+        emitFinalEvent(formattedAnswer, { intent: networkIntent.type, traceId });
+        return { text: formattedAnswer };
       }
     }
   }
@@ -1192,7 +1256,11 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
         
         // Create a signature: toolName + sorted stringified args
-        const callSignature = `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
+        // For twin_query with node_temperature, allow different nodeName params (not duplicates)
+        const isTemperatureQuery = toolName === "twin_query" && parsedArgs.operation === "node_temperature";
+        const callSignature = isTemperatureQuery
+          ? `${toolName}:${parsedArgs.operation}:${parsedArgs.params?.nodeName || "all"}`
+          : `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
         if (seenToolCalls.has(callSignature)) {
           logger.warn(`Duplicate tool call detected, skipping: ${callSignature}`);
           reasoningStep.decisions.push({
@@ -1593,7 +1661,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     }
     reasoningSteps.push(reasoningStep);
 
-    const finalText = coerceTextContent(message?.content).trim();
+    let finalText = coerceTextContent(message?.content).trim();
     if (finalText) {
       // Validate "all nodes" queries - prevent partial answers
       if (isAllNodesQuery) {
@@ -1613,6 +1681,27 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           // Nodes were queried but we didn't track discovery - might be a tracking issue
           logger.warn(`All nodes query: nodes were queried (${queriedNodeCount}) but discovery count is 0 - tracking may have failed`);
         }
+      }
+      
+      // Format response for bot-like style before returning
+      try {
+        // Extract tool calls from reasoning steps for context
+        const allToolCalls = reasoningSteps.flatMap(step => 
+          step.toolCalls.map(tc => ({
+            toolName: tc.toolName,
+            parameters: tc.parameters,
+          }))
+        );
+        
+        const intentType = detectResponseIntent(userInput, allToolCalls);
+        finalText = await formatResponseForBot(finalText, {
+          userQuery: userInput,
+          intentType,
+          toolCalls: allToolCalls,
+        });
+      } catch (error: any) {
+        logger.warn("Failed to format final response", { error: error.message });
+        // Continue with unformatted response
       }
       
       context.addAssistantMessage(finalText);

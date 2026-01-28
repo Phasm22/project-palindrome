@@ -3,10 +3,12 @@ import { loadToolExecutions } from './executions.js';
 import { loadReasoningTraces, copyTraceData } from './reasoning.js';
 import { loadGraph } from './graph.js';
 import { setupQueryInterface, executeQuery, executeGraphQuery, executeCypherQuery } from './query.js';
-import { loadExecutionStats, loadClusterStatus, loadSystemHealth } from './overview.js';
+import { loadExecutionStats, loadClusterStatus, loadSystemHealth, loadIngestionStatus } from './overview.js';
 import { testRagQuery } from './rag.js';
 import { createCustomDropdown, updateDropdown } from './dropdown.js';
 import { API_URL } from './utils.js';
+import { navigateToTab, initRouting, getActiveTabFromURL } from './routing.js';
+import { layoutStore } from './layout-store.js';
 
 // Check API connection and show helpful message if it fails
 async function checkApiConnection() {
@@ -35,7 +37,7 @@ async function checkApiConnection() {
       background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
       color: white;
       padding: 12px 20px;
-      z-index: 9999;
+      z-index: var(--z-notification);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -86,9 +88,13 @@ window.executeQuery = executeQuery;
 window.executeGraphQuery = executeGraphQuery;
 window.executeCypherQuery = executeCypherQuery;
 window.testRagQuery = testRagQuery;
+window.loadIngestionStatus = loadIngestionStatus;
 
-// Make switchTab globally accessible
-window.switchTab = function(tabName, clickedElement) {
+/**
+ * Update UI to show a specific tab (internal function - updates DOM only)
+ * This is called by route change handlers, not directly
+ */
+function updateTabUI(tabName, clickedElement = null) {
   // Get the target tab content first
   const targetTabContent = document.getElementById(tabName);
   
@@ -178,6 +184,7 @@ window.switchTab = function(tabName, clickedElement) {
     loadExecutionStats();
     loadClusterStatus();
     loadSystemHealth();
+    loadIngestionStatus();
   }
   if (tabName === 'executions') loadToolExecutions();
   if (tabName === 'reasoning') loadReasoningTraces();
@@ -244,13 +251,39 @@ window.switchTab = function(tabName, clickedElement) {
     }
   }
   
+  // Show/hide desktop sidebar based on active tab (desktop only)
+  const desktopSidebar = document.getElementById('conversation-sidebar');
+  if (desktopSidebar && window.innerWidth >= 768) {
+    if (tabName === 'chat') {
+      // Show sidebar on chat tab
+      desktopSidebar.classList.remove('hidden');
+      desktopSidebar.classList.add('flex');
+    } else {
+      // Hide sidebar on all other tabs
+      desktopSidebar.classList.add('hidden');
+      desktopSidebar.classList.remove('flex');
+    }
+  }
+  
   // Update mobile dropdown selector
   updateDropdown(tabName);
+}
+
+/**
+ * Switch to a tab - updates URL (source of truth) which triggers UI update
+ * @param {string} tabName - Tab ID to switch to
+ * @param {HTMLElement} clickedElement - Optional clicked element for UI update
+ */
+window.switchTab = function(tabName, clickedElement) {
+  // Update URL - this will trigger route change event
+  navigateToTab(tabName);
+  
+  // Update UI immediately (will also be called by route change handler, but immediate update is smoother)
+  updateTabUI(tabName, clickedElement);
 };
 
-// Mobile tab switching function
+// Mobile tab switching function - same as switchTab (updates URL)
 window.switchTabMobile = function(tabName) {
-  // Use the main switchTab function which handles everything
   window.switchTab(tabName, null);
 };
 
@@ -310,15 +343,19 @@ function trapSidebarFocus(sidebar) {
   return () => sidebar.removeEventListener('keydown', handleTab);
 }
 
-// Sidebar toggle function with accessibility
+// Sidebar toggle function with accessibility - uses LayoutStore for state
 window.toggleSidebar = function() {
   const sidebarMobile = document.getElementById('conversation-sidebar-mobile');
   const backdrop = document.getElementById('sidebar-backdrop');
   
   if (sidebarMobile && backdrop) {
-    const isHidden = sidebarMobile.classList.contains('hidden');
+    const currentState = layoutStore.getState();
+    const isOpening = !currentState.sidebarOpen;
     
-    if (isHidden) {
+    // Update LayoutStore state
+    layoutStore.setSidebarOpen(isOpening);
+    
+    if (isOpening) {
       // Opening sidebar
       sidebarState.previousActiveElement = document.activeElement;
       sidebarMobile.classList.remove('hidden');
@@ -388,15 +425,46 @@ window.toggleSidebar = function() {
 
 // Load initial data when page loads
 window.addEventListener('DOMContentLoaded', async () => {
-  // Initialize custom dropdown for mobile tabs
-  createCustomDropdown('mobile-tab-dropdown-container', 'chat');
+  // Initialize routing - URL is source of truth
+  initRouting(({ route, tabId, source }) => {
+    // Update UI when route changes (from URL, browser back/forward, or programmatic)
+    updateTabUI(tabId);
+  });
   
-  // Set initial nav state (chat is default tab)
+  // Initialize custom dropdown for mobile tabs - use current route
+  const currentTab = getActiveTabFromURL();
+  createCustomDropdown('mobile-tab-dropdown-container', currentTab);
+  
+  // Set initial nav state based on current route
   if (window.innerWidth >= 768) {
     const sharedNav = document.getElementById('desktop-nav-shared');
     const chatNav = document.getElementById('chat-nav-sticky');
-    if (sharedNav) sharedNav.style.display = 'none';
-    if (chatNav) chatNav.style.display = 'block';
+    const desktopSidebar = document.getElementById('conversation-sidebar');
+    const activeTab = getActiveTabFromURL();
+    if (activeTab === 'chat') {
+      if (sharedNav) sharedNav.style.display = 'none';
+      if (chatNav) chatNav.style.display = 'block';
+      // Show sidebar on chat tab
+      if (desktopSidebar) {
+        desktopSidebar.classList.remove('hidden');
+        desktopSidebar.classList.add('flex');
+      }
+    } else {
+      if (sharedNav) sharedNav.style.display = 'flex';
+      if (chatNav) chatNav.style.display = 'none';
+      // Hide sidebar on other tabs
+      if (desktopSidebar) {
+        desktopSidebar.classList.add('hidden');
+        desktopSidebar.classList.remove('flex');
+      }
+    }
+  }
+  
+  // Ensure URL matches current tab (in case page loaded without hash/route)
+  const currentRoute = window.location.pathname;
+  if (currentRoute === '/' || !currentRoute || currentRoute === '/index.html') {
+    // Default to chat if no route specified
+    navigateToTab('chat', true); // Use replaceState for initial load
   }
   
   // Initialize icons
@@ -436,7 +504,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   
   // Refresh icons - use logo component
   const { createLogo } = await import('./components.js');
-  const refreshIcons = ['refresh-icon-executions', 'refresh-icon-reasoning', 'refresh-icon-graph'];
+  const refreshIcons = ['refresh-icon-executions', 'refresh-icon-reasoning', 'refresh-icon-graph', 'refresh-icon-ingestion'];
   refreshIcons.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
@@ -579,28 +647,35 @@ window.addEventListener('DOMContentLoaded', async () => {
     console.warn('API connection failed - some features may not work');
   }
   
-  // Load chat conversations first (default tab)
-  loadConversations();
-  
-  // Restore last active conversation from backend
-  const savedConversationId = await restoreConversation();
-  if (savedConversationId) {
-    // Wait a bit for conversations to load, then restore
-    setTimeout(async () => {
-      await selectConversation(savedConversationId);
-    }, 100);
+  // Load data for current tab (derived from URL)
+  const activeTab = getActiveTabFromURL();
+  if (activeTab === 'chat') {
+    loadConversations();
+  } else if (activeTab === 'overview') {
+    loadExecutionStats();
+    loadClusterStatus();
+    loadSystemHealth();
+    loadIngestionStatus();
   }
   
-  // Load overview data in background
-  loadExecutionStats();
-  loadClusterStatus();
-  loadSystemHealth();
+  // Restore last active conversation from backend
+  // restoreConversation now handles selection internally
+  await restoreConversation();
+  
+  // Load overview data in background (if not already loaded)
+  if (activeTab !== 'overview') {
+    loadExecutionStats();
+    loadClusterStatus();
+    loadSystemHealth();
+    loadIngestionStatus();
+  }
 });
 
 // Auto-refresh every 30 seconds
 setInterval(() => {
-  const overviewTab = document.getElementById('overview');
-  if (overviewTab && overviewTab.classList.contains('active')) {
+  const activeTab = getActiveTabFromURL();
+  if (activeTab === 'overview') {
+    loadIngestionStatus(); // Refresh ingestion status more frequently
     loadExecutionStats();
     loadClusterStatus();
     loadSystemHealth();

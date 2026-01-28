@@ -26,6 +26,7 @@ const TwinQueryParams = z.object({
     "exposure_vms_by_subnet",
     "exposure_path",
     "exposure_internet_exposed",
+    "node_temperature",
   ]),
   params: z
     .object({
@@ -56,6 +57,7 @@ export class TwinQueryTool extends BaseTool {
         "Query the digital twin for compute entities (nodes, VMs, relationships) with structured responses. Use this before calling live Proxmox tools. " +
         "IMPORTANT: When searching for a VM by name (e.g., 'code server', 'nginx', 'database'), use operation='find_vm_by_name' which searches across ALL nodes with case-insensitive partial matching. " +
         "Do NOT assume a VM is on a specific node - always search by name first. " +
+        "For temperature queries: Use operation='node_temperature' WITHOUT nodeName param to get all nodes, or WITH nodeName for a specific node. " +
         "Note: For IP addresses, check the 'primaryIp' field on network interfaces (even if 'ips' array is empty). " +
         "If twin data doesn't have IPs, use proxmox_readonly get_vm_ip for real-time IP resolution.",
       categories: ["twin", "compute", "graph", "read"],
@@ -119,6 +121,14 @@ export class TwinQueryTool extends BaseTool {
         {
           description: "Get exposure map for all VMs",
           parameters: { operation: "firewall_exposure_map" },
+        },
+        {
+          description: "Get temperature for all nodes (preferred for 'all nodes' queries)",
+          parameters: { operation: "node_temperature" },
+        },
+        {
+          description: "Get temperature for a specific node",
+          parameters: { operation: "node_temperature", params: { nodeName: "proxBig" } },
         },
       ],
     });
@@ -343,6 +353,11 @@ export class TwinQueryTool extends BaseTool {
         case "exposure_internet_exposed": {
           const data = await this.service.internetExposedVms();
           return { data: { kind: "internet_exposed_vms", data } };
+        }
+        case "node_temperature": {
+          const nodeName = opParams?.nodeName;
+          const data = await this.service.getNodeTemperature(nodeName);
+          return { data: { kind: "node_temperature", data } };
         }
         default:
           return { error: `Unsupported operation: ${operation}` };

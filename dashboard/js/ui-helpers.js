@@ -1,4 +1,5 @@
 // UI Helper utilities for tooltips and modals
+import { createPortal, removeFromPortal } from './portal.js';
 
 /**
  * Create and show a tooltip
@@ -16,7 +17,7 @@ export function showTooltip(element, text, position = 'top') {
     font-size: 0.8em;
     border: 1px solid #334155;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    z-index: 10000;
+    z-index: var(--z-tooltip);
     pointer-events: none;
     max-width: 350px;
     word-wrap: break-word;
@@ -24,7 +25,8 @@ export function showTooltip(element, text, position = 'top') {
     line-height: 1.4;
   `;
   
-  document.body.appendChild(tooltip);
+  // Render in portal root instead of document.body
+  createPortal(tooltip);
   
   // Force layout calculation
   tooltip.offsetHeight;
@@ -74,9 +76,7 @@ export function showTooltip(element, text, position = 'top') {
  * Remove a tooltip
  */
 export function hideTooltip(tooltip) {
-  if (tooltip && tooltip.parentNode) {
-    tooltip.parentNode.removeChild(tooltip);
-  }
+  removeFromPortal(tooltip);
 }
 
 /**
@@ -99,7 +99,7 @@ export function createModal(title, content, options = {}) {
     right: 0;
     bottom: 0;
     background: rgba(0, 0, 0, 0.7);
-    z-index: 10000;
+    z-index: var(--z-modal);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -167,7 +167,7 @@ export function createModal(title, content, options = {}) {
     };
     closeBtn.onclick = () => {
       if (onClose) onClose();
-      document.body.removeChild(overlay);
+      removeFromPortal(overlay);
     };
     header.appendChild(closeBtn);
   }
@@ -189,7 +189,7 @@ export function createModal(title, content, options = {}) {
   overlay.onclick = (e) => {
     if (e.target === overlay && closable) {
       if (onClose) onClose();
-      document.body.removeChild(overlay);
+      removeFromPortal(overlay);
     }
   };
   
@@ -197,13 +197,14 @@ export function createModal(title, content, options = {}) {
   const escapeHandler = (e) => {
     if (e.key === 'Escape' && closable) {
       if (onClose) onClose();
-      document.body.removeChild(overlay);
+      removeFromPortal(overlay);
       document.removeEventListener('keydown', escapeHandler);
     }
   };
   document.addEventListener('keydown', escapeHandler);
   
-  document.body.appendChild(overlay);
+  // Render in portal root instead of document.body
+  createPortal(overlay);
   
   return { overlay, modal, body };
 }

@@ -59,8 +59,52 @@ async function handleRequest(req: Request, server: any) {
       const file = Bun.file(`${DASHBOARD_DIR}${path}`);
       const exists = await file.exists();
       
+      // If file doesn't exist, check if it's a client-side route
       if (!exists) {
-        return new Response("Not found", { status: 404 });
+        // Check if it's a static asset request (has a file extension)
+        // Common static file extensions
+        const staticExtensions = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.eot', '.json', '.map', '.pdf'];
+        const hasStaticExtension = staticExtensions.some(ext => path.toLowerCase().endsWith(ext));
+        
+        // If it's a static asset that doesn't exist, return 404
+        if (hasStaticExtension) {
+          return new Response("Not found", { status: 404 });
+        }
+        
+        // Otherwise, it's a client-side route - serve index.html for SPA routing
+        path = "/index.html";
+        const indexFile = Bun.file(`${DASHBOARD_DIR}${path}`);
+        const indexExists = await indexFile.exists();
+        
+        if (!indexExists) {
+          return new Response("Not found", { status: 404 });
+        }
+        
+        // Serve index.html with reload script
+        let content = await indexFile.text();
+        const reloadScript = `
+<script>
+  // Auto-reload on file changes
+  (function() {
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(wsProtocol + '//' + location.host + '/_reload');
+    ws.onmessage = () => {
+      console.log('🔄 Reloading...');
+      location.reload();
+    };
+    ws.onerror = () => console.log('Auto-reload unavailable');
+    ws.onclose = () => console.log('Auto-reload disconnected');
+  })();
+</script>`;
+        
+        if (content.includes("</body>")) {
+          content = content.replace("</body>", `${reloadScript}</body>`);
+        } else {
+          content += reloadScript;
+        }
+        return new Response(content, {
+          headers: { "Content-Type": "text/html" },
+        });
       }
       
       // Inject auto-reload script for HTML files

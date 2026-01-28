@@ -582,9 +582,54 @@ export class ProxmoxIngestionOrchestrator {
       collectedAt,
     });
 
+    // Fetch temperature data for each node and add to entities
     const nodeNames = (nodeData.nodes || [])
       .map((node: any) => node?.node)
       .filter((name: string | undefined): name is string => Boolean(name));
+    
+    // Import temperature fetcher
+    const { fetchNodeTemperature, getSummaryTemperature } = await import("../../tools/proxmox/readonly/temperature-fetcher");
+    
+    // Fetch temperature for each node and merge into entities
+    pceLogger.info("Fetching temperature data for nodes during twin ingestion", {
+      nodeCount: nodeResult.entities.filter(e => e.type === "compute_node").length,
+    });
+    
+    for (const entity of nodeResult.entities) {
+      if (entity.type === "compute_node" && entity.displayName) {
+        try {
+          pceLogger.debug(`Fetching temperature for node: ${entity.displayName}`);
+          const tempData = await fetchNodeTemperature(entity.displayName);
+          if (tempData && tempData.temperatures.length > 0) {
+            const summary = getSummaryTemperature(tempData);
+            (entity.data as any).temperature = {
+              max: summary?.max,
+              average: summary?.avg,
+              sensors: tempData.temperatures.length,
+              readings: tempData.temperatures.map((t) => ({
+                sensor: t.sensor,
+                label: t.label || t.sensor.split("/").pop(),
+                value: t.value,
+                unit: t.unit,
+                max: t.max,
+                crit: t.crit,
+              })),
+            };
+            pceLogger.info(`Successfully fetched temperature for ${entity.displayName}`, {
+              max: summary?.max,
+              sensors: tempData.temperatures.length,
+            });
+          } else {
+            pceLogger.debug(`No temperature data available for ${entity.displayName}`);
+          }
+        } catch (error: any) {
+          pceLogger.warn(`Failed to fetch temperature for ${entity.displayName} during twin ingestion`, {
+            error: error.message,
+          });
+          // Continue without temperature data
+        }
+      }
+    }
 
     const vmData = await this.fetchVmInventory(nodeNames);
     const vmResult = await this.vmParser.parse(vmData, {

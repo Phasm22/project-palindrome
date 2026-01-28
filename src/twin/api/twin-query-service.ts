@@ -10,6 +10,11 @@ interface ClusterNodeSummary {
   name: string;
   vmCount: number;
   status?: string;
+  temperature?: {
+    max?: number;
+    average?: number;
+    sensors?: number;
+  };
 }
 
 interface ClusterVmSummary {
@@ -193,18 +198,38 @@ export class TwinQueryService {
         RETURN n.id AS id,
                coalesce(n.displayName, n.id) AS name,
                n.status AS status,
+               n.dataJson AS dataJson,
                count(vm) AS vmCount
         ORDER BY name
       `,
       { nodeType: "compute_node", vmType: "compute_vm" }
     );
 
-    const nodes = nodesResult.records.map((record) => ({
-      id: record.get("id") as string,
-      name: record.get("name") as string,
-      vmCount: this.safeToNumber(record.get("vmCount")),
-      status: record.get("status") ?? undefined,
-    }));
+    const nodes = nodesResult.records.map((record) => {
+      const dataJson = record.get("dataJson");
+      let temperature: ClusterNodeSummary["temperature"] | undefined;
+      if (dataJson) {
+        try {
+          const data = typeof dataJson === "string" ? JSON.parse(dataJson) : dataJson;
+          if (data.temperature) {
+            temperature = {
+              max: data.temperature.max,
+              average: data.temperature.average,
+              sensors: data.temperature.sensors,
+            };
+          }
+        } catch {
+          // Ignore JSON parse errors
+        }
+      }
+      return {
+        id: record.get("id") as string,
+        name: record.get("name") as string,
+        vmCount: this.safeToNumber(record.get("vmCount")),
+        status: record.get("status") ?? undefined,
+        temperature,
+      };
+    });
 
     const vmsResult = await this.runQuery(
       `
@@ -232,6 +257,88 @@ export class TwinQueryService {
     }));
 
     return { nodes, vms };
+  }
+
+  /**
+   * Get temperature for a specific node or all nodes
+   */
+  async getNodeTemperature(nodeName?: string): Promise<Array<{
+    id: string;
+    name: string;
+    temperature?: {
+      max?: number;
+      average?: number;
+      sensors?: number;
+      readings?: Array<{
+        sensor: string;
+        label?: string;
+        value: number;
+        unit: string;
+        max?: number;
+        crit?: number;
+      }>;
+    };
+  }>> {
+    const query = nodeName
+      ? `
+        MATCH (n:TwinEntity {type: $nodeType})
+        WHERE toLower(n.displayName) = toLower($nodeName)
+        RETURN n.id AS id,
+               coalesce(n.displayName, n.id) AS name,
+               n.dataJson AS dataJson
+        ORDER BY name
+      `
+      : `
+        MATCH (n:TwinEntity {type: $nodeType})
+        RETURN n.id AS id,
+               coalesce(n.displayName, n.id) AS name,
+               n.dataJson AS dataJson
+        ORDER BY name
+      `;
+
+    const result = await this.runQuery(query, {
+      nodeType: "compute_node",
+      nodeName: nodeName?.toLowerCase(),
+    });
+
+    return result.records.map((record) => {
+      const dataJson = record.get("dataJson");
+      let temperature: {
+        max?: number;
+        average?: number;
+        sensors?: number;
+        readings?: Array<{
+          sensor: string;
+          label?: string;
+          value: number;
+          unit: string;
+          max?: number;
+          crit?: number;
+        }>;
+      } | undefined;
+
+      if (dataJson) {
+        try {
+          const data = typeof dataJson === "string" ? JSON.parse(dataJson) : dataJson;
+          if (data.temperature) {
+            temperature = {
+              max: data.temperature.max,
+              average: data.temperature.average,
+              sensors: data.temperature.sensors,
+              readings: data.temperature.readings,
+            };
+          }
+        } catch {
+          // Ignore JSON parse errors
+        }
+      }
+
+      return {
+        id: record.get("id") as string,
+        name: record.get("name") as string,
+        temperature: temperature || null, // Explicitly return null if no temperature data
+      };
+    });
   }
 
   async vmsByNode(

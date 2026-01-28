@@ -4,9 +4,125 @@
 @import "animate.css";
 
 @layer base {
+  /* Z-Index Token System - Consistent layering for all overlays */
+  :root {
+    --z-base: 0;
+    --z-elevated: 10;
+    --z-sticky: 20;
+    --z-dropdown: 30;
+    --z-overlay: 40;
+    --z-modal: 50;
+    --z-tooltip: 60;
+    --z-notification: 70;
+    --z-max: 9999; /* Emergency override only */
+    
+    /* Thread/Chat content margin - responsive spacing */
+    --thread-content-margin: 1rem; /* 16px default (spacing-4) */
+
+    /* Layout sizing */
+    --sidebar-width: 256px;
+    --chat-content-max-width: 896px;
+    --chat-chrome-max-width: 1120px;
+  }
+  
+  /* Responsive thread content margins */
+  @media (min-width: 640px) {
+    :root {
+      --thread-content-margin: 1.5rem; /* 24px (spacing-6) */
+    }
+  }
+  
+  @media (min-width: 1024px) {
+    :root {
+      --thread-content-margin: 4rem; /* 64px (spacing-16) */
+    }
+  }
+
+  /* Glass navigation background */
+  .nav-glass {
+    background: rgba(2, 6, 24, 0.35);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(51, 65, 85, 0.45);
+  }
+
+  .chat-input-wrapper {
+    background: rgba(2, 6, 24, 0.35) !important;
+    border-top: 1px solid rgba(51, 65, 85, 0.4);
+  }
+
+  .chat-input-field {
+    background-color: rgba(15, 23, 42, 0.45) !important;
+    border-color: rgba(71, 85, 105, 0.5) !important;
+  }
+
+  .chat-send-btn {
+    background: rgba(249, 115, 22, 0.18) !important;
+    border: 1px solid rgba(249, 115, 22, 0.5) !important;
+    box-shadow: none !important;
+  }
+
+  .chat-send-btn:hover {
+    background: rgba(249, 115, 22, 0.3) !important;
+  }
+
+  /* Desktop chat centering */
+  @media (min-width: 768px) {
+    /* Reserve space for fixed sidebar */
+    #chat {
+      padding-left: var(--sidebar-width);
+      box-sizing: border-box;
+    }
+    
+    .chat-banner-wrapper,
+    .chat-nav-wrapper,
+    .chat-desktop-wrapper {
+      width: 100%;
+      box-sizing: border-box;
+    }
+    
+    .chat-desktop-container,
+    .chat-content-centered {
+      max-width: var(--chat-content-max-width);
+      width: 100%;
+      margin-left: auto;
+      margin-right: auto;
+      box-sizing: border-box;
+    }
+
+    .chat-chrome-centered {
+      max-width: var(--chat-chrome-max-width);
+      width: 100%;
+      margin-left: auto;
+      margin-right: auto;
+      padding-left: var(--thread-content-margin);
+      padding-right: var(--thread-content-margin);
+      box-sizing: border-box;
+    }
+    
+    .chat-messages-wrapper,
+    #chat-messages-desktop {
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    /* Center the textarea by balancing the send button width */
+    .chat-input-spacer {
+      width: 96px;
+      flex: 0 0 96px;
+    }
+
+    #chat-send-btn-desktop {
+      width: 96px;
+      flex: 0 0 96px;
+    }
+
+  }
+
   html, body {
     overflow-x: hidden; /* Prevent horizontal scroll */
     max-width: 100vw;
+    margin: 0;
+    padding: 0;
   }
   
   /* Prevent iOS zoom on input focus */
@@ -76,6 +192,44 @@
 }
 
 @layer components {
+  /* Flexbox debugging utilities - visible in dev tools */
+  [style*="display: flex"],
+  [class*="flex"]:not([class*="flex-col"]):not([class*="flex-row"]) {
+    /* Add outline when inspected in dev tools */
+  }
+  
+  /* Flex container indicator - shows when element has display: flex */
+  .flex-container-debug::before {
+    content: 'flex-container';
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: rgba(249, 115, 22, 0.2);
+    color: #f97316;
+    font-size: 10px;
+    padding: 2px 4px;
+    z-index: 9999;
+    pointer-events: none;
+    border: 1px dashed #f97316;
+  }
+  
+  /* Flex item indicator */
+  [style*="flex:"]::after,
+  [style*="flex-grow"]::after,
+  [style*="flex-shrink"]::after {
+    content: 'flex-item';
+    position: absolute;
+    top: 0;
+    right: 0;
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
+    font-size: 10px;
+    padding: 2px 4px;
+    z-index: 9999;
+    pointer-events: none;
+    border: 1px dashed #3b82f6;
+  }
+  
   /* Card with elevation - static container, no hover effects */
   .card-elevated {
     border: 1px solid #334155;
@@ -128,7 +282,68 @@
   }
 }
 
+@layer components {
+  .overview-details {
+    border: 1px solid #1e293b;
+    border-radius: 0.75rem;
+    background: rgba(15, 23, 42, 0.5);
+    padding: 0.75rem 1rem;
+    margin-top: 1rem;
+  }
+
+  .overview-details[open] {
+    background: rgba(15, 23, 42, 0.7);
+  }
+
+  .overview-details > summary,
+  .overview-subdetails > summary {
+    cursor: pointer;
+    color: #e2e8f0;
+    font-weight: 600;
+    font-size: 0.95rem;
+    list-style: none;
+  }
+
+  .overview-details > summary::marker,
+  .overview-subdetails > summary::marker {
+    content: '';
+  }
+
+  .overview-details-body {
+    margin-top: 0.75rem;
+  }
+
+  .overview-subdetails {
+    border: 1px dashed rgba(51, 65, 85, 0.6);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-top: 0.75rem;
+    background: rgba(15, 23, 42, 0.4);
+  }
+}
+
 @layer utilities {
+  /* 
+   * Flexbox Debugging - Use Browser DevTools Built-in Features
+   * 
+   * Chrome/Edge DevTools (recommended):
+   * 1. Open DevTools (F12)
+   * 2. In Elements panel, look for "flex" badge next to flex containers
+   * 3. Click the badge or hover to see flexbox overlay with dotted lines
+   * 4. Use the flexbox editor button in Styles pane (next to display: flex)
+   * 5. Toggle flex properties (justify-content, align-items, etc.) in real-time
+   * 
+   * Firefox DevTools:
+   * - Flexbox inspector shows flex container and item properties
+   * - Layout panel provides flexbox debugging tools
+   * 
+   * Safari DevTools:
+   * - Similar flexbox debugging features available
+   * 
+   * Alternative: Browser Extensions
+   * - "Pesticide" extension shows all element borders
+   * - "What Font" for typography debugging
+   */
   /* Animation keyframes */
   @keyframes pulse-glow {
     0%, 100% {

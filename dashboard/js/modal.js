@@ -1,4 +1,5 @@
 // Modal/Overlay framework with accessibility and focus management
+import { createPortal, removeFromPortal } from './portal.js';
 
 let activeModal = null;
 let focusableElements = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -51,12 +52,13 @@ export function showModal(options = {}) {
   
   // Create modal structure
   const backdrop = document.createElement('div');
-  backdrop.className = 'modal-backdrop fixed inset-0 z-50';
-  backdrop.style.cssText = 'backdrop-filter: blur(4px); background: rgba(0, 0, 0, 0.1);';
+  backdrop.className = 'modal-backdrop fixed inset-0';
+  backdrop.style.cssText = `backdrop-filter: blur(4px); background: rgba(0, 0, 0, 0.1); z-index: var(--z-modal);`;
   backdrop.setAttribute('aria-hidden', 'true');
   
   const modal = document.createElement('div');
-  modal.className = 'modal-container fixed inset-0 z-50 flex items-center justify-center p-4';
+  modal.className = 'modal-container fixed inset-0 flex items-center justify-center p-4';
+  modal.style.cssText = `z-index: var(--z-modal);`;
   modal.setAttribute('role', 'dialog');
   modal.setAttribute('aria-modal', 'true');
   modal.setAttribute('aria-labelledby', 'modal-title');
@@ -96,9 +98,9 @@ export function showModal(options = {}) {
   dialog.appendChild(body);
   modal.appendChild(dialog);
   
-  // Add to DOM
-  document.body.appendChild(backdrop);
-  document.body.appendChild(modal);
+  // Add to DOM via portal root
+  createPortal(backdrop);
+  createPortal(modal);
   
   // Lock scroll
   document.body.classList.add('overflow-hidden');
@@ -155,9 +157,9 @@ export function closeModal() {
   backdrop.removeEventListener('click', handleBackdrop);
   document.removeEventListener('keydown', handleEscape);
   
-  // Remove from DOM
-  backdrop.remove();
-  modal.remove();
+  // Remove from DOM via portal
+  removeFromPortal(backdrop);
+  removeFromPortal(modal);
   
   // Unlock scroll
   document.body.classList.remove('overflow-hidden');
