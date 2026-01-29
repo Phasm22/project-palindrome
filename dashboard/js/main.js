@@ -251,9 +251,20 @@ function updateTabUI(tabName, clickedElement = null) {
       }
     }
   }
+
+  // Update nav height after visibility changes
+  updateChatNavOffset();
   
   // Update mobile dropdown selector
   updateDropdown(tabName);
+}
+
+// Keep sticky offsets synced with chat nav height
+function updateChatNavOffset() {
+  const nav = document.getElementById('chat-nav-sticky');
+  if (!nav) return;
+  const height = Math.round(nav.getBoundingClientRect().height);
+  document.documentElement.style.setProperty('--chat-nav-height', `${height}px`);
 }
 
 /**
@@ -304,6 +315,12 @@ window.addEventListener('DOMContentLoaded', async () => {
     // Update UI when route changes (from URL, browser back/forward, or programmatic)
     updateTabUI(tabId);
   });
+
+  // Initialize sticky offsets and keep them in sync
+  updateChatNavOffset();
+  window.addEventListener('resize', updateChatNavOffset);
+  // Re-check after fonts/images/layout settle
+  setTimeout(updateChatNavOffset, 500);
   
   // Initialize custom dropdown for mobile tabs - use current route
   const currentTab = getActiveTabFromURL();
@@ -504,6 +521,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   const activeTab = getActiveTabFromURL();
   if (activeTab === 'chat') {
     loadConversations();
+    updateChatNavOffset();
   } else if (activeTab === 'overview') {
     loadExecutionStats();
     loadClusterStatus();

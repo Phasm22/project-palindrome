@@ -22,6 +22,7 @@ export interface ConversationContext {
   activeHost?: string;
   activeService?: string;
   lastIncidentSignature?: string;
+  userName?: string;
   pendingAction?: string;
   pendingActionId?: string;
   pendingActionDigest?: string;

@@ -2,7 +2,6 @@ import neo4j from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 import type { TwinEntity } from "../models/entities";
 import { TwinEntityType } from "../models/entities";
-import { TwinEntityType } from "../models/entities";
 import type { TwinRelationship } from "../models/relationships";
 
 export interface TwinUpdateOptions {
@@ -125,6 +124,10 @@ export class TwinUpdateService {
     let skipped = 0;
     try {
       for (const rel of relationships) {
+        if (!rel.fromId || !rel.toId) {
+          skipped++;
+          continue;
+        }
         // Check if both nodes exist before creating relationship
         const fromCheck = await session.run(
           `MATCH (a:TwinEntity {id: $fromId}) RETURN count(a) as count`,
@@ -161,7 +164,7 @@ export class TwinUpdateService {
       }
       if (skipped > 0) {
         const { pceLogger } = await import("../../pce/utils/logger");
-        pceLogger.warn(`Skipped ${skipped} relationships: source or target entity missing`);
+        pceLogger.warn(`Skipped ${skipped} relationships: invalid or missing entities`);
       }
     } finally {
       await session.close();

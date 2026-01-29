@@ -35,6 +35,8 @@ import {
   ProxmoxStorageParser,
 } from "../../parsers";
 import { TwinUpdateService } from "../../twin";
+import { PromptSuggestionService } from "../api/prompt-suggestion-service";
+import { TwinQueryService } from "../../twin/api/twin-query-service";
 import type { ExecutionContext } from "../../types/execution";
 
 export interface ProxmoxIngestionOptions {
@@ -673,6 +675,21 @@ export class ProxmoxIngestionOrchestrator {
     });
   }
 
+  private async refreshPromptSuggestions(): Promise<void> {
+    if (process.env.PCE_PROMPT_SUGGESTIONS_ENABLED === "false") {
+      return;
+    }
+    const maxSuggestions = Number(process.env.PCE_PROMPT_SUGGESTIONS_LIMIT || "6");
+    const suggestionService = new PromptSuggestionService({
+      twinQuery: new TwinQueryService(this.graphStore),
+      maxSuggestions: Number.isFinite(maxSuggestions) ? Math.max(1, maxSuggestions) : 6,
+    });
+    const result = await suggestionService.generateAndStore();
+    pceLogger.info("Prompt suggestions updated", {
+      suggestions: result.suggestions.length,
+    });
+  }
+
   /**
    * Main ingestion method: Fetch data, generate documents, ingest to both stores
    * TL-2A.6.1: All fetching uses ProxmoxClient for provenance tracking
@@ -700,6 +717,11 @@ export class ProxmoxIngestionOrchestrator {
       // Step 3b: Update digital twin
       try {
         await this.ingestTwinInventory();
+        try {
+          await this.refreshPromptSuggestions();
+        } catch (error: any) {
+          pceLogger.warn("Prompt suggestions refresh failed", { error: error.message });
+        }
       } catch (error: any) {
         pceLogger.warn("Twin ingestion failed", { error: error.message });
       }

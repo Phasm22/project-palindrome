@@ -187,7 +187,7 @@ export class TwinQueryService {
     }
   }
 
-  async describeCluster(vmKind: VmKind = "qemu"): Promise<{
+  async describeCluster(vmKind: VmKind = null): Promise<{
     nodes: ClusterNodeSummary[];
     vms: ClusterVmSummary[];
   }> {

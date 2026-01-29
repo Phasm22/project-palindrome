@@ -36,7 +36,10 @@ let toolCallCount = 0;
 let proxmoxToolCalls: string[] = [];
 const originalToolExecute = ProxmoxReadOnlyTool.prototype.execute;
 
-describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
+const liveTestsEnabled = process.env.PCE_LIVE_TESTS === "true";
+const runDescribe = liveTestsEnabled ? describe : describe.skip;
+
+runDescribe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
   let orchestrator: ProxmoxIngestionOrchestrator;
   let vectorStore: QdrantVectorStore;
   let graphStore: Neo4jGraphStore;
@@ -125,6 +128,10 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
   test("should ingest Proxmox inventory data", async () => {
     // Skip if Proxmox credentials are not available
+    if (!liveTestsEnabled) {
+      console.log("Skipping live test: set PCE_LIVE_TESTS=true to enable.");
+      return;
+    }
     if (!process.env.PROXMOX_URL || process.env.PROXMOX_URL === "https://proxmox.example.com") {
       console.log("Skipping test: PROXMOX_URL not set or is example URL");
       return;
@@ -159,6 +166,10 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
   test("should answer name-based query without tool calls", async () => {
     // Skip if Proxmox credentials or OpenAI key are not available
+    if (!liveTestsEnabled) {
+      console.log("Skipping live test: set PCE_LIVE_TESTS=true to enable.");
+      return;
+    }
     if (
       !process.env.PROXMOX_URL ||
       process.env.PROXMOX_URL === "https://proxmox.example.com" ||
@@ -232,6 +243,10 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
   test("should answer structural query without tool calls", async () => {
     // Skip if credentials are not available
+    if (!liveTestsEnabled) {
+      console.log("Skipping live test: set PCE_LIVE_TESTS=true to enable.");
+      return;
+    }
     if (
       !process.env.PROXMOX_URL ||
       process.env.PROXMOX_URL === "https://proxmox.example.com" ||
@@ -292,6 +307,10 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
   test("should answer resource-based query without tool calls", async () => {
     // Skip if credentials are not available
+    if (!liveTestsEnabled) {
+      console.log("Skipping live test: set PCE_LIVE_TESTS=true to enable.");
+      return;
+    }
     if (
       !process.env.PROXMOX_URL ||
       process.env.PROXMOX_URL === "https://proxmox.example.com" ||
@@ -352,6 +371,10 @@ describe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
   test("should validate provenance for retrieved context", async () => {
     // Skip if credentials are not available
+    if (!liveTestsEnabled) {
+      console.log("Skipping live test: set PCE_LIVE_TESTS=true to enable.");
+      return;
+    }
     if (
       !process.env.PROXMOX_URL ||
       process.env.PROXMOX_URL === "https://proxmox.example.com" ||

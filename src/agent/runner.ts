@@ -11,7 +11,12 @@ import { SYSTEM_PROMPT } from "./system-prompt";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
-import { getReasoningTraceStore, type ReasoningStep } from "../pce/api/reasoning-trace-store";
+import {
+  getReasoningTraceStore,
+  type ReasoningStep,
+  type ReasoningTraceArtifactInput,
+  type ReasoningTraceProvenance,
+} from "../pce/api/reasoning-trace-store";
 import { AgentEventBus } from "./event-bus";
 import type { BaseTool } from "../tools/BaseTool";
 import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-intents";
@@ -59,6 +64,11 @@ import { parseConfirmationInput } from "./dialog-policy";
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-risk";
 
 let openaiClient: OpenAI | null = null;
+const ASSISTANT_NAME = "Pally";
+const PROMPT_HASH = createHash("sha256").update(SYSTEM_PROMPT).digest("hex");
+const PROMPT_VERSION = process.env.PROMPT_VERSION ?? PROMPT_HASH.slice(0, 8);
+const MODEL_ID = "gpt-4o-mini";
+let cachedAgentVersion: string | null = null;
 
 function getOpenAIClient(): OpenAI {
   if (!openaiClient) {
@@ -69,6 +79,295 @@ function getOpenAIClient(): OpenAI {
     openaiClient = new OpenAI({ apiKey });
   }
   return openaiClient;
+}
+
+function resolveAgentVersion(): string {
+  if (cachedAgentVersion) return cachedAgentVersion;
+  const envVersion =
+    process.env.AGENT_VERSION ||
+    process.env.GIT_SHA ||
+    process.env.COMMIT_SHA ||
+    process.env.VERCEL_GIT_COMMIT_SHA;
+  if (envVersion) {
+    cachedAgentVersion = envVersion;
+    return envVersion;
+  }
+  try {
+    const bun = (globalThis as any).Bun;
+    if (bun?.spawnSync) {
+      const result = bun.spawnSync({
+        cmd: ["git", "rev-parse", "HEAD"],
+        cwd: process.cwd(),
+      });
+      const stdout = result?.stdout?.toString?.().trim();
+      if (stdout) {
+        cachedAgentVersion = stdout;
+        return stdout;
+      }
+    }
+  } catch (error) {
+    // Ignore and fall back to unknown
+  }
+  cachedAgentVersion = "unknown";
+  return cachedAgentVersion;
+}
+
+function computeToolRegistryVersion(tools: BaseTool[]): string {
+  const toolDigest = tools
+    .map((tool) => ({
+      name: tool.metadata.name,
+      description: tool.metadata.description ?? "",
+      parameters: tool.metadata.parameters ?? null,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return createHash("sha256").update(JSON.stringify(toolDigest)).digest("hex");
+}
+
+function buildProvenance(params: {
+  toolRegistryVersion?: string;
+  policyMode?: string;
+  selectedMode?: ResponseMode;
+}): ReasoningTraceProvenance {
+  return {
+    agentVersion: resolveAgentVersion(),
+    promptVersion: PROMPT_VERSION,
+    promptHash: PROMPT_HASH,
+    modelId: MODEL_ID,
+    toolRegistryVersion: params.toolRegistryVersion ?? "unknown",
+    policyMode: params.policyMode ?? "standard",
+    selectedMode: params.selectedMode,
+  };
+}
+
+function normalizeUserName(rawName: string): string {
+  const trimmed = rawName.trim().replace(/[.!?]+$/, "");
+  const collapsed = trimmed.replace(/\s+/g, " ");
+  if (!collapsed) return "";
+  const unquoted = collapsed.replace(/^["'](.+)["']$/, "$1");
+  const isAllLower = unquoted === unquoted.toLowerCase();
+  const isAllUpper = unquoted === unquoted.toUpperCase();
+  if (isAllLower || isAllUpper) {
+    return unquoted
+      .split(" ")
+      .map((part) => (part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : part))
+      .join(" ");
+  }
+  return unquoted;
+}
+
+function extractUserNameUpdate(input: string): string | null {
+  const patterns = [
+    /^\s*my name is\s+(.+)\s*$/i,
+    /^\s*call me\s+(.+)\s*$/i,
+    /^\s*you can call me\s+(.+)\s*$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = input.match(pattern);
+    if (!match) continue;
+    const candidate = normalizeUserName(match[1] ?? "");
+    if (!candidate || candidate.length > 60) return null;
+    const lower = candidate.toLowerCase();
+    const stopPhrases = [" and ", " but ", " also ", " plus ", " because ", " then ", " please "];
+    if (stopPhrases.some((phrase) => lower.includes(phrase))) {
+      return null;
+    }
+    return candidate;
+  }
+  return null;
+}
+
+function isUserNameQuery(input: string): boolean {
+  const normalized = input.trim().toLowerCase();
+  return (
+    /^(what('?s| is) my name)\??$/.test(normalized) ||
+    /^(do you know my name)\??$/.test(normalized) ||
+    /^(tell me my name)\??$/.test(normalized)
+  );
+}
+
+function isAssistantNameQuery(input: string): boolean {
+  const normalized = input.trim().toLowerCase();
+  return (
+    /^(what('?s| is) your name)\??$/.test(normalized) ||
+    /^(who are you)\??$/.test(normalized)
+  );
+}
+
+function isMetaIdentityQuery(input: string): boolean {
+  const normalized = input.trim().toLowerCase();
+  if (isUserNameQuery(normalized) || isAssistantNameQuery(normalized)) return true;
+  return /^(what do you do|what can you do)\??$/.test(normalized);
+}
+
+const RETRIEVAL_MIN_SCORE = 0.35;
+
+function getRetrievalEligibility(params: {
+  intent: string;
+  isTrivialQuery: boolean;
+  isActionIntent: boolean;
+  isRealTimeMetricQuery: boolean;
+  isMetaIdentityQuery: boolean;
+}): { eligible: boolean; reason?: string } {
+  if (params.isMetaIdentityQuery) {
+    return { eligible: false, reason: "meta_identity" };
+  }
+  if (params.intent === "CHAT_SOCIAL") {
+    return { eligible: false, reason: "chat_social" };
+  }
+  if (params.intent === "CLARIFICATION") {
+    return { eligible: false, reason: "clarification" };
+  }
+  if (params.isTrivialQuery) {
+    return { eligible: false, reason: "trivial_query" };
+  }
+  if (params.isActionIntent) {
+    return { eligible: false, reason: "action_intent" };
+  }
+  if (params.isRealTimeMetricQuery) {
+    return { eligible: false, reason: "real_time_metrics" };
+  }
+  if (params.intent !== "QUERY" && params.intent !== "CHAT_REASONING") {
+    return { eligible: false, reason: "intent_not_retrieval" };
+  }
+  return { eligible: true };
+}
+
+function hasDomainMatch(domain: string | undefined, rag: HybridApiContext): boolean {
+  if (!domain || domain === "general") return true;
+  const paths: string[] = [];
+  if (rag.sources) {
+    paths.push(...rag.sources.map((source) => source.sourcePath || ""));
+  }
+  const keywords: Record<string, string[]> = {
+    compute: ["proxmox", "vm", "lxc", "cluster", "compute"],
+    network: ["network", "subnet", "interface", "vlan"],
+    firewall: ["firewall", "opnsense", "rules"],
+    metrics: ["metrics", "temperature", "sensors", "cpu", "memory"],
+  };
+  const tokens = keywords[domain] ?? [];
+  if (tokens.length === 0) return true;
+  const haystack = paths.join(" ").toLowerCase();
+  return tokens.some((token) => haystack.includes(token));
+}
+
+function buildRetrievalArtifacts(rag: HybridApiContext): {
+  artifacts: ReasoningTraceArtifactInput[];
+  ragContextId?: string;
+  graphContextId?: string;
+  fusionContextId?: string;
+} {
+  const artifacts: ReasoningTraceArtifactInput[] = [];
+  const ragContextId = randomUUID();
+  const topChunks = rag.context?.semanticChunks?.slice(0, 3) ?? [];
+  artifacts.push({
+    id: ragContextId,
+    kind: "rag_context",
+    payload: {
+      queryType: rag.queryType,
+      sTotalScore: rag.sTotalScore ?? null,
+      sourcesCount: rag.sources?.length ?? 0,
+      topChunks: topChunks.map((chunk) => ({
+        sourcePath: chunk.sourcePath || "unknown",
+        score: chunk.score ?? 0,
+        chunkId: chunk.chunkId ?? undefined,
+      })),
+      structuralPaths: rag.context?.structuralPaths?.length ?? 0,
+    },
+  });
+
+  let graphContextId: string | undefined;
+  if ((rag.fusionMetrics?.graphResults ?? 0) > 0 || (rag.context?.structuralPaths?.length ?? 0) > 0) {
+    graphContextId = randomUUID();
+    artifacts.push({
+      id: graphContextId,
+      kind: "graph_context",
+      payload: {
+        queryType: rag.queryType,
+        graphResults: rag.fusionMetrics?.graphResults ?? 0,
+        structuralPaths: rag.context?.structuralPaths?.length ?? 0,
+      },
+    });
+  }
+
+  let fusionContextId: string | undefined;
+  if (rag.fusionMetrics) {
+    fusionContextId = randomUUID();
+    artifacts.push({
+      id: fusionContextId,
+      kind: "fusion_context",
+      payload: {
+        vectorResults: rag.fusionMetrics.vectorResults,
+        graphResults: rag.fusionMetrics.graphResults,
+        fusedResults: rag.fusionMetrics.fusedResults,
+        prunedResults: rag.fusionMetrics.prunedResults,
+        avgTotalScore: rag.fusionMetrics.avgTotalScore,
+      },
+    });
+  }
+
+  return { artifacts, ragContextId, graphContextId, fusionContextId };
+}
+
+function buildRetrievalToolCalls(rag: HybridApiContext): ReasoningStep["toolCalls"] {
+  const calls: ReasoningStep["toolCalls"] = [];
+  const ragSummary = {
+    queryType: rag.queryType,
+    sTotalScore: rag.sTotalScore ?? null,
+    sourcesCount: rag.sources?.length ?? 0,
+  };
+  const ragPreview = JSON.stringify(ragSummary);
+  calls.push({
+    toolName: "rag.retrieve",
+    parameters: { queryType: rag.queryType },
+    result: {
+      success: true,
+      dataPreview: ragPreview,
+      dataSize: ragPreview.length,
+      resultType: "summary",
+    },
+  });
+
+  if (rag.queryType !== "SEMANTIC_ONLY") {
+    const graphSummary = { graphResults: rag.fusionMetrics?.graphResults ?? 0 };
+    const graphPreview = JSON.stringify(graphSummary);
+    calls.push({
+      toolName: "graph.query",
+      parameters: { queryType: rag.queryType },
+      result: {
+        success: true,
+        dataPreview: graphPreview,
+        dataSize: graphPreview.length,
+        resultType: "summary",
+      },
+    });
+  }
+
+  if (rag.fusionMetrics) {
+    const fusionSummary = {
+      fusedResults: rag.fusionMetrics.fusedResults,
+      prunedResults: rag.fusionMetrics.prunedResults,
+    };
+    const fusionPreview = JSON.stringify(fusionSummary);
+    calls.push({
+      toolName: "fusion.rank",
+      parameters: { queryType: rag.queryType },
+      result: {
+        success: true,
+        dataPreview: fusionPreview,
+        dataSize: fusionPreview.length,
+        resultType: "summary",
+      },
+    });
+  }
+  return calls;
+}
+
+function buildConversationMemoryPrompt(context?: ConversationContext): string | null {
+  if (!context) return null;
+  const parts: string[] = [];
+  if (context.userName) parts.push(`user_name=${context.userName}`);
+  if (parts.length === 0) return null;
+  return `Conversation memory (chat scope only): ${parts.join(" | ")}`;
 }
 
 function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
@@ -238,13 +537,13 @@ async function executeComputeIntent(
       case "describe_cluster":
         return await describeClusterChain(tools, session);
       case "vms_by_node":
-        return await listVmsByNodeChain(tools, session, intent.nodeName);
+        return await listVmsByNodeChain(tools, session, intent.nodeName, intent.vmKind);
       case "running_vms_on_node":
-        return await listRunningVmsOnNodeChain(tools, session, intent.nodeName);
+        return await listRunningVmsOnNodeChain(tools, session, intent.nodeName, intent.vmKind);
       case "vms_without_agent":
         return await listVmsWithoutAgentChain(tools, session);
       case "stopped_vms_on_node":
-        return await listStoppedVmsChain(tools, session, intent.nodeName);
+        return await listStoppedVmsChain(tools, session, intent.nodeName, intent.vmKind);
       case "find_vm_by_id":
         return await findVmByIdChain(tools, session, intent.vmId);
       default:
@@ -497,6 +796,7 @@ export async function runAgent(
   context.addUserMessage(userInput);
 
   const tools = loadTools();
+  const toolRegistryVersion = computeToolRegistryVersion(tools);
   
   // Track failures to prevent retry loops (must be declared before classification)
   const failureTracker = new FailureTracker();
@@ -525,6 +825,7 @@ export async function runAgent(
             metadata: { intent, mode: "twin_first" },
           }],
         }],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
         totalSteps: 1,
         totalToolCalls: toolCalls,
         maxStepsReached: false,
@@ -665,14 +966,169 @@ export async function runAgent(
     route: routing.route,
   });
 
+  const policyMode = options.userPreferences?.safeMode ? "safe" : "standard";
+  const memoryUserName = options.conversationContext?.userName;
+  const nameUpdate = extractUserNameUpdate(originalUserInput);
+  if (!confirmation.confirmed && nameUpdate) {
+    const text = `Got it. I'll call you ${nameUpdate}.`;
+    const traceStore = getReasoningTraceStore();
+    const traceStep: ReasoningStep = {
+      step: 1,
+      toolCalls: [],
+      decisions: [
+        {
+          type: "retrieval_skipped",
+          description: "Retrieval skipped for explicit identity update.",
+          metadata: { reason: "meta_identity" },
+        },
+      ],
+    };
+    let traceId: string | undefined;
+    try {
+      traceId = await traceStore.recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: text,
+        steps: [traceStep],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        totalSteps: 1,
+        totalToolCalls: 0,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record identity update trace", { error: error.message });
+    }
+    emitFinalEvent(text, {
+      conversationState: "FOLLOWUP",
+      conversationContext: { ...contextUpdate, userName: nameUpdate },
+      memorySource: "user_explicit",
+      memoryConfidence: 0.95,
+      traceId,
+    });
+    return { text };
+  }
+
+  if (!confirmation.confirmed && isUserNameQuery(originalUserInput)) {
+    const text = memoryUserName
+      ? `Your name is ${memoryUserName}.`
+      : "I don't have your name yet. Tell me with \"my name is <name>\".";
+    const traceStore = getReasoningTraceStore();
+    const traceStep: ReasoningStep = {
+      step: 1,
+      toolCalls: [],
+      decisions: [
+        {
+          type: "retrieval_skipped",
+          description: "Retrieval skipped for identity lookup.",
+          metadata: { reason: "meta_identity" },
+        },
+      ],
+    };
+    let traceId: string | undefined;
+    try {
+      traceId = await traceStore.recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: text,
+        steps: [traceStep],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        totalSteps: 1,
+        totalToolCalls: 0,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record identity lookup trace", { error: error.message });
+    }
+    emitFinalEvent(text, {
+      conversationState: "FOLLOWUP",
+      conversationContext: contextUpdate,
+      traceId,
+    });
+    return { text };
+  }
+
+  if (!confirmation.confirmed && isAssistantNameQuery(originalUserInput)) {
+    const text = `My name is ${ASSISTANT_NAME}.`;
+    const traceStore = getReasoningTraceStore();
+    const traceStep: ReasoningStep = {
+      step: 1,
+      toolCalls: [],
+      decisions: [
+        {
+          type: "retrieval_skipped",
+          description: "Retrieval skipped for assistant identity query.",
+          metadata: { reason: "meta_identity" },
+        },
+      ],
+    };
+    let traceId: string | undefined;
+    try {
+      traceId = await traceStore.recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: text,
+        steps: [traceStep],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        totalSteps: 1,
+        totalToolCalls: 0,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record assistant identity trace", { error: error.message });
+    }
+    emitFinalEvent(text, {
+      conversationState: "FOLLOWUP",
+      conversationContext: contextUpdate,
+      traceId,
+    });
+    return { text };
+  }
+
   // Fast-path social chat: do not run tools/LLM formatting pipeline.
   // This prevents "Answer/Evidence/Next steps" nonsense for greetings like "Hello".
   if (classification.intent === "CHAT_SOCIAL" && !confirmation.confirmed) {
     const text = "Hi — what do you want to check or change in your lab?";
+    let traceId: string | undefined;
+    try {
+      const traceStore = getReasoningTraceStore();
+      traceId = await traceStore.recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: text,
+        steps: [{
+          step: 1,
+          toolCalls: [],
+          decisions: [{
+            type: "retrieval_skipped",
+            description: "Retrieval skipped for social greeting.",
+            metadata: { reason: "chat_social" },
+          }],
+        }],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        totalSteps: 1,
+        totalToolCalls: 0,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record social trace", { error: error.message });
+    }
     emitFinalEvent(text, {
       classification,
       conversationState: "FOLLOWUP",
       conversationContext: contextUpdate,
+      traceId,
     });
     return { text };
   }
@@ -822,6 +1278,13 @@ export async function runAgent(
     
     const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
     
+    const clarificationRetrievalDecisions: ReasoningStep["decisions"] = [];
+    const clarificationRetrievalToolCalls: ReasoningStep["toolCalls"] = [];
+    const clarificationRetrievalArtifacts: ReasoningTraceArtifactInput[] = [];
+    let clarificationRagContextId: string | undefined;
+    let clarificationGraphContextId: string | undefined;
+    let clarificationFusionContextId: string | undefined;
+
     // If we have domain metadata, try RAG first - the data might answer the question
     // This leverages the PCE data we're collecting even when confidence is low
     // BUT: Skip RAG for real-time metric queries - they need tools for accurate data
@@ -837,9 +1300,52 @@ export async function runAgent(
         userId: session.userId,
         aclGroup: session.aclGroup,
       });
-      
+
+      const ragScore = ragPayload.sTotalScore ?? null;
+      const domainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
+      const hasSources = (ragPayload.sources?.length ?? 0) > 0;
+      const injected =
+        hasSources &&
+        ragScore !== null &&
+        ragScore >= RETRIEVAL_MIN_SCORE &&
+        domainMatch;
+      let injectedReason = "accepted";
+      if (!hasSources) injectedReason = "no_sources";
+      else if (ragScore === null || ragScore < RETRIEVAL_MIN_SCORE) injectedReason = "score_below_threshold";
+      else if (!domainMatch) injectedReason = "domain_mismatch";
+
+      clarificationRetrievalDecisions.push({
+        type: "retrieval_executed",
+        description: "Retrieval executed for low-confidence query.",
+        metadata: {
+          queryType: ragPayload.queryType,
+          score: ragScore,
+          sourcesCount: ragPayload.sources?.length ?? 0,
+        },
+      });
+      clarificationRetrievalDecisions.push({
+        type: injected ? "retrieval_injected" : "retrieval_not_injected",
+        description: injected
+          ? "Retrieval injected into prompt."
+          : "Retrieval executed but not injected into prompt.",
+        metadata: {
+          score: ragScore,
+          minScore: RETRIEVAL_MIN_SCORE,
+          domainMatch,
+          sourcesCount: ragPayload.sources?.length ?? 0,
+          reason: injectedReason,
+        },
+      });
+
+      const artifactBundle = buildRetrievalArtifacts(ragPayload);
+      clarificationRetrievalArtifacts.push(...artifactBundle.artifacts);
+      clarificationRagContextId = artifactBundle.ragContextId;
+      clarificationGraphContextId = artifactBundle.graphContextId;
+      clarificationFusionContextId = artifactBundle.fusionContextId;
+      clarificationRetrievalToolCalls.push(...buildRetrievalToolCalls(ragPayload));
+
       // If RAG has a good answer (high score), use it instead of asking for clarification
-      if (ragPayload && ragPayload.answer && ragPayload.sTotalScore && ragPayload.sTotalScore > 0.3) {
+      if (injected && ragPayload.answer) {
         logger.info("RAG provided answer despite low classification confidence", {
           sTotalScore: ragPayload.sTotalScore,
           answerLength: ragPayload.answer.length,
@@ -861,24 +1367,33 @@ export async function runAgent(
         }
         
         // Record trace
+        let traceId: string | undefined;
         try {
           const traceStore = getReasoningTraceStore();
-          await traceStore.recordTrace({
+          traceId = await traceStore.recordTrace({
             userId: session.userId,
             aclGroup: session.aclGroup,
             userInput,
             finalResponse: cleanedAnswer,
             steps: [{
               step: 1,
-              toolCalls: [],
-              decisions: [{
-                type: "rag_answer_used",
-                description: `Low confidence (${classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore.toFixed(2)})`,
-                metadata: { classification, routing, ragScore: ragPayload.sTotalScore },
-              }],
+              toolCalls: clarificationRetrievalToolCalls,
+              ragContextId: clarificationRagContextId,
+              graphContextId: clarificationGraphContextId,
+              fusionContextId: clarificationFusionContextId,
+              decisions: [
+                ...clarificationRetrievalDecisions,
+                {
+                  type: "rag_used",
+                  description: `Low confidence (${classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore?.toFixed(2)})`,
+                  metadata: { classification, routing, ragScore: ragPayload.sTotalScore },
+                },
+              ],
             }],
+            provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+            artifacts: clarificationRetrievalArtifacts,
             totalSteps: 1,
-            totalToolCalls: 0,
+            totalToolCalls: clarificationRetrievalToolCalls.length,
             maxStepsReached: false,
             timestamp: new Date(),
             durationMs: Date.now() - startTime,
@@ -896,6 +1411,7 @@ export async function runAgent(
           classification,
           conversationState: postExecutionState,
           conversationContext: finalContextUpdate,
+          traceId,
         });
         return { text: cleanedAnswer };
       }
@@ -910,6 +1426,17 @@ export async function runAgent(
       logger.info("Skipping RAG for real-time metric query - will use tools instead", {
         query: userInput.slice(0, 100),
         domain: classification.metadata?.domain,
+      });
+      clarificationRetrievalDecisions.push({
+        type: "retrieval_skipped",
+        description: "Retrieval skipped for real-time metric query.",
+        metadata: { reason: "real_time_metrics" },
+      });
+    } else {
+      clarificationRetrievalDecisions.push({
+        type: "retrieval_skipped",
+        description: "Retrieval skipped before clarification.",
+        metadata: { reason: "low_confidence_no_domain" },
       });
     }
     
@@ -941,24 +1468,35 @@ export async function runAgent(
     }
     
     // Record trace for clarification
+    let clarificationTraceId: string | undefined;
     try {
       const traceStore = getReasoningTraceStore();
-      await traceStore.recordTrace({
+      const clarificationStep: ReasoningStep = {
+        step: 1,
+        toolCalls: clarificationRetrievalToolCalls,
+        decisions: [
+          ...clarificationRetrievalDecisions,
+          {
+            type: "clarification_requested",
+            description: `Confidence ${classification.confidence.toFixed(2)} below threshold for ${classification.type} intent`,
+            metadata: { classification, routing },
+          },
+        ],
+      };
+      if (clarificationRagContextId) clarificationStep.ragContextId = clarificationRagContextId;
+      if (clarificationGraphContextId) clarificationStep.graphContextId = clarificationGraphContextId;
+      if (clarificationFusionContextId) clarificationStep.fusionContextId = clarificationFusionContextId;
+
+      clarificationTraceId = await traceStore.recordTrace({
         userId: session.userId,
         aclGroup: session.aclGroup,
         userInput,
         finalResponse: clarificationMessage,
-        steps: [{
-          step: 1,
-          toolCalls: [],
-          decisions: [{
-            type: "clarification_requested",
-            description: `Confidence ${classification.confidence.toFixed(2)} below threshold for ${classification.type} intent`,
-            metadata: { classification, routing },
-          }],
-        }],
+        steps: [clarificationStep],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        artifacts: clarificationRetrievalArtifacts,
         totalSteps: 1,
-        totalToolCalls: 0,
+        totalToolCalls: clarificationRetrievalToolCalls.length,
         maxStepsReached: false,
         timestamp: new Date(),
         durationMs: Date.now() - startTime,
@@ -976,7 +1514,7 @@ export async function runAgent(
       classification,
       conversationState: conversationPlan.nextState,
       conversationContext: contextUpdate,
-      traceId: undefined, // Will be set if trace was recorded above
+      traceId: clarificationTraceId,
     });
     return { text: clarificationMessage };
   }
@@ -1241,10 +1779,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   const reasoningSteps: ReasoningStep[] = [];
   let totalToolCalls = 0;
   
-  // Skip RAG for trivial queries (greetings, simple questions that don't need context)
-  // Also skip RAG for action intents - they should go straight to the action tool
-  // Also skip RAG for real-time metric queries (uptime, memory, cpu, etc.) - these need tools for accurate data
-  // This significantly improves response time and prevents RAG from confusing action execution or providing stale data
+  // Determine retrieval eligibility before hitting RAG/graph/fusion.
   const isTrivialQuery = (query: string): boolean => {
     const normalized = query.toLowerCase().trim();
     const trivialPatterns = [
@@ -1267,28 +1802,90 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   ];
   
   const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
-  
-  // Skip RAG for action intents - they should use the action tool directly
-  const shouldSkipRAG = isTrivialQuery(userInput) || !!actionIntent || isRealTimeMetricQuery;
-  
+  const isMetaQuery = isMetaIdentityQuery(userInput);
+  const eligibility = getRetrievalEligibility({
+    intent: classification.intent,
+    isTrivialQuery: isTrivialQuery(userInput),
+    isActionIntent: !!actionIntent,
+    isRealTimeMetricQuery,
+    isMetaIdentityQuery: isMetaQuery,
+  });
+
   if (isRealTimeMetricQuery) {
     logger.info("Skipping RAG for real-time metric query - will use tools instead", {
       query: userInput.slice(0, 100),
     });
   }
-  
-  // Only fetch RAG context for non-trivial queries and non-action intents
-  // Action intents should go straight to the action tool without RAG context
-  // RAG context can confuse the LLM into thinking VMs don't exist when they do
-  const ragPayload = shouldSkipRAG
-    ? null 
-    : await fetchHybridContext(userInput, {
-        baseUrl: options.ragBaseUrl,
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-      });
 
-  const ragMessage = ragPayload ? [{ role: "system", content: formatRagSummary(ragPayload) }] : [];
+  let ragPayload: HybridApiContext | null = null;
+  let retrievalInjected = false;
+  let retrievalInjectedReason = "not_executed";
+  let retrievalDomainMatch = true;
+  let ragContextId: string | undefined;
+  let graphContextId: string | undefined;
+  let fusionContextId: string | undefined;
+  let retrievalToolCalls: ReasoningStep["toolCalls"] = [];
+  let retrievalArtifacts: ReasoningTraceArtifactInput[] = [];
+  const retrievalDecisions: ReasoningStep["decisions"] = [];
+
+  if (!eligibility.eligible) {
+    retrievalDecisions.push({
+      type: "retrieval_skipped",
+      description: "Retrieval skipped before execution.",
+      metadata: { reason: eligibility.reason },
+    });
+  } else {
+    ragPayload = await fetchHybridContext(userInput, {
+      baseUrl: options.ragBaseUrl,
+      userId: session.userId,
+      aclGroup: session.aclGroup,
+    });
+    retrievalDecisions.push({
+      type: "retrieval_executed",
+      description: "Retrieval executed for eligible query.",
+      metadata: {
+        queryType: ragPayload.queryType,
+        score: ragPayload.sTotalScore ?? null,
+        sourcesCount: ragPayload.sources?.length ?? 0,
+      },
+    });
+    retrievalDomainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
+    const score = ragPayload.sTotalScore ?? null;
+    const hasSources = (ragPayload.sources?.length ?? 0) > 0;
+    if (!hasSources) {
+      retrievalInjectedReason = "no_sources";
+    } else if (score === null || score < RETRIEVAL_MIN_SCORE) {
+      retrievalInjectedReason = "score_below_threshold";
+    } else if (!retrievalDomainMatch) {
+      retrievalInjectedReason = "domain_mismatch";
+    } else {
+      retrievalInjectedReason = "accepted";
+      retrievalInjected = true;
+    }
+    retrievalDecisions.push({
+      type: retrievalInjected ? "retrieval_injected" : "retrieval_not_injected",
+      description: retrievalInjected
+        ? "Retrieval injected into prompt."
+        : "Retrieval executed but not injected into prompt.",
+      metadata: {
+        score,
+        minScore: RETRIEVAL_MIN_SCORE,
+        domainMatch: retrievalDomainMatch,
+        sourcesCount: ragPayload.sources?.length ?? 0,
+        reason: retrievalInjectedReason,
+      },
+    });
+    const artifactBundle = buildRetrievalArtifacts(ragPayload);
+    retrievalArtifacts = artifactBundle.artifacts;
+    ragContextId = artifactBundle.ragContextId;
+    graphContextId = artifactBundle.graphContextId;
+    fusionContextId = artifactBundle.fusionContextId;
+    retrievalToolCalls = buildRetrievalToolCalls(ragPayload);
+  }
+
+  const ragMessage = retrievalInjected && ragPayload
+    ? [{ role: "system", content: formatRagSummary(ragPayload) }]
+    : [];
   
   // For real-time metric queries, add explicit instruction to use tools
   const realTimeMetricInstruction = isRealTimeMetricQuery 
@@ -1372,79 +1969,32 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       decisions: [],
     };
 
-    // Capture RAG context for first step with detailed chunk information
-    if (step === 0 && ragPayload) {
-      const topChunks = ragPayload.context?.semanticChunks?.slice(0, 5).map(chunk => ({
-        sourcePath: chunk.sourcePath || "unknown",
-        score: chunk.score || 0,
-        textPreview: chunk.text?.slice(0, 200) || "",
-        chunkId: chunk.chunkId,
-      })) || [];
-      
-      reasoningStep.ragContext = {
-        queryType: ragPayload.queryType,
-        sTotalScore: ragPayload.sTotalScore,
-        sourcesCount: ragPayload.sources?.length || 0,
-        topChunks,
-        structuralPaths: ragPayload.context?.structuralPaths?.length || 0,
-        fusionMetrics: ragPayload.fusionMetrics ? {
-          vectorResults: ragPayload.fusionMetrics.vectorResults || 0,
-          graphResults: ragPayload.fusionMetrics.graphResults || 0,
-          fusedResults: ragPayload.fusionMetrics.fusedResults || 0,
-          prunedResults: ragPayload.fusionMetrics.prunedResults || 0,
-        } : undefined,
-      };
-      
-      // Add decision for RAG usage
-      reasoningStep.decisions.push({
-        type: "rag_used",
-        description: `RAG context retrieved: ${ragPayload.queryType} query with ${ragPayload.sources?.length || 0} sources, ${topChunks.length} top chunks`,
-        metadata: {
-          sTotalScore: ragPayload.sTotalScore,
-          queryType: ragPayload.queryType,
-          topChunkScores: topChunks.map(c => c.score),
-        },
-      });
-      
-      // Add decision for graph usage if fusion metrics show graph results
-      if (ragPayload.fusionMetrics?.graphResults && ragPayload.fusionMetrics.graphResults > 0) {
-        reasoningStep.graphContext = {
-          entitiesFound: ragPayload.fusionMetrics.graphResults,
-          relationshipsFound: 0, // Not directly available in fusion metrics
-          queryType: ragPayload.queryType,
-        };
-        reasoningStep.decisions.push({
-          type: "graph_used",
-          description: `Graph retrieval found ${ragPayload.fusionMetrics.graphResults} entities`,
-          metadata: {
-            graphResults: ragPayload.fusionMetrics.graphResults,
-          },
-        });
+    // Attach retrieval decisions + artifact references on step 1.
+    if (step === 0) {
+      if (retrievalDecisions.length > 0) {
+        reasoningStep.decisions.push(...retrievalDecisions);
       }
-      
-      // Add decision for fusion if both vector and graph were used
-      if (ragPayload.fusionMetrics && 
-          ragPayload.fusionMetrics.vectorResults > 0 && 
-          ragPayload.fusionMetrics.graphResults > 0) {
-        reasoningStep.decisions.push({
-          type: "fusion_used",
-          description: `Fusion combined ${ragPayload.fusionMetrics.vectorResults} vector results with ${ragPayload.fusionMetrics.graphResults} graph results`,
-          metadata: {
-            vectorResults: ragPayload.fusionMetrics.vectorResults,
-            graphResults: ragPayload.fusionMetrics.graphResults,
-            fusedResults: ragPayload.fusionMetrics.fusedResults,
-          },
-        });
+      if (retrievalToolCalls.length > 0) {
+        reasoningStep.toolCalls.push(...retrievalToolCalls);
+        totalToolCalls += retrievalToolCalls.length;
       }
+      if (ragContextId) reasoningStep.ragContextId = ragContextId;
+      if (graphContextId) reasoningStep.graphContextId = graphContextId;
+      if (fusionContextId) reasoningStep.fusionContextId = fusionContextId;
     }
 
     // Build messages array with optional resolved VM context
     const vmContextMessage = resolvedVmContext ? [
       { role: "system", content: resolvedVmContext }
     ] : [];
+  const memoryContext = buildConversationMemoryPrompt(options.conversationContext);
+  const memoryContextMessage = memoryContext ? [
+    { role: "system", content: memoryContext }
+  ] : [];
     
     const messages = [
       { role: "system", content: SYSTEM_PROMPT },
+    ...memoryContextMessage,
       ...ragMessage,
       ...realTimeMetricInstruction,
       ...vmContextMessage,
@@ -2190,6 +2740,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           userInput,
           finalResponse: finalText,
           steps: reasoningSteps,
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          artifacts: retrievalArtifacts,
           totalSteps: reasoningSteps.length,
           totalToolCalls,
           maxStepsReached: false,
@@ -2225,6 +2777,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       userInput,
       finalResponse: "Max reasoning depth reached. Please try a simpler query.",
       steps: reasoningSteps,
+      provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+      artifacts: retrievalArtifacts,
       totalSteps: reasoningSteps.length,
       totalToolCalls,
       maxStepsReached: true,

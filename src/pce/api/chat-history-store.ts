@@ -1,12 +1,12 @@
 import { Database } from "bun:sqlite";
+import type { ACLGroup } from "../types";
 import type {
-  ACLGroup,
   ConversationContext,
   ConversationState,
   UserPreferences,
   VerbosityPreference,
-  MemoryUpdateSource
-} from "../types";
+  MemoryUpdateSource,
+} from "../../types";
 import type { ApiHistoryEntry, ApiQueryResponse } from "./types";
 import { pceLogger } from "../utils/logger";
 import { mkdirSync } from "fs";
@@ -195,6 +195,7 @@ export class ChatHistoryStore {
         active_host TEXT,
         active_service TEXT,
         last_incident_signature TEXT,
+        user_name TEXT,
         pending_action TEXT,
         pending_action_id TEXT,
         pending_action_digest TEXT,
@@ -211,6 +212,9 @@ export class ChatHistoryStore {
     try {
       const ctxInfo = this.db.prepare("PRAGMA table_info(conversation_context)").all() as any[];
       const columnExists = (name: string) => ctxInfo.some(col => col.name === name);
+      if (!columnExists("user_name")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN user_name TEXT;");
+      }
       if (!columnExists("pending_action_id")) {
         this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_id TEXT;");
       }
@@ -811,7 +815,7 @@ export class ChatHistoryStore {
   async getConversationContext(conversationId: string): Promise<ConversationContext> {
     try {
       const stmt = this.db.prepare(`
-        SELECT active_host, active_service, last_incident_signature, pending_action,
+        SELECT active_host, active_service, last_incident_signature, user_name, pending_action,
                pending_action_id, pending_action_digest, pending_action_created_at, pending_action_summary
         FROM conversation_context
         WHERE conversation_id = ?
@@ -820,6 +824,7 @@ export class ChatHistoryStore {
         active_host?: string | null;
         active_service?: string | null;
         last_incident_signature?: string | null;
+        user_name?: string | null;
         pending_action?: string | null;
         pending_action_id?: string | null;
         pending_action_digest?: string | null;
@@ -833,6 +838,7 @@ export class ChatHistoryStore {
         activeHost: row.active_host || undefined,
         activeService: row.active_service || undefined,
         lastIncidentSignature: row.last_incident_signature || undefined,
+        userName: row.user_name || undefined,
         pendingAction: row.pending_action || undefined,
         pendingActionId: row.pending_action_id || undefined,
         pendingActionDigest: row.pending_action_digest || undefined,
@@ -866,6 +872,7 @@ export class ChatHistoryStore {
       "activeHost",
       "activeService",
       "lastIncidentSignature",
+      "userName",
       "pendingAction",
       "pendingActionId",
       "pendingActionDigest",
@@ -875,8 +882,9 @@ export class ChatHistoryStore {
 
     const filtered: ConversationContext = {};
     for (const key of allowedKeys) {
-      if (context[key] !== undefined) {
-        filtered[key] = context[key];
+      const value = context[key];
+      if (value !== undefined) {
+        (filtered as Record<string, ConversationContext[keyof ConversationContext]>)[key] = value;
       }
     }
 
@@ -892,6 +900,7 @@ export class ChatHistoryStore {
           active_host,
           active_service,
           last_incident_signature,
+          user_name,
           pending_action,
           pending_action_id,
           pending_action_digest,
@@ -899,11 +908,12 @@ export class ChatHistoryStore {
           pending_action_summary,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(conversation_id) DO UPDATE SET
           active_host = COALESCE(excluded.active_host, conversation_context.active_host),
           active_service = COALESCE(excluded.active_service, conversation_context.active_service),
           last_incident_signature = COALESCE(excluded.last_incident_signature, conversation_context.last_incident_signature),
+          user_name = COALESCE(excluded.user_name, conversation_context.user_name),
           pending_action = COALESCE(excluded.pending_action, conversation_context.pending_action),
           pending_action_id = COALESCE(excluded.pending_action_id, conversation_context.pending_action_id),
           pending_action_digest = COALESCE(excluded.pending_action_digest, conversation_context.pending_action_digest),
@@ -917,6 +927,7 @@ export class ChatHistoryStore {
         filtered.activeHost ?? null,
         filtered.activeService ?? null,
         filtered.lastIncidentSignature ?? null,
+        filtered.userName ?? null,
         filtered.pendingAction ?? null,
         filtered.pendingActionId ?? null,
         filtered.pendingActionDigest ?? null,

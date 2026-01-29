@@ -5,6 +5,8 @@ export {
   bootstrapPceApiServer,
 } from "./server";
 export { ContextHistoryStore } from "./history-store";
+export { PromptSuggestionStore } from "./prompt-suggestion-store";
+export { PromptSuggestionService } from "./prompt-suggestion-service";
 export { ApiRateLimiter, type RateLimitConfig } from "./rate-limiter";
 export { transformHybridContext } from "./context-transformer";
 export * from "./types";

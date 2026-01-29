@@ -1,4 +1,8 @@
-import { ProxmoxNodeParser, ProxmoxVmParser } from "../../src/parsers";
+import {
+  ProxmoxNodeParser,
+  ProxmoxStorageParser,
+  ProxmoxVmParser,
+} from "../../src/parsers";
 import type { ParserContext } from "../../src/parsers";
 
 const context: ParserContext = {
@@ -56,6 +60,29 @@ test("ProxmoxVmParser converts list_vms output to twin entity and relationship",
   expect(vmEntity.data.nodeId).toBe("compute-node:proxbig");
   const relationship = result.relationships[0];
   expect(relationship.toId).toBe("compute-node:proxbig");
+});
+
+test("ProxmoxStorageParser creates ATTACHED_TO relationships", async () => {
+  const parser = new ProxmoxStorageParser();
+  const result = await parser.parse(
+    {
+      node: "yin",
+      storage: [
+        {
+          storage: "local-lvm",
+          type: "lvmthin",
+        },
+      ],
+    },
+    context
+  );
+
+  expect(result.entities).toHaveLength(1);
+  expect(result.relationships).toHaveLength(1);
+  const relationship = result.relationships[0];
+  expect(relationship.fromId).toBe("storage:yin:local-lvm");
+  expect(relationship.toId).toBe("compute-node:yin");
+  expect(relationship.type).toBe("ATTACHED_TO");
 });
 
 test("Parsers tolerate missing optional fields", async () => {

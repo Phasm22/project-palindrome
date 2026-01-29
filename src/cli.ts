@@ -791,8 +791,8 @@ if (args[0] === "hello") {
   console.log("Usage: agent <command>");
   console.log("Commands:");
   console.log("  hello         - Check if agent is online");
-  console.log("  ask           - Ask the agent a question (uses PCE/Hybrid RAG)");
-  console.log("  pce           - Alias for 'ask' (uses PCE/Hybrid RAG)");
+  console.log("  ask           - Ask the agent a question (Query the PCE API via Hybrid RAG)");
+  console.log("  pce           - Alias for 'ask' (Query the PCE API via Hybrid RAG)");
   console.log("  pce-api       - DEPRECATED: Legacy RAG-only mode (use 'ask' instead)");
   console.log("  repl          - Start interactive REPL");
   console.log("  opnsense      - Test OPNsense tool directly");

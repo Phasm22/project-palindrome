@@ -3,7 +3,11 @@ import {
   TwinEntityType,
   type TwinEntity,
 } from "../../twin/models/entities";
-import type { TwinRelationship } from "../../twin/models/relationships";
+import {
+  TwinRelationshipType,
+  type TwinRelationship,
+} from "../../twin/models/relationships";
+import { normalizeNodeId } from "./helpers";
 
 interface ProxmoxStorageRecord {
   storage?: string;
@@ -47,9 +51,13 @@ export class ProxmoxStorageParser implements Parser<ListStorageResponse> {
       .map((storage) => this.toEntity(storage, nodeName, context));
 
     const relationships: TwinRelationship[] = entities.map((entity) => ({
-      from: entity.id,
-      to: `compute-node:${nodeName}`,
-      type: "ATTACHED_TO",
+      type: TwinRelationshipType.ATTACHED_TO,
+      fromId: entity.id,
+      toId: normalizeNodeId(nodeName),
+      metadata: {
+        storageName: entity.displayName,
+      },
+      collectedAt: context.collectedAt,
     }));
 
     return {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ACLGroup, FusionConfig, HybridRAGResponse, QueryType } from "../types";
+import type { ConversationState } from "../../types";
 import { pceLogger } from "../utils/logger";
 import { Redactor } from "../redaction/redactor";
 import { AccessDeniedError } from "../errors";
@@ -12,11 +13,14 @@ import type { ApiHistoryPayload, ApiQueryResponse, DependencyHealthCheck, Health
 import { ApiRateLimiter, type RateLimitConfig } from "./rate-limiter";
 import { ContextHistoryStore } from "./history-store";
 import { ChatHistoryStore } from "./chat-history-store";
+import { PromptSuggestionStore } from "./prompt-suggestion-store";
+import { PromptSuggestionService } from "./prompt-suggestion-service";
 import { transformHybridContext } from "./context-transformer";
 import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
 import { IngestionScheduler } from "../scheduler/ingestion-scheduler";
 import { normalizeProxmoxResponse } from "../../tools/proxmox/readonly/normalization";
+import { TwinQueryService } from "../../twin/api/twin-query-service";
 
 type BunServer = ReturnType<typeof Bun.serve>;
 
@@ -47,6 +51,7 @@ export interface PceApiServerDependencies {
   };
   historyStore?: ContextHistoryStore;
   chatHistoryStore?: ChatHistoryStore;
+  promptSuggestionStore?: PromptSuggestionStore;
   metricsCollector?: MetricsCollector;
   queryMetrics?: QueryMetrics;
   errorMetrics?: ErrorMetrics;
@@ -60,6 +65,7 @@ export class PceApiServer {
   private orchestrator: PceApiServerDependencies["orchestrator"];
   private historyStore: ContextHistoryStore;
   private chatHistoryStore: ChatHistoryStore;
+  private promptSuggestionStore: PromptSuggestionStore;
   private metricsCollector: MetricsCollector;
   private queryMetrics: QueryMetrics;
   private errorMetrics: ErrorMetrics;
@@ -82,6 +88,7 @@ export class PceApiServer {
     this.orchestrator = deps.orchestrator;
     this.historyStore = deps.historyStore ?? new ContextHistoryStore(this.options.historyLimit);
     this.chatHistoryStore = deps.chatHistoryStore ?? new ChatHistoryStore();
+    this.promptSuggestionStore = deps.promptSuggestionStore ?? new PromptSuggestionStore();
     this.metricsCollector = deps.metricsCollector ?? new MetricsCollector();
     this.ownsMetricsCollector = !deps.metricsCollector;
     this.queryMetrics = deps.queryMetrics ?? new QueryMetrics(this.metricsCollector);
@@ -166,6 +173,12 @@ export class PceApiServer {
       this.metricsCollector.shutdown();
     }
 
+    try {
+      this.promptSuggestionStore.close();
+    } catch (error: any) {
+      pceLogger.warn("Failed to close prompt suggestion store", { error: error.message });
+    }
+
     for (const handler of this.cleanupHandlers) {
       await handler();
     }
@@ -230,6 +243,14 @@ export class PceApiServer {
 
     if (req.method === "GET" && url.pathname === "/api/dashboard/ontology-graph") {
       return await this.handleOntologyGraph(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/prompt-suggestions") {
+      return await this.handlePromptSuggestions(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/dashboard/twin-summary") {
+      return await this.handleTwinSummary(req);
     }
 
     if (req.method === "GET" && url.pathname === "/api/dashboard/vector-stats") {
@@ -1414,10 +1435,12 @@ export class PceApiServer {
         return this.jsonResponse(400, { error: "Trace ID required" });
       }
 
+      const url = new URL(req.url);
+      const includeArtifacts = url.searchParams.get("includeArtifacts") === "1";
       const { ReasoningTraceStore } = await import("./reasoning-trace-store");
       const store = new ReasoningTraceStore();
       
-      const trace = await store.getTrace(traceId);
+      const trace = await store.getTrace(traceId, { includeArtifacts });
       if (!trace) {
         return this.jsonResponse(404, { error: "Trace not found" });
       }
@@ -1426,6 +1449,51 @@ export class PceApiServer {
     } catch (error: any) {
       pceLogger.error("Failed to fetch reasoning trace", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handlePromptSuggestions(_req: Request): Promise<Response> {
+    try {
+      const latest = await this.promptSuggestionStore.getLatestBatch();
+      if (latest) {
+        return this.jsonResponse(200, { data: latest });
+      }
+
+      const generator = new PromptSuggestionService({
+        store: this.promptSuggestionStore,
+      });
+      const generated = await generator.generateAndStore();
+      return this.jsonResponse(200, { data: generated });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch prompt suggestions", { error: error.message });
+      return this.jsonResponse(200, { data: null, error: "prompt_suggestions_unavailable" });
+    }
+  }
+
+  private async handleTwinSummary(_req: Request): Promise<Response> {
+    const twinQuery = new TwinQueryService();
+    try {
+      const { nodes, vms } = await twinQuery.describeCluster(null);
+      const firewallRules = await twinQuery.listFirewallRules();
+      const interfaces = await twinQuery.listInterfaces();
+
+      return this.jsonResponse(200, {
+        data: {
+          nodes,
+          vms,
+          counts: {
+            nodes: nodes.length,
+            vms: vms.length,
+            firewallRules: firewallRules.length,
+            interfaces: interfaces.length,
+          },
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch twin summary", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    } finally {
+      await twinQuery.close();
     }
   }
 
@@ -1513,7 +1581,7 @@ export class PceApiServer {
 
       // Load conversation history for context
       let conversationHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
-      let conversationState = "IDLE";
+      let conversationState: ConversationState = "IDLE";
       let conversationContext = {};
       let userPreferences = {};
       if (activeConversationId) {
@@ -1579,11 +1647,20 @@ export class PceApiServer {
               );
             }
             if (event.data.conversationContext) {
+              const rawSource = event.data.memorySource as string | undefined;
+              const allowedSources = new Set(["user_explicit", "policy_inference", "tool_verified"]);
+              const memorySource = allowedSources.has(rawSource ?? "")
+                ? (rawSource as "user_explicit" | "policy_inference" | "tool_verified")
+                : "policy_inference";
+              const rawConfidence = event.data.memoryConfidence as number | undefined;
+              const memoryConfidence = Number.isFinite(rawConfidence)
+                ? Math.min(1, Math.max(0, rawConfidence as number))
+                : 0.7;
               await this.chatHistoryStore.setConversationContext(
                 activeConversationId,
                 event.data.conversationContext,
-                "policy_inference",
-                0.7,
+                memorySource,
+                memoryConfidence,
                 userId
               );
             }
@@ -1596,8 +1673,9 @@ export class PceApiServer {
                 conversationId: activeConversationId,
                 limit: 1,
               });
-              if (firstMessages.length > 0 && firstMessages[0].role === "user") {
-                const title = firstMessages[0].content.substring(0, 50).trim();
+              const firstMessage = firstMessages[0];
+              if (firstMessage && firstMessage.role === "user") {
+                const title = firstMessage.content.substring(0, 50).trim();
                 if (title) {
                   await this.chatHistoryStore.updateConversationTitle(activeConversationId, title);
                 }
@@ -1617,7 +1695,7 @@ export class PceApiServer {
         aclGroup,
         ragBaseUrl: `http://localhost:${this.options.port}`,
         sessionId,
-        conversationId: activeConversationId,
+        conversationId: activeConversationId ?? undefined,
         conversationState,
         conversationContext,
         userPreferences,

@@ -1,29 +1,31 @@
+type VmKind = "qemu" | "lxc" | "all";
+
 export type ComputeIntent =
   | { type: "describe_cluster" }
-  | { type: "vms_by_node"; nodeName: string }
-  | { type: "running_vms_on_node"; nodeName: string }
+  | { type: "vms_by_node"; nodeName: string; vmKind?: VmKind }
+  | { type: "running_vms_on_node"; nodeName: string; vmKind?: VmKind }
   | { type: "vms_without_agent" }
-  | { type: "stopped_vms_on_node"; nodeName: string }
+  | { type: "stopped_vms_on_node"; nodeName: string; vmKind?: VmKind }
   | { type: "find_vm_by_id"; vmId: number };
 
 function extractNodeName(text: string): string | null {
   // Try "node <name>" first
   const nodeMatch = text.match(/\bnode\s+([a-z0-9\-_]+)/i);
   if (nodeMatch) {
-    return nodeMatch[1];
+    return nodeMatch[1] ?? null;
   }
 
   // Try "between <name>"
   const relationMatch = text.match(/\bbetween\s+([a-z0-9\-_]+)/i);
   if (relationMatch) {
-    return relationMatch[1];
+    return relationMatch[1] ?? null;
   }
 
   // Try "on <name>" - this is the most common pattern
   // Match "on Yang", "on yin", "on proxBig", etc.
   const onMatch = text.match(/\bon\s+([a-z0-9\-_]+)/i);
   if (onMatch) {
-    return onMatch[1];
+    return onMatch[1] ?? null;
   }
 
   // Try to find node names directly (yang, yin, proxbig, etc.)
@@ -53,7 +55,11 @@ function extractVmId(text: string): number | null {
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
-      const id = parseInt(match[1], 10);
+      const idText = match[1];
+      if (!idText) {
+        continue;
+      }
+      const id = parseInt(idText, 10);
       if (!isNaN(id) && id > 0) {
         return id;
       }
@@ -63,8 +69,29 @@ function extractVmId(text: string): number | null {
   return null;
 }
 
+function detectVmKind(text: string): VmKind | undefined {
+  const normalized = text.toLowerCase();
+  const mentionsVm =
+    /\bvm(s)?\b/.test(normalized) ||
+    normalized.includes("virtual machine");
+  const mentionsContainer = /\b(container|containers|lxc|ct|cts)\b/.test(normalized);
+
+  if (mentionsVm && mentionsContainer) {
+    return "all";
+  }
+  if (mentionsContainer) {
+    return "lxc";
+  }
+  if (mentionsVm) {
+    return "qemu";
+  }
+  return undefined;
+}
+
 export function detectComputeIntent(userInput: string): ComputeIntent | null {
   const normalized = userInput.toLowerCase();
+  const vmKind = detectVmKind(userInput);
+  const hasVmOrContainer = vmKind !== undefined;
 
   // Running VMs on a node: "what is running on yang?", "which vms are running on yin?"
   if (
@@ -75,18 +102,18 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
   ) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
-      return { type: "running_vms_on_node", nodeName };
+      return { type: "running_vms_on_node", nodeName, vmKind };
     }
   }
 
   // Check for node-specific queries FIRST (before general "all VMs" pattern)
   // This ensures "what are all the VMs on node yin?" matches vms_by_node, not describe_cluster
   if ((normalized.includes("what are") || normalized.includes("show") || normalized.includes("list") || 
-       normalized.includes("which")) && normalized.includes("vm") && 
+       normalized.includes("which")) && hasVmOrContainer && 
       (normalized.includes("on") || normalized.includes("node"))) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
-      return { type: "vms_by_node", nodeName };
+      return { type: "vms_by_node", nodeName, vmKind };
     }
   }
 
@@ -112,21 +139,21 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
   if (normalized.includes("relationship") && normalized.includes("hosted")) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
-      return { type: "vms_by_node", nodeName };
+      return { type: "vms_by_node", nodeName, vmKind };
     }
   }
 
   if (normalized.includes("stopped")) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
-      return { type: "stopped_vms_on_node", nodeName };
+      return { type: "stopped_vms_on_node", nodeName, vmKind };
     }
   }
 
-  if (normalized.includes("which vms") || normalized.includes("list vms")) {
+  if (normalized.includes("which vms") || normalized.includes("list vms") || normalized.includes("list containers") || normalized.includes("which containers")) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
-      return { type: "vms_by_node", nodeName };
+      return { type: "vms_by_node", nodeName, vmKind };
     }
   }
 
@@ -135,7 +162,7 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
       (normalized.includes("on") || normalized.includes("node"))) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
-      return { type: "vms_by_node", nodeName };
+      return { type: "vms_by_node", nodeName, vmKind };
     }
   }
 

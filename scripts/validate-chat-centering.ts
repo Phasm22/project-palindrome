@@ -7,12 +7,11 @@ const viewportHeight = Number(process.env.CENTER_CHECK_HEIGHT ?? "900");
 const threshold = Number(process.env.CENTER_CHECK_THRESHOLD ?? "2");
 
 const targets = [
-  { name: "banner-title", selector: "#chat .chat-banner-wrapper .chat-chrome-centered h1", required: true },
-  { name: "chat-nav", selector: "#chat #chat-nav-sticky .chat-chrome-centered > div", required: true },
+  { name: "chat-nav", selector: "#chat #chat-nav-sticky .chat-chrome-centered > div", required: true, centerBy: "viewport" },
   // These can be hidden when no conversation is selected; treat as optional.
-  { name: "chat-messages", selector: "#chat-messages-desktop", required: false },
-  { name: "chat-input-wrapper", selector: "#chat .chat-input-wrapper", required: false },
-  { name: "chat-input-textarea", selector: "#chat .chat-desktop-container textarea#chat-input-desktop", required: false },
+  { name: "chat-messages", selector: "#chat-messages-desktop", required: false, centerBy: "content" },
+  { name: "chat-input-wrapper", selector: "#chat .chat-input-wrapper", required: false, centerBy: "content" },
+  { name: "chat-input-textarea", selector: "#chat .chat-desktop-container textarea#chat-input-desktop", required: false, centerBy: "content" },
 ];
 
 const maxAlpha = Number(process.env.CENTER_CHECK_MAX_ALPHA ?? "0.45");
@@ -26,6 +25,7 @@ type MeasuredItem = {
   name: string;
   selector: string;
   required?: boolean;
+  centerBy?: "viewport" | "content";
   top?: number;
   left?: number;
   width?: number;
@@ -43,10 +43,22 @@ try {
   await page.goto(url, { waitUntil: "networkidle" });
   await page.waitForSelector("#conversation-select", { timeout: 10000 });
   await page.waitForSelector("#conversation-new-btn", { timeout: 10000 });
+  // Allow initial animations/transforms to settle so sticky headers behave correctly.
+  await page.waitForTimeout(800);
+  // Normalize scroll position for consistent layout checks.
+  await page.evaluate(() => {
+    const chat = document.getElementById("chat");
+    if (chat) chat.scrollTop = 0;
+    window.scrollTo(0, 0);
+  });
 
   const results = await page.evaluate(({ selectors, styles }) => {
     const viewportWidth = window.innerWidth;
     const contentCenter = viewportWidth / 2;
+    const chatContent = document.querySelector(".chat-content") as HTMLElement | null;
+    const chatContentCenter = chatContent
+      ? chatContent.getBoundingClientRect().left + chatContent.getBoundingClientRect().width / 2
+      : contentCenter;
 
     const items = selectors.map((item: MeasuredItem) => {
       const el = document.querySelector(item.selector);
@@ -83,6 +95,26 @@ try {
     });
 
     const sidebarAbsent = !document.querySelector("#conversation-sidebar");
+
+    const navInfo = (() => {
+      const el = document.querySelector("#chat-nav-sticky") as HTMLElement | null;
+      if (!el) return { found: false as const };
+      const rect = el.getBoundingClientRect();
+      return { found: true as const, top: rect.top, bottom: rect.bottom };
+    })();
+
+    const bannerInfo = (() => {
+      const el = document.querySelector("#chat .chat-banner-wrapper h1") as HTMLElement | null;
+      if (!el) return { found: false as const };
+      const rect = el.getBoundingClientRect();
+      const text = el.innerText || "";
+      return {
+        found: true as const,
+        left: rect.left,
+        top: rect.top,
+        text,
+      };
+    })();
 
     const buttonChecks = (() => {
       const selectors = ["#conversation-new-btn", "#conversation-clear-btn"];
@@ -121,16 +153,20 @@ try {
     return {
       viewport: { width: viewportWidth, height: window.innerHeight },
       contentCenter,
+      chatContentCenter,
       items,
       bgChecks,
       sidebarAbsent,
+      navInfo,
+      bannerInfo,
       buttonChecks,
     };
   }, { selectors: targets, styles: styleChecks });
 
   console.log(`URL: ${url}`);
   console.log(`Viewport: ${results.viewport.width}x${results.viewport.height}`);
-  console.log(`Content center X: ${results.contentCenter.toFixed(2)}px`);
+  console.log(`Viewport center X: ${results.contentCenter.toFixed(2)}px`);
+  console.log(`Chat content center X: ${results.chatContentCenter.toFixed(2)}px`);
   console.log(`Threshold: ${threshold}px`);
   console.log("");
 
@@ -139,6 +175,32 @@ try {
   // Sidebar should be fully removed.
   console.log(`[${results.sidebarAbsent ? "OK" : "OFF"}] conversation sidebar removed`);
   if (!results.sidebarAbsent) failed = true;
+
+  // Banner should be top-left aligned and forced to two lines.
+  console.log("");
+  if (!results.bannerInfo?.found) {
+    failed = true;
+    console.log("[MISSING] banner title (#chat .chat-banner-wrapper h1)");
+  } else {
+    const leftOk = results.bannerInfo.left >= 0 && results.bannerInfo.left <= 32;
+    const navBottom = results.navInfo?.found ? results.navInfo.bottom : 0;
+    const topOk = results.bannerInfo.top >= navBottom && results.bannerInfo.top <= navBottom + 48;
+    const lines = results.bannerInfo.text
+      .split(/\r?\n+/)
+      .map((line: string) => line.trim())
+      .filter(Boolean);
+    const textOk = lines[0] === "Palindrome" && lines[1] === "dashboard";
+    console.log(
+      `[${leftOk ? "OK" : "OFF"}] banner-left left=${results.bannerInfo.left.toFixed(2)}px`
+    );
+    console.log(
+      `[${topOk ? "OK" : "OFF"}] banner-top top=${results.bannerInfo.top.toFixed(2)}px`
+    );
+    console.log(
+      `[${textOk ? "OK" : "OFF"}] banner-text lines=${JSON.stringify(lines.slice(0, 2))}`
+    );
+    if (!leftOk || !topOk || !textOk) failed = true;
+  }
 
   // Sidebar header buttons should be visible and clickable (not covered by other layers)
   console.log("");
@@ -168,7 +230,8 @@ try {
       console.log(`[MISSING] ${item.name} (${item.selector})`);
       continue;
     }
-    const delta = Math.abs(item.centerX - results.contentCenter);
+    const targetCenter = item.centerBy === "content" ? results.chatContentCenter : results.contentCenter;
+    const delta = Math.abs(item.centerX - targetCenter);
     const status = delta <= threshold ? "OK" : "OFF";
     if (status === "OFF") failed = true;
     console.log(
@@ -194,10 +257,10 @@ try {
   }
 
   if (failed) {
-    console.log("\nResult: NOT centered within threshold.");
+    console.log("\nResult: Layout checks failed.");
     process.exitCode = 1;
   } else {
-    console.log("\nResult: Centered within threshold.");
+    console.log("\nResult: Layout checks passed.");
   }
 } finally {
   await browser.close();

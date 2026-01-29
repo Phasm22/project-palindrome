@@ -16,16 +16,94 @@ export interface ResolvedVmDetails {
   matches?: Array<{ vmid: number; node: string; name: string; type: "qemu" | "lxc"; status: string }>;
 }
 
+type VmKind = "qemu" | "lxc" | "all";
+
+type VmRecord = {
+  name?: string;
+  id?: string;
+  state?: string;
+  nodeName?: string;
+  agentAvailable?: boolean;
+  vmKind?: "qemu" | "lxc";
+};
+
+function getVmKindLabels(vmKind?: VmKind) {
+  const kind = vmKind ?? "all";
+  if (kind === "lxc") {
+    return { listLabel: "LXC containers", noneLabel: "LXC containers" };
+  }
+  if (kind === "qemu") {
+    return { listLabel: "VMs", noneLabel: "VMs" };
+  }
+  return { listLabel: "VMs and LXC containers", noneLabel: "VMs or LXC containers" };
+}
+
+function sortVmsById(vms: VmRecord[]): VmRecord[] {
+  return [...vms].sort((a, b) => {
+    const aId = a.id ? parseInt(a.id.split(":").pop() || "0", 10) : 0;
+    const bId = b.id ? parseInt(b.id.split(":").pop() || "0", 10) : 0;
+    return aId - bId;
+  });
+}
+
+async function fetchVmsByNode(
+  tools: BaseTool[],
+  session: ToolSession,
+  nodeName: string,
+  vmKind?: VmKind
+): Promise<VmRecord[]> {
+  const requestedKind = vmKind ?? "all";
+  const requests: Array<Promise<{ kind: "qemu" | "lxc"; result: { error?: string; data?: unknown } }>> = [];
+
+  if (requestedKind !== "lxc") {
+    requests.push(
+      executeToolCall(
+        {
+          toolName: "twin_query",
+          parameters: { operation: "vms_by_node", params: { nodeName, vmKind: "qemu" } },
+        },
+        tools,
+        session
+      ).then((result) => ({ kind: "qemu", result }))
+    );
+  }
+
+  if (requestedKind !== "qemu") {
+    requests.push(
+      executeToolCall(
+        {
+          toolName: "twin_query",
+          parameters: { operation: "vms_by_node", params: { nodeName, vmKind: "lxc" } },
+        },
+        tools,
+        session
+      ).then((result) => ({ kind: "lxc", result }))
+    );
+  }
+
+  const results = await Promise.all(requests);
+  const qemuVms: VmRecord[] = [];
+  const lxcVms: VmRecord[] = [];
+
+  for (const { kind, result } of results) {
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    const payload = result.data as { data?: VmRecord[] } | undefined;
+    const vms = payload?.data ?? [];
+    if (kind === "qemu") {
+      qemuVms.push(...vms);
+    } else {
+      lxcVms.push(...vms);
+    }
+  }
+
+  return sortVmsById([...qemuVms, ...lxcVms]);
+}
+
 function formatVmList(
   title: string,
-  vms: Array<{
-    name?: string;
-    id?: string;
-    state?: string;
-    nodeName?: string;
-    agentAvailable?: boolean;
-    vmKind?: "qemu" | "lxc";
-  }>
+  vms: VmRecord[]
 ): string {
   const lines = [title];
   if (!vms.length) {
@@ -94,7 +172,8 @@ export async function describeClusterChain(tools: BaseTool[], session: ToolSessi
 export async function listVmsByNodeChain(
   tools: BaseTool[],
   session: ToolSession,
-  nodeName: string
+  nodeName: string,
+  vmKind?: VmKind
 ): Promise<string> {
   // Normalize node name (yang -> YANG, yin -> YIN, etc.)
   const normalizedNode = nodeName.charAt(0).toUpperCase() + nodeName.slice(1).toLowerCase();
@@ -103,65 +182,36 @@ export async function listVmsByNodeChain(
                        normalizedNode === "Yang" ? "YANG" :
                        normalizedNode === "Yin" ? "yin" : normalizedNode;
 
-  // Query for all VM types (qemu and lxc) to get complete list
-  const [qemuResult, lxcResult] = await Promise.all([
-    executeToolCall(
-      {
-        toolName: "twin_query",
-        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "qemu" } },
-      },
-      tools,
-      session
-    ),
-    executeToolCall(
-      {
-        toolName: "twin_query",
-        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "lxc" } },
-      },
-      tools,
-      session
-    ),
-  ]);
+  const labels = getVmKindLabels(vmKind);
+  const allVms = await fetchVmsByNode(tools, session, finalNodeName, vmKind);
 
-  if (qemuResult.error) {
-    throw new Error(qemuResult.error);
-  }
-  if (lxcResult.error) {
-    throw new Error(lxcResult.error);
-  }
-
-  const qemuPayload = qemuResult.data as any;
-  const lxcPayload = lxcResult.data as any;
-  const qemuVms = qemuPayload?.data ?? [];
-  const lxcVms = lxcPayload?.data ?? [];
-  
-  // Combine and sort by VM ID
-  const allVms = [...qemuVms, ...lxcVms].sort((a, b) => {
-    const aId = a.id ? parseInt(a.id.split(':').pop() || '0') : 0;
-    const bId = b.id ? parseInt(b.id.split(':').pop() || '0') : 0;
-    return aId - bId;
-  });
-
-  // Format response - NO nodes section, only VMs
+  // Format response - NO nodes section, only VMs/containers
   // Use same format as formatVmList for consistency
   if (!allVms.length) {
-    return "No VMs found in the digital twin for this node.\n\nNote: The twin may be incomplete. Run Proxmox ingestion to sync all VMs.";
+    const requestedKind = vmKind ?? "all";
+    const note =
+      requestedKind === "all"
+        ? "\n\nNote: The twin may be incomplete. Run Proxmox ingestion to sync all VMs and LXC containers."
+        : "";
+    return `No ${labels.noneLabel} found in the digital twin for this node.${note}`;
   }
 
   // Use formatVmList helper for consistent formatting (no nodes)
-  return formatVmList("VMs on node " + finalNodeName + ":", allVms);
+  return formatVmList(`${labels.listLabel} on node ${finalNodeName}:`, allVms);
 }
 
 export async function listRunningVmsOnNodeChain(
   tools: BaseTool[],
   session: ToolSession,
-  nodeName: string
+  nodeName: string,
+  vmKind?: VmKind
 ): Promise<string> {
-  const allText = await listVmsByNodeChain(tools, session, nodeName);
-
-  // If the list function returned a "no VMs" note, preserve it.
-  if (allText.startsWith("No VMs found")) {
-    return allText;
+  const requestedKind = vmKind ?? "all";
+  if (requestedKind === "all") {
+    const allText = await listVmsByNodeChain(tools, session, nodeName, vmKind);
+    if (allText.startsWith("No ") && allText.includes("digital twin")) {
+      return allText;
+    }
   }
 
   // Re-run the underlying calls to filter deterministically (avoid parsing formatted text).
@@ -170,38 +220,15 @@ export async function listRunningVmsOnNodeChain(
                        normalizedNode === "Yang" ? "YANG" :
                        normalizedNode === "Yin" ? "yin" : normalizedNode;
 
-  const [qemuResult, lxcResult] = await Promise.all([
-    executeToolCall(
-      {
-        toolName: "twin_query",
-        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "qemu" } },
-      },
-      tools,
-      session
-    ),
-    executeToolCall(
-      {
-        toolName: "twin_query",
-        parameters: { operation: "vms_by_node", params: { nodeName: finalNodeName, vmKind: "lxc" } },
-      },
-      tools,
-      session
-    ),
-  ]);
-
-  if (qemuResult.error) throw new Error(qemuResult.error);
-  if (lxcResult.error) throw new Error(lxcResult.error);
-
-  const qemuVms = (qemuResult.data as any)?.data ?? [];
-  const lxcVms = (lxcResult.data as any)?.data ?? [];
-  const allVms = [...qemuVms, ...lxcVms];
-  const running = allVms.filter((vm: any) => String(vm?.state ?? "").toLowerCase() === "running");
+  const labels = getVmKindLabels(vmKind);
+  const allVms = await fetchVmsByNode(tools, session, finalNodeName, vmKind);
+  const running = allVms.filter((vm) => String(vm.state ?? "").toLowerCase() === "running");
 
   if (!running.length) {
-    return `No running VMs found on node ${finalNodeName}.`;
+    return `No running ${labels.noneLabel} found on node ${finalNodeName}.`;
   }
 
-  return formatVmList(`Running VMs on node ${finalNodeName}:`, running);
+  return formatVmList(`Running ${labels.listLabel} on node ${finalNodeName}:`, running);
 }
 
 export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolSession): Promise<string> {
@@ -226,24 +253,51 @@ export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolS
 export async function listStoppedVmsChain(
   tools: BaseTool[],
   session: ToolSession,
-  nodeName: string
+  nodeName: string,
+  vmKind?: VmKind
 ): Promise<string> {
-  const result = await executeToolCall(
-    {
-      toolName: "twin_query",
-      parameters: { operation: "stopped_vms_on_node", params: { nodeName, vmKind: "qemu" } },
-    },
-    tools,
-    session
-  );
+  const labels = getVmKindLabels(vmKind);
+  const requestedKind = vmKind ?? "all";
+  const requests: Array<Promise<{ kind: "qemu" | "lxc"; result: { error?: string; data?: unknown } }>> = [];
 
-  if (result.error) {
-    throw new Error(result.error);
+  if (requestedKind !== "lxc") {
+    requests.push(
+      executeToolCall(
+        {
+          toolName: "twin_query",
+          parameters: { operation: "stopped_vms_on_node", params: { nodeName, vmKind: "qemu" } },
+        },
+        tools,
+        session
+      ).then((result) => ({ kind: "qemu", result }))
+    );
   }
 
-  const payload = result.data as any;
-  const vms = payload?.data ?? [];
-  return formatVmList(`Stopped VMs on ${nodeName}:`, vms);
+  if (requestedKind !== "qemu") {
+    requests.push(
+      executeToolCall(
+        {
+          toolName: "twin_query",
+          parameters: { operation: "stopped_vms_on_node", params: { nodeName, vmKind: "lxc" } },
+        },
+        tools,
+        session
+      ).then((result) => ({ kind: "lxc", result }))
+    );
+  }
+
+  const results = await Promise.all(requests);
+  const vms: VmRecord[] = [];
+
+  for (const { result } of results) {
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    const payload = result.data as { data?: VmRecord[] } | undefined;
+    vms.push(...(payload?.data ?? []));
+  }
+
+  return formatVmList(`Stopped ${labels.listLabel} on ${nodeName}:`, sortVmsById(vms));
 }
 
 export async function findVmByIdChain(

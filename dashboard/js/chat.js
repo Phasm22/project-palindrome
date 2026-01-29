@@ -10,6 +10,15 @@ let finalEventTimeout = null;
 let currentConversationId = null;
 let isNewConversationMode = false; // True when user clicked "New" but hasn't sent a message yet
 let isCreatingConversation = false; // Prevent spamming New Chat button
+let promptSuggestionCache = null;
+let promptSuggestionCacheAt = 0;
+const PROMPT_SUGGESTIONS_TTL_MS = 5 * 60 * 1000;
+const FALLBACK_PROMPT_SUGGESTIONS = [
+  { title: "Cluster overview", prompt: "Describe the cluster status and VM counts." },
+  { title: "Node temperatures", prompt: "Show temperature readings for all nodes." },
+  { title: "Running VMs", prompt: "List all running VMs." },
+  { title: "Firewall rules", prompt: "Show firewall rules affecting the cluster." },
+];
 
 // Scroll lock state - track async operations and user scroll behavior
 let isAsyncOperationActive = false;
@@ -18,53 +27,44 @@ let scrollLockTimeout = null;
 let scrollHandlersAttached = false;
 let scrollScheduled = false; // Prevent multiple scroll operations
 let scrollToBottomBtn = null; // Scroll to bottom button reference
+let scrollContainerRef = null; // Current scroll container reference
 
 /**
  * Global scroll handler - detects when user scrolls up during async operations
  */
 function handleScrollDuringAsync(e) {
-  // Handle both container scroll and window scroll
-  const messagesDiv = e.target === window ? null : e.target;
-  
+  const target = e?.target instanceof HTMLElement ? e.target : null;
+  const scrollContainer = getChatScrollContainer(target);
+  if (!scrollContainer) return;
+
   if (isAsyncOperationActive) {
-    let distanceFromBottom;
-    if (messagesDiv) {
-      distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
-    } else {
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      const windowHeight = window.innerHeight;
-      const documentHeight = document.documentElement.scrollHeight;
-      distanceFromBottom = documentHeight - (scrollTop + windowHeight);
-    }
-    
+    const { distanceFromBottom } = getScrollMetrics(scrollContainer);
     // If user scrolled up more than 150px from bottom, disable auto-scroll
     if (distanceFromBottom > 150) {
       shouldAutoScroll = false;
     }
   }
-  
+
   // Always update scroll-to-bottom button visibility
-  updateScrollToBottomButton(messagesDiv);
+  updateScrollToBottomButton(scrollContainer);
 }
 
 /**
  * Update scroll-to-bottom button visibility based on scroll position
  */
-function updateScrollToBottomButton(messagesDiv) {
+function updateScrollToBottomButton(preferredContainer) {
   if (!scrollToBottomBtn) {
     scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
   }
   if (!scrollToBottomBtn) return;
-  
-  // Always check window scroll for desktop (full-page chat)
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const windowHeight = window.innerHeight;
-  const documentHeight = document.documentElement.scrollHeight;
-  const distanceFromBottom = documentHeight - (scrollTop + windowHeight);
-  
+
+  const scrollContainer = getChatScrollContainer(preferredContainer);
+  if (!scrollContainer) return;
+
+  const { distanceFromBottom, clientHeight } = getScrollMetrics(scrollContainer);
   // Show button when more than 1 viewport height from bottom (or 200px minimum)
-  const threshold = Math.max(windowHeight, 200);
-  
+  const threshold = Math.max(clientHeight, 200);
+
   if (distanceFromBottom > threshold) {
     scrollToBottomBtn.classList.remove('hidden');
   } else {
@@ -76,22 +76,8 @@ function updateScrollToBottomButton(messagesDiv) {
  * Scroll chat to bottom (called by button)
  */
 window.scrollChatToBottom = function() {
-  // Always scroll the window for full-page chat
-  window.scrollTo({
-    top: document.documentElement.scrollHeight,
-    behavior: 'smooth'
-  });
-  
-  // Also handle container scroll for mobile
-  const containers = getChatMessageContainers();
-  containers.forEach(container => {
-    if (container && (container.style.maxHeight || container.classList.contains('overflow-y-auto'))) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: 'smooth'
-      });
-    }
-  });
+  const scrollContainer = getChatScrollContainer();
+  scrollToBottom(scrollContainer, 'smooth');
   
   shouldAutoScroll = true;
   
@@ -138,10 +124,122 @@ function getPrimaryChatInput() {
   return document.getElementById(isMobile ? 'chat-input' : 'chat-input-desktop');
 }
 
+// Helper: Get the active scroll container for chat
+function getChatScrollContainer(preferred = null) {
+  if (preferred && preferred instanceof HTMLElement) {
+    return preferred;
+  }
+  const isMobile = window.innerWidth < 768;
+  if (isMobile) {
+    return document.getElementById('chat-messages');
+  }
+  return document.getElementById('chat-messages-desktop');
+}
+
+// Helper: Get scroll metrics for a container
+function getScrollMetrics(container) {
+  if (!container) return { scrollTop: 0, scrollHeight: 0, clientHeight: 0, distanceFromBottom: 0 };
+  const scrollTop = container.scrollTop;
+  const scrollHeight = container.scrollHeight;
+  const clientHeight = container.clientHeight;
+  return {
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+    distanceFromBottom: scrollHeight - (scrollTop + clientHeight),
+  };
+}
+
+// Helper: Scroll a container to bottom
+function scrollToBottom(container, behavior = 'auto') {
+  if (!container) return;
+  container.scrollTo({ top: container.scrollHeight, behavior });
+}
+
 // Helper: Sync content to all containers
 function syncToAllContainers(html) {
   getChatMessageContainers().forEach(container => {
     if (container) container.innerHTML = html;
+  });
+}
+
+async function fetchPromptSuggestions() {
+  const now = Date.now();
+  if (promptSuggestionCache && (now - promptSuggestionCacheAt) < PROMPT_SUGGESTIONS_TTL_MS) {
+    return promptSuggestionCache;
+  }
+
+  try {
+    const response = await fetch(`${API_URL}/api/dashboard/prompt-suggestions`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const result = await response.json();
+    const suggestions = result?.data?.suggestions;
+    if (Array.isArray(suggestions) && suggestions.length > 0) {
+      promptSuggestionCache = suggestions;
+      promptSuggestionCacheAt = now;
+      return suggestions;
+    }
+  } catch (error) {
+    console.warn("Failed to fetch prompt suggestions, using defaults.", error);
+  }
+
+  return FALLBACK_PROMPT_SUGGESTIONS;
+}
+
+function attachPromptSuggestionHandlers(container) {
+  const buttons = container.querySelectorAll("[data-suggestion-prompt]");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const encoded = btn.getAttribute("data-suggestion-prompt") || "";
+      const prompt = decodeURIComponent(encoded);
+      if (prompt) {
+        sendChatMessage(prompt);
+      }
+    });
+  });
+}
+
+async function renderPreChatSuggestions() {
+  if (!isNewConversationMode) return;
+  const containers = getChatMessageContainers();
+  if (containers.length === 0) return;
+
+  const suggestions = await fetchPromptSuggestions();
+  const tilesHtml = suggestions.map((suggestion) => {
+    const title = escapeHtml(suggestion.title || "Suggested prompt");
+    const prompt = suggestion.prompt || "";
+    const promptEscaped = escapeHtml(prompt);
+    const promptEncoded = encodeURIComponent(prompt);
+    return `
+      <button
+        class="group w-full text-left border border-slate-700/50 bg-slate-900/60 hover:bg-slate-900/80 rounded-lg p-3 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+        data-suggestion-prompt="${promptEncoded}"
+        aria-label="Send prompt: ${promptEscaped}"
+        type="button"
+      >
+        <div class="text-slate-200 text-sm font-semibold mb-1">${title}</div>
+        <div class="text-slate-400 text-xs leading-relaxed">${promptEscaped}</div>
+      </button>
+    `;
+  }).join("");
+
+  const html = `
+    <div class="w-full max-w-5xl mx-auto px-4 py-4" data-pre-chat-suggestions="true">
+      <div class="text-slate-400 text-center text-sm mb-4">Suggested prompts</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        ${tilesHtml || '<div class="text-slate-500 text-center text-sm">No suggestions available yet.</div>'}
+      </div>
+    </div>
+  `;
+
+  containers.forEach(c => {
+    if (c) {
+      c.innerHTML = html;
+      c.style.display = '';
+      attachPromptSuggestionHandlers(c);
+    }
   });
 }
 
@@ -684,7 +782,8 @@ function formatAgentResponse(text) {
 
 function updateChatMessage(messageId, newContent) {
   // Update in all containers (mobile + desktop)
-  const containersToScroll = [];
+  const containersToScroll = new Set();
+  const scrollContainer = getChatScrollContainer();
   
   // Ensure containers are visible when updating
   const containers = getChatMessageContainers();
@@ -721,22 +820,8 @@ function updateChatMessage(messageId, newContent) {
     }
     
     // Check if user scrolled up (more than 150px from bottom)
-    // Handle both container scroll and window scroll
-    let distanceFromBottom;
-    let wasNearBottom;
-    
-    if (messagesDiv && (messagesDiv.style.maxHeight || messagesDiv.classList.contains('overflow-y-auto'))) {
-      // Container scroll
-      distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
-      wasNearBottom = distanceFromBottom < 150;
-    } else {
-      // Window scroll
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      const windowHeight = window.innerHeight;
-      const documentHeight = document.documentElement.scrollHeight;
-      distanceFromBottom = documentHeight - (scrollTop + windowHeight);
-      wasNearBottom = distanceFromBottom < 150;
-    }
+    const { distanceFromBottom } = getScrollMetrics(scrollContainer);
+    const wasNearBottom = distanceFromBottom < 150;
     
     // If async operation is active and user hasn't scrolled up, lock to bottom
     const shouldLockScroll = isAsyncOperationActive && (wasNearBottom || shouldAutoScroll);
@@ -744,30 +829,17 @@ function updateChatMessage(messageId, newContent) {
     messageDiv.innerHTML = newContent;
     
     if (shouldLockScroll || (wasNearBottom && shouldAutoScroll)) {
-      containersToScroll.push(messagesDiv);
+      if (scrollContainer) containersToScroll.add(scrollContainer);
     }
   });
   
   // Scroll all containers that need scrolling in a single animation frame
-  if (containersToScroll.length > 0 && !scrollScheduled) {
+  if (containersToScroll.size > 0 && !scrollScheduled) {
     scrollScheduled = true;
     requestAnimationFrame(() => {
-      containersToScroll.forEach(messagesDiv => {
-        if (messagesDiv) {
-          // Check if it's a container scroll or page scroll
-          if (!messagesDiv.style.maxHeight || messagesDiv.style.maxHeight === '' || !messagesDiv.classList.contains('overflow-y-auto')) {
-            // Page scroll
-            window.scrollTo({
-              top: document.documentElement.scrollHeight,
-              behavior: 'auto'
-            });
-          } else {
-            // Container scroll
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-          }
-          // Update scroll button visibility
-          updateScrollToBottomButton(messagesDiv);
-        }
+      containersToScroll.forEach(container => {
+        scrollToBottom(container, 'auto');
+        updateScrollToBottomButton(container);
       });
       scrollScheduled = false;
     });
@@ -790,36 +862,29 @@ function lockScrollToBottom() {
   if (!scrollScheduled) {
     scrollScheduled = true;
     requestAnimationFrame(() => {
-      getChatMessageContainers().forEach(messagesDiv => {
-        if (!messagesDiv) return;
-        // Check if it's container scroll or page scroll
-        if (!messagesDiv.style.maxHeight || messagesDiv.style.maxHeight === '' || !messagesDiv.classList.contains('overflow-y-auto')) {
-          // Page scroll
-          window.scrollTo({
-            top: document.documentElement.scrollHeight,
-            behavior: 'auto'
-          });
-        } else {
-          // Container scroll
-          messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        }
-      });
+      const scrollContainer = getChatScrollContainer();
+      if (scrollContainer) {
+        scrollToBottom(scrollContainer, 'auto');
+        updateScrollToBottomButton(scrollContainer);
+      }
       scrollScheduled = false;
     });
   }
   
   // Attach scroll listeners once if not already attached
+  const scrollContainer = getChatScrollContainer();
+  if (scrollContainerRef && scrollContainerRef !== scrollContainer) {
+    scrollContainerRef.removeEventListener('scroll', handleScrollDuringAsync);
+    scrollContainerRef = null;
+    scrollHandlersAttached = false;
+  }
   if (!scrollHandlersAttached) {
-    // Attach to chat containers (for mobile)
-    getChatMessageContainers().forEach(messagesDiv => {
-      if (messagesDiv && (messagesDiv.style.maxHeight || messagesDiv.classList.contains('overflow-y-auto'))) {
-        messagesDiv.addEventListener('scroll', handleScrollDuringAsync, { passive: true });
-      }
-    });
-    // Always attach to window scroll for full-page scrolling (desktop)
-    window.addEventListener('scroll', handleScrollDuringAsync, { passive: true });
+    if (scrollContainer) {
+      scrollContainer.addEventListener('scroll', handleScrollDuringAsync, { passive: true });
+      scrollContainerRef = scrollContainer;
+    }
     // Initial check for scroll-to-bottom button visibility
-    updateScrollToBottomButton(null);
+    updateScrollToBottomButton(scrollContainer);
     scrollHandlersAttached = true;
   }
 }
@@ -858,6 +923,8 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
   containers.forEach(c => {
     const welcomeMsg = c.querySelector('div[style*="text-align: center"]');
     if (welcomeMsg) welcomeMsg.remove();
+    const suggestions = c.querySelector('[data-pre-chat-suggestions="true"]');
+    if (suggestions) suggestions.remove();
   });
 
   const messageDiv = document.createElement('div');
@@ -970,57 +1037,32 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
   }
 
   // Append to all containers and collect which ones need scrolling
-  const containersToScroll = [];
+  const containersToScroll = new Set();
+  const scrollContainer = getChatScrollContainer();
   
   containers.forEach(messagesDiv => {
     const clone = messageDiv.cloneNode(true);
     
     // Check scroll position - handle both container and window scroll
-    let distanceFromBottom;
-    let wasNearBottom;
-    
-    if (messagesDiv && (messagesDiv.style.maxHeight || messagesDiv.classList.contains('overflow-y-auto'))) {
-      // Container scroll
-      distanceFromBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight;
-      wasNearBottom = distanceFromBottom < 150;
-    } else {
-      // Window scroll
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      const windowHeight = window.innerHeight;
-      const documentHeight = document.documentElement.scrollHeight;
-      distanceFromBottom = documentHeight - (scrollTop + windowHeight);
-      wasNearBottom = distanceFromBottom < 150;
-    }
+    const { distanceFromBottom } = getScrollMetrics(scrollContainer);
+    const wasNearBottom = distanceFromBottom < 150;
     
     messagesDiv.appendChild(clone);
     
     // Always scroll for user messages or loading messages
     // For assistant messages, only scroll if user is near bottom or async operation is active
     if (role === 'user' || isLoading || (wasNearBottom && shouldAutoScroll) || (isAsyncOperationActive && shouldAutoScroll)) {
-      containersToScroll.push(messagesDiv);
+      if (scrollContainer) containersToScroll.add(scrollContainer);
     }
   });
   
   // Scroll all containers that need scrolling in a single animation frame
-  if (containersToScroll.length > 0 && !scrollScheduled) {
+  if (containersToScroll.size > 0 && !scrollScheduled) {
     scrollScheduled = true;
     requestAnimationFrame(() => {
-      containersToScroll.forEach(messagesDiv => {
-        if (messagesDiv) {
-          // Check if it's container scroll or page scroll
-          if (!messagesDiv.style.maxHeight || messagesDiv.style.maxHeight === '' || !messagesDiv.classList.contains('overflow-y-auto')) {
-            // Page scroll
-            window.scrollTo({
-              top: document.documentElement.scrollHeight,
-              behavior: 'auto'
-            });
-          } else {
-            // Container scroll
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-          }
-          // Update scroll button visibility
-          updateScrollToBottomButton(messagesDiv);
-        }
+      containersToScroll.forEach(container => {
+        scrollToBottom(container, 'auto');
+        updateScrollToBottomButton(container);
       });
       scrollScheduled = false;
     });
@@ -1297,12 +1339,14 @@ function handleAgentEvent(event, toolExecutions) {
 }
 
 // Main chat functions
-export async function sendChatMessage() {
+export async function sendChatMessage(messageOverride = null) {
   const inputs = getChatInputs();
   const buttons = getSendButtons();
   const primaryInput = getPrimaryChatInput();
   
-  const message = primaryInput?.value?.trim() || '';
+  const message = typeof messageOverride === 'string'
+    ? messageOverride.trim()
+    : (primaryInput?.value?.trim() || '');
   if (!message) return;
 
   inputs.forEach(i => { i.disabled = true; i.value = ''; });
@@ -1695,13 +1739,14 @@ export async function createNewConversation() {
     // Clear URL conversation param
     updateConversationUrl(null);
     
-    // Clear chat messages
+    // Clear chat messages and show suggested prompts
     const containers = getChatMessageContainers();
     containers.forEach(c => {
       if (c) {
-        c.innerHTML = '<div class="text-slate-400 text-center py-6 text-sm">Start a new conversation...</div>';
+        c.innerHTML = '<div class="text-slate-400 text-center py-6 text-sm">Loading suggestions...</div>';
       }
     });
+    await renderPreChatSuggestions();
     
     // Show input box (it will be shown by updateInputVisibility)
     updateInputVisibility(true);
@@ -1906,35 +1951,19 @@ export async function loadChatHistory(conversationId = null) {
       }
     });
 
-    // Scroll to bottom in all containers (OpenAI style - start at bottom)
+    // Scroll to bottom in the active scroll container
     // Disable async scroll lock during history load (not an async operation)
     const wasAsyncActive = isAsyncOperationActive;
     isAsyncOperationActive = false;
-    
-    // Always scroll page to bottom for full-page chat
+
+    const scrollContainer = getChatScrollContainer();
     requestAnimationFrame(() => {
-      window.scrollTo({
-        top: document.documentElement.scrollHeight,
-        behavior: 'auto'
-      });
+      scrollToBottom(scrollContainer, 'auto');
       requestAnimationFrame(() => {
-        window.scrollTo({
-          top: document.documentElement.scrollHeight,
-          behavior: 'auto'
-        });
+        scrollToBottom(scrollContainer, 'auto');
         // Update button visibility after scroll
-        updateScrollToBottomButton(null);
+        updateScrollToBottomButton(scrollContainer);
       });
-    });
-    
-    // Also handle container scroll for mobile
-    containers.forEach(c => {
-      if (c && (c.style.maxHeight || c.classList.contains('overflow-y-auto'))) {
-        requestAnimationFrame(() => {
-          c.scrollTop = c.scrollHeight;
-          updateScrollToBottomButton(c);
-        });
-      }
     });
     
     // Restore async state
