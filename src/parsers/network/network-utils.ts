@@ -44,6 +44,34 @@ export function cidrMask(cidr: string): number {
   return 32;
 }
 
+/** IPv4 octets to 32-bit integer (big-endian). */
+function ipToInt(ip: string): number | null {
+  const parts = ip.trim().split(".");
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const p of parts) {
+    const octet = parseInt(p, 10);
+    if (Number.isNaN(octet) || octet < 0 || octet > 255) return null;
+    n = (n << 8) | octet;
+  }
+  return n >>> 0;
+}
+
+/**
+ * Returns true if the given IPv4 address is inside the CIDR range.
+ * Handles CIDR strings like "172.16.0.0/22" or "10.0.0.0/8".
+ */
+export function ipInCidr(ip: string, cidr: string): boolean {
+  const [base, maskStr] = cidr.trim().split("/");
+  const prefixLen = maskStr != null ? parseInt(maskStr, 10) : 32;
+  if (Number.isNaN(prefixLen) || prefixLen < 0 || prefixLen > 32) return false;
+  const ipN = ipToInt(ip);
+  const baseN = ipToInt(base);
+  if (ipN == null || baseN == null) return false;
+  const mask = prefixLen === 0 ? 0 : ~((1 << (32 - prefixLen)) - 1) >>> 0;
+  return (ipN & mask) === (baseN & mask);
+}
+
 export function safeStatus(value: string | number | undefined | null): "up" | "down" | "unknown" {
   if (value === undefined || value === null) return "unknown";
   if (typeof value === "number") {

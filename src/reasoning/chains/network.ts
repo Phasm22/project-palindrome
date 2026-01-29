@@ -2,6 +2,7 @@ import type { BaseTool } from "../../tools/BaseTool";
 import type { ToolSession } from "../../agent/tool-policy";
 import { executeToolCall } from "../../agent/tool-executor";
 import { IngestionSummaryStore, type ExposureSnapshotEntry } from "../../pce/api/ingestion-summary-store";
+import { ipInCidr } from "../../parsers/network/network-utils";
 
 function formatInterfaceList(
   title: string,
@@ -268,7 +269,7 @@ export async function vmByIpFromIngestionChain(ip: string): Promise<string> {
     return "No ingestion exposure snapshots are available yet.";
   }
 
-  const matches = entries.filter((entry) => entry.subnet.startsWith(`${ip}/`) || entry.subnet === ip);
+  const matches = entries.filter((entry) => ipInCidr(ip, entry.subnet));
   return formatVmMatchesByIp(ip, matches, createdAt);
 }
 

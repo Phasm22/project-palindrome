@@ -7,6 +7,8 @@
  * No LLM needed - uses fuzzy matching and entity recognition.
  */
 
+import { IngestionSummaryStore } from "../pce/api/ingestion-summary-store";
+
 /**
  * Levenshtein distance for typo detection
  */
@@ -125,8 +127,6 @@ function normalizeCasualSpellings(input: string): string {
     .replace(/\btheres\b/gi, "there's")
     .replace(/\bheres\b/gi, "here's");
 }
-
-import { IngestionSummaryStore } from "../pce/api/ingestion-summary-store";
 
 /**
  * Known Proxmox nodes (will be populated from ingested data)
@@ -606,8 +606,9 @@ export async function loadKnownEntitiesFromIngestionSummary(): Promise<void> {
       updateKnownEntities({ nodes, vms });
     }
     ingestionEntitiesLoaded = true;
-  } catch (error: any) {
-    console.warn(`[clarification] Failed to load entities from ingestion summaries: ${error.message}`);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[clarification] Failed to load entities from ingestion summaries: ${message}`);
   } finally {
     summaryStore?.close();
   }
