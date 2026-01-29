@@ -1,6 +1,6 @@
 import { API_URL } from './utils.js';
 
-// Color palette - burnt orange theme
+// Color palette - burnt orange theme with soft, distinct colors
 const colorPalette = {
   primary: '#f97316',
   primaryLight: '#fb923c',
@@ -15,16 +15,17 @@ const colorPalette = {
   textMuted: '#94a3b8',
 };
 
-// Node type colors
+// Node type colors - soft, distinct colors that contrast with dark background (#0f172a)
 const nodeTypeColors = {
-  'compute-vm': colorPalette.primary,
-  'compute-node': colorPalette.success,
-  'network': colorPalette.secondary,
-  'service': colorPalette.warning,
-  'storage': colorPalette.error,
-  'entity': colorPalette.primary,
-  'twinentity': colorPalette.secondary,
-  'unknown': colorPalette.textMuted,
+  'compute_vm': '#60a5fa',        // Soft blue - VMs
+  'compute_node': '#34d399',      // Soft green - Physical nodes
+  'network_interface': '#a78bfa', // Soft purple - Network interfaces
+  'network_subnet': '#c084fc',    // Light purple - Subnets
+  'storage': '#f87171',           // Soft red - Storage
+  'firewall_rule': '#fbbf24',     // Soft yellow - Firewall rules
+  'entity': '#fb923c',            // Soft orange - Generic entities
+  'twinentity': '#f472b6',        // Soft pink - Twin entities
+  'unknown': '#94a3b8',           // Gray - Unknown
 };
 
 let sigma = null;
@@ -142,16 +143,32 @@ export async function loadGraph() {
       });
     });
     
+    // Edge type colors for better distinction
+    const edgeTypeColors = {
+      'RUNS_ON': '#60a5fa',      // Blue
+      'CONNECTS_TO': '#a78bfa',  // Purple
+      'ATTACHED_TO': '#34d399',  // Green
+      'CONFIGURED_BY': '#fbbf24', // Yellow
+      'OWNS': '#f472b6',         // Pink
+      'HOSTS_ON': '#fb923c',     // Orange
+      'AFFECTS': '#f87171',      // Red
+      'ROUTES_TO': '#c084fc',    // Light purple
+      'EXPOSES': '#fcd34d',      // Light yellow
+      'REACHABLE': '#86efac',    // Light green
+    };
+    
     // Add edges
     data.relationships.forEach(r => {
       const from = r.from || r.start;
       const to = r.to || r.end;
       if (graph.hasNode(from) && graph.hasNode(to)) {
         try {
+          const edgeType = r.type || 'unknown';
+          const edgeColor = edgeTypeColors[edgeType] || colorPalette.textMuted;
           graph.addEdge(from, to, {
-      label: r.type || r.properties?.type || '',
-            type: r.type || 'unknown',
-            color: colorPalette.primary,
+            label: edgeType,
+            type: edgeType,
+            color: edgeColor,
             size: 2,
           });
         } catch (e) {
@@ -890,15 +907,18 @@ function setupFilters() {
   // Filter by node type
   document.querySelectorAll('[data-filter-type]').forEach(el => {
     el.addEventListener('click', () => {
-      const type = el.getAttribute('data-filter-type');
-      if (!type) return;
+      const filterType = el.getAttribute('data-filter-type');
+      if (!filterType) return;
       
       const nodesToShow = new Set();
       
       graph.forEachNode((node, attrs) => {
         // Check all possible type attributes (nodeType, entityType, type)
-        const nodeType = attrs.nodeType || attrs.entityType || attrs.type;
-        if (nodeType && nodeType.toLowerCase() === type.toLowerCase()) {
+        // Normalize both to lowercase with underscores for comparison
+        const nodeType = (attrs.nodeType || attrs.entityType || attrs.type || '').toLowerCase().replace(/[-\s]/g, '_');
+        const targetType = filterType.toLowerCase().replace(/[-\s]/g, '_');
+        
+        if (nodeType === targetType) {
           nodesToShow.add(node);
           // Add connected nodes
           graph.forEachNeighbor(node, neighbor => {

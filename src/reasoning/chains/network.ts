@@ -124,3 +124,50 @@ export async function reachabilityChain(
   return lines.join("\n");
 }
 
+export async function vmReachabilityChain(
+  vmId: string,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "vm_reachability_summary", params: { vmId } },
+    },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const summary = payload?.data;
+  if (!summary) {
+    return `No reachability data found for VM ${vmId}.`;
+  }
+
+  const lines = [`Reachability summary for ${summary.vmName} (${summary.vmId}):`];
+  if (summary.nodeName) {
+    lines.push(`Node: ${summary.nodeName}`);
+  }
+  lines.push(`Interfaces: ${summary.interfaces?.length ?? 0}`);
+  for (const iface of summary.interfaces ?? []) {
+    const parts = [
+      iface.interfaceName,
+      iface.subnet ? `subnet=${iface.subnet}` : null,
+      iface.reachableEntities > 0 ? `${iface.reachableEntities} reachable` : null,
+    ].filter(Boolean);
+    lines.push(`  - ${parts.join(" | ")}`);
+  }
+  if (summary.exposedSubnets?.length > 0) {
+    lines.push(`Exposed subnets: ${summary.exposedSubnets.join(", ")}`);
+  }
+  if (summary.allowedBy?.length > 0) {
+    lines.push(`Allowed by ${summary.allowedBy.length} firewall rule(s)`);
+  }
+  if (summary.blockedBy?.length > 0) {
+    lines.push(`Blocked by ${summary.blockedBy.length} firewall rule(s)`);
+  }
+  return lines.join("\n");
+}
+

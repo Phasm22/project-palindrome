@@ -75,7 +75,11 @@ export class TwinUpdateService {
                 n.source = $source,
                 n.destination = $destination,
                 n.chain = $chain,
-                n.ruleType = $ruleType
+                n.ruleType = $ruleType,
+                n.aliasName = $aliasName,
+                n.aliasType = $aliasType,
+                n.aliasEntryCount = $aliasEntryCount,
+                n.aliasCidrCount = $aliasCidrCount
           `,
           {
             id: entity.id,
@@ -105,6 +109,10 @@ export class TwinUpdateService {
             chain: props.chain,
             ruleType: props.ruleType,
             vmKind: props.vmKind,
+            aliasName: props.aliasName,
+            aliasType: props.aliasType,
+            aliasEntryCount: props.aliasEntryCount,
+            aliasCidrCount: props.aliasCidrCount,
           }
         );
       }
@@ -171,6 +179,27 @@ export class TwinUpdateService {
     }
   }
 
+  async deleteRelationshipsByType(types: Array<TwinRelationship["type"]>): Promise<void> {
+    if (!types.length) return;
+    if (!this.initialized) {
+      await this.initialize();
+    }
+    const driver = this.graphStore.getDriver();
+    const session = driver.session();
+    try {
+      await session.run(
+        `
+          MATCH ()-[r]->()
+          WHERE type(r) IN $types
+          DELETE r
+        `,
+        { types }
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
   private buildEntityProperties(entity: TwinEntity): Record<string, any> {
     const data = (entity.data ?? {}) as Record<string, any>;
     const normalizedName = entity.displayName?.toLowerCase?.() ?? null;
@@ -198,6 +227,10 @@ export class TwinUpdateService {
       chain: null,
       ruleType: null,
       vmKind: null,
+      aliasName: null,
+      aliasType: null,
+      aliasEntryCount: null,
+      aliasCidrCount: null,
     };
 
     if (entity.type === TwinEntityType.COMPUTE_NODE) {
@@ -244,6 +277,13 @@ export class TwinUpdateService {
       props.destination = data.destination ?? null;
       props.chain = data.chain ?? null;
       props.ruleType = data.ruleType ?? null;
+    }
+
+    if (entity.type === TwinEntityType.FIREWALL_ALIAS) {
+      props.aliasName = data.name ?? entity.displayName ?? null;
+      props.aliasType = data.aliasType ?? null;
+      props.aliasEntryCount = Array.isArray(data.entries) ? data.entries.length : null;
+      props.aliasCidrCount = Array.isArray(data.cidrs) ? data.cidrs.length : null;
     }
 
     return props;

@@ -22,6 +22,7 @@ import type { BaseTool } from "../tools/BaseTool";
 import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-intents";
 import {
   describeClusterChain,
+  listAllVmsChain,
   listVmsByNodeChain,
   listRunningVmsOnNodeChain,
   listVmsWithoutAgentChain,
@@ -36,6 +37,7 @@ import {
   listNodeInterfacesChain,
   reachabilityChain,
   vmsBySubnetChain,
+  vmReachabilityChain,
 } from "../reasoning/chains/network";
 import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
 import {
@@ -44,6 +46,9 @@ import {
   rulesAllowingSubnetChain,
   rulesBlockingSubnetChain,
   exposureMapChain,
+  reachabilityFromSubnetChain,
+  reachabilityFromChainChain,
+  ruleImpactChain,
 } from "../reasoning/chains/firewall";
 import { detectExposureIntent, type ExposureIntent } from "../reasoning/detectExposureIntent";
 import {
@@ -536,6 +541,8 @@ async function executeComputeIntent(
     switch (intent.type) {
       case "describe_cluster":
         return await describeClusterChain(tools, session);
+      case "list_all_vms":
+        return await listAllVmsChain(tools, session, intent.vmKind);
       case "vms_by_node":
         return await listVmsByNodeChain(tools, session, intent.nodeName, intent.vmKind);
       case "running_vms_on_node":
@@ -570,6 +577,8 @@ async function executeNetworkIntent(
         return await vmsBySubnetChain(tools, session, intent.subnet);
       case "reachability":
         return await reachabilityChain(tools, session, intent.fromId);
+      case "vm_reachability":
+        return await vmReachabilityChain(intent.vmId, tools, session);
       default:
         return null;
     }
@@ -591,6 +600,8 @@ async function executeExposureIntent(
         return await analyzeVmExposureChain(intent.vmId, toolsMap, session as any);
       case "vms_exposed_to_subnet":
         return await listVmsExposedToSubnetChain(intent.subnetCidr, toolsMap, session as any);
+      case "vm_reachability":
+        return await reachabilityFromSubnetChain(intent.subnetCidr, intent.vmId, tools, session);
       case "attack_path":
         return await attackPathChain(intent.fromSubnet, intent.toVmId, toolsMap, session as any);
       case "internet_exposed":
@@ -621,6 +632,10 @@ async function executeFirewallIntent(
         return await rulesBlockingSubnetChain(intent.subnet, tools, session);
       case "exposure_map":
         return await exposureMapChain(intent.vmId, tools, session);
+      case "reachability_from_chain":
+        return await reachabilityFromChainChain(intent.chain, tools, session);
+      case "rule_impact":
+        return await ruleImpactChain(intent.ruleId, tools, session);
       default:
         return null;
     }

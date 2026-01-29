@@ -38,6 +38,10 @@ hosts:
         - "pfctl -sn"
         - "pfctl -si"
         - "pfctl -sa"
+      dhcp:
+        - "cat /var/dhcpd/var/db/dhcpd.leases"
+        - "cat /var/db/dhcpd.leases"
+        - "find /var -name '*dhcp*' -type f 2>/dev/null | head -20"
         
   "172.16.0.10":  # prox_big
     hostname: "172.16.0.10"

@@ -2,6 +2,7 @@ type VmKind = "qemu" | "lxc" | "all";
 
 export type ComputeIntent =
   | { type: "describe_cluster" }
+  | { type: "list_all_vms"; vmKind?: VmKind }
   | { type: "vms_by_node"; nodeName: string; vmKind?: VmKind }
   | { type: "running_vms_on_node"; nodeName: string; vmKind?: VmKind }
   | { type: "vms_without_agent" }
@@ -121,15 +122,24 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
     return { type: "describe_cluster" };
   }
 
-  // Match "all VMs" or "all virtual machines" (whole word "all", not substring)
+  // Match "all VMs" or "all virtual machines" or "list all containers" (whole word "all", not substring)
   // BUT only if NOT asking about a specific node
-  if (/\ball\b/.test(normalized) && (normalized.includes("vm") || normalized.includes("virtual machine"))) {
+  if (/\ball\b/.test(normalized) && (normalized.includes("vm") || normalized.includes("virtual machine") || normalized.includes("container") || normalized.includes("lxc"))) {
     // Check if this is asking about a specific node - if so, use vms_by_node instead
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
-      return { type: "vms_by_node", nodeName };
+      return { type: "vms_by_node", nodeName, vmKind };
     }
-    return { type: "describe_cluster" };
+    return { type: "list_all_vms", vmKind };
+  }
+
+  // Match "list containers" or "list vms" without "all"
+  if ((normalized.includes("list") || normalized.includes("show")) && hasVmOrContainer) {
+    const nodeName = extractNodeName(userInput);
+    if (nodeName) {
+      return { type: "vms_by_node", nodeName, vmKind };
+    }
+    return { type: "list_all_vms", vmKind };
   }
 
   if (normalized.includes("guest agent")) {

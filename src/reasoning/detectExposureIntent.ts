@@ -5,6 +5,7 @@
 export type ExposureIntent =
   | { type: "vm_exposure"; vmId: string }
   | { type: "vms_exposed_to_subnet"; subnetCidr: string }
+  | { type: "vm_reachability"; subnetCidr: string; vmId: string }
   | { type: "attack_path"; fromSubnet: string; toVmId: string }
   | { type: "internet_exposed" };
 
@@ -79,6 +80,11 @@ export function detectExposureIntent(userInput: string): ExposureIntent | null {
   ) {
     const subnetCidr = extractSubnetCidr(userInput);
     if (subnetCidr) {
+      const vmId = extractVmId(userInput);
+      if (vmId) {
+        const normalizedVmId = vmId.includes(":") ? vmId : `compute-vm:${vmId}`;
+        return { type: "vm_reachability", subnetCidr, vmId: normalizedVmId };
+      }
       return { type: "vms_exposed_to_subnet", subnetCidr };
     }
   }

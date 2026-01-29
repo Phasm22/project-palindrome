@@ -8,6 +8,9 @@ export enum TwinRelationshipType {
   ALLOWS = "ALLOWS",
   BLOCKS = "BLOCKS",
   ATTACHED_TO = "ATTACHED_TO",
+  ALIAS_RESOLVES_TO = "ALIAS_RESOLVES_TO",
+  EXPOSES = "EXPOSES",
+  REACHABLE = "REACHABLE",
 }
 
 const BaseRelationshipSchema = z.object({
@@ -47,6 +50,18 @@ export const AttachedToRelationshipSchema = BaseRelationshipSchema.extend({
   type: z.literal(TwinRelationshipType.ATTACHED_TO),
 });
 
+export const AliasResolvesToRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.ALIAS_RESOLVES_TO),
+});
+
+export const ExposesRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.EXPOSES),
+});
+
+export const ReachableRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.REACHABLE),
+});
+
 export const TwinRelationshipSchema = z.union([
   HostsRelationshipSchema,
   RunsOnRelationshipSchema,
@@ -55,6 +70,9 @@ export const TwinRelationshipSchema = z.union([
   AllowsRelationshipSchema,
   BlocksRelationshipSchema,
   AttachedToRelationshipSchema,
+  AliasResolvesToRelationshipSchema,
+  ExposesRelationshipSchema,
+  ReachableRelationshipSchema,
 ]);
 
 export type TwinRelationship = z.infer<typeof TwinRelationshipSchema>;

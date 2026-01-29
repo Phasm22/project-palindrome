@@ -26,13 +26,14 @@ export const ProxmoxReadOnlyParams = z.object({
       "node_network_interfaces",
       "node_temperature",
 
-      // VM-Level (7 actions)
+      // VM-Level (8 actions)
       "list_vms",
       "get_vm_status",
       "get_vm_config",
       "get_vm_network",
       "get_vm_snapshots",
       "get_vm_ip", // Get VM IP via guest agent
+      "get_vm_guest_network", // Get guest agent network interfaces (raw)
       "get_lxc_config", // Get LXC container config
 
       // Cluster-Level (5 actions)
@@ -444,6 +445,9 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
       case "get_vm_ip":
         return this.getVmIP(activeClientVm, params.node, params.vmid, vmType);
+
+      case "get_vm_guest_network":
+        return this.getVmGuestNetwork(activeClientVm, params.node, params.vmid, vmType);
 
       case "get_lxc_config":
         return this.getLxcConfig(activeClientVm, params.node, params.vmid);
@@ -1441,6 +1445,62 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     }
     
     return [...new Set(resolvedIPs)]; // Remove duplicates
+  }
+
+  private async getVmGuestNetwork(
+    client: ProxmoxClient,
+    node: string,
+    vmid: number,
+    type: "qemu" | "lxc"
+  ): Promise<{ data: any; metadata: any }> {
+    const startTime = Date.now();
+
+    try {
+      // Only QEMU VMs support the guest agent network endpoint
+      if (type !== "qemu") {
+        return {
+          data: {
+            node,
+            vmid,
+            type,
+            interfaces: [],
+            error: "Guest agent network interface query only supported for QEMU VMs",
+          },
+          metadata: { timestamp: Date.now(), durationMs: Date.now() - startTime },
+        };
+      }
+
+      const result = await client.get(`/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`);
+      
+      return {
+        data: {
+          node,
+          vmid,
+          type,
+          interfaces: result.data?.data?.result || [],
+        },
+        metadata: { timestamp: Date.now(), durationMs: Date.now() - startTime },
+      };
+    } catch (error: any) {
+      const statusCode = error.response?.status;
+      const errorMessage = error.response?.data?.message || error.message;
+
+      // Guest agent not available or not running
+      if (statusCode === 500 && errorMessage?.includes("agent")) {
+        return {
+          data: {
+            node,
+            vmid,
+            type,
+            interfaces: [],
+            error: "Guest agent not available or not running",
+          },
+          metadata: { timestamp: Date.now(), durationMs: Date.now() - startTime },
+        };
+      }
+
+      throw error;
+    }
   }
 
   private async getVmIP(

@@ -27,11 +27,22 @@ interface ProxmoxNodeInterface {
   mac?: string;
 }
 
+interface ProxmoxGuestInterface {
+  name: string;
+  "hardware-address"?: string;
+  "ip-addresses"?: Array<{
+    "ip-address": string;
+    "ip-address-type": string;
+    prefix: number;
+  }>;
+}
+
 interface ProxmoxVmNetConfig {
   vmid: number;
   node: string;
   name?: string;
   net?: Record<string, string>;
+  guestInterfaces?: ProxmoxGuestInterface[];
 }
 
 export interface ProxmoxInterfaceParserInput {
@@ -76,12 +87,42 @@ export class ProxmoxInterfaceParser implements Parser<ProxmoxInterfaceParserInpu
 
     for (const vm of input.vms || []) {
       const vmNets = vm.net || {};
+      const guestInterfaces = vm.guestInterfaces || [];
+      const vmId = `compute-vm:${vm.node.toLowerCase()}:${vm.vmid}`;
+      
+      // Build map of MAC -> guest IPs from guest agent data
+      const macToIps = new Map<string, string[]>();
+      for (const guestIf of guestInterfaces) {
+        const mac = guestIf["hardware-address"]?.toLowerCase();
+        if (!mac) continue;
+        const ips = (guestIf["ip-addresses"] || [])
+          .filter((addr) => addr["ip-address-type"] === "ipv4" || addr["ip-address-type"] === "ipv6")
+          .map((addr) => `${addr["ip-address"]}/${addr.prefix}`);
+        if (ips.length > 0) {
+          macToIps.set(mac, ips);
+        }
+      }
+      
       Object.entries(vmNets).forEach(([netKey, value]) => {
         if (!value) {
           return;
         }
         const parsed = this.parseVmNetString(value);
-        const cidrs = parseCidrs([parsed.ip]);
+        
+        // Try to get IPs from guest agent data using MAC address
+        let cidrs: string[] = [];
+        if (parsed.mac) {
+          const guestIps = macToIps.get(parsed.mac.toLowerCase());
+          if (guestIps && guestIps.length > 0) {
+            cidrs = parseCidrs(guestIps);
+          }
+        }
+        
+        // Fallback to config IP if present (rare)
+        if (cidrs.length === 0 && parsed.ip) {
+          cidrs = parseCidrs([parsed.ip]);
+        }
+        
         const entity = this.buildInterfaceEntity(
           vm.node,
           `${vm.name || vm.vmid}-${netKey}`,
@@ -91,7 +132,7 @@ export class ProxmoxInterfaceParser implements Parser<ProxmoxInterfaceParserInpu
             vlan: coerceVlan(parsed.tag),
             parent: parsed.bridge ?? null,
             status: "unknown",
-            vmId: `compute-vm:${vm.node.toLowerCase()}:${vm.vmid}`,
+            vmId,
           },
           context.collectedAt
         );

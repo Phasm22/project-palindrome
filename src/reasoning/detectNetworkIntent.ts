@@ -2,14 +2,25 @@ export type NetworkIntent =
   | { type: "describe_network" }
   | { type: "node_interfaces"; nodeName: string }
   | { type: "vms_by_subnet"; subnet: string }
-  | { type: "reachability"; fromId: string };
+  | { type: "reachability"; fromId: string }
+  | { type: "vm_reachability"; vmId: string };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
 const ENTITY_ID_REGEX = /(network-if:[\w:-]+|compute-vm:[\w:-]+)/i;
+const VM_NAME_REGEX = /\bvm\s+([a-z0-9\-_]+)/i;
 
 function extractNodeName(text: string): string | null {
   const match = text.match(/\b(?:node|host)\s+([a-z0-9\-_]+)/i);
   return match ? match[1] : null;
+}
+
+function extractVmNameOrId(text: string): string | null {
+  const idMatch = text.match(ENTITY_ID_REGEX);
+  if (idMatch && idMatch[0].startsWith("compute-vm:")) {
+    return idMatch[0];
+  }
+  const nameMatch = text.match(VM_NAME_REGEX);
+  return nameMatch ? nameMatch[1] : null;
 }
 
 export function detectNetworkIntent(userInput: string): NetworkIntent | null {
@@ -51,6 +62,11 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
   }
 
   if (normalized.includes("reach") || normalized.includes("reachable") || normalized.includes("connectivity")) {
+    const vmNameOrId = extractVmNameOrId(userInput);
+    if (vmNameOrId) {
+      const vmId = vmNameOrId.startsWith("compute-vm:") ? vmNameOrId : vmNameOrId;
+      return { type: "vm_reachability", vmId };
+    }
     const entityMatch = userInput.match(ENTITY_ID_REGEX);
     if (entityMatch) {
       return { type: "reachability", fromId: entityMatch[1] };

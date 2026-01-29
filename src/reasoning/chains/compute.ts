@@ -141,7 +141,7 @@ export async function describeClusterChain(tools: BaseTool[], session: ToolSessi
   const result = await executeToolCall(
     {
       toolName: "twin_query",
-      parameters: { operation: "describe_cluster", params: { vmKind: "qemu" } },
+      parameters: { operation: "describe_cluster" },
     },
     tools,
     session
@@ -164,9 +164,34 @@ export async function describeClusterChain(tools: BaseTool[], session: ToolSessi
     }
   }
 
-  const vmLines = formatVmList("Cluster VMs:", vms);
+  const vmLines = formatVmList("Cluster VMs and LXC Containers:", vms);
 
   return `${nodeLines.join("\n")}\n\n${vmLines}`;
+}
+
+export async function listAllVmsChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  vmKind?: VmKind
+): Promise<string> {
+  const labels = getVmKindLabels(vmKind);
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "list_all_vms", params: vmKind ? { vmKind } : {} },
+    },
+    tools,
+    session
+  );
+
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  const payload = result.data as any;
+  const vms = payload?.data ?? [];
+
+  return formatVmList(`All ${labels.listLabel} in the cluster:`, vms);
 }
 
 export async function listVmsByNodeChain(
@@ -447,7 +472,8 @@ export async function resolveVmDetailsChain(
     } else {
       // Case-insensitive name match
       const name = (r.name || "").toLowerCase();
-      return name === searchValue || name.includes(searchValue) || searchValue.includes(name);
+      const searchStr = String(searchValue);
+      return name === searchStr || name.includes(searchStr) || searchStr.includes(name);
     }
   });
 

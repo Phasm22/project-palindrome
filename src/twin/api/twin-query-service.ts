@@ -110,6 +110,28 @@ export class TwinQueryService {
     return result.records.map(this.mapInterface);
   }
 
+  async subnetsByInterfaceName(interfaceName: string): Promise<string[]> {
+    const suffix = `:${interfaceName.toLowerCase()}`;
+    const result = await this.runQuery(
+      `
+        MATCH (i:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(s:TwinEntity {type: $subnetType})
+        WHERE toLower(i.id) ENDS WITH $suffix
+           OR toLower(i.displayName) ENDS WITH $suffix
+        RETURN DISTINCT s.displayName AS subnet
+        ORDER BY subnet
+      `,
+      {
+        ifaceType: "network_interface",
+        subnetType: "network_subnet",
+        suffix,
+      }
+    );
+
+    return result.records
+      .map((record) => record.get("subnet") as string)
+      .filter((subnet) => Boolean(subnet));
+  }
+
   async vmsBySubnet(subnetCidr: string): Promise<
     Array<{ vmId: string; vmName: string; subnet: string; nodeName?: string }>
   > {
@@ -166,6 +188,101 @@ export class TwinQueryService {
     }));
   }
 
+  async vmReachabilitySummary(vmId: string): Promise<{
+    vmId: string;
+    vmName: string;
+    nodeName?: string;
+    interfaces: Array<{
+      interfaceId: string;
+      interfaceName: string;
+      subnet?: string;
+      reachableEntities: number;
+    }>;
+    exposedSubnets: string[];
+    allowedBy: string[];
+    blockedBy: string[];
+  }> {
+    const vmResult = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType, id: $vmId})
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
+        RETURN vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               n.displayName AS nodeName
+      `,
+      {
+        vmType: "compute_vm",
+        nodeType: "compute_node",
+        vmId,
+      }
+    );
+
+    if (!vmResult.records.length) {
+      throw new Error(`VM not found: ${vmId}`);
+    }
+
+    const vmInfo = vmResult.records[0];
+    const ifacesResult = await this.runQuery(
+      `
+        MATCH (iface:TwinEntity {type: $ifaceType, vmId: $vmId})
+        OPTIONAL MATCH (iface)-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
+        OPTIONAL MATCH (other:TwinEntity)-[:CONNECTS_TO]->(subnet)
+        WHERE other.id <> iface.id
+        RETURN iface.id AS interfaceId,
+               coalesce(iface.displayName, iface.id) AS interfaceName,
+               subnet.displayName AS subnet,
+               count(DISTINCT other) AS reachableCount
+        ORDER BY interfaceName
+      `,
+      {
+        ifaceType: "network_interface",
+        subnetType: "network_subnet",
+        vmId,
+      }
+    );
+
+    const interfaces = ifacesResult.records.map((record) => ({
+      interfaceId: record.get("interfaceId") as string,
+      interfaceName: record.get("interfaceName") as string,
+      subnet: record.get("subnet") ?? undefined,
+      reachableEntities: this.safeToNumber(record.get("reachableCount")),
+    }));
+
+    const exposureResult = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType, id: $vmId})
+        OPTIONAL MATCH (iface:TwinEntity {type: $ifaceType, vmId: vm.id})-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
+        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(subnet)
+        RETURN collect(DISTINCT subnet.displayName) AS exposedSubnets,
+               collect(DISTINCT allowRule.id) AS allowedBy,
+               collect(DISTINCT blockRule.id) AS blockedBy
+      `,
+      {
+        vmType: "compute_vm",
+        ifaceType: "network_interface",
+        subnetType: "network_subnet",
+        ruleType: "firewall_rule",
+        vmId,
+      }
+    );
+
+    const exposureRec = exposureResult.records[0];
+    const exposedSubnets = (exposureRec?.get("exposedSubnets")?.toArray?.() || exposureRec?.get("exposedSubnets") || []).filter((x: any) => x);
+    const allowedBy = (exposureRec?.get("allowedBy")?.toArray?.() || exposureRec?.get("allowedBy") || []).filter((x: any) => x);
+    const blockedBy = (exposureRec?.get("blockedBy")?.toArray?.() || exposureRec?.get("blockedBy") || []).filter((x: any) => x);
+
+    return {
+      vmId: vmInfo.get("vmId") as string,
+      vmName: vmInfo.get("vmName") as string,
+      nodeName: vmInfo.get("nodeName") ?? undefined,
+      interfaces,
+      exposedSubnets,
+      allowedBy,
+      blockedBy,
+    };
+  }
+
   private async ensureConnected(): Promise<void> {
     try {
       this.graphStore.getDriver();
@@ -185,6 +302,35 @@ export class TwinQueryService {
     } finally {
       await session.close();
     }
+  }
+
+  async listAllVms(vmKind: VmKind = null): Promise<ClusterVmSummary[]> {
+    const vmsResult = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {type: $vmType})
+        WHERE $vmKind IS NULL OR toLower(coalesce(vm.vmKind, 'qemu')) = toLower($vmKind)
+        OPTIONAL MATCH (vm)-[:RUNS_ON]->(n:TwinEntity {type: $nodeType})
+        RETURN vm.id AS id,
+               coalesce(vm.displayName, vm.id) AS name,
+               vm.state AS state,
+               vm.vmKind AS vmKind,
+               n.displayName AS nodeName
+        ORDER BY name
+      `,
+      {
+        vmType: "compute_vm",
+        nodeType: "compute_node",
+        vmKind: vmKind === "all" ? null : vmKind,
+      }
+    );
+
+    return vmsResult.records.map((record) => ({
+      id: record.get("id") as string,
+      name: record.get("name") as string,
+      state: record.get("state") ?? undefined,
+      vmKind: record.get("vmKind") ?? undefined,
+      nodeName: record.get("nodeName") ?? undefined,
+    }));
   }
 
   async describeCluster(vmKind: VmKind = null): Promise<{
@@ -650,21 +796,75 @@ export class TwinQueryService {
     }
 
     try {
-      const client = new ProxmoxClient({
-        url: proxmoxUrl,
-        tokenId,
-        tokenSecret,
-        verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
-      });
-
-      // Get all VMs from Proxmox cluster
-      const resourcesResult = await client.get("/cluster/resources");
-      const proxmoxResources = resourcesResult.data?.data || [];
-      const proxmoxVms = proxmoxResources.filter((r: any) => r.type === "qemu" || r.type === "lxc");
+      // Build list of all Proxmox clusters to check (primary + alternatives)
+      const clustersToCheck = [
+        { url: proxmoxUrl, label: "primary" }
+      ];
       
-      logger.debug("Proxmox cluster resources", {
-        totalResources: proxmoxResources.length,
-        vmResources: proxmoxVms.length,
+      // Add alternative cluster endpoints with node-specific tokens
+      const alternativeEndpoints = [
+        { 
+          url: "https://yin.prox:8006", 
+          label: "yin",
+          tokenId: process.env.YIN_TOKEN_ID || tokenId,
+          tokenSecret: process.env.YIN_TOKEN_SECRET || tokenSecret,
+        },
+        { 
+          url: "https://yang.prox:8006", 
+          label: "yang",
+          tokenId: process.env.YANG_TOKEN_ID || tokenId,
+          tokenSecret: process.env.YANG_TOKEN_SECRET || tokenSecret,
+        },
+        { 
+          url: "https://proxbig.prox:8006", 
+          label: "proxbig",
+          tokenId: process.env.PROXBIG_TOKEN_ID || tokenId,
+          tokenSecret: process.env.PROXBIG_TOKEN_SECRET || tokenSecret,
+        },
+      ];
+      
+      for (const alt of alternativeEndpoints) {
+        if (alt.url !== proxmoxUrl && alt.tokenId && alt.tokenSecret) {
+          clustersToCheck.push(alt);
+        }
+      }
+
+      // Collect VMs from all clusters
+      const allProxmoxVms: any[] = [];
+      
+      for (const cluster of clustersToCheck) {
+        try {
+          const client = new ProxmoxClient({
+            url: cluster.url,
+            tokenId: (cluster as any).tokenId || tokenId,
+            tokenSecret: (cluster as any).tokenSecret || tokenSecret,
+            verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+          });
+
+          const resourcesResult = await client.get("/cluster/resources");
+          const proxmoxResources = resourcesResult.data?.data || [];
+          const vmsInCluster = proxmoxResources.filter((r: any) => r.type === "qemu" || r.type === "lxc");
+          
+          logger.debug(`Proxmox cluster resources from ${cluster.label}`, {
+            clusterUrl: cluster.url,
+            totalResources: proxmoxResources.length,
+            vmResources: vmsInCluster.length,
+          });
+          
+          allProxmoxVms.push(...vmsInCluster);
+        } catch (error: any) {
+          // Cluster unreachable or authentication failed - log but continue with other clusters
+          logger.debug(`Failed to query Proxmox cluster ${cluster.label}`, {
+            url: cluster.url,
+            error: error.message,
+          });
+        }
+      }
+      
+      const proxmoxVms = allProxmoxVms;
+      logger.debug("Combined Proxmox VM resources from all clusters", {
+        totalVms: proxmoxVms.length,
+        clustersChecked: clustersToCheck.length,
         sampleVmids: proxmoxVms.slice(0, 10).map((r: any) => ({ vmid: r.vmid, node: r.node, name: r.name })),
       });
 
@@ -714,31 +914,19 @@ export class TwinQueryService {
           return matchesType && matchesNode;
         });
         
-        if (!vmExists) {
-          // VMID exists but node/type doesn't match - log for debugging
-          logger.debug("VM found in Proxmox but node/type mismatch", {
+        if (vmExists) {
+          // VM exists with matching node/type
+          verifiedVms.push(neo4jVm);
+        } else if (matchingResources.length > 0) {
+          // VMID exists but node/type doesn't match - still include it as VMID match is primary
+          logger.debug("VM found in Proxmox but node/type mismatch, including anyway", {
             vmid,
             neo4jNode: neo4jVm.nodeName,
             proxmoxNodes: matchingResources.map((r: any) => r.node),
             neo4jType: neo4jVm.vmKind,
             proxmoxTypes: matchingResources.map((r: any) => r.type),
           });
-          // Still include it - VMID match is the most important
           verifiedVms.push(neo4jVm);
-        } else {
-          verifiedVms.push(neo4jVm);
-        }
-
-        if (vmExists) {
-          verifiedVms.push(neo4jVm);
-        } else {
-          staleVmIds.push(neo4jVm.id);
-          logger.debug("VM not found in Proxmox (stale Neo4j entry)", {
-            id: neo4jVm.id,
-            name: neo4jVm.name,
-            vmid,
-            nodeName: neo4jVm.nodeName,
-          });
         }
       }
 
@@ -1088,6 +1276,7 @@ export class TwinQueryService {
     vmId: string;
     vmName: string;
     subnet: string;
+    subnetId: string;
     allowedBy: string[];
     blockedBy: string[];
   }>> {
@@ -1103,6 +1292,7 @@ export class TwinQueryService {
         RETURN vm.id AS vmId,
                coalesce(vm.displayName, vm.id) AS vmName,
                subnet.displayName AS subnet,
+               subnet.id AS subnetId,
                collect(DISTINCT allowRule.id) AS allowedBy,
                collect(DISTINCT blockRule.id) AS blockedBy
         ORDER BY vmName
@@ -1120,9 +1310,174 @@ export class TwinQueryService {
       vmId: record.get("vmId") as string,
       vmName: record.get("vmName") as string,
       subnet: record.get("subnet") as string,
+      subnetId: record.get("subnetId") as string,
       allowedBy: (record.get("allowedBy")?.toArray?.() || record.get("allowedBy") || []).filter((x: any) => x),
       blockedBy: (record.get("blockedBy")?.toArray?.() || record.get("blockedBy") || []).filter((x: any) => x),
     }));
+  }
+
+  async reachableFromSubnet(
+    subnetCidr: string,
+    vmId?: string
+  ): Promise<Array<{
+    vmId: string;
+    vmName: string;
+    subnet: string;
+    subnetId: string;
+    allowedBy: string[];
+    blockedBy: string[];
+  }>> {
+    const subnetId = `network-subnet:${subnetCidr.toLowerCase()}`;
+    const vmFilter = vmId ? "AND vm.id = $vmId" : "";
+    const result = await this.runQuery(
+      `
+        MATCH (subnet:TwinEntity {type: $subnetType})
+        WHERE subnet.id = $subnetId OR subnet.displayName = $subnetCidr
+        MATCH (iface:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(subnet)
+        MATCH (vm:TwinEntity {type: $vmType})
+        WHERE iface.vmId = vm.id ${vmFilter}
+        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(subnet)
+        RETURN vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               subnet.displayName AS subnet,
+               subnet.id AS subnetId,
+               collect(DISTINCT allowRule.id) AS allowedBy,
+               collect(DISTINCT blockRule.id) AS blockedBy
+        ORDER BY vmName
+      `,
+      {
+        subnetType: "network_subnet",
+        ifaceType: "network_interface",
+        vmType: "compute_vm",
+        ruleType: "firewall_rule",
+        subnetId,
+        subnetCidr,
+        ...(vmId ? { vmId } : {}),
+      }
+    );
+
+    return result.records.map((record) => ({
+      vmId: record.get("vmId") as string,
+      vmName: record.get("vmName") as string,
+      subnet: record.get("subnet") as string,
+      subnetId: record.get("subnetId") as string,
+      allowedBy: (record.get("allowedBy")?.toArray?.() || record.get("allowedBy") || []).filter((x: any) => x),
+      blockedBy: (record.get("blockedBy")?.toArray?.() || record.get("blockedBy") || []).filter((x: any) => x),
+    }));
+  }
+
+  async reachableFromInterfaceChain(
+    chain: string
+  ): Promise<Array<{
+    vmId: string;
+    vmName: string;
+    subnet: string;
+    subnetId: string;
+    allowedBy: string[];
+    blockedBy: string[];
+  }>> {
+    const result = await this.runQuery(
+      `
+        MATCH (allowRule:TwinEntity {type: $ruleType, chain: $chain})-[:ALLOWS]->(subnet:TwinEntity {type: $subnetType})
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType, chain: $chain})-[:BLOCKS]->(subnet)
+        MATCH (iface:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(subnet)
+        MATCH (vm:TwinEntity {type: $vmType})
+        WHERE iface.vmId = vm.id
+        RETURN vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               subnet.displayName AS subnet,
+               subnet.id AS subnetId,
+               collect(DISTINCT allowRule.id) AS allowedBy,
+               collect(DISTINCT blockRule.id) AS blockedBy
+        ORDER BY vmName
+      `,
+      {
+        ruleType: "firewall_rule",
+        subnetType: "network_subnet",
+        ifaceType: "network_interface",
+        vmType: "compute_vm",
+        chain,
+      }
+    );
+
+    return result.records.map((record) => ({
+      vmId: record.get("vmId") as string,
+      vmName: record.get("vmName") as string,
+      subnet: record.get("subnet") as string,
+      subnetId: record.get("subnetId") as string,
+      allowedBy: (record.get("allowedBy")?.toArray?.() || record.get("allowedBy") || []).filter((x: any) => x),
+      blockedBy: (record.get("blockedBy")?.toArray?.() || record.get("blockedBy") || []).filter((x: any) => x),
+    }));
+  }
+
+  async ruleImpact(ruleId: string): Promise<{
+    ruleId: string;
+    action?: string;
+    direction?: string;
+    protocol?: string;
+    subnets: Array<{
+      subnetId: string;
+      subnet: string;
+      vms: Array<{ vmId: string; vmName: string }>;
+    }>;
+  }> {
+    const result = await this.runQuery(
+      `
+        MATCH (r:TwinEntity {type: $ruleType, id: $ruleId})
+        OPTIONAL MATCH (r)-[:ALLOWS|:BLOCKS]->(subnet:TwinEntity {type: $subnetType})
+        OPTIONAL MATCH (iface:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(subnet)
+        OPTIONAL MATCH (vm:TwinEntity {type: $vmType})
+        WHERE iface.vmId = vm.id
+        RETURN r.id AS ruleId,
+               r.action AS action,
+               r.direction AS direction,
+               r.protocol AS protocol,
+               subnet.id AS subnetId,
+               subnet.displayName AS subnet,
+               collect(DISTINCT vm.id) AS vmIds,
+               collect(DISTINCT coalesce(vm.displayName, vm.id)) AS vmNames
+      `,
+      {
+        ruleType: "firewall_rule",
+        subnetType: "network_subnet",
+        ifaceType: "network_interface",
+        vmType: "compute_vm",
+        ruleId,
+      }
+    );
+
+    if (!result.records.length) {
+      return {
+        ruleId,
+        subnets: [],
+      };
+    }
+
+    const subnets = result.records
+      .filter((record) => record.get("subnetId"))
+      .map((record) => {
+        const vmIds = (record.get("vmIds")?.toArray?.() || record.get("vmIds") || []) as string[];
+        const vmNames = (record.get("vmNames")?.toArray?.() || record.get("vmNames") || []) as string[];
+        const vms = vmIds.map((vmId, index) => ({
+          vmId,
+          vmName: vmNames[index] ?? vmId,
+        }));
+        return {
+          subnetId: record.get("subnetId") as string,
+          subnet: record.get("subnet") as string,
+          vms,
+        };
+      });
+
+    const first = result.records[0];
+    return {
+      ruleId: first.get("ruleId") as string,
+      action: first.get("action") ?? undefined,
+      direction: first.get("direction") ?? undefined,
+      protocol: first.get("protocol") ?? undefined,
+      subnets,
+    };
   }
 
   /**

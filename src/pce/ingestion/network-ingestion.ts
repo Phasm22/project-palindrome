@@ -124,12 +124,31 @@ export class NetworkIngestionOrchestrator {
             netEntries[key] = value;
           }
         }
-        if (Object.keys(netEntries).length > 0) {
+        
+        // Fetch guest agent network interfaces if available
+        let guestInterfaces: any[] | undefined;
+        if (vm.status === "running") {
+          try {
+            const agentRes = await this.proxmoxTool.execute(
+              { action: "get_vm_guest_network", node: nodeName, vmid: vm.vmid, type: "qemu" },
+              this.createContext("network_ingest")
+            );
+            if (agentRes.data?.interfaces && Array.isArray(agentRes.data.interfaces)) {
+              guestInterfaces = agentRes.data.interfaces;
+            }
+          } catch (error: any) {
+            // Guest agent not available or not running - this is expected for many VMs
+            pceLogger.debug(`Guest agent network unavailable for VM ${vm.vmid}: ${error.message}`);
+          }
+        }
+        
+        if (Object.keys(netEntries).length > 0 || guestInterfaces) {
           vmConfigs.push({
             vmid: vm.vmid,
             node: nodeName,
             name: vm.name,
             net: netEntries,
+            guestInterfaces,
           });
         }
       }

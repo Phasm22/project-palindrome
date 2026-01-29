@@ -15,6 +15,7 @@ import { ContextHistoryStore } from "./history-store";
 import { ChatHistoryStore } from "./chat-history-store";
 import { PromptSuggestionStore } from "./prompt-suggestion-store";
 import { PromptSuggestionService } from "./prompt-suggestion-service";
+import { IngestionSummaryStore } from "./ingestion-summary-store";
 import { transformHybridContext } from "./context-transformer";
 import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
@@ -52,6 +53,7 @@ export interface PceApiServerDependencies {
   historyStore?: ContextHistoryStore;
   chatHistoryStore?: ChatHistoryStore;
   promptSuggestionStore?: PromptSuggestionStore;
+  ingestionSummaryStore?: IngestionSummaryStore;
   metricsCollector?: MetricsCollector;
   queryMetrics?: QueryMetrics;
   errorMetrics?: ErrorMetrics;
@@ -66,6 +68,7 @@ export class PceApiServer {
   private historyStore: ContextHistoryStore;
   private chatHistoryStore: ChatHistoryStore;
   private promptSuggestionStore: PromptSuggestionStore;
+  private ingestionSummaryStore: IngestionSummaryStore;
   private metricsCollector: MetricsCollector;
   private queryMetrics: QueryMetrics;
   private errorMetrics: ErrorMetrics;
@@ -89,6 +92,7 @@ export class PceApiServer {
     this.historyStore = deps.historyStore ?? new ContextHistoryStore(this.options.historyLimit);
     this.chatHistoryStore = deps.chatHistoryStore ?? new ChatHistoryStore();
     this.promptSuggestionStore = deps.promptSuggestionStore ?? new PromptSuggestionStore();
+    this.ingestionSummaryStore = deps.ingestionSummaryStore ?? new IngestionSummaryStore();
     this.metricsCollector = deps.metricsCollector ?? new MetricsCollector();
     this.ownsMetricsCollector = !deps.metricsCollector;
     this.queryMetrics = deps.queryMetrics ?? new QueryMetrics(this.metricsCollector);
@@ -177,6 +181,12 @@ export class PceApiServer {
       this.promptSuggestionStore.close();
     } catch (error: any) {
       pceLogger.warn("Failed to close prompt suggestion store", { error: error.message });
+    }
+
+    try {
+      this.ingestionSummaryStore.close();
+    } catch (error: any) {
+      pceLogger.warn("Failed to close ingestion summary store", { error: error.message });
     }
 
     for (const handler of this.cleanupHandlers) {
@@ -277,6 +287,10 @@ export class PceApiServer {
       return await this.handleIngestionStatus(req);
     }
 
+    if (req.method === "GET" && url.pathname === "/api/dashboard/ingestion-summaries") {
+      return await this.handleIngestionSummaries(req);
+    }
+
     // Unified query endpoints
     if (req.method === "POST" && url.pathname === "/api/dashboard/query/rag") {
       return await this.handleDashboardRagQuery(req);
@@ -316,6 +330,10 @@ export class PceApiServer {
 
     if (req.method === "POST" && url.pathname === "/api/chat/conversations") {
       return await this.handleCreateConversation(req);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/chat/clarification-responses") {
+      return await this.handleClarificationResponse(req);
     }
 
     if (req.method === "DELETE" && url.pathname === "/api/chat/conversations") {
@@ -932,7 +950,12 @@ export class PceApiServer {
       
       // Use neo4j.int() to ensure integer type for LIMIT clause
       const { int } = await import("neo4j-driver");
-      // Query TwinEntity nodes with their actual properties
+      
+      // Strategy: Get a connected subgraph by fetching nodes WITH their 1-hop neighbors
+      // This ensures the graph is always connected and visualizable
+      
+      // Fetch nodes and their direct relationships in a single query
+      // This returns connected components, not isolated nodes
       const result = await queryInterface.executeQuery(`
         MATCH (n:TwinEntity)-[r]->(m:TwinEntity)
         RETURN n, r, m
@@ -1397,6 +1420,28 @@ export class PceApiServer {
       });
     } catch (error: any) {
       pceLogger.error("Failed to fetch ingestion status", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleIngestionSummaries(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const queryParse = z
+        .object({
+          limit: z.coerce.number().int().min(1).max(50).optional(),
+        })
+        .safeParse({ limit: url.searchParams.get("limit") });
+
+      if (!queryParse.success) {
+        return this.jsonResponse(400, { error: "Invalid limit parameter" });
+      }
+
+      const limit = queryParse.data.limit ?? 5;
+      const summaries = await this.ingestionSummaryStore.listSummaries(limit);
+      return this.jsonResponse(200, { data: summaries });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch ingestion summaries", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
     }
   }
@@ -1897,6 +1942,42 @@ export class PceApiServer {
       });
     } catch (error: any) {
       pceLogger.error("Failed to create conversation", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleClarificationResponse(req: Request): Promise<Response> {
+    try {
+      const body = await req.json();
+      const schema = z.object({
+        userId: z.string().min(1),
+        conversationId: z.string().min(1),
+        clarificationId: z.string().min(1),
+        optionId: z.union([z.string(), z.number()]).optional(),
+        optionText: z.string().min(1),
+        clarificationText: z.string().optional(),
+      });
+      const parsed = schema.safeParse(body);
+      if (!parsed.success) {
+        return this.jsonResponse(400, { error: parsed.error.message });
+      }
+
+      const recordId = await this.chatHistoryStore.recordClarificationResponse({
+        conversationId: parsed.data.conversationId,
+        userId: parsed.data.userId,
+        clarificationId: parsed.data.clarificationId,
+        optionId: parsed.data.optionId?.toString(),
+        optionText: parsed.data.optionText,
+        clarificationText: parsed.data.clarificationText,
+      });
+
+      if (!recordId) {
+        return this.jsonResponse(500, { error: "Failed to store clarification response" });
+      }
+
+      return this.jsonResponse(200, { data: { id: recordId } });
+    } catch (error: any) {
+      pceLogger.error("Failed to record clarification response", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
     }
   }

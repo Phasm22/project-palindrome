@@ -124,14 +124,9 @@ export class GraphQueryInterface {
             recordNodes.set(nodeId, nodeData);
           }
           // Check if it's a relationship (direct relationship object)
-          else if (typeof value === "object" && value.type) {
-            // Relationship object - check if it has start/end
-            if (value.start && value.end) {
-              recordRel = value;
-            } else {
-              // Relationship might be returned without start/end - store it anyway
-              recordRel = value;
-            }
+          // Neo4j Relationship objects have __isRelationship__ marker
+          else if (typeof value === "object" && (value.__isRelationship__ || (value.type && value.startNodeElementId))) {
+            recordRel = value;
           }
           // Check if it's a path
           else if (Array.isArray(value)) {
@@ -173,40 +168,30 @@ export class GraphQueryInterface {
             }
           });
 
-          // If we don't have IDs from query, try to get from relationship object
-          if ((!fromId || !toId) && recordRel.start && recordRel.end) {
-            const startNode = recordRel.start;
-            const endNode = recordRel.end;
-
-            // Extract from node ID - try multiple ways
-            if (!fromId && startNode) {
-              if (typeof startNode === 'object') {
-                if (startNode.properties?.id) {
-                  fromId = startNode.properties.id;
-                } else if (startNode.identity !== undefined && startNode.identity !== null) {
-                  fromId = String(startNode.identity);
-                }
-              } else if (typeof startNode === 'string') {
-                fromId = startNode;
-              } else if (typeof startNode === 'number') {
-                fromId = String(startNode);
+          // If we don't have IDs yet, extract from nodes in this record
+          // When query is MATCH (n)-[r]->(m) RETURN n, r, m,
+          // n and m are the actual node objects with properties.id
+          // r.start/r.end are internal Neo4j Integer IDs that match n.identity/m.identity
+          if (!fromId || !toId) {
+            // Get relationship's start/end element IDs
+            const relStartElementId = recordRel.startNodeElementId;
+            const relEndElementId = recordRel.endNodeElementId;
+            
+            // Iterate through all returned values in this record to find matching nodes
+            record.keys.forEach((key) => {
+              const val = record.get(key);
+              if (!val || typeof val !== 'object' || !val.properties?.id) return;
+              
+              const nodeId = val.properties.id;
+              const nodeElementId = val.elementId;
+              
+              if (!fromId && nodeElementId === relStartElementId) {
+                fromId = nodeId;
               }
-            }
-
-            // Extract to node ID - try multiple ways
-            if (!toId && endNode) {
-              if (typeof endNode === 'object') {
-                if (endNode.properties?.id) {
-                  toId = endNode.properties.id;
-                } else if (endNode.identity !== undefined && endNode.identity !== null) {
-                  toId = String(endNode.identity);
-                }
-              } else if (typeof endNode === 'string') {
-                toId = endNode;
-              } else if (typeof endNode === 'number') {
-                toId = String(endNode);
+              if (!toId && nodeElementId === relEndElementId) {
+                toId = nodeId;
               }
-            }
+            });
           }
 
           if (fromId && toId) {

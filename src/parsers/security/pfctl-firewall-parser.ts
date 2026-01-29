@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Parser, ParserContext, ParserResult } from "../types";
 import type { TwinEntity, FirewallRuleEntity } from "../../twin/models/entities";
 import type { TwinRelationship } from "../../twin/models/relationships";
@@ -181,7 +182,16 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     }
 
     // Generate rule ID
-    const ruleId = this.normalizeRuleId(interfaceName, action, direction, source, destination, protocol, destinationPort);
+    const ruleId = this.normalizeRuleId(
+      interfaceName,
+      action,
+      direction,
+      source,
+      destination,
+      protocol,
+      destinationPort,
+      trimmed
+    );
 
     // Determine chain (interface-based grouping)
     const chain = interfaceName ? `chain:${interfaceName}` : "chain:default";
@@ -316,7 +326,16 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
       }
     }
 
-    const ruleId = this.normalizeRuleId(interfaceName, ruleType, "any", source, destination || target, protocol, destinationPort);
+    const ruleId = this.normalizeRuleId(
+      interfaceName,
+      ruleType,
+      "any",
+      source,
+      destination || target,
+      protocol,
+      destinationPort,
+      trimmed
+    );
 
     const chain = interfaceName ? `chain:${interfaceName}` : "chain:default";
 
@@ -420,7 +439,8 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     source: string | null,
     destination: string | null,
     protocol: string | null,
-    port: string | null
+    port: string | null,
+    rawLine?: string
   ): string {
     const parts = [
       "fw-rule",
@@ -432,7 +452,10 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
       protocol || "any",
       port || "any",
     ];
-    return parts.join(":").toLowerCase().replace(/[^a-z0-9:._-]/g, "_");
+    const base = parts.join(":").toLowerCase().replace(/[^a-z0-9:._-]/g, "_");
+    const hashInput = rawLine?.trim() || base;
+    const hash = createHash("sha256").update(hashInput).digest("hex").slice(0, 10);
+    return `${base}:${hash}`;
   }
 
   /**

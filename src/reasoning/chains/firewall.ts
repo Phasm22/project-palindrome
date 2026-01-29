@@ -159,3 +159,108 @@ export async function exposureMapChain(
   return lines.join("\n");
 }
 
+export async function reachabilityFromSubnetChain(
+  subnet: string,
+  vmId: string | undefined,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: {
+        operation: "firewall_reachability_from_subnet",
+        params: vmId ? { subnet, vmId } : { subnet },
+      },
+    },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const items = payload?.data ?? [];
+  if (!items.length) {
+    return `No reachability data found for ${subnet}.`;
+  }
+
+  const lines = [`Reachability from subnet ${subnet}:`];
+  for (const item of items) {
+    const parts = [
+      `VM: ${item.vmName} (${item.vmId})`,
+      item.allowedBy?.length ? `Allowed by: ${item.allowedBy.length} rule(s)` : null,
+      item.blockedBy?.length ? `Blocked by: ${item.blockedBy.length} rule(s)` : null,
+    ].filter(Boolean);
+    lines.push(`- ${parts.join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+export async function reachabilityFromChainChain(
+  chain: string,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "firewall_reachability_from_chain", params: { chain } },
+    },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const items = payload?.data ?? [];
+  if (!items.length) {
+    return `No reachability data found for ${chain}.`;
+  }
+
+  const lines = [`VMs reachable from ${chain}:`];
+  for (const item of items) {
+    const parts = [
+      `VM: ${item.vmName} (${item.vmId})`,
+      `Subnet: ${item.subnet}`,
+      item.allowedBy?.length ? `Allowed by: ${item.allowedBy.length} rule(s)` : null,
+      item.blockedBy?.length ? `Blocked by: ${item.blockedBy.length} rule(s)` : null,
+    ].filter(Boolean);
+    lines.push(`- ${parts.join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+export async function ruleImpactChain(
+  ruleId: string,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "firewall_rule_impact", params: { ruleId } },
+    },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const impact = payload?.data ?? null;
+  if (!impact || !impact.subnets?.length) {
+    return `No impacted subnets found for rule ${ruleId}.`;
+  }
+
+  const lines = [`Impact for rule ${ruleId}:`];
+  for (const subnet of impact.subnets) {
+    const vmList = (subnet.vms || [])
+      .map((vm: any) => `${vm.vmName} (${vm.vmId})`)
+      .join(", ");
+    lines.push(`- ${subnet.subnet} | VMs: ${vmList || "none"}`);
+  }
+  return lines.join("\n");
+}
+

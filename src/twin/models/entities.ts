@@ -6,6 +6,7 @@ export enum TwinEntityType {
   NETWORK_INTERFACE = "network_interface",
   NETWORK_SUBNET = "network_subnet",
   FIREWALL_RULE = "firewall_rule",
+  FIREWALL_ALIAS = "firewall_alias",
   STORAGE = "storage",
 }
 
@@ -98,6 +99,17 @@ export const FirewallRuleEntitySchema = BaseTwinEntitySchema.extend({
   }),
 });
 
+export const FirewallAliasEntitySchema = BaseTwinEntitySchema.extend({
+  type: z.literal(TwinEntityType.FIREWALL_ALIAS),
+  data: z.object({
+    name: z.string(),
+    aliasType: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    entries: z.array(z.string()).default([]),
+    cidrs: z.array(z.string()).default([]),
+  }),
+});
+
 export const StorageEntitySchema = BaseTwinEntitySchema.extend({
   type: z.literal(TwinEntityType.STORAGE),
   data: z.object({
@@ -121,6 +133,7 @@ export const TwinEntitySchema = z.union([
   NetworkInterfaceEntitySchema,
   NetworkSubnetEntitySchema,
   FirewallRuleEntitySchema,
+  FirewallAliasEntitySchema,
   StorageEntitySchema,
 ]);
 
@@ -130,5 +143,6 @@ export type ComputeVmEntity = z.infer<typeof ComputeVmEntitySchema>;
 export type NetworkInterfaceEntity = z.infer<typeof NetworkInterfaceEntitySchema>;
 export type NetworkSubnetEntity = z.infer<typeof NetworkSubnetEntitySchema>;
 export type FirewallRuleEntity = z.infer<typeof FirewallRuleEntitySchema>;
+export type FirewallAliasEntity = z.infer<typeof FirewallAliasEntitySchema>;
 export type StorageEntity = z.infer<typeof StorageEntitySchema>;
 

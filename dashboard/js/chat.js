@@ -356,7 +356,8 @@ function formatClusterVmsSection(vms) {
  */
 function formatClarificationMessage(text) {
   const lines = text.split('\n');
-  let html = '<div class="clarification-message" style="background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%); border: 1px solid #3b82f6; border-radius: 8px; padding: 16px;">';
+  const encodedText = encodeURIComponent(text);
+  let html = `<div class="clarification-message" data-clarification-text="${encodedText}" style="background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%); border: 1px solid #3b82f6; border-radius: 8px; padding: 16px;">`;
   
   for (const line of lines) {
     const trimmed = line.trim();
@@ -383,7 +384,9 @@ function formatClarificationMessage(text) {
     const optionMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
     if (optionMatch) {
       const [, num, optionText] = optionMatch;
-      html += `<button onclick="selectClarificationOption(${num}, '${escapeHtml(optionText).replace(/'/g, "\\'")}')" 
+      html += `<button type="button"
+        data-clarification-option-id="${num}"
+        data-clarification-option="${encodeURIComponent(optionText)}"
         style="display: block; width: 100%; text-align: left; padding: 10px 12px; margin: 6px 0; 
                background: #0f172a; border: 1px solid #334155; border-radius: 6px; 
                color: #e2e8f0; cursor: pointer; transition: all 0.2s ease;
@@ -428,16 +431,61 @@ function formatClarificationMessage(text) {
 /**
  * Handle clicking a clarification option
  */
-window.selectClarificationOption = function(num, optionText) {
-  // Send the actual suggestion text (not just the number)
-  // This avoids needing server-side state for pending clarifications
-  const input = getChatInput();
-  if (input) {
-    input.value = optionText;
-    // Trigger send
-    sendChatMessage();
+function hashClarificationText(text) {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash) + text.charCodeAt(i);
+    hash |= 0;
   }
-};
+  return `clar_${Math.abs(hash)}`;
+}
+
+async function saveClarificationResponse(payload) {
+  if (!currentConversationId) return;
+  try {
+    await fetch(`${API_URL}/api/chat/clarification-responses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: 'dashboard-user',
+        conversationId: currentConversationId,
+        clarificationId: payload.clarificationId,
+        optionId: payload.optionId,
+        optionText: payload.optionText,
+        clarificationText: payload.clarificationText,
+      }),
+    });
+  } catch (error) {
+    console.warn('Failed to persist clarification response', error);
+  }
+}
+
+function attachClarificationHandlers(container) {
+  const buttons = container.querySelectorAll('[data-clarification-option]');
+  buttons.forEach((btn) => {
+    if (btn.dataset.bound === 'true') return;
+    btn.dataset.bound = 'true';
+    btn.addEventListener('click', async () => {
+      const optionText = decodeURIComponent(btn.dataset.clarificationOption || '');
+      if (!optionText) return;
+
+      const optionId = btn.dataset.clarificationOptionId || undefined;
+      const wrapper = btn.closest('.clarification-message');
+      const clarificationTextRaw = wrapper?.getAttribute('data-clarification-text') || '';
+      const clarificationText = clarificationTextRaw ? decodeURIComponent(clarificationTextRaw) : '';
+      const clarificationId = hashClarificationText(clarificationText || optionText);
+
+      await saveClarificationResponse({
+        clarificationId,
+        optionId,
+        optionText,
+        clarificationText,
+      });
+
+      sendChatMessage(optionText);
+    });
+  });
+}
 
 function formatAgentResponse(text) {
   if (!text) return '';
@@ -827,6 +875,7 @@ function updateChatMessage(messageId, newContent) {
     const shouldLockScroll = isAsyncOperationActive && (wasNearBottom || shouldAutoScroll);
     
     messageDiv.innerHTML = newContent;
+    attachClarificationHandlers(messageDiv);
     
     if (shouldLockScroll || (wasNearBottom && shouldAutoScroll)) {
       if (scrollContainer) containersToScroll.add(scrollContainer);
@@ -1089,10 +1138,12 @@ function handleAgentEvent(event, toolExecutions) {
     case 'agent:step':
       // Lock scroll during async operations
       lockScrollToBottom();
+      const stepNum = event.data.step ?? '?';
+      const maxSteps = event.data.maxSteps ?? '?';
       updateChatMessage(currentResponseId, 
         `<div class="agent-thinking">
           <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-          Reasoning step ${event.data.step}/${event.data.maxSteps}...
+          Reasoning step ${stepNum}/${maxSteps}...
         </div>`);
       break;
       

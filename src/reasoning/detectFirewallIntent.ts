@@ -3,10 +3,13 @@ export type FirewallIntent =
   | { type: "rules_by_chain"; chain: string }
   | { type: "rules_allowing_subnet"; subnet: string }
   | { type: "rules_blocking_subnet"; subnet: string }
-  | { type: "exposure_map"; vmId?: string };
+  | { type: "exposure_map"; vmId?: string }
+  | { type: "reachability_from_chain"; chain: string }
+  | { type: "rule_impact"; ruleId: string };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
 const VM_ID_REGEX = /(?:vm|vm-)(\d+)|compute-vm:[\w:-]+/i;
+const RULE_ID_REGEX = /\bfw-rule:[a-z0-9:._-]+/i;
 
 function extractSubnet(text: string): string | null {
   const match = text.match(CIDR_REGEX);
@@ -22,6 +25,11 @@ function extractVmId(text: string): string | null {
     return match[0];
   }
   return null;
+}
+
+function extractRuleId(text: string): string | null {
+  const match = text.match(RULE_ID_REGEX);
+  return match ? match[0] : null;
 }
 
 function extractChain(text: string): string | null {
@@ -77,6 +85,13 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     return { type: "exposure_map", vmId: vmId ?? undefined };
   }
 
+  // Reachability from interface/chain (e.g. WireGuard)
+  const reachabilityKeywords = normalized.includes("reachable") || normalized.includes("reach") || normalized.includes("accessible");
+  const chain = extractChain(userInput);
+  if (reachabilityKeywords && chain) {
+    return { type: "reachability_from_chain", chain };
+  }
+
   // Rules allowing/blocking subnet
   const subnet = extractSubnet(userInput);
   if (subnet) {
@@ -89,9 +104,16 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   }
 
   // Rules by chain/interface
-  const chain = extractChain(userInput);
   if (chain) {
     return { type: "rules_by_chain", chain };
+  }
+
+  // Rule impact queries
+  if (normalized.includes("impact") || normalized.includes("break")) {
+    const ruleId = extractRuleId(userInput);
+    if (ruleId) {
+      return { type: "rule_impact", ruleId };
+    }
   }
 
   // Default: list all rules

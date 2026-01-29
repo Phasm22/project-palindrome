@@ -24,6 +24,17 @@ export interface ChatMessage {
   reasoningTraceId?: string; // Link to reasoning trace for assistant messages
 }
 
+export interface ClarificationResponse {
+  id: string;
+  conversationId: string;
+  userId: string;
+  clarificationId: string;
+  optionId?: string;
+  optionText: string;
+  clarificationText?: string;
+  createdAt: Date;
+}
+
 export interface Conversation {
   id: string;
   userId: string;
@@ -105,7 +116,7 @@ export class ChatHistoryStore {
         `);
         
         // Migrate existing messages to a default conversation
-        this.migrateExistingMessages();
+        this.migrateExistingMessagesLegacy();
       }
       
       if (!hasReasoningTraceId) {
@@ -208,6 +219,27 @@ export class ChatHistoryStore {
       CREATE INDEX IF NOT EXISTS idx_conversation_context_conversation_id ON conversation_context(conversation_id);
     `);
 
+    // Create clarification response table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS clarification_responses (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        clarification_id TEXT NOT NULL,
+        option_id TEXT,
+        option_text TEXT NOT NULL,
+        clarification_text TEXT,
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_clarification_conversation_id
+        ON clarification_responses(conversation_id);
+      CREATE INDEX IF NOT EXISTS idx_clarification_id
+        ON clarification_responses(clarification_id);
+      CREATE INDEX IF NOT EXISTS idx_clarification_user_id
+        ON clarification_responses(user_id);
+    `);
+
     // Ensure conversation_context columns exist (for backward compatibility)
     try {
       const ctxInfo = this.db.prepare("PRAGMA table_info(conversation_context)").all() as any[];
@@ -256,7 +288,7 @@ export class ChatHistoryStore {
   /**
    * Migrate existing messages without conversation_id to a default conversation
    */
-  private migrateExistingMessages() {
+  private migrateExistingMessagesLegacy() {
     try {
       // Get all unique user_ids that have messages without conversation_id
       const usersStmt = this.db.prepare(`
@@ -952,6 +984,70 @@ export class ChatHistoryStore {
       pceLogger.error("Failed to set conversation context", { error: error.message, conversationId });
       return false;
     }
+  }
+
+  async recordClarificationResponse(input: {
+    conversationId: string;
+    userId: string;
+    clarificationId: string;
+    optionId?: string;
+    optionText: string;
+    clarificationText?: string;
+  }): Promise<string | null> {
+    try {
+      const id = crypto.randomUUID();
+      const stmt = this.db.prepare(`
+        INSERT INTO clarification_responses (
+          id,
+          conversation_id,
+          user_id,
+          clarification_id,
+          option_id,
+          option_text,
+          clarification_text,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run(
+        id,
+        input.conversationId,
+        input.userId,
+        input.clarificationId,
+        input.optionId ?? null,
+        input.optionText,
+        input.clarificationText ?? null,
+        Date.now()
+      );
+      return id;
+    } catch (error: any) {
+      pceLogger.warn("Failed to record clarification response", { error: error.message });
+      return null;
+    }
+  }
+
+  async getClarificationResponses(
+    conversationId: string,
+    limit: number = 50
+  ): Promise<ClarificationResponse[]> {
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM clarification_responses
+      WHERE conversation_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(conversationId, limit) as any[];
+    return rows.map((row) => ({
+      id: row.id,
+      conversationId: row.conversation_id,
+      userId: row.user_id,
+      clarificationId: row.clarification_id,
+      optionId: row.option_id ?? undefined,
+      optionText: row.option_text,
+      clarificationText: row.clarification_text ?? undefined,
+      createdAt: new Date(row.created_at),
+    }));
   }
 
   private async recordMemoryEvent(event: {

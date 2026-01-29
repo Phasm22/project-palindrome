@@ -8,6 +8,7 @@ import { TwinQueryService } from "../twin";
 const TwinQueryParams = z.object({
   operation: z.enum([
     "describe_cluster",
+    "list_all_vms",
     "vms_by_node",
     "vms_without_agent",
     "stopped_vms_on_node",
@@ -17,11 +18,15 @@ const TwinQueryParams = z.object({
     "network_interfaces_by_node",
     "network_vms_by_subnet",
     "network_reachability",
+    "vm_reachability_summary",
     "firewall_list_rules",
     "firewall_rules_by_chain",
     "firewall_rules_allowing_subnet",
     "firewall_rules_blocking_subnet",
     "firewall_exposure_map",
+    "firewall_reachability_from_subnet",
+    "firewall_reachability_from_chain",
+    "firewall_rule_impact",
     "exposure_vm_analysis",
     "exposure_vms_by_subnet",
     "exposure_path",
@@ -34,6 +39,7 @@ const TwinQueryParams = z.object({
       subnet: z.string().optional(),
       fromId: z.string().optional(),
       chain: z.string().optional(),
+      ruleId: z.string().optional(),
       vmId: z.string().optional(),
       fromSubnet: z.string().optional(),
       toVmId: z.string().optional(),
@@ -165,6 +171,7 @@ export class TwinQueryTool extends BaseTool {
         "subnet",
         "fromId",
         "chain",
+        "ruleId",
         "vmId",
         "fromSubnet",
         "toVmId",
@@ -197,6 +204,11 @@ export class TwinQueryTool extends BaseTool {
           const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
           const data = await this.service.describeCluster(vmKind ?? undefined);
           return { data: { kind: "cluster_overview", data } };
+        }
+        case "list_all_vms": {
+          const vmKind = this.normalizeVmKind(opParams?.vmKind as string | undefined);
+          const data = await this.service.listAllVms(vmKind ?? undefined);
+          return { data: { kind: "vm_list", data } };
         }
         case "vms_by_node": {
           const nodeName = opParams?.nodeName;
@@ -292,6 +304,15 @@ export class TwinQueryTool extends BaseTool {
           const data = await this.service.reachability(fromId);
           return { data: { kind: "reachability", fromId, data } };
         }
+        case "vm_reachability_summary": {
+          const vmId = opParams?.vmId;
+          if (!vmId) {
+            return { error: "vmId is required for vm_reachability_summary" };
+          }
+          const vmIdStr = typeof vmId === "number" ? `compute-vm:${vmId}` : vmId.toString();
+          const data = await this.service.vmReachabilitySummary(vmIdStr);
+          return { data: { kind: "vm_reachability_summary", data } };
+        }
         case "firewall_list_rules": {
           const data = await this.service.listFirewallRules();
           return { data: { kind: "firewall_rule_list", data } };
@@ -324,6 +345,31 @@ export class TwinQueryTool extends BaseTool {
           const vmId = opParams?.vmId;
           const data = await this.service.exposureMap(vmId);
           return { data: { kind: "exposure_map", vmId, data } };
+        }
+        case "firewall_reachability_from_subnet": {
+          const subnet = opParams?.subnet;
+          if (!subnet) {
+            return { error: "subnet is required for firewall_reachability_from_subnet" };
+          }
+          const vmId = opParams?.vmId;
+          const data = await this.service.reachableFromSubnet(subnet, vmId);
+          return { data: { kind: "reachability_subnet", subnet, data } };
+        }
+        case "firewall_reachability_from_chain": {
+          const chain = opParams?.chain;
+          if (!chain) {
+            return { error: "chain is required for firewall_reachability_from_chain" };
+          }
+          const data = await this.service.reachableFromInterfaceChain(chain);
+          return { data: { kind: "reachability_chain", chain, data } };
+        }
+        case "firewall_rule_impact": {
+          const ruleId = opParams?.ruleId;
+          if (!ruleId) {
+            return { error: "ruleId is required for firewall_rule_impact" };
+          }
+          const data = await this.service.ruleImpact(ruleId);
+          return { data: { kind: "rule_impact", data } };
         }
         case "exposure_vm_analysis": {
           const vmId = opParams?.vmId;
