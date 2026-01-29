@@ -1,13 +1,26 @@
+import { getKnownEntities } from "./clarification";
+
 export type NetworkIntent =
   | { type: "describe_network" }
   | { type: "node_interfaces"; nodeName: string }
   | { type: "vms_by_subnet"; subnet: string }
   | { type: "reachability"; fromId: string }
-  | { type: "vm_reachability"; vmId: string };
+  | { type: "vm_reachability"; vmId: string }
+  | { type: "vm_networks"; vmNameOrId: string }
+  | { type: "vm_by_ip"; ip: string }
+  | { type: "vms_with_multiple_interfaces" };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
+const IP_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\b/;
 const ENTITY_ID_REGEX = /(network-if:[\w:-]+|compute-vm:[\w:-]+)/i;
 const VM_NAME_REGEX = /\bvm\s+([a-z0-9\-_]+)/i;
+const MULTI_NIC_PATTERNS = [
+  /\btwo\s+nics?\b/i,
+  /\bmultiple\s+nics?\b/i,
+  /\bmulti[-\s]?nic\b/i,
+  /\bmore\s+than\s+one\s+interface\b/i,
+  /\btwo\s+interfaces?\b/i,
+];
 
 function extractNodeName(text: string): string | null {
   const match = text.match(/\b(?:node|host)\s+([a-z0-9\-_]+)/i);
@@ -21,6 +34,14 @@ function extractVmNameOrId(text: string): string | null {
   }
   const nameMatch = text.match(VM_NAME_REGEX);
   return nameMatch ? nameMatch[1] : null;
+}
+
+function extractKnownVmName(text: string): string | null {
+  const { vms } = getKnownEntities();
+  if (!vms.length) return null;
+  const normalized = text.toLowerCase();
+  const matched = vms.find((vm) => vm.name && normalized.includes(vm.name.toLowerCase()));
+  return matched?.name ?? null;
 }
 
 export function detectNetworkIntent(userInput: string): NetworkIntent | null {
@@ -44,6 +65,23 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
     return null;
   }
 
+  const vmNameOrId = extractVmNameOrId(userInput) || extractKnownVmName(userInput);
+
+  if (MULTI_NIC_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return { type: "vms_with_multiple_interfaces" };
+  }
+
+  if (normalized.includes("ip") || normalized.includes("ip address")) {
+    const ipMatch = userInput.match(IP_REGEX);
+    if (ipMatch) {
+      return { type: "vm_by_ip", ip: ipMatch[0] };
+    }
+  }
+
+  if ((normalized.includes("network") || normalized.includes("interfaces") || normalized.includes("nic")) && vmNameOrId) {
+    return { type: "vm_networks", vmNameOrId };
+  }
+
   if (normalized.includes("network") || normalized.includes("interfaces")) {
     const nodeName = extractNodeName(userInput);
     if (nodeName) {
@@ -62,7 +100,6 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
   }
 
   if (normalized.includes("reach") || normalized.includes("reachable") || normalized.includes("connectivity")) {
-    const vmNameOrId = extractVmNameOrId(userInput);
     if (vmNameOrId) {
       const vmId = vmNameOrId.startsWith("compute-vm:") ? vmNameOrId : vmNameOrId;
       return { type: "vm_reachability", vmId };
@@ -80,4 +117,3 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
 
   return null;
 }
-

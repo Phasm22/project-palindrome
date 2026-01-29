@@ -36,7 +36,10 @@ import {
   describeNetworkChain,
   listNodeInterfacesChain,
   reachabilityChain,
+  vmByIpFromIngestionChain,
   vmsBySubnetChain,
+  vmsWithMultipleInterfacesFromIngestionChain,
+  vmNetworksFromIngestionChain,
   vmReachabilityChain,
 } from "../reasoning/chains/network";
 import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
@@ -59,6 +62,7 @@ import {
 } from "../reasoning/chains/exposure";
 import { detectActionIntent } from "../reasoning/action-intents";
 import {
+  loadKnownEntitiesFromIngestionSummary,
   loadKnownEntitiesFromProxmox,
 } from "../reasoning/clarification";
 import { classifyAndRoute } from "../reasoning/intent-router";
@@ -579,6 +583,12 @@ async function executeNetworkIntent(
         return await reachabilityChain(tools, session, intent.fromId);
       case "vm_reachability":
         return await vmReachabilityChain(intent.vmId, tools, session);
+      case "vm_networks":
+        return await vmNetworksFromIngestionChain(intent.vmNameOrId);
+      case "vm_by_ip":
+        return await vmByIpFromIngestionChain(intent.ip);
+      case "vms_with_multiple_interfaces":
+        return await vmsWithMultipleInterfacesFromIngestionChain();
       default:
         return null;
     }
@@ -931,6 +941,7 @@ export async function runAgent(
   // ============================================================
   
   // Lazily load known entities from Proxmox (first run only)
+  await loadKnownEntitiesFromIngestionSummary();
   await loadKnownEntitiesFromProxmox(async (toolName, params) => {
     const tool = tools.find(t => t.metadata.name === toolName);
     if (!tool) return null;
@@ -1766,10 +1777,18 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         // Format network response for bot-like style
         let formattedAnswer = networkAnswer;
         try {
+          const usesIngestionSummary = [
+            "vm_networks",
+            "vm_by_ip",
+            "vms_with_multiple_interfaces",
+          ].includes(networkIntent.type);
+          const toolCalls = usesIngestionSummary
+            ? [{ toolName: "ingestion_summary_store", parameters: { snapshot: "latest" } }]
+            : [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }];
           formattedAnswer = await formatResponseForBot(networkAnswer, {
             userQuery: userInput,
             intentType: "network_info",
-            toolCalls: [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }],
+            toolCalls,
             mode: responseMode,
           });
         } catch (error: any) {
@@ -2814,4 +2833,3 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
   return { text: "Max reasoning depth reached. Please try a simpler query." };
 }
-

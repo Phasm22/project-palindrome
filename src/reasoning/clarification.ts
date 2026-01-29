@@ -126,6 +126,8 @@ function normalizeCasualSpellings(input: string): string {
     .replace(/\bheres\b/gi, "here's");
 }
 
+import { IngestionSummaryStore } from "../pce/api/ingestion-summary-store";
+
 /**
  * Known Proxmox nodes (will be populated from ingested data)
  */
@@ -135,6 +137,17 @@ let knownNodes: string[] = ["proxBig", "YANG", "YIN"];
  * Known VMs/Containers (will be populated from ingested data)
  */
 let knownVMs: Array<{ name: string; vmid: number; node: string; type: "qemu" | "lxc" }> = [];
+
+let ingestionEntitiesLoaded = false;
+
+function parseVmId(vmId: string): { node?: string; vmid?: number } {
+  const match = vmId.match(/^compute-vm:([^:]+):(\d+)$/i);
+  if (!match) return {};
+  return {
+    node: match[1],
+    vmid: Number(match[2]),
+  };
+}
 
 /**
  * Action verbs and their meanings
@@ -557,6 +570,50 @@ export function updateKnownEntities(entities: {
 }
 
 /**
+ * Load known entities from latest ingestion summary snapshots.
+ */
+export async function loadKnownEntitiesFromIngestionSummary(): Promise<void> {
+  if (ingestionEntitiesLoaded) return;
+  let summaryStore: IngestionSummaryStore | null = null;
+  try {
+    summaryStore = new IngestionSummaryStore();
+    const summary = await summaryStore.getLatestSummary();
+    if (!summary?.snapshot?.length) {
+      ingestionEntitiesLoaded = true;
+      return;
+    }
+
+    const nodes: string[] = [];
+    const vms: Array<{ name: string; vmid: number; node: string; type: "qemu" | "lxc" }> = [];
+
+    for (const entry of summary.snapshot) {
+      if (!entry?.vmId || !entry?.vmName) continue;
+      const parsed = parseVmId(entry.vmId);
+      if (parsed.node) {
+        nodes.push(parsed.node);
+      }
+      if (parsed.vmid !== undefined && parsed.node) {
+        vms.push({
+          name: entry.vmName,
+          vmid: parsed.vmid,
+          node: parsed.node,
+          type: "qemu",
+        });
+      }
+    }
+
+    if (nodes.length || vms.length) {
+      updateKnownEntities({ nodes, vms });
+    }
+    ingestionEntitiesLoaded = true;
+  } catch (error: any) {
+    console.warn(`[clarification] Failed to load entities from ingestion summaries: ${error.message}`);
+  } finally {
+    summaryStore?.close();
+  }
+}
+
+/**
  * Get current known entities (for debugging)
  */
 export function getKnownEntities(): { nodes: string[]; vms: typeof knownVMs } {
@@ -633,4 +690,3 @@ export function isClarificationResponse(input: string): { isResponse: boolean; s
   
   return { isResponse: false };
 }
-

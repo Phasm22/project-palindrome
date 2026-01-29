@@ -1,6 +1,7 @@
 import type { BaseTool } from "../../tools/BaseTool";
 import type { ToolSession } from "../../agent/tool-policy";
 import { executeToolCall } from "../../agent/tool-executor";
+import { IngestionSummaryStore, type ExposureSnapshotEntry } from "../../pce/api/ingestion-summary-store";
 
 function formatInterfaceList(
   title: string,
@@ -29,6 +30,72 @@ function formatInterfaceList(
       iface.vmId ? `vm=${iface.vmId}` : null,
     ].filter(Boolean);
     lines.push(`- ${parts.join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+async function loadLatestExposureSnapshot(): Promise<{ createdAt?: Date; entries: ExposureSnapshotEntry[] }> {
+  const store = new IngestionSummaryStore();
+  try {
+    const summary = await store.getLatestSummary();
+    return {
+      createdAt: summary?.createdAt,
+      entries: summary?.snapshot ?? [],
+    };
+  } finally {
+    store.close();
+  }
+}
+
+function formatVmNetworks(vmName: string, entries: ExposureSnapshotEntry[], createdAt?: Date): string {
+  if (!entries.length) {
+    return `No network exposure data found for ${vmName}.`;
+  }
+  const lines = [`Networks for ${vmName}:`];
+  if (createdAt) {
+    lines.push(`Snapshot: ${createdAt.toISOString()}`);
+  }
+  for (const entry of entries) {
+    const parts = [
+      `subnet=${entry.subnet}`,
+      entry.allowedBy.length ? `allowedBy=${entry.allowedBy.length}` : null,
+      entry.blockedBy.length ? `blockedBy=${entry.blockedBy.length}` : null,
+    ].filter(Boolean);
+    lines.push(`- ${parts.join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
+function formatVmMatchesByIp(ip: string, entries: ExposureSnapshotEntry[], createdAt?: Date): string {
+  if (!entries.length) {
+    return `No VMs found with IP ${ip} in the latest ingestion snapshot.`;
+  }
+  const lines = [`VMs with IP ${ip}:`];
+  if (createdAt) {
+    lines.push(`Snapshot: ${createdAt.toISOString()}`);
+  }
+  for (const entry of entries) {
+    lines.push(`- ${entry.vmName} (${entry.vmId}) subnet=${entry.subnet}`);
+  }
+  return lines.join("\n");
+}
+
+function formatMultiNicVms(
+  entries: Array<{ vmName: string; vmId: string; subnets: string[] }>,
+  createdAt?: Date
+): string {
+  if (!entries.length) {
+    return "No multi-interface VMs found in the latest ingestion snapshot.";
+  }
+  const lines = ["VMs with multiple interfaces:"];
+  if (createdAt) {
+    lines.push(`Snapshot: ${createdAt.toISOString()}`);
+  }
+  for (const entry of entries) {
+    lines.push(`- ${entry.vmName} (${entry.vmId}) interfaces=${entry.subnets.length}`);
+    for (const subnet of entry.subnets) {
+      lines.push(`  - ${subnet}`);
+    }
   }
   return lines.join("\n");
 }
@@ -171,3 +238,64 @@ export async function vmReachabilityChain(
   return lines.join("\n");
 }
 
+export async function vmNetworksFromIngestionChain(vmNameOrId: string): Promise<string> {
+  const { createdAt, entries } = await loadLatestExposureSnapshot();
+  if (!entries.length) {
+    return "No ingestion exposure snapshots are available yet.";
+  }
+
+  const normalized = vmNameOrId.toLowerCase();
+  const matches = entries.filter((entry) =>
+    entry.vmId.toLowerCase() === normalized || entry.vmName.toLowerCase() === normalized
+  );
+
+  if (!matches.length) {
+    const partialMatches = entries.filter((entry) =>
+      entry.vmName.toLowerCase().includes(normalized)
+    );
+    if (partialMatches.length) {
+      return formatVmNetworks(vmNameOrId, partialMatches, createdAt);
+    }
+    return `No network exposure data found for ${vmNameOrId}.`;
+  }
+
+  return formatVmNetworks(vmNameOrId, matches, createdAt);
+}
+
+export async function vmByIpFromIngestionChain(ip: string): Promise<string> {
+  const { createdAt, entries } = await loadLatestExposureSnapshot();
+  if (!entries.length) {
+    return "No ingestion exposure snapshots are available yet.";
+  }
+
+  const matches = entries.filter((entry) => entry.subnet.startsWith(`${ip}/`) || entry.subnet === ip);
+  return formatVmMatchesByIp(ip, matches, createdAt);
+}
+
+export async function vmsWithMultipleInterfacesFromIngestionChain(): Promise<string> {
+  const { createdAt, entries } = await loadLatestExposureSnapshot();
+  if (!entries.length) {
+    return "No ingestion exposure snapshots are available yet.";
+  }
+
+  const byVm = new Map<string, { vmName: string; vmId: string; subnets: Set<string> }>();
+  for (const entry of entries) {
+    const existing = byVm.get(entry.vmId) ?? {
+      vmName: entry.vmName,
+      vmId: entry.vmId,
+      subnets: new Set<string>(),
+    };
+    existing.subnets.add(entry.subnet);
+    byVm.set(entry.vmId, existing);
+  }
+
+  const multiNic = Array.from(byVm.values())
+    .filter((vm) => vm.subnets.size > 1)
+    .map((vm) => ({
+      vmName: vm.vmName,
+      vmId: vm.vmId,
+      subnets: Array.from(vm.subnets.values()),
+    }));
+
+  return formatMultiNicVms(multiNic, createdAt);
+}

@@ -95,6 +95,14 @@ const INTENT_ARCHETYPES: Record<IntentType, string[]> = {
     "is container running",
     "is there",
     "does exist",
+    "what network is this vm on",
+    "which network is vm on",
+    "what networks does vm have",
+    "list vms with two nics",
+    "which vms have multiple interfaces",
+    "find vm by ip",
+    "which vm has ip",
+    "what gateway does vm use",
   ],
   ACTION: [
     "create a vm",
@@ -199,6 +207,9 @@ export function classifyIntent(userInput: string): IntentClassification {
     /^tell (me|us)\b/i,
     /^list\b/i,
     /^describe\b/i,
+    /^find\b/i,
+    /^do i have\b/i,
+    /^which vms?\b/i,
   ];
   
   // Check for strong query indicators first
@@ -214,8 +225,9 @@ export function classifyIntent(userInput: string): IntentClassification {
   };
   
   // Boost QUERY score if strong query indicators are present
-  if (hasQueryIndicator) {
-    scores.QUERY = 0.5; // Start with a base score for query indicators
+  const queryIndicatorBoost = hasQueryIndicator ? 0.5 : 0;
+  if (queryIndicatorBoost > 0) {
+    scores.QUERY = queryIndicatorBoost; // Start with a base score for query indicators
   }
   
   // Score against archetypes
@@ -225,7 +237,13 @@ export function classifyIntent(userInput: string): IntentClassification {
       const similarity = semanticSimilarity(normalized, archetype);
       maxScore = Math.max(maxScore, similarity);
     }
-    scores[intentType as IntentType] = maxScore;
+    const intentKey = intentType as IntentType;
+    scores[intentKey] = maxScore;
+  }
+
+  // Preserve query-indicator boost after archetype scoring
+  if (queryIndicatorBoost > 0) {
+    scores.QUERY = Math.max(scores.QUERY, queryIndicatorBoost);
   }
   
   // Find the highest scoring intent
@@ -308,6 +326,7 @@ export function classifyIntent(userInput: string): IntentClassification {
       list: /\b(list|show|which|what are)\b/i,
       describe: /\b(describe|tell me about|what is|explain)\b/i,
       metrics: /\b(metrics|usage|load|cpu|memory|ram|disk)\b/i,
+      network: /\b(network|interface|nic|gateway|ip|subnet|vlan)\b/i,
     };
     
     for (const [queryType, pattern] of Object.entries(queryPatterns)) {
@@ -519,4 +538,3 @@ function determineMissing(intent: IntentType, entities: IntentEntities, metadata
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-
