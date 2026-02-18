@@ -1,6 +1,7 @@
 import neo4j from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 import { ProxmoxClient } from "../../tools/proxmox/client";
+import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { pceLogger as logger } from "../../pce/utils/logger";
 
 type VmKind = "qemu" | "lxc" | null;
@@ -765,107 +766,46 @@ export class TwinQueryService {
   private async verifyVmsAgainstProxmox(
     neo4jVms: ClusterVmSummary[]
   ): Promise<ClusterVmSummary[]> {
-    // Get Proxmox client configuration
-    // Use same approach as ProxmoxReadOnlyBase.getApiConfig()
-    const proxmoxUrl = process.env.PROXMOX_URL;
-    const tokenId = process.env.PROXMOX_TOKEN_ID;
-    let tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
-    
-    // Try to find node-specific token secret based on URL hostname (like readonly tool does)
-    if (proxmoxUrl && tokenSecret) {
-      try {
-        const urlObj = new URL(proxmoxUrl);
-        const hostname = urlObj.hostname.toLowerCase();
-        const nodeName = hostname.split('.')[0].toUpperCase();
-        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
-        if (nodeSpecificSecret) {
-          tokenSecret = nodeSpecificSecret;
-        }
-      } catch {
-        // If URL parsing fails, use default
-      }
-    }
-
-    if (!proxmoxUrl || !tokenId || !tokenSecret) {
+    const configs = getProxmoxEndpointConfigs();
+    if (configs.length === 0) {
       logger.warn("Proxmox credentials not configured, skipping verification", {
-        hasUrl: !!proxmoxUrl,
-        hasTokenId: !!tokenId,
-        hasTokenSecret: !!tokenSecret,
+        hint: "Set cluster (PROXMOX_*/CLUSTER_TF_*) and/or proxbig (PROXBIG_*) env",
       });
-      return neo4jVms; // Return Neo4j results if we can't verify
+      return neo4jVms;
     }
 
     try {
-      // Build list of all Proxmox clusters to check (primary + alternatives)
-      const clustersToCheck = [
-        { url: proxmoxUrl, label: "primary" }
-      ];
-      
-      // Add alternative cluster endpoints with node-specific tokens
-      const alternativeEndpoints = [
-        { 
-          url: "https://yin.prox:8006", 
-          label: "yin",
-          tokenId: process.env.YIN_TOKEN_ID || tokenId,
-          tokenSecret: process.env.YIN_TOKEN_SECRET || tokenSecret,
-        },
-        { 
-          url: "https://yang.prox:8006", 
-          label: "yang",
-          tokenId: process.env.YANG_TOKEN_ID || tokenId,
-          tokenSecret: process.env.YANG_TOKEN_SECRET || tokenSecret,
-        },
-        { 
-          url: "https://proxbig.prox:8006", 
-          label: "proxbig",
-          tokenId: process.env.PROXBIG_TOKEN_ID || tokenId,
-          tokenSecret: process.env.PROXBIG_TOKEN_SECRET || tokenSecret,
-        },
-      ];
-      
-      for (const alt of alternativeEndpoints) {
-        if (alt.url !== proxmoxUrl && alt.tokenId && alt.tokenSecret) {
-          clustersToCheck.push(alt);
-        }
-      }
-
-      // Collect VMs from all clusters
-      const allProxmoxVms: any[] = [];
-      
-      for (const cluster of clustersToCheck) {
+      const allProxmoxVms: Array<{ vmid: number; node?: string; type?: string; name?: string }> = [];
+      for (const c of configs) {
         try {
           const client = new ProxmoxClient({
-            url: cluster.url,
-            tokenId: (cluster as any).tokenId || tokenId,
-            tokenSecret: (cluster as any).tokenSecret || tokenSecret,
-            verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+            url: c.url,
+            tokenId: c.tokenId,
+            tokenSecret: c.tokenSecret,
+            verifySsl: c.verifySsl,
           });
-
           const resourcesResult = await client.get("/cluster/resources");
-          const proxmoxResources = resourcesResult.data?.data || [];
-          const vmsInCluster = proxmoxResources.filter((r: any) => r.type === "qemu" || r.type === "lxc");
-          
-          logger.debug(`Proxmox cluster resources from ${cluster.label}`, {
-            clusterUrl: cluster.url,
-            totalResources: proxmoxResources.length,
+          const resources = resourcesResult.data?.data || [];
+          const vmsInCluster = resources.filter((r: { type?: string }) => r.type === "qemu" || r.type === "lxc");
+          logger.debug(`Proxmox resources from ${c.label}`, {
+            url: c.url,
+            totalResources: resources.length,
             vmResources: vmsInCluster.length,
           });
-          
           allProxmoxVms.push(...vmsInCluster);
-        } catch (error: any) {
-          // Cluster unreachable or authentication failed - log but continue with other clusters
-          logger.debug(`Failed to query Proxmox cluster ${cluster.label}`, {
-            url: cluster.url,
-            error: error.message,
+        } catch (err: unknown) {
+          logger.debug(`Failed to query Proxmox ${c.label}`, {
+            url: c.url,
+            error: err instanceof Error ? err.message : String(err),
           });
         }
       }
-      
+
       const proxmoxVms = allProxmoxVms;
-      logger.debug("Combined Proxmox VM resources from all clusters", {
+      logger.debug("Combined Proxmox VM resources from all endpoints", {
         totalVms: proxmoxVms.length,
-        clustersChecked: clustersToCheck.length,
-        sampleVmids: proxmoxVms.slice(0, 10).map((r: any) => ({ vmid: r.vmid, node: r.node, name: r.name })),
+        endpointsChecked: configs.length,
+        sampleVmids: proxmoxVms.slice(0, 10).map((r) => ({ vmid: r.vmid, node: r.node, name: r.name })),
       });
 
       // Extract VMID from Neo4j VM IDs (format: "compute-vm:node:vmid")
@@ -886,26 +826,24 @@ export class TwinQueryService {
 
         // Check if VM exists in Proxmox
         // First, find all resources with matching VMID (only check VMs/containers)
-        const matchingResources = proxmoxVms.filter((r: any) => r.vmid === vmid);
+        const matchingResources = proxmoxVms.filter((r) => r.vmid === vmid);
         
         if (matchingResources.length === 0) {
-          // VMID doesn't exist in Proxmox at all
           staleVmIds.push(neo4jVm.id);
           logger.debug("VM not found in Proxmox (stale Neo4j entry)", {
             id: neo4jVm.id,
             name: neo4jVm.name,
             vmid,
             nodeName: neo4jVm.nodeName,
-            availableVmids: proxmoxResources
-              .filter((r: any) => r.type === "qemu" || r.type === "lxc")
-              .map((r: any) => ({ vmid: r.vmid, node: r.node, type: r.type }))
-              .slice(0, 10), // Show first 10 for debugging
+            availableVmids: proxmoxVms
+              .filter((r) => r.type === "qemu" || r.type === "lxc")
+              .map((r) => ({ vmid: r.vmid, node: r.node, type: r.type }))
+              .slice(0, 10),
           });
           continue;
         }
         
-        // Check if any matching resource matches type and node
-        const vmExists = matchingResources.some((r: any) => {
+        const vmExists = matchingResources.some((r) => {
           const matchesType = !neo4jVm.vmKind || r.type === neo4jVm.vmKind;
           // Node matching: be flexible - allow case-insensitive match and handle undefined nodeName
           const matchesNode = !neo4jVm.nodeName || 
@@ -918,13 +856,12 @@ export class TwinQueryService {
           // VM exists with matching node/type
           verifiedVms.push(neo4jVm);
         } else if (matchingResources.length > 0) {
-          // VMID exists but node/type doesn't match - still include it as VMID match is primary
           logger.debug("VM found in Proxmox but node/type mismatch, including anyway", {
             vmid,
             neo4jNode: neo4jVm.nodeName,
-            proxmoxNodes: matchingResources.map((r: any) => r.node),
+            proxmoxNodes: matchingResources.map((r) => r.node),
             neo4jType: neo4jVm.vmKind,
-            proxmoxTypes: matchingResources.map((r: any) => r.type),
+            proxmoxTypes: matchingResources.map((r) => r.type),
           });
           verifiedVms.push(neo4jVm);
         }
@@ -950,12 +887,11 @@ export class TwinQueryService {
       });
 
       return deduplicatedVerifiedVms;
-    } catch (error: any) {
+    } catch (err: unknown) {
       logger.error("Error verifying VMs against Proxmox", {
-        error: error.message,
+        error: err instanceof Error ? err.message : String(err),
         vmCount: neo4jVms.length,
       });
-      // Return Neo4j results if verification fails
       return neo4jVms;
     }
   }
@@ -965,29 +901,10 @@ export class TwinQueryService {
    * Returns count of deleted VMs
    */
   async cleanStaleVms(): Promise<{ deleted: number; errors: number }> {
-    // Use same approach as ProxmoxReadOnlyBase.getApiConfig()
-    const proxmoxUrl = process.env.PROXMOX_URL;
-    const tokenId = process.env.PROXMOX_TOKEN_ID;
-    let tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
-    
-    // Try to find node-specific token secret based on URL hostname (like readonly tool does)
-    if (proxmoxUrl && tokenSecret) {
-      try {
-        const urlObj = new URL(proxmoxUrl);
-        const hostname = urlObj.hostname.toLowerCase();
-        const nodeName = hostname.split('.')[0].toUpperCase();
-        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
-        if (nodeSpecificSecret) {
-          tokenSecret = nodeSpecificSecret;
-        }
-      } catch {
-        // If URL parsing fails, use default
-      }
-    }
-
-    if (!proxmoxUrl || !tokenId || !tokenSecret) {
+    const configs = getProxmoxEndpointConfigs();
+    if (configs.length === 0) {
       throw new Error(
-        "Proxmox credentials not configured. Set PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET (or NODE_TOKEN_SECRET for node-specific secret)"
+        "Proxmox credentials not configured. Set cluster (PROXMOX_*/CLUSTER_TF_*) and/or proxbig (PROXBIG_*) env."
       );
     }
 
@@ -995,7 +912,6 @@ export class TwinQueryService {
     let errors = 0;
 
     try {
-      // Get all VMs from Neo4j
       const allVmsResult = await this.runQuery(
         `
           MATCH (vm:TwinEntity {type: $vmType})
@@ -1023,16 +939,25 @@ export class TwinQueryService {
         return { deleted: 0, errors: 0 };
       }
 
-      // Get all VMs from Proxmox
-      const client = new ProxmoxClient({
-        url: proxmoxUrl,
-        tokenId,
-        tokenSecret,
-        verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
-      });
-
-      const resourcesResult = await client.get("/cluster/resources");
-      const proxmoxResources = resourcesResult.data?.data || [];
+      const proxmoxResources: Array<{ vmid?: number; node?: string; type?: string }> = [];
+      for (const c of configs) {
+        try {
+          const client = new ProxmoxClient({
+            url: c.url,
+            tokenId: c.tokenId,
+            tokenSecret: c.tokenSecret,
+            verifySsl: c.verifySsl,
+          });
+          const resourcesResult = await client.get("/cluster/resources");
+          const data = resourcesResult.data?.data || [];
+          proxmoxResources.push(...data);
+        } catch (err: unknown) {
+          logger.warn(`Failed to fetch Proxmox resources from ${c.label}`, {
+            url: c.url,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
 
       // Find stale VMs
       const staleVmIds: string[] = [];
@@ -1045,7 +970,7 @@ export class TwinQueryService {
           continue; // Skip if we can't parse VMID
         }
 
-        const vmExists = proxmoxResources.some((r: any) => {
+        const vmExists = proxmoxResources.some((r) => {
           const matchesVmid = r.vmid === vmid;
           const matchesType = !neo4jVm.vmKind || r.type === neo4jVm.vmKind;
           const matchesNode = !neo4jVm.nodeName || 
@@ -1130,6 +1055,45 @@ export class TwinQueryService {
       destination: record.get("destination") ?? undefined,
       chain: record.get("chain") ?? undefined,
     }));
+  }
+
+  /**
+   * List firewall alias definitions (name -> entries/cidrs) for use in agent responses.
+   */
+  async listFirewallAliases(): Promise<Array<{ name: string; type?: string; entries: string[]; cidrs: string[] }>> {
+    const result = await this.runQuery(
+      `
+        MATCH (a:TwinEntity {type: $aliasType})
+        RETURN a.id AS id,
+               coalesce(a.displayName, a.aliasName) AS name,
+               a.aliasType AS type,
+               a.dataJson AS dataJson
+        ORDER BY name
+      `,
+      { aliasType: "firewall_alias" }
+    );
+
+    return result.records.map((record) => {
+      const name = (record.get("name") as string) ?? (record.get("id") as string)?.replace(/^firewall-alias:/i, "") ?? "unknown";
+      let entries: string[] = [];
+      let cidrs: string[] = [];
+      try {
+        const dataJson = record.get("dataJson");
+        const data = typeof dataJson === "string" ? JSON.parse(dataJson) : dataJson;
+        if (data && typeof data === "object") {
+          entries = Array.isArray(data.entries) ? data.entries : [];
+          cidrs = Array.isArray(data.cidrs) ? data.cidrs : [];
+        }
+      } catch {
+        // ignore
+      }
+      return {
+        name,
+        type: record.get("type") as string | undefined,
+        entries,
+        cidrs,
+      };
+    });
   }
 
   /**

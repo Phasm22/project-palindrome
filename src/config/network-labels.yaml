@@ -1,0 +1,6 @@
+# Authoritative network labels: CIDR -> human-readable name.
+# Used in agent answers for interfaces and VM networking (e.g. "net0: HomeNet (192.168.68.0/22) — IP 192.168.68.87").
+# Add or edit entries as needed; CIDRs are matched by containment (IP in CIDR).
+---
+"192.168.68.0/22": HomeNet
+"172.16.0.0/22": LabNet

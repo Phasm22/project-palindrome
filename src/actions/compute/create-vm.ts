@@ -8,6 +8,7 @@ import { checkTerraformEnv } from "../helpers/env-validator";
 import { getNextAvailablePalindromeName, getRandomPalindromeName } from "../helpers/palindrome-names";
 import { allocateVmId } from "../helpers/vm-id-allocator";
 import { ProxmoxClient } from "../../tools/proxmox/client";
+import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { emitToolProgress } from "../../agent/event-bus";
 
 /**
@@ -62,9 +63,9 @@ function getProxmoxClientConfig(node: string): { url: string; tokenId: string; t
   let tokenSecret: string | undefined;
   
   if (nodeLower === "yin" || nodeLower === "yang") {
-    url = nodeLower === "yin"
+    url = (nodeLower === "yin"
       ? process.env.PROXMOX_YIN_URL || process.env.PROXMOX_URL || DEFAULT_NODE_URLS.yin
-      : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL || DEFAULT_NODE_URLS.yang;
+      : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL || DEFAULT_NODE_URLS.yang) as string;
     // Prefer node-specific TF token if provided; fall back to cluster token
     tokenId = nodeLower === "yin"
       ? process.env.PROXMOX_YIN_TF_TOKEN_ID || process.env.CLUSTER_TF_TOKEN_ID
@@ -150,20 +151,57 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     };
   }
 
-  // 1. Twin-grounded validation
+  // 1. Twin-grounded validation (with live fallback when twin is stale)
   const twinQuery = new TwinQueryService();
-  
+  let nodeExists = false;
+  let liveFallbackUsed = false;
+
   try {
-    // Check if node exists
     const clusterInfo = await twinQuery.describeCluster();
-    const nodeExists = clusterInfo.nodes.some((n) => 
+    nodeExists = clusterInfo.nodes.some((n) =>
       n.name.toLowerCase() === normalizedNode.toLowerCase()
     );
 
     if (!nodeExists) {
+      // Twin may be stale (e.g. ingestion only had one endpoint). Verify against live Proxmox.
+      const configs = getProxmoxEndpointConfigs();
+      const targetLower = normalizedNode.toLowerCase();
+      for (const cfg of configs) {
+        try {
+          const client = new ProxmoxClient({
+            url: cfg.url,
+            tokenId: cfg.tokenId,
+            tokenSecret: cfg.tokenSecret,
+            verifySsl: cfg.verifySsl,
+          });
+          const res = await client.get("/nodes");
+          const nodes: unknown[] = Array.isArray(res?.data?.data) ? res.data.data : [];
+          const found = nodes.some((n: unknown) => {
+            const o = n as { node?: string };
+            return o?.node && o.node.toLowerCase() === targetLower;
+          });
+          if (found) {
+            nodeExists = true;
+            liveFallbackUsed = true;
+            logger.info("Node found on live Proxmox (twin missing this node)", {
+              node: normalizedNode,
+              endpoint: cfg.label ?? cfg.url,
+            });
+            break;
+          }
+        } catch (err: unknown) {
+          logger.debug("Live node check failed for endpoint", {
+            endpoint: cfg.label ?? cfg.url,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    if (!nodeExists) {
       return {
         success: false,
-        message: `Node "${normalizedNode}" not found in twin. Available nodes: ${clusterInfo.nodes.map(n => n.name).join(", ")}`,
+        message: `Node "${normalizedNode}" not found in twin or live Proxmox. Available nodes (twin): ${clusterInfo.nodes.map(n => n.name).join(", ")}. Run ingestion to sync the twin, or check PROXMOX_* / PROXBIG_* env.`,
       };
     }
 
@@ -251,14 +289,14 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       });
     } else {
       logger.warn("Could not allocate VM ID, Terraform will auto-assign", { 
-        preferredId,
+        preferredVmId,
         range: "9000-9999"
       });
     }
   } catch (error: any) {
     logger.warn("Failed to allocate VM ID, Terraform will auto-assign", { 
       error: error.message,
-      preferredId
+      preferredVmId
     });
     // Continue without allocated ID - Terraform will auto-assign
   }

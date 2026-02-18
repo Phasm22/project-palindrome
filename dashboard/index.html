@@ -16,42 +16,57 @@
   </script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen" style="margin: 0; padding: 0;">
-  
-  <div class="mx-auto max-w-7xl px-4 md:px-6 py-3 md:py-6 flex flex-col">
+
+  <!-- Global sticky header: logo + nav (desktop only) -->
+  <header id="app-header" class="hidden md:block sticky top-0 nav-glass border-b-4 border-slate-600" style="z-index: var(--z-sticky);">
+    <div class="mx-auto max-w-7xl px-4 md:px-6 flex items-center gap-3">
+      <!-- Logo -->
+      <div class="flex items-center gap-2.5 py-2.5 flex-shrink-0">
+        <img src="assets/images/logo.png" alt="Palindrome Logo"
+             class="w-8 h-8 object-contain"
+             style="filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);"
+             onerror="this.style.display='none';">
+        <span class="text-sm font-semibold hidden lg:block" style="background: linear-gradient(135deg, #f97316 0%, #fb923c 60%, #e2e8f0 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Palindrome</span>
+      </div>
+      <!-- Divider -->
+      <div class="w-px h-5 bg-slate-700 flex-shrink-0 self-center"></div>
+      <!-- Nav tabs -->
+      <div class="flex gap-2 overflow-x-auto flex-1" role="tablist" aria-label="Dashboard tabs">
+        <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
+          <span class="relative z-10">Chat</span>
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+        </button>
+        <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
+          <span class="relative z-10">Overview</span>
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+        </button>
+        <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
+          <span class="relative z-10">Tool Executions</span>
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+        </button>
+        <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
+          <span class="relative z-10">Reasoning Traces</span>
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+        </button>
+        <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
+          <span class="relative z-10">Ontology Graph</span>
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+        </button>
+        <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
+          <span class="relative z-10">RAG Diagnostics</span>
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+        </button>
+        <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
+          <span class="relative z-10">Query</span>
+          <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="mx-auto max-w-7xl px-4 md:px-6 py-3 flex flex-col">
     <!-- Mobile: Dropdown menu for tabs -->
     <div class="md:hidden mb-2" id="mobile-tab-dropdown-container"></div>
-
-    <!-- Desktop: Navigation Bar (non-sticky for non-chat tabs) -->
-    <div id="desktop-nav-shared" class="hidden md:flex gap-2 border-b-4 border-slate-600 overflow-x-auto nav-glass" style="margin: 0 -1.5rem; padding: 0 1.5rem; padding-top: 0.75rem; padding-bottom: 0.75rem;" role="tablist" aria-label="Dashboard tabs">
-      <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
-        <span class="relative z-10">Chat</span>
-        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-      </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
-        <span class="relative z-10">Overview</span>
-        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-      </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
-        <span class="relative z-10">Tool Executions</span>
-        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-      </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
-        <span class="relative z-10">Reasoning Traces</span>
-        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-      </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
-        <span class="relative z-10">Ontology Graph</span>
-        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-      </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
-        <span class="relative z-10">RAG Diagnostics</span>
-        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-      </button>
-      <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
-        <span class="relative z-10">Query</span>
-        <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-      </button>
-    </div>
 
     <!-- Desktop: Right-side floating nav for Overview tab - starts hidden, JS shows it -->
     <div class="hidden fixed right-4 top-1/2 -translate-y-1/2 flex-col gap-3" id="overview-nav" style="z-index: var(--z-sticky);">
@@ -245,63 +260,9 @@
 
     <!-- Chat Tab -->
     <!-- Chat Tab - iOS-style on mobile (no card), card on desktop -->
-    <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col relative" role="tabpanel" aria-labelledby="chat-tab" aria-hidden="false" style="height: calc(100vh - 200px); width: 100vw; max-width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw); margin-bottom: -1.5rem;">
+    <div id="chat" class="tab-content flex-1 min-h-0 flex flex-col relative" role="tabpanel" aria-labelledby="chat-tab" aria-hidden="false" style="height: calc(100dvh - var(--app-header-height, 0px) - 0.75rem); width: 100vw; max-width: 100vw; margin-left: calc(50% - 50vw); margin-right: calc(50% - 50vw);">
       <div class="chat-shell">
-        <!-- Desktop: Sticky Navigation Bar (only in chat tab) -->
-        <div id="chat-nav-sticky" class="hidden md:block chat-nav-wrapper nav-glass">
-          <div class="chat-chrome-centered">
-            <div class="flex items-center justify-between gap-4 py-3 border-b-4 border-slate-600">
-              <div class="flex-1 min-w-0">
-                <div class="flex gap-2 overflow-x-auto" role="tablist" aria-label="Dashboard tabs">
-                  <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
-                    <span class="relative z-10">Chat</span>
-                    <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-                  </button>
-                  <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('overview', this)" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">
-                    <span class="relative z-10">Overview</span>
-                    <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-                  </button>
-                  <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('executions', this)" role="tab" aria-selected="false" aria-controls="executions" tabindex="-1">
-                    <span class="relative z-10">Tool Executions</span>
-                    <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-                  </button>
-                  <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('reasoning', this)" role="tab" aria-selected="false" aria-controls="reasoning" tabindex="-1">
-                    <span class="relative z-10">Reasoning Traces</span>
-                    <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-                  </button>
-                  <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('graph', this)" role="tab" aria-selected="false" aria-controls="graph" tabindex="-1">
-                    <span class="relative z-10">Ontology Graph</span>
-                    <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-                  </button>
-                  <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('rag', this)" role="tab" aria-selected="false" aria-controls="rag" tabindex="-1">
-                    <span class="relative z-10">RAG Diagnostics</span>
-                    <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-                  </button>
-                  <button class="tab px-5 py-3 cursor-pointer text-slate-400 border-b-2 border-transparent hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-medium relative group" onclick="window.switchTab('query', this)" role="tab" aria-selected="false" aria-controls="query" tabindex="-1">
-                    <span class="relative z-10">Query</span>
-                    <span class="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-primary-500 to-primary-600 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-200"></span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div class="chat-scroll">
-          <!-- Banner - scrolls with chat content -->
-          <div class="chat-banner-wrapper">
-            <div class="chat-banner-left">
-              <h1 class="text-xl md:text-3xl lg:text-4xl font-title-bold flex items-start gap-3 animate-slide-up text-left">
-                <img id="header-logo-chat" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-20 md:h-20 lg:w-24 lg:h-24 object-contain drop-shadow-lg drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback-chat').style.display='block';">
-                <span id="header-icon-fallback-chat" class="text-primary-500 w-6 h-6 md:w-10 md:h-10 drop-shadow-lg drop-shadow-glow-orange hidden"></span>
-                <span class="flex flex-col leading-tight text-gradient-shimmer">
-                  <span class="block">Palindrome</span>
-                  <span class="block">dashboard</span>
-                </span>
-              </h1>
-            </div>
-          </div>
-
           <div class="chat-main">
             <!-- Conversation panel (left) -->
             <aside class="chat-sidebar">
@@ -358,8 +319,21 @@
               <div class="hidden md:block chat-desktop-wrapper" style="height: 100%;">
                 <!-- Desktop Chat Area - Centered with flex parent -->
                 <div class="flex flex-col min-w-0 relative chat-desktop-container" style="height: 100%; overflow: hidden; max-width: 896px; width: 100%; min-width: 0; margin-left: auto; margin-right: auto; box-sizing: border-box;">
+                  <!-- Brand header - inside the centered message column -->
+                  <div class="chat-banner-wrapper">
+                    <div class="chat-banner-left">
+                      <h1 class="text-base md:text-lg font-title-bold flex items-center gap-3 animate-slide-up text-left">
+                        <img id="header-logo-chat" src="assets/images/logo.png" alt="Palindrome Logo" class="w-8 h-8 md:w-10 md:h-10 lg:w-12 lg:h-12 object-contain drop-shadow-glow-orange" style="filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);" onerror="this.style.display='none'; document.getElementById('header-icon-fallback-chat').style.display='block';">
+                        <span id="header-icon-fallback-chat" class="text-primary-500 w-6 h-6 md:w-8 md:h-8 drop-shadow-glow-orange hidden"></span>
+                        <span class="flex flex-col leading-tight text-gradient-shimmer">
+                          <span class="block">Palindrome</span>
+                          <span class="block">dashboard</span>
+                        </span>
+                      </h1>
+                    </div>
+                  </div>
                   <!-- Chat messages container -->
-                  <div class="flex-1 flex flex-col min-w-0 w-full chat-messages-wrapper" style="height: 100%; overflow: hidden; padding-left: var(--thread-content-margin); padding-right: var(--thread-content-margin); box-sizing: border-box;">
+                  <div class="flex-1 flex flex-col min-w-0 w-full chat-messages-wrapper" style="overflow: hidden; padding-left: var(--thread-content-margin); padding-right: var(--thread-content-margin); box-sizing: border-box;">
                     <div class="chat-messages-fade"></div>
                     <!-- Chat messages - scrollable area above fixed input -->
                     <div id="chat-messages-desktop" class="flex-1 overflow-y-auto py-6 min-h-0" style="padding-bottom: 140px; width: 100%; box-sizing: border-box;">

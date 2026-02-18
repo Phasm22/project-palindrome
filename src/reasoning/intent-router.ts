@@ -370,15 +370,57 @@ function routeQueryIntent(
 }
 
 /**
+ * Detect clear informational questions that should not trigger disambiguation.
+ * When the user is obviously asking to observe/explain (not act), route to QUERY
+ * instead of asking "observe, diagnose, change, or explain?".
+ */
+function isClearInformationalQuery(userInput: string): boolean {
+  const n = userInput.trim().toLowerCase();
+  if (n.length < 4) return false;
+  const patterns = [
+    /\b(want to see|want to know|want to check|want to find out)\b/,
+    /\bwhat (ip|network|address)\b/,
+    /\bwhich (ip|network)\b/,
+    /\bare there (any)?\s+/,
+    /\b(is|are) there (any)?\s+/,
+    /\b(show|tell|list|describe)\s+(me\s+)?(the\s+)?/,
+    /\b(what|how)\s+(is|are|does|do)\s+/,
+    /\b(which|what)\s+(vm|container|node|firewall|rule|network)\s+/,
+  ];
+  return patterns.some((p) => p.test(n));
+}
+
+/**
  * Main entry point: classify and route user input
  */
 export function classifyAndRoute(userInput: string): {
   classification: IntentClassification;
   routing: RoutingDecision;
 } {
-  const classification = classifyIntent(userInput);
-  const routing = routeIntent(userInput, classification);
-  
+  let classification = classifyIntent(userInput);
+  let routing = routeIntent(userInput, classification);
+
+  // Bypass clarification for clear informational questions so we don't ask
+  // "observe, diagnose, change, or explain?" when the user is obviously querying.
+  if (routing.route === "clarification" && isClearInformationalQuery(userInput)) {
+    const queryClassification: IntentClassification = {
+      ...classification,
+      type: "QUERY",
+      intent: "QUERY",
+      confidence: 0.5,
+      missing: [],
+      metadata: classification.metadata ?? {},
+    };
+    if (!queryClassification.metadata.domain) {
+      const n = userInput.toLowerCase();
+      if (/\b(ip|network|interface|subnet|vlan|gateway)\b/.test(n)) queryClassification.metadata.domain = "network";
+      else if (/\b(firewall|rule|allow|block|port)\b/.test(n)) queryClassification.metadata.domain = "firewall";
+      else if (/\b(vm|container|node|host)\b/.test(n)) queryClassification.metadata.domain = "compute";
+    }
+    routing = routeIntent(userInput, queryClassification);
+    classification = queryClassification;
+  }
+
   return {
     classification,
     routing,

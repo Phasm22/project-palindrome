@@ -229,29 +229,6 @@ function updateTabUI(tabName, clickedElement = null) {
     }
   }
   
-  // Show/hide nav bars based on active tab (desktop only)
-  const sharedNav = document.getElementById('desktop-nav-shared');
-  const chatNav = document.getElementById('chat-nav-sticky');
-  if (window.innerWidth >= 768) {
-    if (tabName === 'chat') {
-      // Hide shared nav, show chat-specific sticky nav
-      if (sharedNav) {
-        sharedNav.style.display = 'none';
-      }
-      if (chatNav) {
-        chatNav.style.display = 'block';
-      }
-    } else {
-      // Show shared nav, hide chat-specific nav
-      if (sharedNav) {
-        sharedNav.style.display = 'flex';
-      }
-      if (chatNav) {
-        chatNav.style.display = 'none';
-      }
-    }
-  }
-
   // Update nav height after visibility changes
   updateChatNavOffset();
   
@@ -259,11 +236,10 @@ function updateTabUI(tabName, clickedElement = null) {
   updateDropdown(tabName);
 }
 
-// Keep sticky offsets synced with chat nav height
+// Keep sticky offsets synced with app header height
 function updateChatNavOffset() {
-  const nav = document.getElementById('chat-nav-sticky');
-  if (!nav) return;
-  const height = Math.round(nav.getBoundingClientRect().height);
+  const header = document.getElementById('app-header');
+  const height = header ? Math.round(header.getBoundingClientRect().height) : 0;
   document.documentElement.style.setProperty('--chat-nav-height', `${height}px`);
 }
 
@@ -326,19 +302,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   const currentTab = getActiveTabFromURL();
   createCustomDropdown('mobile-tab-dropdown-container', currentTab);
   
-  // Set initial nav state based on current route
-  if (window.innerWidth >= 768) {
-    const sharedNav = document.getElementById('desktop-nav-shared');
-    const chatNav = document.getElementById('chat-nav-sticky');
-    const activeTab = getActiveTabFromURL();
-    if (activeTab === 'chat') {
-      if (sharedNav) sharedNav.style.display = 'none';
-      if (chatNav) chatNav.style.display = 'block';
-    } else {
-      if (sharedNav) sharedNav.style.display = 'flex';
-      if (chatNav) chatNav.style.display = 'none';
-    }
-  }
+  // Sync initial nav height offset
+  updateChatNavOffset();
   
   // Ensure URL matches current tab (in case page loaded without hash/route)
   const currentRoute = window.location.pathname;

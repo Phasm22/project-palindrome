@@ -70,6 +70,17 @@ PROXMOX_URL=https://yin.prox:8006/api2/json PROXMOX_CLUSTER_TF_SECRET=<yin-secre
 PROXMOX_URL=https://YANG.prox:8006/api2/json PROXMOX_CLUSTER_TF_SECRET=<yang-secret> bash scripts/test-terraform-token.sh
 ```
 
+## Troubleshooting: API process
+
+The PCE API (`bun run pce:api`) loads `.env` at startup and uses `getProxmoxEndpointConfigs()` for list_nodes, ingestion, and create_vm. If only proxBig appears (yin/YANG missing):
+
+1. **Restart the API** after changing `.env` (env is read at process start).
+2. **Check startup logs** – you should see either:
+   - `Proxmox endpoints configured { count: 2, labels: ['cluster', 'proxbig'] }` (cluster + proxbig), or
+   - `Only proxBig endpoint is configured. To see cluster nodes (yin/YANG), set PROXMOX_URL, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET (or CLUSTER_TF_*) in .env and restart.`
+3. **Check `/health`** – response includes `proxmoxEndpoints: { count, labels }` (no secrets). If `count === 1` and `labels === ['proxbig']`, cluster env is not set for this process.
+4. **Ensure cluster vars** – for cluster (yin/YANG) the API needs at least: `PROXMOX_URL` (or `PROXMOX_YIN_URL`), `PROXMOX_TOKEN_ID` (or `CLUSTER_TF_TOKEN_ID`), and `PROXMOX_TOKEN_SECRET` (or `PROXMOX_CLUSTER_TF_SECRET`). Same `.env` used by `bun run pce:api` must contain these.
+
 ## Notes
 
 - **Token ID is the same**: `llm@pve!llm-agent` works on all nodes

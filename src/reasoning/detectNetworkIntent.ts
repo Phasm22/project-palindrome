@@ -8,6 +8,7 @@ export type NetworkIntent =
   | { type: "vm_reachability"; vmId: string }
   | { type: "vm_networks"; vmNameOrId: string }
   | { type: "vm_by_ip"; ip: string }
+  | { type: "vm_ip_by_name"; vmNameOrId: string }
   | { type: "vms_with_multiple_interfaces" };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
@@ -75,6 +76,13 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
     const ipMatch = userInput.match(IP_REGEX);
     if (ipMatch) {
       return { type: "vm_by_ip", ip: ipMatch[0] };
+    }
+    // "what is the IP of sentinelZero" / "IP of X" – resolve VM by name then get IP
+    const ipOfMatch = userInput.match(/(?:what is the )?ip (?:address )?of\s+([a-z0-9\-_]+)/i)
+      || userInput.match(/(?:ip|address)\s+of\s+([a-z0-9\-_]+)/i);
+    const vmForIp = ipOfMatch?.[1] ?? (vmNameOrId || extractKnownVmName(userInput));
+    if (vmForIp) {
+      return { type: "vm_ip_by_name", vmNameOrId: vmForIp };
     }
   }
 

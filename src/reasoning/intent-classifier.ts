@@ -103,6 +103,19 @@ const INTENT_ARCHETYPES: Record<IntentType, string[]> = {
     "find vm by ip",
     "which vm has ip",
     "what gateway does vm use",
+    "i want to see",
+    "i want to know",
+    "i want to know about",
+    "i want to check",
+    "what ip is",
+    "what ip does",
+    "what ip has",
+    "which ip is",
+    "are there any",
+    "are there firewall",
+    "are there rules",
+    "tell me about my lab",
+    "what about my lab",
   ],
   ACTION: [
     "create a vm",
@@ -197,6 +210,7 @@ export function classifyIntent(userInput: string): IntentClassification {
   // These patterns strongly suggest QUERY, not ACTION
   const queryIndicators = [
     /^is there\b/i,
+    /^are there\b/i,
     /^does .* exist\b/i,
     /^does .* have\b/i,
     /^is .* (called|named)\b/i,
@@ -210,6 +224,9 @@ export function classifyIntent(userInput: string): IntentClassification {
     /^find\b/i,
     /^do i have\b/i,
     /^which vms?\b/i,
+    /^i want to (see|know|check|find out)\b/i,
+    /\bwhat (ip|network)\b/i,
+    /\bwhich (ip|network)\b/i,
   ];
   
   // Check for strong query indicators first

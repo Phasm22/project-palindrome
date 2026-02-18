@@ -4,6 +4,7 @@ import type { ToolSchema } from "./tool-schema";
 import { createToolSchema } from "./tool-helpers";
 import type { ExecutionContext, ExecutionResult } from "../types/execution";
 import { TwinQueryService } from "../twin";
+import { formatInterfaceLine } from "../config/network-labels";
 
 const TwinQueryParams = z.object({
   operation: z.enum([
@@ -262,11 +263,16 @@ export class TwinQueryTool extends BaseTool {
         }
         case "network_list_interfaces": {
           const data = await this.service.listInterfaces();
-          // Format interfaces to highlight primaryIp field for IP address queries
-          const formattedData = data.map((iface: any) => ({
+          const ip = (iface: { primaryIp?: string; ips?: string[] }) =>
+            iface.primaryIp ?? (Array.isArray(iface.ips) ? iface.ips[0] : undefined);
+          const formattedData = data.map((iface: { name?: string; id?: string; primaryIp?: string; ips?: string[]; [k: string]: unknown }) => ({
             ...iface,
-            // Add a note if primaryIp exists but ips array is empty
-            _note: iface.primaryIp && (!iface.ips || iface.ips.length === 0) 
+            labelLine: formatInterfaceLine(
+              iface.name ?? (typeof iface.id === "string" ? iface.id.split(":").pop() ?? "interface" : "interface"),
+              ip(iface),
+              undefined
+            ),
+            _note: iface.primaryIp && (!iface.ips || iface.ips.length === 0)
               ? `IP address available in primaryIp field: ${iface.primaryIp}`
               : undefined,
           }));
@@ -278,11 +284,16 @@ export class TwinQueryTool extends BaseTool {
             return { error: "nodeName is required for network_interfaces_by_node" };
           }
           const data = await this.service.interfacesByNode(nodeName);
-          // Format interfaces to highlight primaryIp field for IP address queries
-          const formattedData = data.map((iface: any) => ({
+          const ip = (iface: { primaryIp?: string; ips?: string[] }) =>
+            iface.primaryIp ?? (Array.isArray(iface.ips) ? iface.ips[0] : undefined);
+          const formattedData = data.map((iface: { name?: string; id?: string; primaryIp?: string; ips?: string[]; [k: string]: unknown }) => ({
             ...iface,
-            // Add a note if primaryIp exists but ips array is empty
-            _note: iface.primaryIp && (!iface.ips || iface.ips.length === 0) 
+            labelLine: formatInterfaceLine(
+              iface.name ?? (typeof iface.id === "string" ? iface.id.split(":").pop() ?? "interface" : "interface"),
+              ip(iface),
+              undefined
+            ),
+            _note: iface.primaryIp && (!iface.ips || iface.ips.length === 0)
               ? `IP address available in primaryIp field: ${iface.primaryIp}`
               : undefined,
           }));
@@ -315,7 +326,8 @@ export class TwinQueryTool extends BaseTool {
         }
         case "firewall_list_rules": {
           const data = await this.service.listFirewallRules();
-          return { data: { kind: "firewall_rule_list", data } };
+          const aliases = await this.service.listFirewallAliases();
+          return { data: { kind: "firewall_rule_list", data, aliases } };
         }
         case "firewall_rules_by_chain": {
           const chain = opParams?.chain;
@@ -323,7 +335,8 @@ export class TwinQueryTool extends BaseTool {
             return { error: "chain is required for firewall_rules_by_chain" };
           }
           const data = await this.service.firewallRulesByChain(chain);
-          return { data: { kind: "firewall_rule_list", chain, data } };
+          const aliases = await this.service.listFirewallAliases();
+          return { data: { kind: "firewall_rule_list", chain, data, aliases } };
         }
         case "firewall_rules_allowing_subnet": {
           const subnet = opParams?.subnet;
@@ -331,7 +344,8 @@ export class TwinQueryTool extends BaseTool {
             return { error: "subnet is required for firewall_rules_allowing_subnet" };
           }
           const data = await this.service.rulesAllowingSubnet(subnet);
-          return { data: { kind: "firewall_rule_list", subnet, data } };
+          const aliases = await this.service.listFirewallAliases();
+          return { data: { kind: "firewall_rule_list", subnet, data, aliases } };
         }
         case "firewall_rules_blocking_subnet": {
           const subnet = opParams?.subnet;
@@ -339,7 +353,8 @@ export class TwinQueryTool extends BaseTool {
             return { error: "subnet is required for firewall_rules_blocking_subnet" };
           }
           const data = await this.service.rulesBlockingSubnet(subnet);
-          return { data: { kind: "firewall_rule_list", subnet, data } };
+          const aliases = await this.service.listFirewallAliases();
+          return { data: { kind: "firewall_rule_list", subnet, data, aliases } };
         }
         case "firewall_exposure_map": {
           const vmId = opParams?.vmId;

@@ -143,13 +143,18 @@ export async function formatResponseForBot(
 
     const systemPrompt = MODE_SYSTEM_PROMPTS[context.mode];
 
+    const preserveAliasDefs = context.intentType === "firewall_rules" && rawResponse.includes("Alias definitions:");
+    const aliasSection = preserveAliasDefs
+      ? rawResponse.slice(rawResponse.indexOf("Alias definitions:"))
+      : "";
+
     const userPrompt = `Original response to format:
 ${rawResponse}
 
 ${intentContext ? `${intentContext}\n` : ""}${toolContext ? `${toolContext}\n` : ""}
 User query: "${context.userQuery}"
 
-Format this response in a structured, data-oriented style. Return only the formatted response, no explanations.`;
+Format this response in a structured, data-oriented style. Return only the formatted response, no explanations.${preserveAliasDefs ? " IMPORTANT: Keep the entire 'Alias definitions:' section at the end unchanged (do not truncate or summarize it)." : ""}`;
 
     const response = await client.chat.completions.create({
       model: "gpt-4o-mini", // Use fast, cheap model for formatting
@@ -158,10 +163,13 @@ Format this response in a structured, data-oriented style. Return only the forma
         { role: "user", content: userPrompt },
       ],
       temperature: 0.1, // Low temperature for consistent formatting
-      max_tokens: 2000, // Should be enough for formatted responses
+      max_tokens: 4000, // Enough for rules + full alias definitions
     });
 
-    const formatted = response.choices[0]?.message?.content?.trim() || rawResponse;
+    let formatted = response.choices[0]?.message?.content?.trim() || rawResponse;
+    if (preserveAliasDefs && aliasSection && !formatted.includes("Alias definitions:")) {
+      formatted = formatted.trimEnd() + "\n\n" + aliasSection;
+    }
     
     logger.debug("Response formatted", {
       originalLength: rawResponse.length,

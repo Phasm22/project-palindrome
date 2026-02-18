@@ -28,6 +28,7 @@ import {
   listVmsWithoutAgentChain,
   listStoppedVmsChain,
   findVmByIdChain,
+  findVmByNameChain,
   resolveVmDetailsChain,
   type ResolvedVmDetails,
 } from "../reasoning/chains/compute";
@@ -39,6 +40,7 @@ import {
   vmByIpFromIngestionChain,
   vmsBySubnetChain,
   vmsWithMultipleInterfacesFromIngestionChain,
+  vmIpByNameChain,
   vmNetworksFromIngestionChain,
   vmReachabilityChain,
 } from "../reasoning/chains/network";
@@ -557,6 +559,8 @@ async function executeComputeIntent(
         return await listStoppedVmsChain(tools, session, intent.nodeName, intent.vmKind);
       case "find_vm_by_id":
         return await findVmByIdChain(tools, session, intent.vmId);
+      case "find_vm_by_name":
+        return await findVmByNameChain(tools, session, intent.vmName, intent.vmKind);
       default:
         return null;
     }
@@ -587,6 +591,8 @@ async function executeNetworkIntent(
         return await vmNetworksFromIngestionChain(intent.vmNameOrId);
       case "vm_by_ip":
         return await vmByIpFromIngestionChain(intent.ip);
+      case "vm_ip_by_name":
+        return await vmIpByNameChain(intent.vmNameOrId, tools, session);
       case "vms_with_multiple_interfaces":
         return await vmsWithMultipleInterfacesFromIngestionChain();
       default:
@@ -1600,10 +1606,45 @@ export async function runAgent(
         ? `VMCreate | node=${node} | ${hostname ? `name=${hostname} | ` : ""}${vmId ? `vmid=${vmId} | ` : ""}message="${String(message).replace(/"/g, '\\"')}"`
         : `Error | action=compute.create_vm | node=${node} | message="${String(message).replace(/"/g, '\\"')}"`;
 
+      let createVmTraceId: string | undefined;
+      try {
+        const traceStore = getReasoningTraceStore();
+        const durationMs = Date.now() - startTime;
+        createVmTraceId = await traceStore.recordTrace({
+          userId: session.userId,
+          aclGroup: session.aclGroup,
+          userInput,
+          finalResponse: text,
+          steps: [{
+            step: 1,
+            toolCalls: [{
+              toolName: "action",
+              parameters: { action: "compute.create_vm", params: { node, ...params } },
+              result: ok ? { success: true, vmId, hostname, message } : { success: false, message },
+              durationMs,
+            }],
+            decisions: [{
+              type: "tool_choice",
+              description: "Direct action: compute.create_vm",
+              metadata: { intent: "create_vm", node },
+            }],
+          }],
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          totalSteps: 1,
+          totalToolCalls: 1,
+          maxStepsReached: false,
+          timestamp: new Date(),
+          durationMs,
+        });
+      } catch (error: any) {
+        logger.warn("Failed to record reasoning trace for create_vm", { error: error.message });
+      }
+
       emitFinalEvent(text, {
         classification,
         conversationState: postExecutionState,
         conversationContext: finalContextUpdate,
+        traceId: createVmTraceId,
       });
       return { text };
     }
@@ -1660,7 +1701,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const exposureAnswer = await executeExposureIntent(exposureIntent, tools, session);
       if (exposureAnswer) {
         logger.info("Responding via twin-first exposure reasoning chain.");
-        emitStepEvent({ intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent({ step: 1, maxSteps: 1, intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format exposure response for bot-like style
         let formattedAnswer = exposureAnswer;
@@ -1708,7 +1749,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
       if (twinAnswer) {
         logger.info("Responding via twin-first reasoning chain (no LLM needed).");
-        emitStepEvent({ intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent({ step: 1, maxSteps: 1, intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format compute response for bot-like style
         let formattedAnswer = twinAnswer;
@@ -1741,7 +1782,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
       if (firewallAnswer) {
         logger.info("Responding via twin-first firewall reasoning chain.");
-        emitStepEvent({ intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent({ step: 1, maxSteps: 1, intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format firewall response for bot-like style
         let formattedAnswer = firewallAnswer;
@@ -1772,7 +1813,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
       if (networkAnswer) {
         logger.info("Responding via twin-first network reasoning chain.");
-        emitStepEvent({ intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent({ step: 1, maxSteps: 1, intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format network response for bot-like style
         let formattedAnswer = networkAnswer;
@@ -1782,9 +1823,15 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             "vm_by_ip",
             "vms_with_multiple_interfaces",
           ].includes(networkIntent.type);
-          const toolCalls = usesIngestionSummary
-            ? [{ toolName: "ingestion_summary_store", parameters: { snapshot: "latest" } }]
-            : [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }];
+          const toolCalls =
+            networkIntent.type === "vm_ip_by_name"
+              ? [
+                  { toolName: "twin_query", parameters: { operation: "find_vm_by_name" } },
+                  { toolName: "proxmox_readonly", parameters: { action: "get_vm_ip" } },
+                ]
+              : usesIngestionSummary
+                ? [{ toolName: "ingestion_summary_store", parameters: { snapshot: "latest" } }]
+                : [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }];
           formattedAnswer = await formatResponseForBot(networkAnswer, {
             userQuery: userInput,
             intentType: "network_info",

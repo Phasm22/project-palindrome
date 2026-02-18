@@ -376,6 +376,56 @@ export async function findVmByIdChain(
   return lines.join("\n");
 }
 
+export async function findVmByNameChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  vmName: string,
+  vmKind?: VmKind
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "find_vm_by_name", params: { vmName, vmKind } },
+    },
+    tools,
+    session
+  );
+
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  const payload = result.data as { data?: VmRecord[] };
+  const vms = payload?.data ?? [];
+
+  if (vms.length === 0) {
+    return `No VM or container matching "${vmName}" found in the digital twin. Run Proxmox ingestion to sync the twin.`;
+  }
+
+  if (vms.length === 1) {
+    const vm = vms[0];
+    if (!vm) {
+      return `No VM or container matching "${vmName}" found in the digital twin. Run Proxmox ingestion to sync the twin.`;
+    }
+    const label = vm.name || "Unnamed VM";
+    const vmType = vm.vmKind === "lxc" ? "LXC container" : "QEMU VM";
+    const state = vm.state ?? "unknown";
+    const nodeInfo = vm.nodeName ? ` on node ${vm.nodeName}` : "";
+    return `${label} is ${state}${nodeInfo}. (${vmType})`;
+  }
+
+  const lines: string[] = [`VMs/containers matching "${vmName}":`];
+  for (const vm of vms) {
+    if (!vm) continue;
+    const label = vm.name || "Unnamed VM";
+    const vmType = vm.vmKind === "lxc" ? "LXC" : "VM";
+    const state = vm.state ?? "unknown";
+    const nodeInfo = vm.nodeName ? ` on ${vm.nodeName}` : "";
+    lines.push(`- ${label} (${vmType}, ${state}${nodeInfo})`);
+  }
+  return lines.join("\n");
+}
+
 /**
  * Known Proxmox nodes and their endpoints for multi-cluster support
  * This allows VM resolution across all clusters, not just the primary one

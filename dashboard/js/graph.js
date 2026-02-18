@@ -839,7 +839,7 @@ function setupSearch() {
       graph.forEachNode((node, attrs) => {
         const label = (attrs.label || '').toLowerCase();
         const id = (node || '').toLowerCase();
-        const type = (attrs.type || '').toLowerCase();
+        const type = (attrs.nodeType || attrs.entityType || attrs.type || '').toLowerCase();
         if (label.includes(query) || id.includes(query) || type.includes(query)) {
           matchingNodes.push({ node, attrs });
         }
@@ -871,7 +871,7 @@ function setupSearch() {
             <div class="p-2 hover:bg-slate-700 cursor-pointer text-slate-200 text-sm border-b border-slate-700" 
                  data-node-id="${node}">
               <div class="font-medium">${attrs.label || node}</div>
-              <div class="text-xs text-slate-400">${attrs.type || 'unknown'}</div>
+              <div class="text-xs text-slate-400">${attrs.nodeType || attrs.entityType || attrs.type || 'unknown'}</div>
             </div>
           `;
         }).join('');

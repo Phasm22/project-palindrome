@@ -14,6 +14,7 @@ function formatInterfaceList(
     vlan?: string;
     primaryIp?: string;
     vmId?: string;
+    labelLine?: string;
   }>
 ): string {
   if (!interfaces.length) {
@@ -22,15 +23,19 @@ function formatInterfaceList(
 
   const lines = [title];
   for (const iface of interfaces) {
-    const parts = [
-      iface.name,
-      iface.nodeName ? `node=${iface.nodeName}` : null,
-      iface.status ? `status=${iface.status}` : null,
-      iface.primaryIp ? `ip=${iface.primaryIp}` : null,
-      iface.vlan ? `vlan=${iface.vlan}` : null,
-      iface.vmId ? `vm=${iface.vmId}` : null,
-    ].filter(Boolean);
-    lines.push(`- ${parts.join(" | ")}`);
+    if (iface.labelLine) {
+      lines.push(`- ${iface.labelLine}`);
+    } else {
+      const parts = [
+        iface.name,
+        iface.nodeName ? `node=${iface.nodeName}` : null,
+        iface.status ? `status=${iface.status}` : null,
+        iface.primaryIp ? `ip=${iface.primaryIp}` : null,
+        iface.vlan ? `vlan=${iface.vlan}` : null,
+        iface.vmId ? `vm=${iface.vmId}` : null,
+      ].filter(Boolean);
+      lines.push(`- ${parts.join(" | ")}`);
+    }
   }
   return lines.join("\n");
 }
@@ -299,4 +304,59 @@ export async function vmsWithMultipleInterfacesFromIngestionChain(): Promise<str
     }));
 
   return formatMultiNicVms(multiNic, createdAt);
+}
+
+/**
+ * Resolve VM by name via twin, then get its IP via Proxmox get_vm_ip.
+ * Ensures node is passed so we never hit "node parameter required".
+ */
+export async function vmIpByNameChain(
+  vmNameOrId: string,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const findResult = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "find_vm_by_name", params: { vmName: vmNameOrId } },
+    },
+    tools,
+    session
+  );
+  if (findResult.error) {
+    return `Could not find VM "${vmNameOrId}": ${findResult.error}`;
+  }
+  const payload = findResult.data as { kind?: string; data?: Array<{ id: string; name?: string; nodeName?: string }> };
+  const vms = payload?.data ?? [];
+  if (!vms.length) {
+    return `No VM found with name "${vmNameOrId}".`;
+  }
+  const first = vms[0];
+  const nodeName = first.nodeName;
+  const vmidStr = first.id?.split(":").pop();
+  const vmid = vmidStr ? parseInt(vmidStr, 10) : NaN;
+  if (!nodeName || Number.isNaN(vmid)) {
+    return `Could not resolve node/vmid for "${vmNameOrId}" (id: ${first.id}).`;
+  }
+  const ipResult = await executeToolCall(
+    {
+      toolName: "proxmox_readonly",
+      parameters: { action: "get_vm_ip", node: nodeName, vmid },
+    },
+    tools,
+    session
+  );
+  if (ipResult.error) {
+    return `VM "${first.name ?? vmNameOrId}" (node=${nodeName}, vmid=${vmid}) found but could not get IP: ${ipResult.error}`;
+  }
+  const ipPayload = ipResult.data as { ip?: string; ips?: string[]; name?: string; error?: string; message?: string };
+  if (ipPayload?.error || ipPayload?.message) {
+    return `VM "${first.name ?? vmNameOrId}" (node=${nodeName}): ${ipPayload.message ?? ipPayload.error ?? "no IP available"}.`;
+  }
+  const ip = ipPayload?.ip ?? ipPayload?.ips?.[0];
+  const host = ipPayload?.name ?? first.name ?? vmNameOrId;
+  if (!ip) {
+    return `VM "${host}" (node=${nodeName}, vmid=${vmid}): no IP reported (guest agent may be unavailable).`;
+  }
+  return `IP Address | host=${host} | ip=${ip}`;
 }

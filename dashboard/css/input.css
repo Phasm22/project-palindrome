@@ -15,7 +15,7 @@
     --z-tooltip: 60;
     --z-notification: 70;
     --z-max: 9999; /* Emergency override only */
-    
+
     /* Thread/Chat content margin - responsive spacing */
     --thread-content-margin: 1rem; /* 16px default (spacing-4) */
 
@@ -23,6 +23,15 @@
     --sidebar-width: 256px;
     --chat-content-max-width: 896px;
     --chat-chrome-max-width: 1120px;
+
+    /* App header height - 0 on mobile (no header), set at md+ */
+    --app-header-height: 0px;
+  }
+
+  @media (min-width: 768px) {
+    :root {
+      --app-header-height: 52px;
+    }
   }
   
   /* Responsive thread content margins */
@@ -192,8 +201,8 @@
   .chat-banner-left {
     width: 100%;
     box-sizing: border-box;
-    padding-left: 0.5rem;
-    padding-right: 1rem;
+    padding-left: var(--thread-content-margin);
+    padding-right: var(--thread-content-margin);
     display: flex;
     justify-content: flex-start;
   }
@@ -214,28 +223,30 @@
   .chat-shell {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    height: 100%;
     min-height: 0;
   }
 
   .chat-scroll {
     display: flex;
     flex-direction: column;
+    flex: 1;
     min-height: 0;
   }
 
-  #chat-nav-sticky {
-    position: sticky;
-    top: 0;
-    z-index: var(--z-sticky);
+  #app-header {
+    height: var(--app-header-height);
   }
 
   .chat-banner-wrapper {
-    padding-top: 24px;
-    padding-bottom: 16px;
+    padding-top: 16px;
+    padding-bottom: 12px;
+    flex-shrink: 0;
   }
 
   .chat-banner-left h1 {
-    line-height: 1.05;
+    line-height: 1.2;
   }
 
   .chat-main {
@@ -957,10 +968,11 @@
   .status-success {
     background: linear-gradient(135deg, #10b981 0%, #059669 100%);
     color: white !important;
+    -webkit-text-fill-color: white !important;
     border-color: rgba(16, 185, 129, 0.3);
     box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
   }
-  
+
   .status-success::before {
     content: '';
     width: 0.5rem;
@@ -969,17 +981,19 @@
     border-radius: 50%;
     animation: pulse 2s ease-in-out infinite;
   }
-  
+
   .status-error {
     background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
     color: white !important;
+    -webkit-text-fill-color: white !important;
     border-color: rgba(239, 68, 68, 0.3);
     box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3);
   }
-  
+
   .status-warning {
     background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
     color: white !important;
+    -webkit-text-fill-color: white !important;
     border-color: rgba(245, 158, 11, 0.3);
     box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
   }

@@ -8,6 +8,7 @@
 import neo4j from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 import { ProxmoxClient } from "../../tools/proxmox/client";
+import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { pceLogger } from "../../pce/utils/logger";
 
 export interface StaleCleanupResult {
@@ -446,6 +447,8 @@ export class StaleNodeCleaner {
 
   /**
    * Clean stale firewall rules (rules that no longer exist in OPNsense)
+   * Note: firewall_alias entities are never deleted here or by lastSeen cleanup,
+   * so alias definitions remain available for agent responses (e.g. WG_VIP, WG_Friends).
    */
   async cleanStaleFirewallRules(options: StaleCleanupOptions = {}): Promise<StaleCleanupResult> {
     const result: StaleCleanupResult = {
@@ -651,7 +654,14 @@ export class StaleNodeCleaner {
       const session = this.graphStore.getSession();
       const threshold = new Date(Date.now() - this.staleThresholdMs);
 
-      // Find entities that haven't been updated recently
+      // Types we delete when not seen since threshold. Intentionally EXCLUDE:
+      // - firewall_alias: keep so agent responses can show "Alias definitions" (WG_VIP, etc.)
+      // - compute_node / compute_vm: use source verification instead
+      const STALE_LASTSEEN_TYPES = [
+        "network_interface",
+        "firewall_rule",
+      ];
+
       const staleEntitiesResult = await session.run(
         `
           MATCH (e:TwinEntity)
@@ -662,11 +672,7 @@ export class StaleNodeCleaner {
         `,
         {
           threshold: neo4j.types.DateTime.fromStandardDate(threshold),
-          types: [
-            "network_interface",
-            "firewall_rule",
-            // Don't auto-delete nodes/VMs by lastSeen - use source verification instead
-          ],
+          types: STALE_LASTSEEN_TYPES,
         }
       );
 
@@ -715,90 +721,17 @@ export class StaleNodeCleaner {
   }
 
   /**
-   * Get all configured Proxmox clusters
-   * Uses same token selection logic as ProxmoxReadOnlyBase.getApiConfig()
+   * Get all configured Proxmox endpoints (cluster + proxbig).
+   * Uses shared getProxmoxEndpointConfigs (same env precedence as ingestion/readonly).
    */
   private getAllProxmoxConfigs(): Array<{ url: string; tokenId: string; tokenSecret: string; verifySsl: boolean; clusterName: string }> {
-    const configs: Array<{ url: string; tokenId: string; tokenSecret: string; verifySsl: boolean; clusterName: string }> = [];
-
-    // Default cluster (proxBig) - use same logic as ProxmoxReadOnlyBase
-    const defaultUrl = process.env.PROXMOX_URL;
-    const defaultTokenId = process.env.PROXMOX_TOKEN_ID;
-    let defaultTokenSecret = process.env.PROXMOX_TOKEN_SECRET;
-    
-    // Try to find node-specific token secret based on URL hostname (like readonly tool does)
-    if (defaultUrl && defaultTokenSecret) {
-      try {
-        const urlObj = new URL(defaultUrl);
-        const hostname = urlObj.hostname.toLowerCase();
-        const nodeName = hostname.split('.')[0].toUpperCase();
-        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
-        if (nodeSpecificSecret) {
-          defaultTokenSecret = nodeSpecificSecret;
-          pceLogger.debug(`Using node-specific secret for default cluster: ${nodeName}_TOKEN_SECRET`);
-        }
-      } catch {
-        // If URL parsing fails, use default
-      }
-    }
-    
-    if (defaultUrl && defaultTokenId && defaultTokenSecret) {
-      configs.push({
-        url: defaultUrl,
-        tokenId: defaultTokenId,
-        tokenSecret: defaultTokenSecret,
-        verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
-        clusterName: "default",
-      });
-    }
-
-    // Yin cluster - use same token selection as ProxmoxReadOnlyTool.getAlternativeEndpoints()
-    const yinUrl = process.env.PROXMOX_YIN_URL;
-    const yinTokenId = process.env.PROXMOX_TOKEN_ID || process.env.PROXMOX_YIN_TOKEN_ID;
-    // Try YIN_TOKEN_SECRET first (node-specific), then PROXMOX_TOKEN_SECRET (cluster-wide)
-    const yinTokenSecret = process.env.YIN_TOKEN_SECRET 
-      || process.env.PROXMOX_TOKEN_SECRET;
-    
-    if (yinUrl && yinTokenId && yinTokenSecret) {
-      configs.push({
-        url: yinUrl,
-        tokenId: yinTokenId,
-        tokenSecret: yinTokenSecret,
-        verifySsl: process.env.PROXMOX_YIN_VERIFY_SSL !== "false",
-        clusterName: "yin",
-      });
-    } else {
-      pceLogger.debug("Yin cluster config incomplete", {
-        hasUrl: !!yinUrl,
-        hasTokenId: !!yinTokenId,
-        hasTokenSecret: !!yinTokenSecret,
-      });
-    }
-
-    // Yang cluster - use same token selection as ProxmoxReadOnlyTool.getAlternativeEndpoints()
-    const yangUrl = process.env.PROXMOX_YANG_URL;
-    const yangTokenId = process.env.PROXMOX_TOKEN_ID || process.env.PROXMOX_YIN_TOKEN_ID;
-    // Try YANG_TOKEN_SECRET first (node-specific), then PROXMOX_TOKEN_SECRET (cluster-wide)
-    const yangTokenSecret = process.env.YANG_TOKEN_SECRET 
-      || process.env.PROXMOX_TOKEN_SECRET;
-    
-    if (yangUrl && yangTokenId && yangTokenSecret) {
-      configs.push({
-        url: yangUrl,
-        tokenId: yangTokenId,
-        tokenSecret: yangTokenSecret,
-        verifySsl: process.env.PROXMOX_YIN_VERIFY_SSL !== "false",
-        clusterName: "yang",
-      });
-    } else {
-      pceLogger.debug("Yang cluster config incomplete", {
-        hasUrl: !!yangUrl,
-        hasTokenId: !!yangTokenId,
-        hasTokenSecret: !!yangTokenSecret,
-      });
-    }
-
-    return configs;
+    return getProxmoxEndpointConfigs().map((c) => ({
+      url: c.url,
+      tokenId: c.tokenId,
+      tokenSecret: c.tokenSecret,
+      verifySsl: c.verifySsl,
+      clusterName: c.label,
+    }));
   }
 
   /**

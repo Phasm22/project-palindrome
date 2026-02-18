@@ -21,6 +21,7 @@ import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
 import { IngestionScheduler } from "../scheduler/ingestion-scheduler";
 import { normalizeProxmoxResponse } from "../../tools/proxmox/readonly/normalization";
+import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
 
 type BunServer = ReturnType<typeof Bun.serve>;
@@ -593,10 +594,12 @@ export class PceApiServer {
     );
 
     const overallHealthy = checks.every((c) => c.healthy);
+    const configs = getProxmoxEndpointConfigs();
     const payload: HealthPayload = {
       status: overallHealthy ? "ok" : "degraded",
       uptimeMs: Date.now() - this.startTime,
       dependencies: checks,
+      proxmoxEndpoints: { count: configs.length, labels: configs.map((c) => c.label) },
     };
 
     return this.jsonResponse(overallHealthy ? 200 : 503, {

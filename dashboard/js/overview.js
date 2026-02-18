@@ -500,9 +500,8 @@ export async function loadIngestionStatus(reset = false) {
 
     let html = '';
 
-    // Current Status
-    html += '<div class="mb-6">';
-    html += '<h3 class="text-lg font-semibold text-slate-200 mb-3">Current Status</h3>';
+    // Current Status (no heading — cards speak for themselves)
+    html += '<div class="mb-4">';
     html += '<div class="status-grid">';
     
     html += `
@@ -554,22 +553,22 @@ export async function loadIngestionStatus(reset = false) {
       html += '<div class="overview-details-body">';
       
       html += `
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-          <div>
-            <div class="text-xs text-slate-500 mb-1">Status</div>
-            <div class="text-sm">
+        <div class="status-grid mb-4">
+          <div class="stat-card">
+            <div class="stat-label">Status</div>
+            <div>
               <span class="status-badge ${lastRun.success ? 'status-success' : 'status-error'}">
                 ${lastRun.success ? 'Success' : 'Failed'}
               </span>
             </div>
           </div>
-          <div>
-            <div class="text-xs text-slate-500 mb-1">Duration</div>
-            <div class="text-sm text-slate-200">${formatDuration(lastRun.duration)}</div>
+          <div class="stat-card">
+            <div class="stat-label">Duration</div>
+            <div class="stat-value">${formatDuration(lastRun.duration)}</div>
           </div>
-          <div>
-            <div class="text-xs text-slate-500 mb-1">Timestamp</div>
-            <div class="text-sm text-slate-200">${new Date(lastRun.timestamp).toLocaleString()}</div>
+          <div class="stat-card">
+            <div class="stat-label">Timestamp</div>
+            <div class="stat-value" style="font-size: 0.85em;">${new Date(lastRun.timestamp).toLocaleString()}</div>
           </div>
         </div>
       `;

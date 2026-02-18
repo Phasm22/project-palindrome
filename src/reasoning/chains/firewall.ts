@@ -2,6 +2,13 @@ import type { BaseTool } from "../../tools/BaseTool";
 import type { ToolSession } from "../../agent/tool-policy";
 import { executeToolCall } from "../../agent/tool-executor";
 
+interface FirewallAliasDef {
+  name: string;
+  type?: string;
+  entries: string[];
+  cidrs: string[];
+}
+
 function formatRuleList(
   title: string,
   rules: Array<{
@@ -13,23 +20,36 @@ function formatRuleList(
     source?: string;
     destination?: string;
     chain?: string;
-  }>
+  }>,
+  aliases?: FirewallAliasDef[]
 ): string {
+  const lines: string[] = [];
   if (!rules.length) {
-    return `${title}\n- None`;
+    lines.push(`${title}\n- None`);
+  } else {
+    lines.push(title);
+    for (const rule of rules) {
+      const parts = [
+        rule.action.toUpperCase(),
+        rule.direction ? `dir=${rule.direction}` : null,
+        rule.interface ? `if=${rule.interface}` : null,
+        rule.protocol ? `proto=${rule.protocol}` : null,
+        rule.source ? `src=${rule.source}` : null,
+        rule.destination ? `dst=${rule.destination}` : null,
+      ].filter(Boolean);
+      lines.push(`- ${parts.join(" | ")}`);
+    }
   }
-
-  const lines = [title];
-  for (const rule of rules) {
-    const parts = [
-      rule.action.toUpperCase(),
-      rule.direction ? `dir=${rule.direction}` : null,
-      rule.interface ? `if=${rule.interface}` : null,
-      rule.protocol ? `proto=${rule.protocol}` : null,
-      rule.source ? `src=${rule.source}` : null,
-      rule.destination ? `dst=${rule.destination}` : null,
-    ].filter(Boolean);
-    lines.push(`- ${parts.join(" | ")}`);
+  if (aliases && aliases.length > 0) {
+    lines.push("");
+    lines.push("Alias definitions:");
+    for (const a of aliases) {
+      const content = a.cidrs.length > 0 ? a.cidrs.join(", ") : (a.entries.length > 0 ? a.entries.join(", ") : "(empty)");
+      lines.push(`${a.name} = ${content}`);
+    }
+  } else if (rules.some((r) => (r.source && String(r.source).includes("<")) || (r.destination && String(r.destination).includes("<")))) {
+    lines.push("");
+    lines.push("Alias definitions: (none in twin — run pce:ingest-firewall to populate from OPNsense)");
   }
   return lines.join("\n");
 }
@@ -46,9 +66,10 @@ export async function listFirewallRulesChain(
   if (result.error) {
     throw new Error(result.error);
   }
-  const payload = result.data as any;
+  const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
   const rules = payload?.data ?? [];
-  return formatRuleList("Firewall Rules:", rules);
+  const aliases = payload?.aliases ?? [];
+  return formatRuleList("Firewall Rules:", rules, aliases);
 }
 
 export async function firewallRulesByChainChain(
@@ -67,9 +88,10 @@ export async function firewallRulesByChainChain(
   if (result.error) {
     throw new Error(result.error);
   }
-  const payload = result.data as any;
+  const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
   const rules = payload?.data ?? [];
-  return formatRuleList(`Firewall Rules for ${chain}:`, rules);
+  const aliases = payload?.aliases ?? [];
+  return formatRuleList(`Firewall Rules for ${chain}:`, rules, aliases);
 }
 
 export async function rulesAllowingSubnetChain(
@@ -91,9 +113,10 @@ export async function rulesAllowingSubnetChain(
   if (result.error) {
     throw new Error(result.error);
   }
-  const payload = result.data as any;
+  const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
   const rules = payload?.data ?? [];
-  return formatRuleList(`Rules Allowing Access to ${subnet}:`, rules);
+  const aliases = payload?.aliases ?? [];
+  return formatRuleList(`Rules Allowing Access to ${subnet}:`, rules, aliases);
 }
 
 export async function rulesBlockingSubnetChain(
@@ -115,9 +138,10 @@ export async function rulesBlockingSubnetChain(
   if (result.error) {
     throw new Error(result.error);
   }
-  const payload = result.data as any;
+  const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
   const rules = payload?.data ?? [];
-  return formatRuleList(`Rules Blocking Access to ${subnet}:`, rules);
+  const aliases = payload?.aliases ?? [];
+  return formatRuleList(`Rules Blocking Access to ${subnet}:`, rules, aliases);
 }
 
 export async function exposureMapChain(

@@ -61,6 +61,8 @@ export interface HealthPayload {
   status: "ok" | "degraded";
   uptimeMs: number;
   dependencies: DependencyHealthStatus[];
+  /** Proxmox endpoint labels visible to this process (no URLs/secrets). For troubleshooting cluster vs proxBig visibility. */
+  proxmoxEndpoints?: { count: number; labels: string[] };
 }
 
 export interface MetricsPayload {

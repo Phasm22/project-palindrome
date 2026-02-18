@@ -5,9 +5,38 @@ export type ComputeIntent =
   | { type: "list_all_vms"; vmKind?: VmKind }
   | { type: "vms_by_node"; nodeName: string; vmKind?: VmKind }
   | { type: "running_vms_on_node"; nodeName: string; vmKind?: VmKind }
+  | { type: "find_vm_by_name"; vmName: string; vmKind?: VmKind }
   | { type: "vms_without_agent" }
   | { type: "stopped_vms_on_node"; nodeName: string; vmKind?: VmKind }
   | { type: "find_vm_by_id"; vmId: number };
+
+const KNOWN_NODE_NAMES = new Set(["yang", "yin", "proxbig", "pve1", "pve2"]);
+
+function extractVmNameForLocationQuery(text: string): string | null {
+  const normalized = text.toLowerCase().trim();
+  // "Is opnsense running and which node hosts it?" -> capture "opnsense" from "is X running"
+  const isRunningMatch = text.match(/\bis\s+([a-z0-9\-_]+)\s+running\b/i);
+  if (isRunningMatch && (normalized.includes("which node hosts") || normalized.includes("node hosts"))) {
+    const name = isRunningMatch[1];
+    if (name && name !== "it" && name.length > 1) {
+      return name;
+    }
+  }
+  // "Which node hosts opnsense?" -> capture "opnsense"
+  const hostsMatch = text.match(/\b(?:which\s+)?node\s+hosts\s+([a-z0-9\-_]+)/i);
+  if (hostsMatch) {
+    const name = hostsMatch[1]?.toLowerCase();
+    if (name && name !== "it") {
+      return hostsMatch[1] ?? null;
+    }
+  }
+  // "Where is opnsense running?" -> capture "opnsense"
+  const whereMatch = text.match(/\bwhere\s+is\s+([a-z0-9\-_]+)\s+(?:running|hosted)?/i);
+  if (whereMatch && whereMatch[1]) {
+    return whereMatch[1];
+  }
+  return null;
+}
 
 function extractNodeName(text: string): string | null {
   // Try "node <name>" first
@@ -94,7 +123,13 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
   const vmKind = detectVmKind(userInput);
   const hasVmOrContainer = vmKind !== undefined;
 
-  // Running VMs on a node: "what is running on yang?", "which vms are running on yin?"
+  // "Is X running and which node hosts it?" / "which node hosts X?" / "where is X running?" -> find VM by name
+  const vmNameForLocation = extractVmNameForLocationQuery(userInput);
+  if (vmNameForLocation) {
+    return { type: "find_vm_by_name", vmName: vmNameForLocation, vmKind };
+  }
+
+  // Running VMs on a node: "what is running on yang?", "which vms are running on yin?" (node must be a known node name)
   if (
     (normalized.includes("running") || normalized.includes("run ")) &&
     (normalized.includes("on") || normalized.includes("node")) &&
@@ -102,7 +137,7 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
     !normalized.includes("temp")
   ) {
     const nodeName = extractNodeName(userInput);
-    if (nodeName) {
+    if (nodeName && KNOWN_NODE_NAMES.has(nodeName.toLowerCase())) {
       return { type: "running_vms_on_node", nodeName, vmKind };
     }
   }
