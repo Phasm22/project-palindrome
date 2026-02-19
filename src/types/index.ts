@@ -6,6 +6,5 @@ export type {
   VerbosityPreference,
   MemoryUpdateSource
 } from "./conversation";
-export type { ExecutionResult, ExecutionContext } from "./execution";
+export type { ExecutionResult, ExecutionContext, ACLGroup } from "./execution";
 export type { AgentResponse } from "./agent";
-

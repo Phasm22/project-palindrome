@@ -212,6 +212,10 @@ export class ChatHistoryStore {
         pending_action_digest TEXT,
         pending_action_created_at INTEGER,
         pending_action_summary TEXT,
+        pending_action_type TEXT,
+        pending_action_preview TEXT,
+        pending_action_execute_input TEXT,
+        pending_action_expires_at INTEGER,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       );
@@ -258,6 +262,18 @@ export class ChatHistoryStore {
       }
       if (!columnExists("pending_action_summary")) {
         this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_summary TEXT;");
+      }
+      if (!columnExists("pending_action_type")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_type TEXT;");
+      }
+      if (!columnExists("pending_action_preview")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_preview TEXT;");
+      }
+      if (!columnExists("pending_action_execute_input")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_execute_input TEXT;");
+      }
+      if (!columnExists("pending_action_expires_at")) {
+        this.db.exec("ALTER TABLE conversation_context ADD COLUMN pending_action_expires_at INTEGER;");
       }
     } catch (error: any) {
       if (!error.message.includes("duplicate column")) {
@@ -848,7 +864,8 @@ export class ChatHistoryStore {
     try {
       const stmt = this.db.prepare(`
         SELECT active_host, active_service, last_incident_signature, user_name, pending_action,
-               pending_action_id, pending_action_digest, pending_action_created_at, pending_action_summary
+               pending_action_id, pending_action_digest, pending_action_created_at, pending_action_summary,
+               pending_action_type, pending_action_preview, pending_action_execute_input, pending_action_expires_at
         FROM conversation_context
         WHERE conversation_id = ?
       `);
@@ -862,6 +879,10 @@ export class ChatHistoryStore {
         pending_action_digest?: string | null;
         pending_action_created_at?: number | null;
         pending_action_summary?: string | null;
+        pending_action_type?: string | null;
+        pending_action_preview?: string | null;
+        pending_action_execute_input?: string | null;
+        pending_action_expires_at?: number | null;
       } | undefined;
 
       if (!row) return {};
@@ -876,6 +897,10 @@ export class ChatHistoryStore {
         pendingActionDigest: row.pending_action_digest || undefined,
         pendingActionCreatedAt: row.pending_action_created_at || undefined,
         pendingActionSummary: row.pending_action_summary || undefined,
+        pendingActionType: row.pending_action_type || undefined,
+        pendingActionPreview: row.pending_action_preview || undefined,
+        pendingActionExecuteInput: row.pending_action_execute_input || undefined,
+        pendingActionExpiresAt: row.pending_action_expires_at || undefined,
       };
     } catch (error: any) {
       pceLogger.error("Failed to get conversation context", { error: error.message, conversationId });
@@ -910,6 +935,10 @@ export class ChatHistoryStore {
       "pendingActionDigest",
       "pendingActionCreatedAt",
       "pendingActionSummary",
+      "pendingActionType",
+      "pendingActionPreview",
+      "pendingActionExecuteInput",
+      "pendingActionExpiresAt",
     ];
 
     const filtered: ConversationContext = {};
@@ -938,9 +967,13 @@ export class ChatHistoryStore {
           pending_action_digest,
           pending_action_created_at,
           pending_action_summary,
+          pending_action_type,
+          pending_action_preview,
+          pending_action_execute_input,
+          pending_action_expires_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(conversation_id) DO UPDATE SET
           active_host = COALESCE(excluded.active_host, conversation_context.active_host),
           active_service = COALESCE(excluded.active_service, conversation_context.active_service),
@@ -951,6 +984,10 @@ export class ChatHistoryStore {
           pending_action_digest = COALESCE(excluded.pending_action_digest, conversation_context.pending_action_digest),
           pending_action_created_at = COALESCE(excluded.pending_action_created_at, conversation_context.pending_action_created_at),
           pending_action_summary = COALESCE(excluded.pending_action_summary, conversation_context.pending_action_summary),
+          pending_action_type = COALESCE(excluded.pending_action_type, conversation_context.pending_action_type),
+          pending_action_preview = COALESCE(excluded.pending_action_preview, conversation_context.pending_action_preview),
+          pending_action_execute_input = COALESCE(excluded.pending_action_execute_input, conversation_context.pending_action_execute_input),
+          pending_action_expires_at = COALESCE(excluded.pending_action_expires_at, conversation_context.pending_action_expires_at),
           updated_at = excluded.updated_at
       `);
 
@@ -965,6 +1002,10 @@ export class ChatHistoryStore {
         filtered.pendingActionDigest ?? null,
         filtered.pendingActionCreatedAt ?? null,
         filtered.pendingActionSummary ?? null,
+        filtered.pendingActionType ?? null,
+        filtered.pendingActionPreview ?? null,
+        filtered.pendingActionExecuteInput ?? null,
+        filtered.pendingActionExpiresAt ?? null,
         now
       );
 
@@ -1086,4 +1127,3 @@ export class ChatHistoryStore {
     this.db.close();
   }
 }
-

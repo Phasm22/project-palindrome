@@ -57,7 +57,7 @@ export class GraphRAGRetrieval {
     try {
       pceLogger.info("Graph-only retrieval", { query, queryType });
 
-      let result: GraphQueryResult;
+      let result: GraphQueryResult | undefined;
 
       if (queryType === "alerts" && query.includes("alert")) {
         const hostId = query.match(/(?:host|server)\s+([a-z0-9-]+)/i)?.[1];
@@ -135,11 +135,12 @@ export class GraphRAGRetrieval {
         }
       }
 
-      const entityIds = result.nodes.map((n) => n.id);
+      const resolvedResult = result ?? { nodes: [], relationships: [] };
+      const entityIds = resolvedResult.nodes.map((n) => n.id);
       await this.queryInterface.getEntitiesWithProvenance(entityIds);
 
       const provenanceMap = new Map<string, { versionHash: string; sourcePath: string }>();
-      for (const node of result.nodes) {
+      for (const node of resolvedResult.nodes) {
         if (node.versionHash && node.sourcePath) {
           provenanceMap.set(node.versionHash, {
             versionHash: node.versionHash,
@@ -147,7 +148,7 @@ export class GraphRAGRetrieval {
           });
         }
       }
-      for (const rel of result.relationships) {
+      for (const rel of resolvedResult.relationships) {
         if (rel.versionHash && rel.sourcePath) {
           provenanceMap.set(rel.versionHash, {
             versionHash: rel.versionHash,
@@ -157,16 +158,16 @@ export class GraphRAGRetrieval {
       }
 
       pceLogger.info("Graph retrieval complete", {
-        entities: result.nodes.length,
-        relationships: result.relationships.length,
+        entities: resolvedResult.nodes.length,
+        relationships: resolvedResult.relationships.length,
         provenance: provenanceMap.size,
       });
 
       return this.enforceAclGuards(
         {
-          entities: result.nodes,
-          relationships: result.relationships,
-          paths: result.paths,
+          entities: resolvedResult.nodes,
+          relationships: resolvedResult.relationships,
+          paths: resolvedResult.paths,
           provenance: Array.from(provenanceMap.values()),
         },
         aclGroup
@@ -265,4 +266,3 @@ export class GraphRAGRetrieval {
     return resourceAcl === requester;
   }
 }
-

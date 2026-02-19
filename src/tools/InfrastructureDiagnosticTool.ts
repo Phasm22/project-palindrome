@@ -109,58 +109,34 @@ export class InfrastructureDiagnosticTool extends BaseTool {
       switch (diagnostic_type) {
         case "guest_agent":
           if (!vmid || !node) {
-            return {
-              success: false,
-              data: null,
-              error: "vmid and node are required for guest_agent diagnostic",
-            };
+            return { error: "vmid and node are required for guest_agent diagnostic" };
           }
           return await this.checkGuestAgent(vmid, node);
 
         case "vm_health":
           if (!vmid || !node) {
-            return {
-              success: false,
-              data: null,
-              error: "vmid and node are required for vm_health diagnostic",
-            };
+            return { error: "vmid and node are required for vm_health diagnostic" };
           }
           return await this.checkVmHealth(vmid, node);
 
         case "network_connectivity":
           if (!hostname) {
-            return {
-              success: false,
-              data: null,
-              error: "hostname is required for network_connectivity diagnostic",
-            };
+            return { error: "hostname is required for network_connectivity diagnostic" };
           }
           return await this.checkNetworkConnectivity(hostname);
 
         case "service_health":
           if (!service) {
-            return {
-              success: false,
-              data: null,
-              error: "service is required for service_health diagnostic",
-            };
+            return { error: "service is required for service_health diagnostic" };
           }
           return await this.checkServiceHealth(service);
 
         default:
-          return {
-            success: false,
-            data: null,
-            error: `Unknown diagnostic type: ${diagnostic_type}`,
-          };
+          return { error: `Unknown diagnostic type: ${diagnostic_type}` };
       }
     } catch (error: any) {
       logger.error("Diagnostic tool error", { diagnostic_type, error: error.message, stack: error.stack });
-      return {
-        success: false,
-        data: null,
-        error: `Diagnostic failed: ${error.message}`,
-      };
+      return { error: `Diagnostic failed: ${error.message}` };
     }
   }
 
@@ -317,29 +293,24 @@ export class InfrastructureDiagnosticTool extends BaseTool {
       }
 
       return {
-        success: true,
-        data: status,
-        metadata: {
+        data: {
+          success: true,
           diagnostic_type: "guest_agent",
           vmid,
           node: normalizedNode,
+          result: status,
         },
       };
     } catch (error: any) {
       logger.error("Guest agent diagnostic failed", { vmid, node, error: error.message });
-      return {
-        success: false,
-        data: null,
-        error: `Guest agent diagnostic failed: ${error.message}`,
-      };
+      return { error: `Guest agent diagnostic failed: ${error.message}` };
     }
   }
 
   private async checkVmHealth(vmid: number, node: string): Promise<ExecutionResult> {
     // TODO: Implement VM health check (status, resources, connectivity)
     return {
-      success: false,
-      data: null,
+      data: { success: false, diagnostic_type: "vm_health", vmid, node },
       error: "vm_health diagnostic not yet implemented",
     };
   }
@@ -347,8 +318,7 @@ export class InfrastructureDiagnosticTool extends BaseTool {
   private async checkNetworkConnectivity(hostname: string): Promise<ExecutionResult> {
     // TODO: Implement network connectivity check (ping, DNS, port checks)
     return {
-      success: false,
-      data: null,
+      data: { success: false, diagnostic_type: "network_connectivity", hostname },
       error: "network_connectivity diagnostic not yet implemented",
     };
   }
@@ -356,8 +326,7 @@ export class InfrastructureDiagnosticTool extends BaseTool {
   private async checkServiceHealth(service: string): Promise<ExecutionResult> {
     // TODO: Implement service health check
     return {
-      success: false,
-      data: null,
+      data: { success: false, diagnostic_type: "service_health", service },
       error: "service_health diagnostic not yet implemented",
     };
   }
@@ -392,4 +361,3 @@ export class InfrastructureDiagnosticTool extends BaseTool {
     return { url, tokenId, tokenSecret };
   }
 }
-

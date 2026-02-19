@@ -49,6 +49,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@playwright/mcp": "^0.0.68",
     "@qdrant/js-client-rest": "^1.15.1",
     "@types/ssh2": "^1.15.5",
     "ai": "^5.0.93",

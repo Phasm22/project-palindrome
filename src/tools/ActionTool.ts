@@ -12,7 +12,7 @@ const ActionParams = z.object({
   action: z.string().describe("Action name (e.g., 'compute.create_vm')"),
   params: z.any().describe(
     "Action parameters as an object. " +
-        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, vmBridge?: string (default: 'vmbr0'), vlanId?: number (1-4094, optional), templateId?: number, bootstrap?: boolean, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. Set vmBridge to 'vmbr2' for pre-configured VLAN bridges, or use vlanId with vmbr0 for VLAN tagging. Set bootstrap=true to run Ansible bootstrap after VM creation. " +
+        "For compute.create_vm: {name?: string, node: string, cores?: number, memory?: number, diskSize?: string, vmBridge?: string (default: 'vmbr0'), vlanId?: number (1-4094, optional), datastore?: string, templateId?: number, bootstrap?: boolean, dryRun?: boolean}. If name is not provided, a palindrome name will be auto-generated. Node names are canonicalized to live Proxmox values when possible. If vmBridge/datastore/templateId are omitted or unavailable, the action selects from available options on the target node and reports any fallback. Set vmBridge to 'vmbr2' for pre-configured VLAN bridges, or use vlanId with vmbr0 for VLAN tagging. Set bootstrap=true to run Ansible bootstrap after VM creation. " +
         "For compute.destroy_vm: {name?: string, vmId?: number, node?: string, dryRun?: boolean}. Either name or vmId is required. " +
         "For network.create_dns_record: {hostname: string, ip: string, domain?: string, dryRun?: boolean}. Creates DNS A record in Pi-hole. " +
         "For network.sync_dhcp_to_dns: {dryRun?: boolean, domain?: string, updateExisting?: boolean}. Syncs OPNsense DHCP leases to Pi-hole DNS records. " +
@@ -21,7 +21,7 @@ const ActionParams = z.object({
         "For services.install_nginx: {vmName: string, waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Installs and configures nginx web server on a VM. " +
         "For services.configure_firewall: {vmName: string, rules?: Array<{port: number, protocol?: 'tcp'|'udp'|'both', action?: 'allow'|'deny'}>, defaultPolicy?: 'allow'|'deny', waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Configures UFW firewall rules on a VM. " +
         "For services.set_static_ip: {vmName: string, ip: string (CIDR format, e.g., '192.168.1.100/24'), gateway: string, dns?: string[], interface?: string (default: 'eth0'), waitForVm?: boolean, timeout?: number, retryOnFailure?: boolean, maxRetries?: number, dryRun?: boolean}. Configures a static IP address on a VM using netplan. " +
-    "templateId is the VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001). " +
+    "templateId is the VM template ID to clone from (optional). If omitted, the action discovers available templates on the target node and selects the best match. " +
     "Must be an object."
   ),
 });
@@ -200,7 +200,7 @@ export class ActionTool extends BaseTool {
         "For VM destruction, use action: 'compute.destroy_vm'",
         "Actions use Terraform/Ansible for safe, deterministic operations",
         "Set dryRun: true to preview changes without applying them",
-        "For compute.create_vm: templateId (number, optional) - VM template ID to clone from. Defaults are node-specific: yang=8000, yin=8001, proxBig=8001. Required if template doesn't exist on target node.",
+        "For compute.create_vm: node/datastore/vmBridge/templateId are availability-aware. The action canonicalizes node names and auto-selects from discovered options on that node, with explicit fallback warnings.",
         "For compute.destroy_vm: name (string, optional) - VM name to destroy. vmId (number, optional) - VM ID to destroy. Either name or vmId is required. node (string, optional) - Node name for validation. dryRun (boolean, optional) - Preview destruction without executing.",
         "For network.create_dns_record: hostname (string, required) - Hostname (e.g., 'web-server'). ip (string, required) - IPv4 address (e.g., '172.16.50.100'). domain (string, optional, default: '.prox') - Domain suffix to append. dryRun (boolean, optional) - Preview DNS record creation without executing.",
         "For network.sync_dhcp_to_dns: dryRun (boolean, optional) - Preview sync without creating/updating DNS records. domain (string, optional, default: '.prox') - Domain suffix for DNS records. updateExisting (boolean, optional, default: true) - Update DNS records if IP changed. This action queries OPNsense DHCP leases and creates/updates corresponding DNS records in Pi-hole, bridging the gap between OPNsense DHCP (Unbound) and Pi-hole (forwarder)."
@@ -322,4 +322,3 @@ export class ActionTool extends BaseTool {
     }
   }
 }
-

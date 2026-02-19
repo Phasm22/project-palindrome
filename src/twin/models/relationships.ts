@@ -18,7 +18,7 @@ const BaseRelationshipSchema = z.object({
   type: z.nativeEnum(TwinRelationshipType),
   fromId: z.string().min(1),
   toId: z.string().min(1),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
   collectedAt: z.date().default(() => new Date()),
 });
 
@@ -76,4 +76,3 @@ export const TwinRelationshipSchema = z.union([
 ]);
 
 export type TwinRelationship = z.infer<typeof TwinRelationshipSchema>;
-

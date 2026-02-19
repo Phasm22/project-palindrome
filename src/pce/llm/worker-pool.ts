@@ -218,6 +218,10 @@ class RateLimiter {
     if (this.requests.length >= this.rpm) {
       // Wait until the oldest request expires
       const oldestRequest = this.requests[0];
+      if (oldestRequest === undefined) {
+        this.requests.push(Date.now());
+        return;
+      }
       const waitTime = 60000 - (now - oldestRequest) + 100; // Add 100ms buffer
       
       if (waitTime > 0) {
@@ -230,4 +234,3 @@ class RateLimiter {
     this.requests.push(Date.now());
   }
 }
-

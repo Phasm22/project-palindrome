@@ -30,6 +30,10 @@ interface EmbeddingCacheEntry {
   timestamp: number;
 }
 
+interface OllamaEmbeddingResponse {
+  embedding?: number[];
+}
+
 // Cache TTL: 5 minutes for query embeddings
 const EMBEDDING_CACHE_TTL = 5 * 60 * 1000;
 const EMBEDDING_CACHE_MAX_SIZE = 500;
@@ -192,7 +196,7 @@ export class EmbeddingService {
       throw new Error(`Ollama API error: ${response.status} ${errorText}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as OllamaEmbeddingResponse;
     const embedding = data.embedding;
 
     if (!embedding || !Array.isArray(embedding)) {
@@ -240,5 +244,4 @@ export class EmbeddingService {
     return this.dimension;
   }
 }
-
 

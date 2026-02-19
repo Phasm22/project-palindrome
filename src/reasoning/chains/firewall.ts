@@ -9,18 +9,30 @@ interface FirewallAliasDef {
   cidrs: string[];
 }
 
+interface FirewallRuleSummary {
+  id: string;
+  action: string;
+  direction?: string;
+  interface?: string;
+  protocol?: string;
+  source?: string;
+  destination?: string;
+  chain?: string;
+}
+
+function toFirewallRules(data: unknown[]): FirewallRuleSummary[] {
+  return data.filter((rule): rule is FirewallRuleSummary => {
+    if (!rule || typeof rule !== "object") {
+      return false;
+    }
+    const candidate = rule as Partial<FirewallRuleSummary>;
+    return typeof candidate.id === "string" && typeof candidate.action === "string";
+  });
+}
+
 function formatRuleList(
   title: string,
-  rules: Array<{
-    id: string;
-    action: string;
-    direction?: string;
-    interface?: string;
-    protocol?: string;
-    source?: string;
-    destination?: string;
-    chain?: string;
-  }>,
+  rules: FirewallRuleSummary[],
   aliases?: FirewallAliasDef[]
 ): string {
   const lines: string[] = [];
@@ -67,7 +79,7 @@ export async function listFirewallRulesChain(
     throw new Error(result.error);
   }
   const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
-  const rules = payload?.data ?? [];
+  const rules = toFirewallRules(payload?.data ?? []);
   const aliases = payload?.aliases ?? [];
   return formatRuleList("Firewall Rules:", rules, aliases);
 }
@@ -89,7 +101,7 @@ export async function firewallRulesByChainChain(
     throw new Error(result.error);
   }
   const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
-  const rules = payload?.data ?? [];
+  const rules = toFirewallRules(payload?.data ?? []);
   const aliases = payload?.aliases ?? [];
   return formatRuleList(`Firewall Rules for ${chain}:`, rules, aliases);
 }
@@ -114,7 +126,7 @@ export async function rulesAllowingSubnetChain(
     throw new Error(result.error);
   }
   const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
-  const rules = payload?.data ?? [];
+  const rules = toFirewallRules(payload?.data ?? []);
   const aliases = payload?.aliases ?? [];
   return formatRuleList(`Rules Allowing Access to ${subnet}:`, rules, aliases);
 }
@@ -139,7 +151,7 @@ export async function rulesBlockingSubnetChain(
     throw new Error(result.error);
   }
   const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
-  const rules = payload?.data ?? [];
+  const rules = toFirewallRules(payload?.data ?? []);
   const aliases = payload?.aliases ?? [];
   return formatRuleList(`Rules Blocking Access to ${subnet}:`, rules, aliases);
 }
@@ -287,4 +299,3 @@ export async function ruleImpactChain(
   }
   return lines.join("\n");
 }
-

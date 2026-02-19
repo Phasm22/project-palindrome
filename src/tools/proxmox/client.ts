@@ -1,4 +1,5 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
+import axios from "axios";
+import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import https from "https";
 import { pceLogger as logger } from "../../pce/utils/logger";
 
@@ -368,4 +369,3 @@ export class ProxmoxClient {
     });
   }
 }
-

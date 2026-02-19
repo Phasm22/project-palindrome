@@ -241,11 +241,16 @@ export class QdrantVectorStore {
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
+      const vector = vectors[i];
+      if (!chunk || !vector) {
+        skipped++;
+        continue;
+      }
       const existing = existingChunkMap.get(chunk.id);
 
       // Update if chunk doesn't exist or if content changed (compare hash)
       if (!existing) {
-        chunksToUpdate.push({ chunk, vector: vectors[i], index: i });
+        chunksToUpdate.push({ chunk, vector, index: i });
       } else {
         // Compare chunk content hash to detect changes
         const existingText = existing.chunk.text;
@@ -253,7 +258,7 @@ export class QdrantVectorStore {
         
         // Simple comparison - in production, could use chunk hash from metadata
         if (existingText !== newText) {
-          chunksToUpdate.push({ chunk, vector: vectors[i], index: i });
+          chunksToUpdate.push({ chunk, vector, index: i });
         } else {
           skipped++;
         }
@@ -539,4 +544,3 @@ export class QdrantVectorStore {
     }
   }
 }
-

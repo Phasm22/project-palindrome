@@ -76,6 +76,9 @@ export function zodToJsonSchema(zodSchema: z.ZodTypeAny): JSONSchema {
 }
 
 function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
+  const anyType = zodType as any;
+  const def = anyType?._def as Record<string, any> | undefined;
+
   // Handle ZodString
   if (zodType instanceof z.ZodString) {
     const prop: JSONSchemaProperty = {
@@ -107,11 +110,11 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
   if (zodType instanceof z.ZodEnum) {
     // Zod uses _def.entries (object) or _def.values (array) depending on version
     let enumValues: any[] = [];
-    if (zodType._def.values) {
-      enumValues = zodType._def.values;
-    } else if (zodType._def.entries) {
+    if (Array.isArray(def?.values)) {
+      enumValues = def.values;
+    } else if (def?.entries && typeof def.entries === "object") {
       // entries is an object like { a: true, b: true } - extract keys
-      enumValues = Object.keys(zodType._def.entries);
+      enumValues = Object.keys(def.entries as Record<string, unknown>);
     }
     
     const prop: JSONSchemaProperty = {
@@ -123,10 +126,10 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
   }
 
   // Handle ZodNativeEnum (check if it exists first)
-  if (zodType._def?.typeName === "ZodNativeEnum") {
+  if (def?.typeName === "ZodNativeEnum") {
     const prop: JSONSchemaProperty = {
       type: "string",
-      enum: Object.values(zodType._def.values),
+      enum: Object.values((def.values ?? {}) as Record<string, unknown>),
       description: zodType.description,
     };
     return prop;
@@ -134,21 +137,23 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
 
   // Handle ZodOptional
   if (zodType instanceof z.ZodOptional) {
-    return zodToJsonSchemaProperty(zodType._def.innerType);
+    const innerType = (def?.innerType ?? anyType.unwrap?.()) as z.ZodTypeAny;
+    return zodToJsonSchemaProperty(innerType);
   }
 
   // Handle ZodDefault - unwrap and preserve enum/default
   if (zodType instanceof z.ZodDefault) {
-    const innerType = zodType._def.innerType;
+    const innerType = (def?.innerType ?? anyType.removeDefault?.()) as z.ZodTypeAny;
     // Check if inner type is an enum BEFORE unwrapping
     if (innerType instanceof z.ZodEnum) {
       // Zod uses _def.entries (object) or _def.values (array) depending on version
       let enumValues: any[] = [];
-      if (innerType._def.values) {
-        enumValues = innerType._def.values;
-      } else if (innerType._def.entries) {
+      const innerDef = (innerType as any)._def as Record<string, any> | undefined;
+      if (Array.isArray(innerDef?.values)) {
+        enumValues = innerDef.values;
+      } else if (innerDef?.entries && typeof innerDef.entries === "object") {
         // entries is an object like { a: true, b: true } - extract keys
-        enumValues = Object.keys(innerType._def.entries);
+        enumValues = Object.keys(innerDef.entries as Record<string, unknown>);
       }
       
       const prop: JSONSchemaProperty = {
@@ -157,27 +162,30 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
         description: innerType.description || zodType.description,
       };
       // defaultValue can be a function or a value
-      const defaultValue = typeof zodType._def.defaultValue === "function" 
-        ? zodType._def.defaultValue() 
-        : zodType._def.defaultValue;
+      const defaultFnOrValue = def?.defaultValue;
+      const defaultValue = typeof defaultFnOrValue === "function"
+        ? defaultFnOrValue()
+        : defaultFnOrValue;
       prop.default = defaultValue;
       return prop;
     }
     // For non-enum defaults, unwrap normally
     const prop = zodToJsonSchemaProperty(innerType);
-    const defaultValue = typeof zodType._def.defaultValue === "function" 
-      ? zodType._def.defaultValue() 
-      : zodType._def.defaultValue;
+    const defaultFnOrValue = def?.defaultValue;
+    const defaultValue = typeof defaultFnOrValue === "function"
+      ? defaultFnOrValue()
+      : defaultFnOrValue;
     prop.default = defaultValue;
     return prop;
   }
 
   // Handle ZodArray
   if (zodType instanceof z.ZodArray) {
+    const itemType = (def?.type ?? anyType.element ?? z.any()) as z.ZodTypeAny;
     const prop: JSONSchemaProperty = {
       type: "array",
       description: zodType.description,
-      items: zodToJsonSchemaProperty(zodType._def.type),
+      items: zodToJsonSchemaProperty(itemType),
     };
     return prop;
   }
@@ -199,8 +207,8 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
   }
 
   // Handle ZodRecord (z.record())
-  if (zodType._def?.typeName === "ZodRecord" || (zodType as any).constructor?.name === "ZodRecord") {
-    const valueType = zodType._def?.valueType;
+  if (def?.typeName === "ZodRecord" || (zodType as any).constructor?.name === "ZodRecord") {
+    const valueType = def?.valueType as z.ZodTypeAny | undefined;
     
     // For ZodRecord, we need to represent it as an object with additionalProperties
     // OpenAI doesn't accept "any" type, so we use a more permissive object schema
@@ -224,7 +232,7 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
 
   // Handle z.any() - OpenAI doesn't accept "any", so we use object as a fallback
   // Check for ZodAny by checking the typeName or constructor name
-  const typeName = zodType._def?.typeName;
+  const typeName = def?.typeName;
   const constructorName = (zodType as any).constructor?.name;
   if (typeName === "ZodAny" || constructorName === "ZodAny" || zodType instanceof (z as any).ZodAny) {
     // For z.any(), we return an object type that accepts any properties
@@ -340,4 +348,3 @@ export function generateToolsPrompt(tools: BaseTool[]): string {
   
   return prompt.trim();
 }
-

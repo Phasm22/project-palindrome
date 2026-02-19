@@ -25,7 +25,7 @@ const MULTI_NIC_PATTERNS = [
 
 function extractNodeName(text: string): string | null {
   const match = text.match(/\b(?:node|host)\s+([a-z0-9\-_]+)/i);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 function extractVmNameOrId(text: string): string | null {
@@ -34,7 +34,7 @@ function extractVmNameOrId(text: string): string | null {
     return idMatch[0];
   }
   const nameMatch = text.match(VM_NAME_REGEX);
-  return nameMatch ? nameMatch[1] : null;
+  return nameMatch?.[1] ?? null;
 }
 
 function extractKnownVmName(text: string): string | null {
@@ -113,7 +113,7 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
       return { type: "vm_reachability", vmId };
     }
     const entityMatch = userInput.match(ENTITY_ID_REGEX);
-    if (entityMatch) {
+    if (entityMatch?.[1]) {
       return { type: "reachability", fromId: entityMatch[1] };
     }
   }

@@ -8,9 +8,11 @@
  * 4. Runtime introspection
  */
 
-import { ApiDiscoveryService, DiscoveredEndpoint, DiscoveryResult } from "./discovery-framework";
+import { ApiDiscoveryService } from "./discovery-framework";
+import type { DiscoveredEndpoint, DiscoveryResult } from "./discovery-framework";
 import { logger } from "../../utils/logger";
-import axios, { AxiosInstance } from "axios";
+import axios from "axios";
+import type { AxiosInstance } from "axios";
 import https from "https";
 
 export class OpnsenseDiscoveryService extends ApiDiscoveryService {
@@ -85,7 +87,7 @@ export class OpnsenseDiscoveryService extends ApiDiscoveryService {
         const moduleEndpoints = await this.probeModule(module);
         endpoints.push(...moduleEndpoints);
       } catch (error) {
-        logger.debug(`Could not probe module ${module}`, error);
+        logger.debug(`Could not probe module ${module}`, { error });
       }
     }
 
@@ -260,4 +262,3 @@ export class OpnsenseDiscoveryService extends ApiDiscoveryService {
     });
   }
 }
-

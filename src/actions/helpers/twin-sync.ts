@@ -1,9 +1,9 @@
 import { TwinUpdateService } from "../../twin/state/twin-updater";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
-import type { TwinEntity, TwinRelationship } from "../../twin/models/entities";
+import type { TwinEntity } from "../../twin/models/entities";
 import { TwinEntityType } from "../../twin/models/entities";
-import { TwinRelationshipType } from "../../twin/models/relationships";
-import { TerraformOutput } from "./terraform-runner";
+import { TwinRelationshipType, type TwinRelationship } from "../../twin/models/relationships";
+import type { TerraformOutput } from "./terraform-runner";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { normalizeVmId, normalizeNodeId } from "../../parsers/compute/helpers";
 
@@ -40,12 +40,10 @@ export class TwinSync {
       // Format: "proxBig/qemu/101" or just the number
       let vmId: string;
       if (typeof vmInfo.id === "number") {
-        // Need to determine node from vmInfo.node
-        const nodeId = normalizeNodeId(vmInfo.node);
         vmId = normalizeVmId(vmInfo.node, vmInfo.id);
       } else {
         // Assume it's already in the right format
-        vmId = vmInfo.id.toString();
+        vmId = String(vmInfo.id);
       }
 
       const nodeId = normalizeNodeId(vmInfo.node);
@@ -74,10 +72,10 @@ export class TwinSync {
 
       // Create RUNS_ON relationship
       const relationship: TwinRelationship = {
-        from: vmId,
-        to: nodeId,
+        fromId: vmId,
+        toId: nodeId,
         type: TwinRelationshipType.RUNS_ON,
-        source: "terraform",
+        metadata: { source: "terraform" },
         collectedAt,
       };
 
@@ -113,4 +111,3 @@ export class TwinSync {
     logger.info("VM removed from terraform, will be cleaned up by next ingestion", { vmId });
   }
 }
-

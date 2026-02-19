@@ -46,7 +46,7 @@ export class ProxmoxNodeParser implements Parser<ListNodesResponse> {
   }
 
   private toEntity(node: ProxmoxNodeRecord & { node: string }, context: ParserContext): TwinEntity {
-    const status = node.status_normalized || node.status || "unknown";
+    const status = this.normalizeStatus(node.status_normalized ?? node.status);
     const id = normalizeNodeId(node.node);
 
     return {
@@ -58,11 +58,23 @@ export class ProxmoxNodeParser implements Parser<ListNodesResponse> {
       data: {
         roles: node.type ? [node.type] : [],
         ipAddresses: collectIpAddresses(node.ip),
-        status: status as "online" | "degraded" | "offline" | "unknown",
+        status,
         cpuTotalCores: node.maxcpu,
         memoryTotalBytes: node.maxmem,
       },
     };
   }
-}
 
+  private normalizeStatus(
+    raw?: string
+  ): "online" | "degraded" | "offline" | undefined {
+    if (!raw) {
+      return undefined;
+    }
+    const normalized = raw.toLowerCase();
+    if (normalized === "online" || normalized === "degraded" || normalized === "offline") {
+      return normalized;
+    }
+    return undefined;
+  }
+}

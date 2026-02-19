@@ -2,6 +2,7 @@ import readline from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import type { AgentResponse } from "../types/agent";
+import type { ExecutionResult } from "../types/execution";
 import type { ConversationContext, ConversationState, UserPreferences } from "../types";
 import { logger } from "../utils/logger";
 import { loadTools } from "./tool-loader";
@@ -73,6 +74,7 @@ import { formatResponseForBot, detectResponseIntent, type FormatContext, type Re
 import { planConversation } from "./conversation-orchestrator";
 import { parseConfirmationInput } from "./dialog-policy";
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-risk";
+import { pceLogger } from "../pce/utils/logger";
 
 let openaiClient: OpenAI | null = null;
 const ASSISTANT_NAME = "Pally";
@@ -160,7 +162,7 @@ function normalizeUserName(rawName: string): string {
   if (isAllLower || isAllUpper) {
     return unquoted
       .split(" ")
-      .map((part) => (part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : part))
+      .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase() : part))
       .join(" ");
   }
   return unquoted;
@@ -280,7 +282,7 @@ function buildRetrievalArtifacts(rag: HybridApiContext): {
       topChunks: topChunks.map((chunk) => ({
         sourcePath: chunk.sourcePath || "unknown",
         score: chunk.score ?? 0,
-        chunkId: chunk.chunkId ?? undefined,
+        chunkId: chunk.id ?? undefined,
       })),
       structuralPaths: rag.context?.structuralPaths?.length ?? 0,
     },
@@ -705,20 +707,25 @@ export async function runAgent(
   const eventBus = AgentEventBus.getInstance();
 
   const originalUserInput = userInput;
-  const confirmation = parseConfirmationInput(userInput);
+  let confirmation = parseConfirmationInput(userInput);
   const pendingAction = options.conversationContext?.pendingAction;
   const pendingActionId = options.conversationContext?.pendingActionId;
+  const pendingActionExecuteInput = options.conversationContext?.pendingActionExecuteInput ?? pendingAction;
+  const pendingActionPreview =
+    options.conversationContext?.pendingActionPreview ??
+    options.conversationContext?.pendingActionSummary ??
+    pendingAction;
+  const pendingActionCreatedAt = options.conversationContext?.pendingActionCreatedAt;
+  const pendingActionExpiresAt = options.conversationContext?.pendingActionExpiresAt;
+  const pendingActionSummary =
+    options.conversationContext?.pendingActionSummary ??
+    options.conversationContext?.pendingActionPreview ??
+    pendingAction;
+  const pendingActionExpired =
+    typeof pendingActionExpiresAt === "number"
+      ? Date.now() > pendingActionExpiresAt
+      : (pendingActionCreatedAt ? (Date.now() - pendingActionCreatedAt) > (15 * 60 * 1000) : false);
   let usedPendingAction = false;
-  if (confirmation.confirmed && confirmation.actionText) {
-    userInput = confirmation.actionText;
-  } else if (
-    confirmation.confirmed &&
-    pendingAction &&
-    (!confirmation.actionId || (pendingActionId && confirmation.actionId === pendingActionId))
-  ) {
-    userInput = pendingAction;
-    usedPendingAction = true;
-  }
 
   const emitStepEvent = (data: Record<string, any>) => {
     eventBus.emit({
@@ -744,23 +751,43 @@ export async function runAgent(
     });
   };
 
-  const pendingActionCreatedAt = options.conversationContext?.pendingActionCreatedAt;
-  const pendingActionSummary = options.conversationContext?.pendingActionSummary ?? pendingAction;
-  const pendingActionExpired =
-    pendingActionCreatedAt ? (Date.now() - pendingActionCreatedAt) > (15 * 60 * 1000) : false;
+  if (confirmation.cancelled) {
+    const prompt = pendingActionId
+      ? "Cancelled the pending change. Nothing was applied."
+      : "There is no pending change to cancel.";
+    emitFinalEvent(prompt, {
+      clarification: true,
+      needsResponse: true,
+      conversationState: "IDLE",
+      conversationContext: {
+        pendingAction: "",
+        pendingActionId: "",
+        pendingActionDigest: "",
+        pendingActionCreatedAt: 0,
+        pendingActionSummary: "",
+        pendingActionType: "",
+        pendingActionPreview: "",
+        pendingActionExecuteInput: "",
+        pendingActionExpiresAt: 0,
+      },
+    });
+    pceLogger.incrementCounter("confirmation_rejected");
+    return { text: prompt };
+  }
 
-  if (confirmation.confirmed && confirmation.actionId && !pendingActionId) {
-    const prompt = "There is no pending action to confirm. Please restate the change.";
+  if (confirmation.confirmed && !pendingActionId) {
+    const prompt = "There is no pending action to confirm. Re-submit the change request first.";
     emitFinalEvent(prompt, {
       clarification: true,
       needsResponse: true,
       conversationState: "IDLE",
     });
+    pceLogger.incrementCounter("confirmation_mismatch");
     return { text: prompt };
   }
 
-  if (confirmation.confirmed && confirmation.actionId && pendingActionId && confirmation.actionId !== pendingActionId) {
-    const prompt = `Confirmation id does not match the pending action. Reply with CONFIRM ${pendingActionId} to proceed.`;
+  if (confirmation.confirmed && !confirmation.actionId && pendingActionId) {
+    const prompt = `Pending change requires explicit confirmation. Reply with CONFIRM ${pendingActionId} to apply, or CANCEL.`;
     emitFinalEvent(prompt, {
       clarification: true,
       needsResponse: true,
@@ -771,12 +798,45 @@ export async function runAgent(
         pendingActionDigest: options.conversationContext?.pendingActionDigest,
         pendingActionCreatedAt,
         pendingActionSummary,
+        pendingActionPreview,
+        pendingActionExecuteInput,
+        pendingActionExpiresAt,
       },
+      confirmationRequired: true,
+      confirmationId: pendingActionId,
+      confirmationPreview: pendingActionPreview ?? pendingActionSummary ?? pendingAction ?? "",
+      confirmationExpiresAt: pendingActionExpiresAt ?? 0,
     });
+    pceLogger.incrementCounter("confirmation_mismatch");
     return { text: prompt };
   }
 
-  if (confirmation.confirmed && pendingActionExpired) {
+  if (confirmation.confirmed && confirmation.actionId && pendingActionId && confirmation.actionId !== pendingActionId) {
+    const prompt = `Confirmation id does not match the pending action. Reply with CONFIRM ${pendingActionId} to apply, or CANCEL.`;
+    emitFinalEvent(prompt, {
+      clarification: true,
+      needsResponse: true,
+      conversationState: "AWAITING_CONFIRMATION",
+      conversationContext: {
+        pendingAction,
+        pendingActionId,
+        pendingActionDigest: options.conversationContext?.pendingActionDigest,
+        pendingActionCreatedAt,
+        pendingActionSummary,
+        pendingActionPreview,
+        pendingActionExecuteInput,
+        pendingActionExpiresAt,
+      },
+      confirmationRequired: true,
+      confirmationId: pendingActionId,
+      confirmationPreview: pendingActionPreview ?? pendingActionSummary ?? pendingAction ?? "",
+      confirmationExpiresAt: pendingActionExpiresAt ?? 0,
+    });
+    pceLogger.incrementCounter("confirmation_mismatch");
+    return { text: prompt };
+  }
+
+  if (confirmation.confirmed && pendingActionExpired && pendingActionId) {
     const prompt = "Confirmation expired. Please re-request the change.";
     emitFinalEvent(prompt, {
       clarification: true,
@@ -788,19 +848,22 @@ export async function runAgent(
         pendingActionDigest: "",
         pendingActionCreatedAt: 0,
         pendingActionSummary: "",
+        pendingActionType: "",
+        pendingActionPreview: "",
+        pendingActionExecuteInput: "",
+        pendingActionExpiresAt: 0,
       },
     });
+    pceLogger.incrementCounter("confirmation_expired");
     return { text: prompt };
   }
 
-  if (confirmation.confirmed && !confirmation.actionText && !pendingAction) {
-    const prompt = "What should I confirm? Reply with CONFIRM: <action>.";
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "NEED_CLARIFICATION",
-    });
-    return { text: prompt };
+  if (confirmation.confirmed && pendingActionExecuteInput && pendingActionId && confirmation.actionId === pendingActionId) {
+    userInput = pendingActionExecuteInput;
+    usedPendingAction = true;
+    pceLogger.incrementCounter("confirmation_approved");
+    // Confirmation token is consumed; downstream routing should evaluate the replayed action on its own.
+    confirmation = { confirmed: false };
   }
 
   const session: ToolSession = {
@@ -921,11 +984,25 @@ export async function runAgent(
     return parts.join("\n\n");
   };
 
-  const buildPendingActionRecord = (actionText: string, summary?: string) => {
+  const buildPendingActionRecord = (
+    executeInput: string,
+    summary?: string,
+    type: string = "change_request"
+  ) => {
     const createdAt = Date.now();
-    const digest = createHash("sha256").update(actionText).digest("hex");
+    const expiresAt = createdAt + 15 * 60 * 1000;
+    const digest = createHash("sha256").update(executeInput).digest("hex");
     const id = digest.slice(0, 8);
-    return { id, digest, createdAt, summary: summary ?? actionText };
+    return {
+      id,
+      digest,
+      createdAt,
+      expiresAt,
+      type,
+      preview: summary ?? executeInput,
+      executeInput,
+      summary: summary ?? executeInput,
+    };
   };
 
   const summarizeToolCall = (toolName: string, params: Record<string, any>): string => {
@@ -977,14 +1054,17 @@ export async function runAgent(
   const finalContextUpdate: ConversationContext = { ...contextUpdate };
   const shouldClearPending =
     usedPendingAction ||
-    (confirmation.confirmed && conversationPlan.shouldExecute) ||
-    (!!pendingAction && !confirmation.confirmed && (classification.intent !== "ACTION" || classification.operation.verbs.length === 0));
+    (confirmation.confirmed && conversationPlan.shouldExecute);
   if (shouldClearPending) {
     finalContextUpdate.pendingAction = "";
     finalContextUpdate.pendingActionId = "";
     finalContextUpdate.pendingActionDigest = "";
     finalContextUpdate.pendingActionCreatedAt = 0;
     finalContextUpdate.pendingActionSummary = "";
+    finalContextUpdate.pendingActionType = "";
+    finalContextUpdate.pendingActionPreview = "";
+    finalContextUpdate.pendingActionExecuteInput = "";
+    finalContextUpdate.pendingActionExpiresAt = 0;
   }
   
   // Store original classification for confidence monotonicity
@@ -996,6 +1076,12 @@ export async function runAgent(
     confidence: classification.confidence,
     metadata: classification.metadata,
     route: routing.route,
+  });
+  logger.info("Conversation transition", {
+    conversation_state_before: options.conversationState ?? "IDLE",
+    decision: conversationPlan.decision,
+    confirmation_id: pendingActionId ?? null,
+    pending_action_source: usedPendingAction ? "pending_replay" : "user_input",
   });
 
   const policyMode = options.userPreferences?.safeMode ? "safe" : "standard";
@@ -1171,7 +1257,9 @@ export async function runAgent(
     const q = (originalUserInput || "").toLowerCase();
     const match = q.match(/\bsubnet\b[\s\S]*?\b(\d+)\b[\s\S]*?\bhosts?\b/) || q.match(/\b(\d+)\b[\s\S]*?\bhosts?\b[\s\S]*?\bsubnet\b/);
     if (!match) return null;
-    const hosts = parseInt(match[1], 10);
+    const hostsRaw = match[1];
+    if (!hostsRaw) return null;
+    const hosts = parseInt(hostsRaw, 10);
     if (!Number.isFinite(hosts) || hosts <= 0) return null;
     // IPv4: need 2 extra addresses for network+broadcast
     const needed = hosts + 2;
@@ -1199,27 +1287,43 @@ export async function runAgent(
 
   // Handle high-risk confirmation gate (bound to pending action)
   if (conversationPlan.decision === "ASK_CONFIRM") {
-    const pendingActionText = originalUserInput;
-    const pendingSummary = conversationPlan.pendingAction ?? pendingActionText;
-    const pendingRecord = buildPendingActionRecord(pendingActionText, pendingSummary);
-    const requiresId = classification.risk === "DESTRUCTIVE";
-    const confirmationPrompt = requiresId
-      ? `This is a destructive change. Reply with CONFIRM ${pendingRecord.id} to proceed.`
-      : `This is a high-risk change. Reply with CONFIRM to proceed.`;
+    const pendingActionExecute = originalUserInput;
+    const pendingSummary = conversationPlan.pendingAction ?? pendingActionExecute;
+    const pendingRecord = buildPendingActionRecord(
+      pendingActionExecute,
+      pendingSummary,
+      `intent:${classification.intent.toLowerCase()}`
+    );
+    const confirmationPrompt =
+      `Review pending change: ${pendingRecord.preview}\n` +
+      `Reply with CONFIRM ${pendingRecord.id} to apply, or CANCEL.`;
+    pceLogger.incrementCounter("confirmation_requested");
+    logger.info("Conversation transition", {
+      conversation_state_before: options.conversationState ?? "IDLE",
+      decision: conversationPlan.decision,
+      confirmation_id: pendingRecord.id,
+      pending_action_source: "plan_conversation",
+    });
 
     emitFinalEvent(confirmationPrompt, {
       confirmationRequired: true,
+      confirmationId: pendingRecord.id,
+      confirmationPreview: pendingRecord.preview,
+      confirmationExpiresAt: pendingRecord.expiresAt,
       classification,
       conversationState: conversationPlan.nextState,
-      pendingAction: pendingSummary,
+      pendingAction: pendingRecord.preview,
       conversationContext: {
         ...contextUpdate,
-        // Keep the full original request so a later bare CONFIRM replays the real action.
-        pendingAction: pendingActionText,
+        pendingAction: pendingRecord.executeInput,
         pendingActionId: pendingRecord.id,
         pendingActionDigest: pendingRecord.digest,
         pendingActionCreatedAt: pendingRecord.createdAt,
         pendingActionSummary: pendingRecord.summary,
+        pendingActionType: pendingRecord.type,
+        pendingActionPreview: pendingRecord.preview,
+        pendingActionExecuteInput: pendingRecord.executeInput,
+        pendingActionExpiresAt: pendingRecord.expiresAt,
       },
     });
     return { text: confirmationPrompt };
@@ -1332,127 +1436,134 @@ export async function runAgent(
         userId: session.userId,
         aclGroup: session.aclGroup,
       });
+      if (ragPayload) {
+        const ragScore = ragPayload.sTotalScore ?? null;
+        const domainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
+        const hasSources = (ragPayload.sources?.length ?? 0) > 0;
+        const injected =
+          hasSources &&
+          ragScore !== null &&
+          ragScore >= RETRIEVAL_MIN_SCORE &&
+          domainMatch;
+        let injectedReason = "accepted";
+        if (!hasSources) injectedReason = "no_sources";
+        else if (ragScore === null || ragScore < RETRIEVAL_MIN_SCORE) injectedReason = "score_below_threshold";
+        else if (!domainMatch) injectedReason = "domain_mismatch";
 
-      const ragScore = ragPayload.sTotalScore ?? null;
-      const domainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
-      const hasSources = (ragPayload.sources?.length ?? 0) > 0;
-      const injected =
-        hasSources &&
-        ragScore !== null &&
-        ragScore >= RETRIEVAL_MIN_SCORE &&
-        domainMatch;
-      let injectedReason = "accepted";
-      if (!hasSources) injectedReason = "no_sources";
-      else if (ragScore === null || ragScore < RETRIEVAL_MIN_SCORE) injectedReason = "score_below_threshold";
-      else if (!domainMatch) injectedReason = "domain_mismatch";
-
-      clarificationRetrievalDecisions.push({
-        type: "retrieval_executed",
-        description: "Retrieval executed for low-confidence query.",
-        metadata: {
-          queryType: ragPayload.queryType,
-          score: ragScore,
-          sourcesCount: ragPayload.sources?.length ?? 0,
-        },
-      });
-      clarificationRetrievalDecisions.push({
-        type: injected ? "retrieval_injected" : "retrieval_not_injected",
-        description: injected
-          ? "Retrieval injected into prompt."
-          : "Retrieval executed but not injected into prompt.",
-        metadata: {
-          score: ragScore,
-          minScore: RETRIEVAL_MIN_SCORE,
-          domainMatch,
-          sourcesCount: ragPayload.sources?.length ?? 0,
-          reason: injectedReason,
-        },
-      });
-
-      const artifactBundle = buildRetrievalArtifacts(ragPayload);
-      clarificationRetrievalArtifacts.push(...artifactBundle.artifacts);
-      clarificationRagContextId = artifactBundle.ragContextId;
-      clarificationGraphContextId = artifactBundle.graphContextId;
-      clarificationFusionContextId = artifactBundle.fusionContextId;
-      clarificationRetrievalToolCalls.push(...buildRetrievalToolCalls(ragPayload));
-
-      // If RAG has a good answer (high score), use it instead of asking for clarification
-      if (injected && ragPayload.answer) {
-        logger.info("RAG provided answer despite low classification confidence", {
-          sTotalScore: ragPayload.sTotalScore,
-          answerLength: ragPayload.answer.length,
+        clarificationRetrievalDecisions.push({
+          type: "retrieval_executed",
+          description: "Retrieval executed for low-confidence query.",
+          metadata: {
+            queryType: ragPayload.queryType,
+            score: ragScore,
+            sourcesCount: ragPayload.sources?.length ?? 0,
+          },
         });
-        
-        // Clean up the RAG answer (remove verbose citations, formatting)
-        let cleanedAnswer = cleanupRagAnswer(ragPayload.answer);
-        
-        // Format response for bot-like style
-        try {
-          const intentType = detectResponseIntent(userInput);
-          cleanedAnswer = await formatResponseForBot(cleanedAnswer, {
-            userQuery: userInput,
-            intentType,
-            mode: responseMode,
+        clarificationRetrievalDecisions.push({
+          type: injected ? "retrieval_injected" : "retrieval_not_injected",
+          description: injected
+            ? "Retrieval injected into prompt."
+            : "Retrieval executed but not injected into prompt.",
+          metadata: {
+            score: ragScore,
+            minScore: RETRIEVAL_MIN_SCORE,
+            domainMatch,
+            sourcesCount: ragPayload.sources?.length ?? 0,
+            reason: injectedReason,
+          },
+        });
+
+        const artifactBundle = buildRetrievalArtifacts(ragPayload);
+        clarificationRetrievalArtifacts.push(...artifactBundle.artifacts);
+        clarificationRagContextId = artifactBundle.ragContextId;
+        clarificationGraphContextId = artifactBundle.graphContextId;
+        clarificationFusionContextId = artifactBundle.fusionContextId;
+        clarificationRetrievalToolCalls.push(...buildRetrievalToolCalls(ragPayload));
+
+        // If RAG has a good answer (high score), use it instead of asking for clarification
+        if (injected && ragPayload.answer) {
+          logger.info("RAG provided answer despite low classification confidence", {
+            sTotalScore: ragPayload.sTotalScore,
+            answerLength: ragPayload.answer.length,
           });
-        } catch (error: any) {
-          logger.warn("Failed to format RAG answer", { error: error.message });
+          
+          // Clean up the RAG answer (remove verbose citations, formatting)
+          let cleanedAnswer = cleanupRagAnswer(ragPayload.answer);
+          
+          // Format response for bot-like style
+          try {
+            const intentType = detectResponseIntent(userInput);
+            cleanedAnswer = await formatResponseForBot(cleanedAnswer, {
+              userQuery: userInput,
+              intentType,
+              mode: responseMode,
+            });
+          } catch (error: any) {
+            logger.warn("Failed to format RAG answer", { error: error.message });
+          }
+          
+          // Record trace
+          let traceId: string | undefined;
+          try {
+            const traceStore = getReasoningTraceStore();
+            traceId = await traceStore.recordTrace({
+              userId: session.userId,
+              aclGroup: session.aclGroup,
+              userInput,
+              finalResponse: cleanedAnswer,
+              steps: [{
+                step: 1,
+                toolCalls: clarificationRetrievalToolCalls,
+                ragContextId: clarificationRagContextId,
+                graphContextId: clarificationGraphContextId,
+                fusionContextId: clarificationFusionContextId,
+                decisions: [
+                  ...clarificationRetrievalDecisions,
+                  {
+                    type: "rag_used",
+                    description: `Low confidence (${classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore?.toFixed(2)})`,
+                    metadata: { classification, routing, ragScore: ragPayload.sTotalScore },
+                  },
+                ],
+              }],
+              provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+              artifacts: clarificationRetrievalArtifacts,
+              totalSteps: 1,
+              totalToolCalls: clarificationRetrievalToolCalls.length,
+              maxStepsReached: false,
+              timestamp: new Date(),
+              durationMs: Date.now() - startTime,
+            });
+          } catch (error: any) {
+            logger.warn("Failed to record RAG answer trace", { error: error.message });
+          }
+          
+          // Small delay to ensure SSE stream is subscribed before emitting
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          emitFinalEvent(cleanedAnswer, { 
+            ragAnswer: true,
+            ragScore: ragPayload.sTotalScore,
+            classification,
+            conversationState: postExecutionState,
+            conversationContext: finalContextUpdate,
+            traceId,
+          });
+          return { text: cleanedAnswer };
         }
         
-        // Record trace
-        let traceId: string | undefined;
-        try {
-          const traceStore = getReasoningTraceStore();
-          traceId = await traceStore.recordTrace({
-            userId: session.userId,
-            aclGroup: session.aclGroup,
-            userInput,
-            finalResponse: cleanedAnswer,
-            steps: [{
-              step: 1,
-              toolCalls: clarificationRetrievalToolCalls,
-              ragContextId: clarificationRagContextId,
-              graphContextId: clarificationGraphContextId,
-              fusionContextId: clarificationFusionContextId,
-              decisions: [
-                ...clarificationRetrievalDecisions,
-                {
-                  type: "rag_used",
-                  description: `Low confidence (${classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore?.toFixed(2)})`,
-                  metadata: { classification, routing, ragScore: ragPayload.sTotalScore },
-                },
-              ],
-            }],
-            provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-            artifacts: clarificationRetrievalArtifacts,
-            totalSteps: 1,
-            totalToolCalls: clarificationRetrievalToolCalls.length,
-            maxStepsReached: false,
-            timestamp: new Date(),
-            durationMs: Date.now() - startTime,
-          });
-        } catch (error: any) {
-          logger.warn("Failed to record RAG answer trace", { error: error.message });
-        }
-        
-        // Small delay to ensure SSE stream is subscribed before emitting
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        emitFinalEvent(cleanedAnswer, { 
-          ragAnswer: true,
+        // RAG didn't have a good answer, fall through to clarification
+        logger.info("RAG did not provide sufficient answer, proceeding with clarification", {
           ragScore: ragPayload.sTotalScore,
-          classification,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
-          traceId,
+          hasAnswer: !!ragPayload.answer,
         });
-        return { text: cleanedAnswer };
+      } else {
+        clarificationRetrievalDecisions.push({
+          type: "retrieval_not_injected",
+          description: "Retrieval request failed or returned no payload.",
+          metadata: { reason: "unavailable" },
+        });
       }
-      
-      // RAG didn't have a good answer, fall through to clarification
-      logger.info("RAG did not provide sufficient answer, proceeding with clarification", {
-        ragScore: ragPayload?.sTotalScore,
-        hasAnswer: !!ragPayload?.answer,
-      });
     } else if (isRealTimeMetricQuery) {
       // Real-time metric queries should use tools, not RAG
       logger.info("Skipping RAG for real-time metric query - will use tools instead", {
@@ -1615,14 +1726,24 @@ export async function runAgent(
           aclGroup: session.aclGroup,
           userInput,
           finalResponse: text,
-          steps: [{
-            step: 1,
-            toolCalls: [{
-              toolName: "action",
-              parameters: { action: "compute.create_vm", params: { node, ...params } },
-              result: ok ? { success: true, vmId, hostname, message } : { success: false, message },
-              durationMs,
-            }],
+	          steps: [{
+	            step: 1,
+	            toolCalls: [{
+	              toolName: "action",
+	              parameters: { action: "compute.create_vm", params: { node, ...params } },
+	              result: ok
+	                ? {
+	                    success: true,
+	                    dataPreview: JSON.stringify({ vmId, hostname, message }),
+	                    dataSize: JSON.stringify({ vmId, hostname, message }).length,
+	                    resultType: "create_vm",
+	                  }
+	                : {
+	                    success: false,
+	                    error: String(message),
+	                  },
+	              durationMs,
+	            }],
             decisions: [{
               type: "tool_choice",
               description: "Direct action: compute.create_vm",
@@ -1921,47 +2042,57 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       userId: session.userId,
       aclGroup: session.aclGroup,
     });
-    retrievalDecisions.push({
-      type: "retrieval_executed",
-      description: "Retrieval executed for eligible query.",
-      metadata: {
-        queryType: ragPayload.queryType,
-        score: ragPayload.sTotalScore ?? null,
-        sourcesCount: ragPayload.sources?.length ?? 0,
-      },
-    });
-    retrievalDomainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
-    const score = ragPayload.sTotalScore ?? null;
-    const hasSources = (ragPayload.sources?.length ?? 0) > 0;
-    if (!hasSources) {
-      retrievalInjectedReason = "no_sources";
-    } else if (score === null || score < RETRIEVAL_MIN_SCORE) {
-      retrievalInjectedReason = "score_below_threshold";
-    } else if (!retrievalDomainMatch) {
-      retrievalInjectedReason = "domain_mismatch";
+    if (ragPayload) {
+      retrievalDecisions.push({
+        type: "retrieval_executed",
+        description: "Retrieval executed for eligible query.",
+        metadata: {
+          queryType: ragPayload.queryType,
+          score: ragPayload.sTotalScore ?? null,
+          sourcesCount: ragPayload.sources?.length ?? 0,
+        },
+      });
+      retrievalDomainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
+      const score = ragPayload.sTotalScore ?? null;
+      const hasSources = (ragPayload.sources?.length ?? 0) > 0;
+      if (!hasSources) {
+        retrievalInjectedReason = "no_sources";
+      } else if (score === null || score < RETRIEVAL_MIN_SCORE) {
+        retrievalInjectedReason = "score_below_threshold";
+      } else if (!retrievalDomainMatch) {
+        retrievalInjectedReason = "domain_mismatch";
+      } else {
+        retrievalInjectedReason = "accepted";
+        retrievalInjected = true;
+      }
+      retrievalDecisions.push({
+        type: retrievalInjected ? "retrieval_injected" : "retrieval_not_injected",
+        description: retrievalInjected
+          ? "Retrieval injected into prompt."
+          : "Retrieval executed but not injected into prompt.",
+        metadata: {
+          score,
+          minScore: RETRIEVAL_MIN_SCORE,
+          domainMatch: retrievalDomainMatch,
+          sourcesCount: ragPayload.sources?.length ?? 0,
+          reason: retrievalInjectedReason,
+        },
+      });
+      const artifactBundle = buildRetrievalArtifacts(ragPayload);
+      retrievalArtifacts = artifactBundle.artifacts;
+      ragContextId = artifactBundle.ragContextId;
+      graphContextId = artifactBundle.graphContextId;
+      fusionContextId = artifactBundle.fusionContextId;
+      retrievalToolCalls = buildRetrievalToolCalls(ragPayload);
     } else {
-      retrievalInjectedReason = "accepted";
-      retrievalInjected = true;
+      retrievalInjected = false;
+      retrievalInjectedReason = "unavailable";
+      retrievalDecisions.push({
+        type: "retrieval_not_injected",
+        description: "Retrieval request failed or returned no payload.",
+        metadata: { reason: "unavailable" },
+      });
     }
-    retrievalDecisions.push({
-      type: retrievalInjected ? "retrieval_injected" : "retrieval_not_injected",
-      description: retrievalInjected
-        ? "Retrieval injected into prompt."
-        : "Retrieval executed but not injected into prompt.",
-      metadata: {
-        score,
-        minScore: RETRIEVAL_MIN_SCORE,
-        domainMatch: retrievalDomainMatch,
-        sourcesCount: ragPayload.sources?.length ?? 0,
-        reason: retrievalInjectedReason,
-      },
-    });
-    const artifactBundle = buildRetrievalArtifacts(ragPayload);
-    retrievalArtifacts = artifactBundle.artifacts;
-    ragContextId = artifactBundle.ragContextId;
-    graphContextId = artifactBundle.graphContextId;
-    fusionContextId = artifactBundle.fusionContextId;
-    retrievalToolCalls = buildRetrievalToolCalls(ragPayload);
   }
 
   const ragMessage = retrievalInjected && ragPayload
@@ -2396,35 +2527,60 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
         const toolRisk = mapToolRiskToIntentRisk(getToolRisk(targetTool));
         const derivedRisk = deriveToolCallRisk(toolName, parsedArgs);
-        const effectiveRisk = maxRisk(
-          classification.risk,
-          toolRisk,
-          derivedRisk ?? "READ"
-        );
+        const effectiveRisk = maxRisk(classification.risk, toolRisk, derivedRisk ?? "READ");
         const needsToolConfirmation = effectiveRisk === "WRITE_HIGH" || effectiveRisk === "DESTRUCTIVE";
+        const requiresApproval = requiresConfirmation(targetTool) || needsToolConfirmation;
         const explicitConfirmationOk =
-          effectiveRisk === "DESTRUCTIVE"
-            ? (confirmation.confirmed && !!pendingActionId && confirmation.actionId === pendingActionId && !pendingActionExpired)
-            : (confirmation.confirmed && !pendingActionExpired);
+          confirmation.confirmed &&
+          !!pendingActionId &&
+          confirmation.actionId === pendingActionId &&
+          !pendingActionExpired;
 
-        if (needsToolConfirmation && !explicitConfirmationOk) {
+        if (requiresApproval && !explicitConfirmationOk) {
           const summary = summarizeToolCall(toolName, parsedArgs);
-          const pendingRecord = buildPendingActionRecord(summary, summary);
-          const prompt = effectiveRisk === "DESTRUCTIVE"
-            ? `This is a destructive change. Reply with CONFIRM ${pendingRecord.id} to proceed.`
-            : "This is a high-risk change. Reply with CONFIRM to proceed.";
+          const existingId = pendingActionId;
+          const pendingRecord = existingId
+            ? {
+                id: existingId,
+                digest: options.conversationContext?.pendingActionDigest ?? "",
+                createdAt: pendingActionCreatedAt ?? Date.now(),
+                expiresAt: pendingActionExpiresAt ?? (Date.now() + 15 * 60 * 1000),
+                type: options.conversationContext?.pendingActionType ?? `tool:${toolName}`,
+                preview: pendingActionPreview ?? pendingActionSummary ?? summary,
+                executeInput: pendingActionExecuteInput ?? pendingAction ?? originalUserInput,
+                summary: pendingActionSummary ?? pendingActionPreview ?? summary,
+              }
+            : buildPendingActionRecord(
+                originalUserInput,
+                summary,
+                `tool:${toolName}`
+              );
+          const prompt =
+            `Review pending change: ${pendingRecord.preview}\n` +
+            `Reply with CONFIRM ${pendingRecord.id} to apply, or CANCEL.`;
 
           confirmationAbort = {
             prompt,
             state: "AWAITING_CONFIRMATION",
             context: {
-              pendingAction: summary,
+              pendingAction: pendingRecord.executeInput,
               pendingActionId: pendingRecord.id,
               pendingActionDigest: pendingRecord.digest,
               pendingActionCreatedAt: pendingRecord.createdAt,
               pendingActionSummary: pendingRecord.summary,
+              pendingActionType: pendingRecord.type,
+              pendingActionPreview: pendingRecord.preview,
+              pendingActionExecuteInput: pendingRecord.executeInput,
+              pendingActionExpiresAt: pendingRecord.expiresAt,
             },
           };
+          pceLogger.incrementCounter("confirmation_requested");
+          logger.info("Conversation transition", {
+            conversation_state_before: options.conversationState ?? "IDLE",
+            decision: "ASK_CONFIRM",
+            confirmation_id: pendingRecord.id,
+            pending_action_source: existingId ? "existing_pending_action" : "tool_guard",
+          });
           reasoningStep.decisions.push({
             type: "validation_failed",
             description: "Tool execution blocked pending explicit confirmation",
@@ -2432,8 +2588,6 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           });
           break;
         }
-
-        const requiresApproval = requiresConfirmation(targetTool) || needsToolConfirmation;
 
         // For proxmox_write operations, do a dry-run first to check if action is needed
         // This avoids prompting for confirmation when the VM is already in the desired state
@@ -2456,23 +2610,6 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             // No action needed, return the dry-run result without prompting
             result = dryRunResult;
           } else {
-            // Action is needed, prompt for confirmation
-            if (requiresApproval && !explicitConfirmationOk) {
-              const approved = await confirmHighRisk({
-                toolName,
-                parameters: parsedArgs,
-                risk: getToolRisk(targetTool),
-              });
-
-              if (!approved) {
-                context.addToolResult(toolCall.id, toolName, {
-                  provenanceId,
-                  success: false,
-                  error: "High-risk action was not approved",
-                });
-                continue;
-              }
-            }
             // Execute the actual operation
             result = await executeToolCall(
               { toolName, parameters: parsedArgs },
@@ -2481,24 +2618,6 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             );
           }
         } else {
-          // For other tools, prompt for confirmation if needed
-          if (requiresApproval && !explicitConfirmationOk) {
-            const approved = await confirmHighRisk({
-              toolName,
-              parameters: parsedArgs,
-              risk: getToolRisk(targetTool),
-            });
-
-            if (!approved) {
-              context.addToolResult(toolCall.id, toolName, {
-                provenanceId,
-                success: false,
-                error: "High-risk action was not approved",
-              });
-              continue;
-            }
-          }
-
           result = await executeToolCall(
             { toolName, parameters: parsedArgs },
             tools,
@@ -2740,6 +2859,9 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         };
         emitFinalEvent(confirmationAbort.prompt, {
           confirmationRequired: true,
+          confirmationId: mergedContext.pendingActionId,
+          confirmationPreview: mergedContext.pendingActionPreview ?? mergedContext.pendingActionSummary,
+          confirmationExpiresAt: mergedContext.pendingActionExpiresAt ?? 0,
           classification,
           conversationState: confirmationAbort.state,
           conversationContext: mergedContext,

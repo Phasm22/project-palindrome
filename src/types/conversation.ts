@@ -23,9 +23,15 @@ export interface ConversationContext {
   activeService?: string;
   lastIncidentSignature?: string;
   userName?: string;
+  // Legacy pending-action keys (kept for backward compatibility)
   pendingAction?: string;
   pendingActionId?: string;
   pendingActionDigest?: string;
   pendingActionCreatedAt?: number;
   pendingActionSummary?: string;
+  // Strict confirmation envelope
+  pendingActionType?: string;
+  pendingActionPreview?: string;
+  pendingActionExecuteInput?: string;
+  pendingActionExpiresAt?: number;
 }

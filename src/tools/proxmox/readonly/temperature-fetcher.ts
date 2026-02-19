@@ -123,8 +123,12 @@ function parseSensorsText(output: string): TemperatureReading[] {
     // Temperature line: "temp1:        +45.0°C  (high = +80.0°C, crit = +100.0°C)"
     const tempMatch = trimmed.match(/^([^:]+):\s*([+-]?\d+\.?\d*)\s*°C/);
     if (tempMatch) {
-      const sensorName = tempMatch[1].trim();
-      const tempValue = parseFloat(tempMatch[2]);
+      const sensorName = tempMatch[1]?.trim();
+      const tempValueRaw = tempMatch[2];
+      if (!sensorName || !tempValueRaw) {
+        continue;
+      }
+      const tempValue = parseFloat(tempValueRaw);
 
       // Extract high and crit if present
       const highMatch = trimmed.match(/high\s*=\s*([+-]?\d+\.?\d*)\s*°C/i);
@@ -135,8 +139,8 @@ function parseSensorsText(output: string): TemperatureReading[] {
         value: tempValue,
         unit: "celsius",
         label: sensorName,
-        max: highMatch ? parseFloat(highMatch[1]) : undefined,
-        crit: critMatch ? parseFloat(critMatch[1]) : undefined,
+        max: highMatch?.[1] ? parseFloat(highMatch[1]) : undefined,
+        crit: critMatch?.[1] ? parseFloat(critMatch[1]) : undefined,
       });
     }
   }

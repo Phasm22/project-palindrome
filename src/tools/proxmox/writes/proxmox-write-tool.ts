@@ -131,7 +131,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     });
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     return createToolSchema(this, ProxmoxWriteParams, {
       examples: [
         {
@@ -195,7 +195,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     });
   }
 
-  getParameterSchema(): z.ZodTypeAny {
+  override getParameterSchema(): z.ZodTypeAny {
     return ProxmoxWriteParams;
   }
 
@@ -1484,4 +1484,3 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     }
   }
 }
-

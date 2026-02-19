@@ -1,7 +1,8 @@
 import { BaseTool } from "../../BaseTool";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { pceLogger as logger } from "../../../pce/utils/logger";
-import { ProxmoxClient, ProxmoxApiConfig } from "../client";
+import { ProxmoxClient } from "../client";
+import type { ProxmoxApiConfig } from "../client";
 import { sanitizeToolPayload } from "../../../agent/tool-sanitizer";
 import crypto from "crypto";
 
@@ -29,8 +30,9 @@ export abstract class ProxmoxWriteBase extends BaseTool {
         const urlObj = new URL(url);
         const hostname = urlObj.hostname.toLowerCase();
         // Check for node-specific secrets (e.g., proxbig -> PROXBIG_TOKEN_SECRET)
-        const nodeName = hostname.split('.')[0].toUpperCase();
-        const nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
+        const nodeSegment = hostname.split(".")[0];
+        const nodeName = nodeSegment ? nodeSegment.toUpperCase() : "";
+        const nodeSpecificSecret = nodeName ? process.env[`${nodeName}_TOKEN_SECRET`] : undefined;
         if (nodeSpecificSecret) {
           tokenSecret = nodeSpecificSecret;
         }
@@ -43,7 +45,18 @@ export abstract class ProxmoxWriteBase extends BaseTool {
 
     // Check after trying to find node-specific secret
     if (!url || !tokenId || !tokenSecret) {
-      const nodeHint = url ? ` (or ${new URL(url).hostname.split('.')[0].toUpperCase()}_TOKEN_SECRET for node-specific secret)` : '';
+      let nodeHint = "";
+      if (url) {
+        try {
+          const hostname = new URL(url).hostname;
+          const nodeSegment = hostname.split(".")[0];
+          if (nodeSegment) {
+            nodeHint = ` (or ${nodeSegment.toUpperCase()}_TOKEN_SECRET for node-specific secret)`;
+          }
+        } catch {
+          // ignore URL parsing failure in hint
+        }
+      }
       throw new Error(
         `PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET${nodeHint} must be set`
       );
@@ -146,7 +159,7 @@ export abstract class ProxmoxWriteBase extends BaseTool {
 
       return {
         data: responseData,
-        metadata: result.metadata,
+        durationMs: result.metadata?.durationMs,
       };
     } catch (error: any) {
       logger.error("Proxmox API call failed", {
@@ -179,4 +192,3 @@ export abstract class ProxmoxWriteBase extends BaseTool {
     };
   }
 }
-

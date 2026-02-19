@@ -58,8 +58,13 @@ export class AgentEventBus extends EventEmitter {
   /**
    * Emit an agent event
    */
-  emit(event: AgentEvent): boolean {
-    return super.emit("agent-event", event);
+  override emit(eventName: string | symbol, ...args: any[]): boolean;
+  override emit(event: AgentEvent): boolean;
+  override emit(eventOrName: string | symbol | AgentEvent, ...args: any[]): boolean {
+    if (typeof eventOrName === "object" && eventOrName !== null && "type" in eventOrName) {
+      return super.emit("agent-event", eventOrName as AgentEvent);
+    }
+    return super.emit(eventOrName as string | symbol, ...args);
   }
 
   /**
@@ -106,4 +111,3 @@ export class AgentEventBus extends EventEmitter {
 export function emitToolProgress(progress: ToolProgressData, sessionId?: string): void {
   AgentEventBus.getInstance().emitProgress(progress, sessionId);
 }
-

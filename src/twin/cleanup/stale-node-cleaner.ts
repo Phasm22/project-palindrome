@@ -101,7 +101,7 @@ export class StaleNodeCleaner {
       }
 
       // Get all VMs from twin
-      const session = this.graphStore.getSession();
+      const session = this.graphStore.getDriver().session();
       const twinVmsResult = await session.run(
         `
           MATCH (vm:TwinEntity {type: $type})
@@ -174,7 +174,8 @@ export class StaleNodeCleaner {
 
       for (const twinVm of twinVms) {
         const idParts = twinVm.id.split(":");
-        const vmid = idParts.length > 0 ? parseInt(idParts[idParts.length - 1], 10) : null;
+        const vmIdPart = idParts[idParts.length - 1];
+        const vmid = vmIdPart ? parseInt(vmIdPart, 10) : null;
 
         if (!vmid || isNaN(vmid)) {
           pceLogger.debug(`Skipping VM with invalid ID format: ${twinVm.id}`);
@@ -247,7 +248,7 @@ export class StaleNodeCleaner {
         return result;
       }
 
-      const session = this.graphStore.getSession();
+      const session = this.graphStore.getDriver().session();
       const twinNodesResult = await session.run(
         `MATCH (n:TwinEntity {type: $type}) RETURN n.id AS id, n.displayName AS name`,
         { type: "compute_node" }
@@ -392,7 +393,7 @@ export class StaleNodeCleaner {
     };
 
     try {
-      const session = this.graphStore.getSession();
+      const session = this.graphStore.getDriver().session();
       
       // Find subnets with no connected interfaces
       const staleSubnetsResult = await session.run(
@@ -481,7 +482,7 @@ export class StaleNodeCleaner {
         return result;
       }
 
-      const session = this.graphStore.getSession();
+      const session = this.graphStore.getDriver().session();
       const twinStorageResult = await session.run(
         `
           MATCH (s:TwinEntity {type: $type})
@@ -547,9 +548,11 @@ export class StaleNodeCleaner {
               // Call the API with the exact node name returned by Proxmox,
               // but store keys normalized for matching twin IDs.
               const storageResult = await client.get(`/nodes/${nodeApiName}/storage`);
-              const storageList = storageResult.data?.data || [];
-              const storageNames = new Set(
-                storageList.map((s: any) => s.storage?.toLowerCase()).filter(Boolean)
+              const storageList = (storageResult.data?.data || []) as Array<{ storage?: unknown }>;
+              const storageNames = new Set<string>(
+                storageList
+                  .map((s) => (typeof s.storage === "string" ? s.storage.toLowerCase() : undefined))
+                  .filter((name): name is string => typeof name === "string" && name.length > 0)
               );
               proxmoxStorageMap.set(nodeKey, storageNames);
               unreachableNodeKeys.delete(nodeKey);
@@ -651,7 +654,7 @@ export class StaleNodeCleaner {
     };
 
     try {
-      const session = this.graphStore.getSession();
+      const session = this.graphStore.getDriver().session();
       const threshold = new Date(Date.now() - this.staleThresholdMs);
 
       // Types we delete when not seen since threshold. Intentionally EXCLUDE:

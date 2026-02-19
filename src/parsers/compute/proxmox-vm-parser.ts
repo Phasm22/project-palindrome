@@ -83,11 +83,7 @@ export class ProxmoxVmParser implements Parser<ListVmsResponse> {
       collectedAt: context.collectedAt,
       data: {
         nodeId,
-        state: (vm.status_normalized || vm.status || "unknown") as
-          | "running"
-          | "stopped"
-          | "paused"
-          | "unknown",
+        state: this.normalizeState(vm.status_normalized ?? vm.status),
         ipAddresses: collectIpAddresses(vm.ip, ...(vm.ip_addresses ?? [])),
         agentAvailable: this.normalizeAgent(vm.agent),
         cpuCores: vm.maxcpu ?? vm.cpus,
@@ -121,5 +117,15 @@ export class ProxmoxVmParser implements Parser<ListVmsResponse> {
     }
     return undefined;
   }
-}
 
+  private normalizeState(raw?: string): "running" | "stopped" | "paused" | undefined {
+    if (!raw) {
+      return undefined;
+    }
+    const normalized = raw.toLowerCase();
+    if (normalized === "running" || normalized === "stopped" || normalized === "paused") {
+      return normalized;
+    }
+    return undefined;
+  }
+}

@@ -81,7 +81,7 @@ export class RunDiagnosticTool extends BaseTool {
     const args = ["-c", String(payload.packets), target];
     const { stdout } = await execFileAsync("ping", args, { timeout: payload.timeoutMs });
     const latencyMatch = stdout.match(/min\/avg\/max.* = .*\/(.*)\//);
-    const averageLatency = latencyMatch ? parseFloat(latencyMatch[1]) : null;
+    const averageLatency = latencyMatch?.[1] ? parseFloat(latencyMatch[1]) : null;
 
     return {
       summary: averageLatency

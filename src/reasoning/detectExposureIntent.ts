@@ -22,13 +22,13 @@ function extractVmId(text: string): string | null {
   // Match vm-{vmid} or vm {vmid}
   const vmMatch = text.match(/vm[- ]?(\d+)/i);
   if (vmMatch) {
-    return vmMatch[1]; // Return just the number, caller can construct full ID
+    return vmMatch[1] ?? null; // Return just the number, caller can construct full ID
   }
 
   // Match quoted VM names
   const quotedMatch = text.match(/"([^"]+)"/);
   if (quotedMatch) {
-    return quotedMatch[1];
+    return quotedMatch[1] ?? null;
   }
 
   return null;
@@ -126,4 +126,3 @@ export function detectExposureIntent(userInput: string): ExposureIntent | null {
 
   return null;
 }
-

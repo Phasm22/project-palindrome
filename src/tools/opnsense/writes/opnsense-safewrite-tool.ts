@@ -57,7 +57,7 @@ export class OpnsenseSafeWriteTool extends OpnsenseWriteBase {
     });
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     return createToolSchema(this, OpnsenseSafeWriteParams, {
       examples: [
         {
@@ -99,7 +99,7 @@ export class OpnsenseSafeWriteTool extends OpnsenseWriteBase {
     });
   }
 
-  getParameterSchema() {
+  override getParameterSchema() {
     return OpnsenseSafeWriteParams;
   }
 
@@ -474,4 +474,3 @@ export class OpnsenseSafeWriteTool extends OpnsenseWriteBase {
     };
   }
 }
-

@@ -35,13 +35,16 @@ function chunkMarkdownRunbook(
   
   while ((match = headerRegex.exec(text)) !== null) {
     if (sections.length > 0) {
-      sections[sections.length - 1].end = match.index;
+      const previousSection = sections[sections.length - 1];
+      if (previousSection) {
+        previousSection.end = match.index;
+      }
     }
     
     sections.push({
       start: match.index,
       end: text.length,
-      title: match[2].trim(),
+      title: (match[2] ?? "Section").trim(),
     });
     
     lastIndex = match.index + match[0].length;
@@ -161,4 +164,3 @@ export function chunkDocument(
       return chunkGenericText(text, metadata, config);
   }
 }
-

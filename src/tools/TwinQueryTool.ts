@@ -41,7 +41,6 @@ const TwinQueryParams = z.object({
       fromId: z.string().optional(),
       chain: z.string().optional(),
       ruleId: z.string().optional(),
-      vmId: z.string().optional(),
       fromSubnet: z.string().optional(),
       toVmId: z.string().optional(),
       vmName: z.string().optional(),
@@ -74,7 +73,7 @@ export class TwinQueryTool extends BaseTool {
     this.service = service;
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     return createToolSchema(this, TwinQueryParams, {
       examples: [
         {
@@ -158,6 +157,16 @@ export class TwinQueryTool extends BaseTool {
       return value;
     }
     return undefined;
+  }
+
+  private normalizeVmEntityId(value?: string | number): string | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    if (typeof value === "number") {
+      return `compute-vm:${value}`;
+    }
+    return value;
   }
 
   async execute(
@@ -358,7 +367,8 @@ export class TwinQueryTool extends BaseTool {
         }
         case "firewall_exposure_map": {
           const vmId = opParams?.vmId;
-          const data = await this.service.exposureMap(vmId);
+          const vmEntityId = this.normalizeVmEntityId(vmId);
+          const data = await this.service.exposureMap(vmEntityId);
           return { data: { kind: "exposure_map", vmId, data } };
         }
         case "firewall_reachability_from_subnet": {
@@ -367,7 +377,8 @@ export class TwinQueryTool extends BaseTool {
             return { error: "subnet is required for firewall_reachability_from_subnet" };
           }
           const vmId = opParams?.vmId;
-          const data = await this.service.reachableFromSubnet(subnet, vmId);
+          const vmEntityId = this.normalizeVmEntityId(vmId);
+          const data = await this.service.reachableFromSubnet(subnet, vmEntityId);
           return { data: { kind: "reachability_subnet", subnet, data } };
         }
         case "firewall_reachability_from_chain": {
@@ -391,7 +402,11 @@ export class TwinQueryTool extends BaseTool {
           if (!vmId) {
             return { error: "vmId is required for exposure_vm_analysis" };
           }
-          const data = await this.service.vmExposure(vmId);
+          const vmEntityId = this.normalizeVmEntityId(vmId);
+          if (!vmEntityId) {
+            return { error: "vmId is required for exposure_vm_analysis" };
+          }
+          const data = await this.service.vmExposure(vmEntityId);
           return { data: { kind: "vm_exposure", vmId, data } };
         }
         case "exposure_vms_by_subnet": {
@@ -428,4 +443,3 @@ export class TwinQueryTool extends BaseTool {
     }
   }
 }
-

@@ -34,6 +34,9 @@ export async function resolveVmToHostname(vmName: string): Promise<{ hostname: s
   }
 
   const vm = vms[0];
+  if (!vm) {
+    throw new Error(`VM "${vmName}" lookup returned no usable records.`);
+  }
   const resolvedName = vm.name || vmName;
   const hostname = `${resolvedName}.prox`;
 
@@ -232,6 +235,8 @@ export async function verifyVmIsRunning(vmName: string): Promise<boolean> {
   }
 
   const vm = vms[0];
+  if (!vm) {
+    return false;
+  }
   return vm.state === "running";
 }
-

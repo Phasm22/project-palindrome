@@ -218,6 +218,28 @@ export abstract class ApiDiscoveryService {
   /**
    * Convert Zod schema to JSON Schema (simplified)
    */
+  protected zodTypeToJsonSchema(value: z.ZodTypeAny): Record<string, any> {
+    if (value instanceof z.ZodOptional) {
+      return this.zodTypeToJsonSchema(value.unwrap() as unknown as z.ZodTypeAny);
+    }
+    if (value instanceof z.ZodEnum) {
+      return {
+        type: "string",
+        enum: value.options,
+      };
+    }
+    if (value instanceof z.ZodString) {
+      return { type: "string" };
+    }
+    if (value instanceof z.ZodNumber) {
+      return { type: "number" };
+    }
+    if (value instanceof z.ZodBoolean) {
+      return { type: "boolean" };
+    }
+    return { type: "string" };
+  }
+
   protected zodToJsonSchema(schema: z.ZodObject<any>): any {
     // This is a simplified version - in production, use zod-to-json-schema library
     const shape = schema.shape;
@@ -225,23 +247,7 @@ export abstract class ApiDiscoveryService {
     const required: string[] = [];
 
     Object.entries(shape).forEach(([key, value]: [string, any]) => {
-      if (value instanceof z.ZodEnum) {
-        properties[key] = {
-          type: "string",
-          enum: value.options,
-        };
-      } else if (value instanceof z.ZodString) {
-        properties[key] = { type: "string" };
-      } else if (value instanceof z.ZodNumber) {
-        properties[key] = { type: "number" };
-      } else if (value instanceof z.ZodBoolean) {
-        properties[key] = { type: "boolean" };
-      } else if (value instanceof z.ZodOptional) {
-        properties[key] = this.zodToJsonSchema(value._def.innerType);
-      } else {
-        properties[key] = { type: "string" }; // fallback
-      }
-
+      properties[key] = this.zodTypeToJsonSchema(value as z.ZodTypeAny);
       if (!(value instanceof z.ZodOptional)) {
         required.push(key);
       }
@@ -295,4 +301,3 @@ export class DiscoveryRegistry {
 
 // Global registry instance
 export const discoveryRegistry = new DiscoveryRegistry();
-

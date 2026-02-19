@@ -19,20 +19,20 @@ function extractVmName(text: string): string | null {
   // Match patterns like "create VM named X", "create a VM called X", "VM named X"
   const namedMatch = text.match(/\b(?:vm|virtual machine)\s+(?:named|called|with name)\s+([a-z0-9\-_]+)/i);
   if (namedMatch) {
-    return namedMatch[1];
+    return namedMatch[1] ?? null;
   }
 
   // Match patterns like "destroy X", "delete X", "remove X" where X is a VM name
   const destroyMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
   if (destroyMatch) {
-    return destroyMatch[1];
+    return destroyMatch[1] ?? null;
   }
 
   // Match patterns like "restart X", "start X", "stop X", "reboot X" where X is a VM name
   // These are common patterns for VM lifecycle operations
   const lifecycleMatch = text.match(/\b(?:restart|start|stop|reboot|shutdown)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
   if (lifecycleMatch) {
-    return lifecycleMatch[1];
+    return lifecycleMatch[1] ?? null;
   }
 
   return null;
@@ -41,13 +41,13 @@ function extractVmName(text: string): string | null {
 function extractVmId(text: string): number | null {
   // Match patterns like "vm 104", "vmid 104", "vm id 104", "virtual machine 104"
   const vmIdMatch = text.match(/\b(?:vm|vmid|vm\s+id|virtual\s+machine)\s+(\d+)/i);
-  if (vmIdMatch) {
+  if (vmIdMatch?.[1]) {
     return parseInt(vmIdMatch[1], 10);
   }
 
   // Match standalone numbers after destroy/delete/remove
   const destroyIdMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?(\d+)/i);
-  if (destroyIdMatch) {
+  if (destroyIdMatch?.[1]) {
     return parseInt(destroyIdMatch[1], 10);
   }
 
@@ -58,13 +58,13 @@ function extractNodeName(text: string): string | null {
   // Match patterns like "on node X", "on X", "in X", "node X"
   const onMatch = text.match(/\b(?:on|in)\s+(?:node\s+)?([a-z0-9\-_]+)/i);
   if (onMatch) {
-    return onMatch[1];
+    return onMatch[1] ?? null;
   }
 
   // Also try "node X" pattern
   const nodeMatch = text.match(/\bnode\s+([a-z0-9\-_]+)/i);
   if (nodeMatch) {
-    return nodeMatch[1];
+    return nodeMatch[1] ?? null;
   }
 
   return null;
@@ -78,7 +78,12 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
 
   // Create VM
   if (
-    (normalized.includes("create") || normalized.includes("spin up") || normalized.includes("provision")) &&
+    (
+      normalized.includes("create") ||
+      normalized.includes("make") ||
+      normalized.includes("spin up") ||
+      normalized.includes("provision")
+    ) &&
     (normalized.includes("vm") || normalized.includes("virtual machine"))
   ) {
     const vmName = extractVmName(userInput);
@@ -216,8 +221,7 @@ function extractVmNameFromContext(text: string): string | null {
   // Match patterns like "on X", "for X", "to X" where X is a VM name
   const onMatch = text.match(/\b(?:on|for|to)\s+([a-z0-9\-_]+)/i);
   if (onMatch) {
-    return onMatch[1];
+    return onMatch[1] ?? null;
   }
   return null;
 }
-

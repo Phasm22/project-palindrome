@@ -228,9 +228,16 @@ export function classifyIntent(userInput: string): IntentClassification {
     /\bwhat (ip|network)\b/i,
     /\bwhich (ip|network)\b/i,
   ];
+  const actionIndicators = [
+    /\b(create|make|spin up|provision|new)\b.*\b(vm|virtual machine|container|lxc)\b/i,
+    /\b(destroy|delete|remove|terminate|kill)\b.*\b(vm|virtual machine|container|lxc)\b/i,
+    /\b(start|stop|restart|reboot|shutdown)\b.*\b(vm|virtual machine|container|lxc)\b/i,
+    /\b(install|configure|assign|set)\b.*\b(firewall|network|vlan|service|nginx|docker)\b/i,
+  ];
   
   // Check for strong query indicators first
   const hasQueryIndicator = queryIndicators.some(pattern => pattern.test(normalized));
+  const hasActionIndicator = actionIndicators.some(pattern => pattern.test(normalized));
   
   // Calculate similarity scores for each intent type
   const scores: Record<IntentType, number> = {
@@ -243,8 +250,12 @@ export function classifyIntent(userInput: string): IntentClassification {
   
   // Boost QUERY score if strong query indicators are present
   const queryIndicatorBoost = hasQueryIndicator ? 0.5 : 0;
+  const actionIndicatorBoost = hasActionIndicator ? 0.55 : 0;
   if (queryIndicatorBoost > 0) {
     scores.QUERY = queryIndicatorBoost; // Start with a base score for query indicators
+  }
+  if (actionIndicatorBoost > 0) {
+    scores.ACTION = actionIndicatorBoost; // Start with a base score for action indicators
   }
   
   // Score against archetypes
@@ -261,6 +272,9 @@ export function classifyIntent(userInput: string): IntentClassification {
   // Preserve query-indicator boost after archetype scoring
   if (queryIndicatorBoost > 0) {
     scores.QUERY = Math.max(scores.QUERY, queryIndicatorBoost);
+  }
+  if (actionIndicatorBoost > 0) {
+    scores.ACTION = Math.max(scores.ACTION, actionIndicatorBoost);
   }
   
   // Find the highest scoring intent

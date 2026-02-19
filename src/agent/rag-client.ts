@@ -71,8 +71,12 @@ export async function fetchHybridContext(
       return null;
     }
 
-    const payload = await response.json();
-    return payload?.data ?? null;
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== "object") {
+      return null;
+    }
+    const payloadRecord = payload as { data?: unknown };
+    return (payloadRecord.data as HybridApiContext | undefined) ?? null;
   } catch (error: any) {
     // Don't log connection errors as errors if API server isn't running - this is expected in some scenarios
     if (error.name === 'AbortError' || error.message?.includes('ECONNREFUSED') || error.message?.includes('fetch failed')) {

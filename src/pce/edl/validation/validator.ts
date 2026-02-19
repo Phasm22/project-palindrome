@@ -4,6 +4,7 @@
  */
 
 import type { NodeType } from "../../kg/schema";
+import { NodeType as NodeTypeEnum } from "../../kg/schema";
 import { pceLogger } from "../../utils/logger";
 
 /**
@@ -41,25 +42,29 @@ export function validateEntityType(text: string, suggestedType: NodeType): {
 
   // IP Address patterns
   if (IP_REGEX.test(text) || CIDR_REGEX.test(text)) {
-    if (suggestedType === "Host" || suggestedType === "Network") {
-      return { valid: true, confidence: 0.9, correctedType: CIDR_REGEX.test(text) ? "Network" : "Host" };
+    if (suggestedType === NodeTypeEnum.HOST || suggestedType === NodeTypeEnum.NETWORK) {
+      return {
+        valid: true,
+        confidence: 0.9,
+        correctedType: CIDR_REGEX.test(text) ? NodeTypeEnum.NETWORK : NodeTypeEnum.HOST,
+      };
     }
     return {
       valid: false,
-      correctedType: CIDR_REGEX.test(text) ? "Network" : "Host",
+      correctedType: CIDR_REGEX.test(text) ? NodeTypeEnum.NETWORK : NodeTypeEnum.HOST,
       confidence: 0.9,
-      reason: `IP/CIDR pattern suggests ${CIDR_REGEX.test(text) ? "Network" : "Host"} type`,
+      reason: `IP/CIDR pattern suggests ${CIDR_REGEX.test(text) ? NodeTypeEnum.NETWORK : NodeTypeEnum.HOST} type`,
     };
   }
 
   // Hostname patterns
   if (HOSTNAME_REGEX.test(text)) {
-    if (suggestedType === "Host") {
+    if (suggestedType === NodeTypeEnum.HOST) {
       return { valid: true, confidence: 0.85 };
     }
     return {
       valid: false,
-      correctedType: "Host",
+      correctedType: NodeTypeEnum.HOST,
       confidence: 0.85,
       reason: "Hostname pattern suggests Host type",
     };
@@ -69,12 +74,12 @@ export function validateEntityType(text: string, suggestedType: NodeType): {
   if (PORT_REGEX.test(text)) {
     const port = parseInt(text, 10);
     if (port >= VALID_PORT_RANGE.min && port <= VALID_PORT_RANGE.max) {
-      if (suggestedType === "Service") {
+      if (suggestedType === NodeTypeEnum.SERVICE) {
         return { valid: true, confidence: 0.7 };
       }
       return {
         valid: false,
-        correctedType: "Service",
+        correctedType: NodeTypeEnum.SERVICE,
         confidence: 0.7,
         reason: "Port number suggests Service type",
       };
@@ -83,12 +88,12 @@ export function validateEntityType(text: string, suggestedType: NodeType): {
 
   // Email patterns
   if (EMAIL_REGEX.test(text)) {
-    if (suggestedType === "User") {
+    if (suggestedType === NodeTypeEnum.USER) {
       return { valid: true, confidence: 0.8 };
     }
     return {
       valid: false,
-      correctedType: "User",
+      correctedType: NodeTypeEnum.USER,
       confidence: 0.8,
       reason: "Email pattern suggests User type",
     };
@@ -98,7 +103,7 @@ export function validateEntityType(text: string, suggestedType: NodeType): {
   if (/^\d+$/.test(text)) {
     const num = parseInt(text, 10);
     if (num >= 1 && num <= 4094) {
-      if (suggestedType === "VLAN") {
+      if (suggestedType === NodeTypeEnum.VLAN) {
         return { valid: true, confidence: 0.75 };
       }
       // Could be VLAN, but not definitive
@@ -107,14 +112,14 @@ export function validateEntityType(text: string, suggestedType: NodeType): {
 
   // Alert keywords
   if (/(alert|warning|error|critical|severity)/i.test(text)) {
-    if (suggestedType === "Alert") {
+    if (suggestedType === NodeTypeEnum.ALERT) {
       return { valid: true, confidence: 0.7 };
     }
   }
 
   // Service keywords
   if (/(http|https|ssh|ftp|smtp|dns|service|port)/i.test(text)) {
-    if (suggestedType === "Service") {
+    if (suggestedType === NodeTypeEnum.SERVICE) {
       return { valid: true, confidence: 0.7 };
     }
   }
@@ -151,4 +156,3 @@ export function validateExtractionResults(
     };
   });
 }
-

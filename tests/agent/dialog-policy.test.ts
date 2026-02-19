@@ -30,6 +30,12 @@ test("Bare CONFIRM does not become action text", () => {
   expect(confirmation.actionText).toBeUndefined();
 });
 
+test("Cancel is parsed explicitly", () => {
+  const confirmation = parseConfirmationInput("CANCEL");
+  expect(confirmation.confirmed).toBe(false);
+  expect(confirmation.cancelled).toBe(true);
+});
+
 test("Missing target triggers clarification", () => {
   const classification = classifyIntent("restart the vm");
   const decision = evaluateDialogPolicy({ intent: classification, confirmation: { confirmed: false } });
@@ -53,6 +59,21 @@ test("Stale confirmation is rejected", () => {
     pendingActionId: "deadbeef",
     pendingActionCreatedAt: Date.now() - 20 * 60 * 1000,
   });
+  expect(decision.shouldExecute).toBe(false);
+  expect(decision.nextState).toBe("AWAITING_CONFIRMATION");
+});
+
+test("Write-high action requires CONFIRM <id>", () => {
+  const confirmation = parseConfirmationInput("CONFIRM");
+  const classification = classifyIntent("create a vm on yin");
+  const decision = evaluateDialogPolicy({
+    intent: classification,
+    confirmation,
+    pendingActionId: "deadbeef",
+    pendingActionCreatedAt: Date.now(),
+  });
+  expect(classification.risk).toBe("WRITE_HIGH");
+  expect(decision.requiresConfirmation).toBe(true);
   expect(decision.shouldExecute).toBe(false);
   expect(decision.nextState).toBe("AWAITING_CONFIRMATION");
 });

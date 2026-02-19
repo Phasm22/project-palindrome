@@ -18,7 +18,7 @@ export interface WebhookListenerOptions {
  * HTTP Webhook Listener for Real-Time Ingestion
  */
 export class WebhookListener {
-  private server: Server | null = null;
+  private server: Server<any> | null = null;
   private queue: RealtimeIngestionQueue;
   private options: Required<WebhookListenerOptions>;
 
@@ -158,4 +158,3 @@ export class WebhookListener {
     };
   }
 }
-

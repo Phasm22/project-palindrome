@@ -55,7 +55,7 @@ export class CreateIncidentTicketTool extends BaseTool {
   private buildTicket(payload: CreateIncidentTicketParamsType): Record<string, any> {
     const now = new Date().toISOString();
     const ticketId = `INC-${now.replace(/[-:TZ]/g, "").slice(0, 12)}-${randomUUID().slice(0, 6)}`;
-    const severityWeights: Record<string, number> = {
+    const severityWeights: Record<CreateIncidentTicketParamsType["severity"], number> = {
       low: 1,
       medium: 2,
       high: 3,

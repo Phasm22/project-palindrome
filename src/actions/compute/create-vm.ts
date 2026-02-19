@@ -25,7 +25,7 @@ export const CreateVmSchema = z.object({
   vlanId: z.number().int().min(1).max(4094).optional(), // Optional: VLAN ID to assign (for vmbr0 tagging, or validation for pre-configured bridges)
   datastore: z.string().default("local-lvm"),
   cloudInitDatastore: z.string().optional(), // Optional: defaults to "local" in Terraform
-  templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (defaults: yang=8000, yin=8001, proxBig=8001)
+  templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (auto-discovered when omitted)
   vmId: z.number().int().positive().optional(), // Optional: Preferred VM ID (will check availability)
   bootstrap: z.boolean().default(false), // Optional: Run Ansible bootstrap (common.yml) after VM creation
   dryRun: z.boolean().default(false),
@@ -40,6 +40,157 @@ export interface CreateVmResult {
   ipAddresses?: string[];
   message: string;
   terraformOutput?: any;
+}
+
+type ProxmoxVmListItem = {
+  vmid?: number | string;
+  name?: string;
+  template?: number | boolean | string;
+};
+
+type ProxmoxNodeListItem = {
+  node?: string;
+  status?: string;
+};
+
+type ProxmoxStorageListItem = {
+  storage?: string;
+  enabled?: number | boolean | string;
+  active?: number | boolean | string;
+};
+
+type ProxmoxNetworkListItem = {
+  iface?: string;
+  type?: string;
+  active?: number | boolean | string;
+};
+
+export function parseTemplateCandidates(resources: unknown[]): Array<{ vmid: number; name: string }> {
+  const templates: Array<{ vmid: number; name: string }> = [];
+  for (const resource of resources) {
+    const item = resource as ProxmoxVmListItem;
+    const vmidRaw = item?.vmid;
+    const vmid = typeof vmidRaw === "number" ? vmidRaw : Number(vmidRaw);
+    if (!Number.isFinite(vmid) || vmid <= 0) continue;
+    const templateFlag = item?.template;
+    const isTemplate =
+      templateFlag === true ||
+      templateFlag === 1 ||
+      templateFlag === "1" ||
+      templateFlag === "true";
+    if (!isTemplate) continue;
+    templates.push({ vmid, name: String(item?.name || "") });
+  }
+  return templates;
+}
+
+export function rankTemplateCandidates(
+  candidates: Array<{ vmid: number; name: string }>,
+  preferredTemplateId?: number
+): Array<{ vmid: number; name: string }> {
+  const score = (entry: { vmid: number; name: string }): number => {
+    const name = entry.name.toLowerCase();
+    let points = 0;
+    if (preferredTemplateId && entry.vmid === preferredTemplateId) points += 1000;
+    if (name.includes("cloud")) points += 20;
+    if (name.includes("ubuntu")) points += 15;
+    if (name.includes("template")) points += 10;
+    // favor lower IDs for stable infra conventions
+    points -= entry.vmid / 10000;
+    return points;
+  };
+
+  return [...candidates].sort((a, b) => score(b) - score(a));
+}
+
+function parseNodeCandidates(resources: unknown[]): string[] {
+  const nodes = new Set<string>();
+  for (const resource of resources) {
+    const item = resource as ProxmoxNodeListItem;
+    const name = typeof item.node === "string" ? item.node.trim() : "";
+    if (!name) continue;
+    nodes.add(name);
+  }
+  return Array.from(nodes);
+}
+
+export function parseDatastoreCandidates(resources: unknown[]): string[] {
+  const storages = new Set<string>();
+  for (const resource of resources) {
+    const item = resource as ProxmoxStorageListItem;
+    const name = typeof item.storage === "string" ? item.storage.trim() : "";
+    if (!name) continue;
+    const isEnabled = item.enabled === undefined || item.enabled === true || item.enabled === 1 || item.enabled === "1";
+    const isActive = item.active === undefined || item.active === true || item.active === 1 || item.active === "1";
+    if (!isEnabled || !isActive) continue;
+    storages.add(name);
+  }
+  return Array.from(storages);
+}
+
+export function parseBridgeCandidates(resources: unknown[]): string[] {
+  const bridges = new Set<string>();
+  for (const resource of resources) {
+    const item = resource as ProxmoxNetworkListItem;
+    const iface = typeof item.iface === "string" ? item.iface.trim() : "";
+    if (!iface) continue;
+    const isBridge = item.type === "bridge" || iface.toLowerCase().startsWith("vmbr");
+    if (!isBridge) continue;
+    const isActive = item.active === undefined || item.active === true || item.active === 1 || item.active === "1";
+    if (!isActive) continue;
+    bridges.add(iface);
+  }
+  return Array.from(bridges);
+}
+
+export function rankStringCandidates(
+  candidates: string[],
+  preferredValue: string | undefined,
+  priorityValues: string[]
+): string[] {
+  const preferred = preferredValue?.toLowerCase();
+  const priorities = priorityValues.map((value) => value.toLowerCase());
+  const unique = Array.from(new Set(candidates.map((value) => value.trim()).filter(Boolean)));
+  return unique.sort((a, b) => {
+    const score = (value: string): number => {
+      const normalized = value.toLowerCase();
+      let points = 0;
+      if (preferred && normalized === preferred) points += 1000;
+      const priorityIndex = priorities.indexOf(normalized);
+      if (priorityIndex >= 0) points += 200 - priorityIndex;
+      return points;
+    };
+    return score(b) - score(a);
+  });
+}
+
+export function selectAvailableOption(params: {
+  optionName: "datastore" | "bridge";
+  preferredValue: string;
+  availableValues: string[];
+  priorityValues: string[];
+  nodeName: string;
+}): { value: string; warning?: string } {
+  const { optionName, preferredValue, availableValues, priorityValues, nodeName } = params;
+  if (availableValues.length === 0) {
+    return { value: preferredValue };
+  }
+
+  const ranked = rankStringCandidates(availableValues, preferredValue, priorityValues);
+  const preferredMatch = ranked.find((candidate) => candidate.toLowerCase() === preferredValue.toLowerCase());
+  if (preferredMatch) {
+    return { value: preferredMatch };
+  }
+
+  const fallback = ranked[0];
+  if (!fallback) {
+    throw new Error(`No usable ${optionName} options were discovered on node "${nodeName}".`);
+  }
+
+  return {
+    value: fallback,
+    warning: `${optionName} "${preferredValue}" is not available on node "${nodeName}". Using "${fallback}" instead. Available: ${ranked.join(", ")}.`,
+  };
 }
 
 /**
@@ -155,17 +306,20 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   const twinQuery = new TwinQueryService();
   let nodeExists = false;
   let liveFallbackUsed = false;
+  const liveNodeCandidates = new Set<string>();
 
   try {
     const clusterInfo = await twinQuery.describeCluster();
-    nodeExists = clusterInfo.nodes.some((n) =>
-      n.name.toLowerCase() === normalizedNode.toLowerCase()
-    );
+    const targetLower = normalizedNode.toLowerCase();
+    const twinNodeMatch = clusterInfo.nodes.find((n) => n.name.toLowerCase() === targetLower);
+    if (twinNodeMatch?.name) {
+      nodeExists = true;
+      normalizedNode = twinNodeMatch.name;
+    }
 
     if (!nodeExists) {
       // Twin may be stale (e.g. ingestion only had one endpoint). Verify against live Proxmox.
       const configs = getProxmoxEndpointConfigs();
-      const targetLower = normalizedNode.toLowerCase();
       for (const cfg of configs) {
         try {
           const client = new ProxmoxClient({
@@ -176,13 +330,15 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
           });
           const res = await client.get("/nodes");
           const nodes: unknown[] = Array.isArray(res?.data?.data) ? res.data.data : [];
-          const found = nodes.some((n: unknown) => {
-            const o = n as { node?: string };
-            return o?.node && o.node.toLowerCase() === targetLower;
-          });
-          if (found) {
+          const discoveredNodeNames = parseNodeCandidates(nodes);
+          for (const discoveredNode of discoveredNodeNames) {
+            liveNodeCandidates.add(discoveredNode);
+          }
+          const canonicalNode = discoveredNodeNames.find((nodeName) => nodeName.toLowerCase() === targetLower);
+          if (canonicalNode) {
             nodeExists = true;
             liveFallbackUsed = true;
+            normalizedNode = canonicalNode;
             logger.info("Node found on live Proxmox (twin missing this node)", {
               node: normalizedNode,
               endpoint: cfg.label ?? cfg.url,
@@ -199,9 +355,11 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     }
 
     if (!nodeExists) {
+      const twinNodes = clusterInfo.nodes.map(n => n.name);
+      const liveNodes = Array.from(liveNodeCandidates);
       return {
         success: false,
-        message: `Node "${normalizedNode}" not found in twin or live Proxmox. Available nodes (twin): ${clusterInfo.nodes.map(n => n.name).join(", ")}. Run ingestion to sync the twin, or check PROXMOX_* / PROXBIG_* env.`,
+        message: `Node "${normalizedNode}" not found in twin or live Proxmox. Available nodes (twin): ${twinNodes.join(", ") || "none"}. Available nodes (live): ${liveNodes.join(", ") || "none"}. Run ingestion to sync the twin, or check PROXMOX_* / PROXBIG_* env.`,
       };
     }
 
@@ -245,22 +403,107 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     await twinQuery.close();
   }
 
-  // 1.5. Determine template ID (node-specific defaults for cluster nodes)
-  // In Proxmox clusters, VM IDs must be unique across the cluster
-  // yang uses template 8000, yin uses template 8001
-  // Reuse nodeLower from normalization above
+  const normalizedNodeLower = normalizedNode.toLowerCase();
+  const selectionWarnings: string[] = [];
+
+  // 1.5. Determine template ID with live discovery first, then defaults.
   let defaultTemplateId: number;
-  if (nodeLower === "yang") {
-    defaultTemplateId = 8000;
-  } else if (nodeLower === "yin") {
-    defaultTemplateId = 8001;
-  } else {
-    // proxBig or other nodes default to 8001
-    defaultTemplateId = 8001;
+  if (normalizedNodeLower === "yang") defaultTemplateId = 8000;
+  else if (normalizedNodeLower === "yin") defaultTemplateId = 8001;
+  else defaultTemplateId = 8001;
+
+  let discoveredTemplates: Array<{ vmid: number; name: string }> = [];
+  let discoveredDatastores: string[] = [];
+  let discoveredBridges: string[] = [];
+  try {
+    const proxmoxConfig = getProxmoxClientConfig(normalizedNode);
+    const proxmoxClient = new ProxmoxClient({
+      url: proxmoxConfig.url,
+      tokenId: proxmoxConfig.tokenId,
+      tokenSecret: proxmoxConfig.tokenSecret,
+      verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
+    });
+
+    const qemuResult = await proxmoxClient.get(`/nodes/${normalizedNode}/qemu`);
+    const data = (qemuResult.data as { data?: unknown[] })?.data;
+    discoveredTemplates = parseTemplateCandidates(Array.isArray(data) ? data : []);
+
+    const storageResult = await proxmoxClient.get(`/nodes/${normalizedNode}/storage`);
+    const storageData = (storageResult.data as { data?: unknown[] })?.data;
+    discoveredDatastores = parseDatastoreCandidates(Array.isArray(storageData) ? storageData : []);
+
+    const networkResult = await proxmoxClient.get(`/nodes/${normalizedNode}/network`);
+    const networkData = (networkResult.data as { data?: unknown[] })?.data;
+    discoveredBridges = parseBridgeCandidates(Array.isArray(networkData) ? networkData : []);
+  } catch (error: any) {
+    logger.warn("Proxmox option discovery failed; falling back to provided/default values", {
+      node: normalizedNode,
+      error: error?.message || String(error),
+    });
   }
-  
-  const finalTemplateId = templateId || defaultTemplateId;
-  logger.info("Using template ID", { templateId: finalTemplateId, node: normalizedNode, defaultTemplateId, wasProvided: !!templateId });
+
+  const rankedTemplates = rankTemplateCandidates(discoveredTemplates, templateId || defaultTemplateId);
+  let finalTemplateId: number;
+  if (templateId) {
+    finalTemplateId = templateId;
+    if (rankedTemplates.length > 0 && !rankedTemplates.some((t) => t.vmid === templateId)) {
+      const available = rankedTemplates.map((t) => `${t.vmid}${t.name ? ` (${t.name})` : ""}`).join(", ");
+      return {
+        success: false,
+        message: `Template VM ${templateId} is not available on node "${normalizedNode}". Available templates on ${normalizedNode}: ${available}.`,
+      };
+    }
+  } else if (rankedTemplates.length > 0) {
+    const defaultMatch = rankedTemplates.find((t) => t.vmid === defaultTemplateId)?.vmid;
+    const firstRanked = rankedTemplates[0]?.vmid;
+    finalTemplateId = defaultMatch ?? firstRanked ?? defaultTemplateId;
+  } else {
+    finalTemplateId = defaultTemplateId;
+  }
+
+  logger.info("Using template ID", {
+    templateId: finalTemplateId,
+    node: normalizedNode,
+    defaultTemplateId,
+    wasProvided: !!templateId,
+    discoveredTemplateIds: rankedTemplates.map((t) => t.vmid),
+  });
+
+  const datastoreSelection = selectAvailableOption({
+    optionName: "datastore",
+    preferredValue: datastore,
+    availableValues: discoveredDatastores,
+    priorityValues: ["local-lvm", "local", "snippets"],
+    nodeName: normalizedNode,
+  });
+  const bridgeSelection = selectAvailableOption({
+    optionName: "bridge",
+    preferredValue: vmBridge,
+    availableValues: discoveredBridges,
+    priorityValues: ["vmbr0", "vmbr1", "vmbr2"],
+    nodeName: normalizedNode,
+  });
+
+  const finalDatastore = datastoreSelection.value;
+  const finalVmBridge = bridgeSelection.value;
+  if (datastoreSelection.warning) {
+    selectionWarnings.push(datastoreSelection.warning);
+    logger.warn(datastoreSelection.warning);
+  }
+  if (bridgeSelection.warning) {
+    selectionWarnings.push(bridgeSelection.warning);
+    logger.warn(bridgeSelection.warning);
+  }
+
+  logger.info("Using infrastructure options", {
+    node: normalizedNode,
+    datastore: finalDatastore,
+    vmBridge: finalVmBridge,
+    requestedDatastore: datastore,
+    requestedVmBridge: vmBridge,
+    discoveredDatastores,
+    discoveredBridges,
+  });
 
   // 1.6. Allocate VM ID from high-number range (9000-9999)
   let allocatedVmId: number | undefined;
@@ -320,7 +563,10 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
 
   // Determine cloud-init datastore based on node
   // yin/yang use "local" for snippets, proxBig uses "snippets" datastore
-  const defaultCloudInitDatastore = (nodeLower === "yin" || nodeLower === "yang") ? "local" : "snippets";
+  const defaultCloudInitDatastore = (normalizedNodeLower === "yin" || normalizedNodeLower === "yang") ? "local" : "snippets";
+  const selectionNoteText = selectionWarnings.length > 0
+    ? ` Option adjustments: ${selectionWarnings.join(" ")}`
+    : "";
 
   const tfConfig: TerraformConfig = {
     vmConfigs: {
@@ -333,9 +579,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       },
     },
     sshPublicKey: sshKey,
-    vmBridge,
+    vmBridge: finalVmBridge,
     vlanId, // Optional VLAN ID for network tagging
-    datastore,
+    datastore: finalDatastore,
     cloudInitDatastore: cloudInitDatastore || defaultCloudInitDatastore,
     templateId: finalTemplateId, // Use the calculated template ID
   };
@@ -346,7 +592,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     return {
       success: planResult.success,
       message: planResult.success
-        ? `Dry-run successful. Would create VM "${finalName}" on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}`
+        ? `Dry-run successful. Would create VM "${finalName}" on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""} using bridge "${finalVmBridge}" and datastore "${finalDatastore}".${selectionNoteText}`
         : `Dry-run failed: ${planResult.stderr}`,
     };
   }
@@ -380,16 +626,24 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     } else if (stderr.includes("timeout") || stderr.includes("Still creating")) {
       errorMessage = `Terraform operation timed out or is taking too long. This may indicate network issues or insufficient permissions. ` +
         `Check the Proxmox API connectivity and token permissions. Original error: ${stderr}`;
-    } else if (stderr.includes("unable to find configuration file for VM") || stderr.includes("template") || stderr.includes("does not exist")) {
-      // Provide helpful error message with node-specific defaults
-      const nodeLower = node.toLowerCase();
-      const suggestedTemplateId = nodeLower === "yang" ? 8000 : nodeLower === "yin" ? 8001 : 8001;
+    } else if (
+      stderr.includes("storage 'snippets' does not exist") ||
+      stderr.toLowerCase().includes("datastore snippets")
+    ) {
+      errorMessage = `Cloud-init snippets datastore is not available on node "${normalizedNode}". ` +
+        `Set compute.create_vm cloudInitDatastore to a valid datastore for this node (for example "local"), or provision a snippets-capable datastore. ` +
+        `Original error: ${stderr}`;
+    } else if (
+      /unable to find configuration file for VM\s+\d+/i.test(stderr) ||
+      /template vm \d+ not found/i.test(stderr) ||
+      /vm \d+ does not exist/i.test(stderr)
+    ) {
+      const available = rankedTemplates.length > 0
+        ? rankedTemplates.map((t) => `${t.vmid}${t.name ? ` (${t.name})` : ""}`).join(", ")
+        : "none discovered";
       errorMessage = `Template VM ${finalTemplateId} not found on node "${normalizedNode}". ` +
-        `In Proxmox clusters, VM IDs must be unique. ` +
-        `Default template IDs: yang=8000, yin=8001, proxBig=8001. ` +
-        `Please verify that template ${finalTemplateId} exists on ${normalizedNode}, or specify a different template ID using the templateId parameter. ` +
-        (finalTemplateId === suggestedTemplateId ? `(Note: ${normalizedNode} defaults to template ${suggestedTemplateId})` : ``) +
-        ` Original error: ${stderr}`;
+        `Available templates on ${normalizedNode}: ${available}. ` +
+        `Specify templateId explicitly if needed. Original error: ${stderr}`;
     }
     
     // Propagate as failure so the caller stops the chain
@@ -540,6 +794,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     hostname: vmInfo.hostname,
     ipAddresses,
     bootstrap: shouldBootstrap,
+    datastore: finalDatastore,
+    vmBridge: finalVmBridge,
+    selectionWarnings,
   });
 
   return {
@@ -547,8 +804,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     vmId: vmInfo.id.toString(),
     hostname: vmInfo.hostname,
     ipAddresses,
-    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}${firstIp ? `. DNS record created: ${finalName}.prox → ${firstIp}` : ""}.${bootstrapMessage}`,
+    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}. Bridge: ${finalVmBridge}. Datastore: ${finalDatastore}.${firstIp ? ` DNS record created: ${finalName}.prox → ${firstIp}.` : ""}${bootstrapMessage}${selectionNoteText}`,
     terraformOutput: outputs,
   };
 }
-

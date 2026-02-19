@@ -1,7 +1,8 @@
 import { BaseTool } from "../../BaseTool";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { pceLogger as logger } from "../../../pce/utils/logger";
-import { ProxmoxClient, ProxmoxApiConfig } from "../client";
+import { ProxmoxClient } from "../client";
+import type { ProxmoxApiConfig } from "../client";
 import { sanitizeToolPayload } from "../../../agent/tool-sanitizer";
 
 /**
@@ -39,15 +40,18 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
         // Check for node-specific secrets (e.g., proxbig -> PROXBIG_TOKEN_SECRET)
         // IMPORTANT: If URL is an IP address, this will extract the first octet (e.g., "172")
         // which won't match node-specific secrets. Use hostname URLs for proper lookup.
-        const nodeName = hostname.split('.')[0].toUpperCase();
+        const nodeSegment = hostname.split(".")[0];
+        const nodeName = nodeSegment ? nodeSegment.toUpperCase() : "";
         // Try a few common patterns:
         // - YIN_TOKEN_SECRET / YANG_TOKEN_SECRET / PROXBIG_TOKEN_SECRET
         // - PROXMOX_YIN_TF_SECRET / PROXMOX_YANG_TF_SECRET (cluster node TF tokens)
         // - PROXMOX_<NODE>_TOKEN_SECRET (future-proof)
         const nodeSpecificSecret =
-          process.env[`${nodeName}_TOKEN_SECRET`] ||
-          process.env[`PROXMOX_${nodeName}_TF_SECRET`] ||
-          process.env[`PROXMOX_${nodeName}_TOKEN_SECRET`];
+          (nodeName
+            ? process.env[`${nodeName}_TOKEN_SECRET`] ||
+              process.env[`PROXMOX_${nodeName}_TF_SECRET`] ||
+              process.env[`PROXMOX_${nodeName}_TOKEN_SECRET`]
+            : undefined);
         if (nodeSpecificSecret) {
           logger.debug(`Using node-specific secret: ${nodeName}_TOKEN_SECRET (extracted from URL hostname: ${hostname})`);
           tokenSecret = nodeSpecificSecret;
@@ -64,7 +68,18 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
 
     // Check after trying to find node-specific secret
     if (!url || !tokenId || !tokenSecret) {
-      const nodeHint = url ? ` (or ${new URL(url).hostname.split('.')[0].toUpperCase()}_TOKEN_SECRET for node-specific secret)` : '';
+      let nodeHint = "";
+      if (url) {
+        try {
+          const hostname = new URL(url).hostname;
+          const nodeSegment = hostname.split(".")[0];
+          if (nodeSegment) {
+            nodeHint = ` (or ${nodeSegment.toUpperCase()}_TOKEN_SECRET for node-specific secret)`;
+          }
+        } catch {
+          // ignore URL parsing failure in hint
+        }
+      }
       throw new Error(
         `PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET${nodeHint} must be set`
       );
@@ -183,4 +198,3 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
     return data;
   }
 }
-

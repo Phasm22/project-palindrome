@@ -177,7 +177,11 @@ export class ProxmoxIngestionOrchestrator {
     try {
       // Write documents to temp files
       for (let i = 0; i < documents.length; i++) {
-        const filePath = await this.writeTempFile(documents[i], i);
+        const document = documents[i];
+        if (!document) {
+          continue;
+        }
+        const filePath = await this.writeTempFile(document, i);
         tempFiles.push(filePath);
       }
 
@@ -283,6 +287,7 @@ export class ProxmoxIngestionOrchestrator {
           // Create HOSTS_ON relationship: VM -> Node (VM is hosted on Node)
           const nodeId = `pve_node:${doc.metadata.node}`;
           relationships.push({
+            id: `${vmId}-HOSTS_ON-${nodeId}`,
             from: vmId,
             to: nodeId,
             type: RelationshipType.HOSTS_ON,
@@ -321,7 +326,11 @@ export class ProxmoxIngestionOrchestrator {
     const profile: any = { node: nodeName };
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+      const currentLine = lines[i];
+      if (!currentLine) {
+        continue;
+      }
+      const line = currentLine.trim();
       if (line.startsWith("- Status:")) {
         profile.status = line.replace("- Status:", "").trim();
       } else if (line.startsWith("- CPU Usage:")) {
@@ -332,13 +341,18 @@ export class ProxmoxIngestionOrchestrator {
       } else if (line.includes("Memory") && i + 1 < lines.length) {
         // Parse memory from next lines
         const memLine = lines[i + 1];
-        if (memLine.includes("Total:")) {
-          const totalStr = memLine.split("Total:")[1].trim();
+        if (memLine && memLine.includes("Total:")) {
+          const totalStr = memLine.split("Total:")[1]?.trim();
+          if (!totalStr) {
+            continue;
+          }
           // Extract number and unit
           const match = totalStr.match(/([\d.]+)\s*(\w+)/);
-          if (match) {
-            const value = parseFloat(match[1]);
-            const unit = match[2].toLowerCase();
+          const valueToken = match?.[1];
+          const unitToken = match?.[2];
+          if (valueToken && unitToken) {
+            const value = parseFloat(valueToken);
+            const unit = unitToken.toLowerCase();
             profile.maxmem = unit === "gb" ? value * 1024 * 1024 * 1024 : value * 1024 * 1024;
           }
         }
@@ -349,31 +363,42 @@ export class ProxmoxIngestionOrchestrator {
         let avgTemp: number | undefined;
         
         // Look ahead for temperature data
-        for (let j = i + 1; j < lines.length && !lines[j].trim().startsWith("##"); j++) {
-          const tempLine = lines[j].trim();
+        for (let j = i + 1; j < lines.length; j++) {
+          const rawTempLine = lines[j];
+          if (!rawTempLine) {
+            continue;
+          }
+          if (rawTempLine.trim().startsWith("##")) {
+            break;
+          }
+          const tempLine = rawTempLine.trim();
           if (tempLine.startsWith("- Maximum:")) {
             const match = tempLine.match(/([\d.]+)°C/);
-            if (match) {
-              maxTemp = parseFloat(match[1]);
+            const maxToken = match?.[1];
+            if (maxToken) {
+              maxTemp = parseFloat(maxToken);
             }
           } else if (tempLine.startsWith("- Average:")) {
             const match = tempLine.match(/([\d.]+)°C/);
-            if (match) {
-              avgTemp = parseFloat(match[1]);
+            const avgToken = match?.[1];
+            if (avgToken) {
+              avgTemp = parseFloat(avgToken);
             }
           } else if (tempLine.includes(":") && tempLine.includes("°C")) {
             // Individual sensor reading: "- label: 45.0°C (max: 80.0°C)"
             const sensorMatch = tempLine.match(/^-\s*([^:]+):\s*([\d.]+)°C/);
-            if (sensorMatch) {
-              const label = sensorMatch[1].trim();
-              const value = parseFloat(sensorMatch[2]);
+            const labelToken = sensorMatch?.[1];
+            const valueToken = sensorMatch?.[2];
+            if (labelToken && valueToken) {
+              const label = labelToken.trim();
+              const value = parseFloat(valueToken);
               const maxMatch = tempLine.match(/max:\s*([\d.]+)°C/);
               const critMatch = tempLine.match(/crit:\s*([\d.]+)°C/);
               tempReadings.push({
                 sensor: label,
                 value,
-                max: maxMatch ? parseFloat(maxMatch[1]) : undefined,
-                crit: critMatch ? parseFloat(critMatch[1]) : undefined,
+                max: maxMatch?.[1] ? parseFloat(maxMatch[1]) : undefined,
+                crit: critMatch?.[1] ? parseFloat(critMatch[1]) : undefined,
               });
             }
           }
@@ -427,10 +452,12 @@ export class ProxmoxIngestionOrchestrator {
         }
         // Start new VM
         const match = line.match(/VM (\d+):\s*(.+)/);
-        if (match) {
+        const vmidToken = match?.[1];
+        const nameToken = match?.[2];
+        if (vmidToken && nameToken) {
           currentVm = {
-            vmid: parseInt(match[1]),
-            name: match[2] !== "Unnamed" ? match[2] : undefined,
+            vmid: parseInt(vmidToken, 10),
+            name: nameToken !== "Unnamed" ? nameToken : undefined,
             node: nodeName,
           };
         }
@@ -447,11 +474,15 @@ export class ProxmoxIngestionOrchestrator {
           // Parse memory: "X MB / Y MB" or "X GB / Y GB"
           const memStr = line.replace("- Memory:", "").trim();
           const match = memStr.match(/([\d.]+)\s*(\w+)\s*\/\s*([\d.]+)\s*(\w+)/);
-          if (match) {
-            const usedValue = parseFloat(match[1]);
-            const usedUnit = match[2].toLowerCase();
-            const maxValue = parseFloat(match[3]);
-            const maxUnit = match[4].toLowerCase();
+          const usedValueToken = match?.[1];
+          const usedUnitToken = match?.[2];
+          const maxValueToken = match?.[3];
+          const maxUnitToken = match?.[4];
+          if (usedValueToken && usedUnitToken && maxValueToken && maxUnitToken) {
+            const usedValue = parseFloat(usedValueToken);
+            const usedUnit = usedUnitToken.toLowerCase();
+            const maxValue = parseFloat(maxValueToken);
+            const maxUnit = maxUnitToken.toLowerCase();
             
             currentVm.memory = usedUnit === "gb" ? usedValue * 1024 * 1024 * 1024 : usedValue * 1024 * 1024;
             currentVm.maxmem = maxUnit === "gb" ? maxValue * 1024 * 1024 * 1024 : maxValue * 1024 * 1024;
@@ -730,7 +761,11 @@ export class ProxmoxIngestionOrchestrator {
       const tempFiles: string[] = [];
       try {
         for (let i = 0; i < documents.length; i++) {
-          const filePath = await this.writeTempFile(documents[i], i);
+          const document = documents[i];
+          if (!document) {
+            continue;
+          }
+          const filePath = await this.writeTempFile(document, i);
           tempFiles.push(filePath);
         }
 
@@ -778,4 +813,3 @@ export class ProxmoxIngestionOrchestrator {
     }
   }
 }
-

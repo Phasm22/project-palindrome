@@ -44,6 +44,14 @@ class SSHConnectionPool {
     this.cleanupInterval = setInterval(() => this.cleanupIdle(), 10000);
   }
 
+  private isClientDestroyed(client: Client): boolean {
+    const candidate = client as unknown as {
+      destroyed?: boolean;
+      _sock?: { destroyed?: boolean };
+    };
+    return candidate.destroyed === true || candidate._sock?.destroyed === true;
+  }
+
   private cleanupIdle() {
     const now = Date.now();
     for (const [key, conn] of this.connections.entries()) {
@@ -67,7 +75,7 @@ class SSHConnectionPool {
     // Reuse existing connection if available and not in use
     if (conn && !conn.inUse) {
       // Check if connection is still alive
-      if (conn.client && !conn.client.destroyed) {
+      if (conn.client && !this.isClientDestroyed(conn.client)) {
         conn.lastUsed = Date.now();
         conn.inUse = true;
         return conn.client;
@@ -171,7 +179,7 @@ export class SSHTool extends BaseTool {
     });
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     // Load approved commands to get available hosts
     const config = this.loadApprovedCommands();
     const availableHosts: string[] = [];
@@ -204,7 +212,7 @@ export class SSHTool extends BaseTool {
     });
   }
 
-  getParameterSchema() {
+  override getParameterSchema() {
     return SSHToolParams;
   }
 
@@ -337,6 +345,9 @@ export class SSHTool extends BaseTool {
     }
     
     const hostConfig = config.hosts[resolvedHost];
+    if (!hostConfig) {
+      return [];
+    }
     const commands: string[] = [];
     
     for (const category of Object.keys(hostConfig.commands)) {
@@ -344,7 +355,10 @@ export class SSHTool extends BaseTool {
         continue;
       }
       const categoryCommands = hostConfig.commands[category];
-      const commandList = Array.isArray(categoryCommands) ? categoryCommands : Object.values(categoryCommands);
+      const commandList = (Array.isArray(categoryCommands)
+        ? categoryCommands
+        : Object.values(categoryCommands)
+      ).filter((item): item is string => typeof item === "string");
       commands.push(...commandList);
     }
     
@@ -416,6 +430,12 @@ export class SSHTool extends BaseTool {
     }
     
     const hostConfig = config.hosts[resolvedHost];
+    if (!hostConfig) {
+      return {
+        approved: false,
+        reason: `Host "${host}" resolved to "${resolvedHost}" but has no configuration.`,
+      };
+    }
 
     // Try command aliases/expansions first
     const commandExpansions = this.expandCommandAlias(command);
@@ -428,7 +448,9 @@ export class SSHTool extends BaseTool {
         }
         const commands = hostConfig.commands[category];
         // Handle both array and object formats from YAML
-        const commandList = Array.isArray(commands) ? commands : Object.values(commands);
+        const commandList = (Array.isArray(commands) ? commands : Object.values(commands)).filter(
+          (item): item is string => typeof item === "string"
+        );
         
         // First try exact match
         if (commandList.includes(expandedCmd)) {
@@ -943,4 +965,3 @@ export class SSHTool extends BaseTool {
     }
   }
 }
-

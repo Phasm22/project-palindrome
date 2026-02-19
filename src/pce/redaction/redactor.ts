@@ -42,12 +42,14 @@ export class Redactor {
       if (matches) {
         const originalLength = matches.reduce((sum, m) => sum + m.length, 0);
         
-        // Support both string and function replacements
-        const replacement = typeof pattern.replacement === "function"
-          ? pattern.replacement
-          : pattern.replacement;
-        
-        redactedText = redactedText.replace(pattern.pattern, replacement);
+        if (typeof pattern.replacement === "function") {
+          const replacer = pattern.replacement;
+          redactedText = redactedText.replace(pattern.pattern, (...args) =>
+            replacer(...args)
+          );
+        } else {
+          redactedText = redactedText.replace(pattern.pattern, pattern.replacement);
+        }
         
         // Calculate replacement length (approximate for function replacements)
         const replacementLength = typeof pattern.replacement === "function"
@@ -84,4 +86,3 @@ export class Redactor {
     return this.patterns.some((pattern) => pattern.pattern.test(text));
   }
 }
-

@@ -12,6 +12,7 @@ import type { ProxmoxReadOnlyParams } from "./proxmox-readonly-tool";
 import { ProxmoxReadOnlyTool } from "./proxmox-readonly-tool";
 import { ProxmoxClient } from "../client";
 import { fetchNodeTemperature, getSummaryTemperature } from "./temperature-fetcher";
+import { pceLogger } from "../../../pce/utils/logger";
 
 export interface ProxmoxDocument {
   content: string;
@@ -132,7 +133,7 @@ export async function generateNodeProfileDocument(
             if (!retryResult.error) {
               // Use the corrected result
               statusResult.data = retryResult.data;
-              statusResult.error = null;
+              statusResult.error = undefined;
               // Continue with normal flow below
             }
           }
@@ -358,4 +359,3 @@ export async function generateAllProxmoxDocuments(
 
   return documents;
 }
-

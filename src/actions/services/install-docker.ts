@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { pceLogger as logger } from "../../pce/utils/logger";
-import { bootstrap, BootstrapSchema, BootstrapResult } from "./bootstrap";
+import { bootstrap, BootstrapSchema, type BootstrapResult } from "./bootstrap";
 
 /**
  * Install Docker Action Schema
@@ -9,7 +9,7 @@ export const InstallDockerSchema = z.object({
   vmName: z.string().min(1, "VM name is required"),
   waitForVm: z.boolean().default(true),
   timeout: z.number().int().positive().default(300),
-  extraVars: z.record(z.any()).optional(),
+  extraVars: z.record(z.string(), z.any()).optional(),
   retryOnFailure: z.boolean().default(false),
   maxRetries: z.number().int().positive().default(1),
   dryRun: z.boolean().default(false),
@@ -34,4 +34,3 @@ export async function installDocker(params: InstallDockerParams): Promise<Instal
     playbook: "docker.yml",
   });
 }
-

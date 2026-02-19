@@ -678,7 +678,15 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
         sections[key] = { error: result.error };
         continue;
       }
-      sections[key] = (result.data?.stdout || "").trim();
+      const payload = "data" in result ? result.data : undefined;
+      const stdout =
+        typeof payload === "object" &&
+        payload !== null &&
+        "stdout" in payload &&
+        typeof payload.stdout === "string"
+          ? payload.stdout
+          : "";
+      sections[key] = stdout.trim();
     }
 
     const rulesOutput = typeof sections.rules === "string" ? sections.rules : "";
@@ -737,4 +745,3 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       });
   }
 }
-

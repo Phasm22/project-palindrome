@@ -95,7 +95,7 @@ export class MetricsCollector {
       const avg = sum / count;
       const min = Math.min(...values);
       const max = Math.max(...values);
-      const latest = values[values.length - 1];
+      const latest = values[values.length - 1] ?? 0;
 
       snapshot.metrics[name] = {
         count,
@@ -140,4 +140,3 @@ export class MetricsCollector {
     }
   }
 }
-

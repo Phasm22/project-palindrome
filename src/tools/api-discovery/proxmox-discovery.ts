@@ -8,7 +8,8 @@
  * 4. Runtime introspection of available paths
  */
 
-import { ApiDiscoveryService, DiscoveredEndpoint, DiscoveryResult } from "./discovery-framework";
+import { ApiDiscoveryService } from "./discovery-framework";
+import type { DiscoveredEndpoint, DiscoveryResult } from "./discovery-framework";
 import { ProxmoxClient } from "../proxmox/client";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import axios from "axios";
@@ -64,8 +65,9 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
           const hostname = url.hostname.toLowerCase();
           
           // Try to find node matching hostname (case-insensitive match)
+          const hostnameNode = hostname.split(".")[0] ?? "";
           const matchedNode = nodes.find((n: any) => 
-            n.node && n.node.toLowerCase() === hostname.split('.')[0].toLowerCase()
+            n.node && n.node.toLowerCase() === hostnameNode.toLowerCase()
           );
           
           if (matchedNode) {
@@ -573,4 +575,3 @@ export class ProxmoxDiscoveryService extends ApiDiscoveryService {
     });
   }
 }
-

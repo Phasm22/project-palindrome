@@ -52,7 +52,7 @@ export class TwinUpdateService {
             MERGE (n:TwinEntity {id: $id})
             SET n.type = $type,
                 n.displayName = $displayName,
-                n.source = $source,
+                n.entitySource = $entitySource,
                 n.collectedAt = $collectedAt,
                 n.dataJson = $dataJson,
                 n.normalizedName = $normalizedName,
@@ -85,7 +85,7 @@ export class TwinUpdateService {
             id: entity.id,
             type: entity.type,
             displayName: entity.displayName,
-            source: entity.source ?? null,
+            entitySource: entity.source ?? null,
             collectedAt: neo4j.types.DateTime.fromStandardDate(entity.collectedAt),
             dataJson: props.dataJson,
             normalizedName: props.normalizedName,
@@ -295,4 +295,3 @@ export class TwinUpdateService {
     }
   }
 }
-

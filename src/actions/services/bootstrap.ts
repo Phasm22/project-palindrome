@@ -16,7 +16,7 @@ export const BootstrapSchema = z.object({
   playbook: z.string().default("common.yml"), // Default to common.yml
   waitForVm: z.boolean().default(true), // Wait for SSH accessibility
   timeout: z.number().int().positive().default(300), // SSH wait timeout in seconds
-  extraVars: z.record(z.any()).optional(), // Additional Ansible variables
+  extraVars: z.record(z.string(), z.any()).optional(), // Additional Ansible variables
   retryOnFailure: z.boolean().default(false), // Retry on failure
   maxRetries: z.number().int().positive().default(1), // Max retry attempts
   dryRun: z.boolean().default(false),
@@ -146,14 +146,16 @@ export async function bootstrap(params: BootstrapParams): Promise<BootstrapResul
         };
       }
 
-      const result = await ansibleRunner.runPlaybook(playbook, "inventory.ini", extraVars, hostname);
+	  const result = await ansibleRunner.runPlaybook(playbook, "inventory.ini", extraVars, hostname);
       lastResult = result;
 
       // Parse task counts from output
       const tasksChangedMatch = result.stdout.match(/changed=(\d+)/);
       const tasksFailedMatch = result.stdout.match(/failed=(\d+)/);
-      const tasksChanged = tasksChangedMatch ? parseInt(tasksChangedMatch[1], 10) : 0;
-      const tasksFailed = tasksFailedMatch ? parseInt(tasksFailedMatch[1], 10) : 0;
+      const tasksChangedRaw = tasksChangedMatch?.[1];
+      const tasksFailedRaw = tasksFailedMatch?.[1];
+      const tasksChanged = tasksChangedRaw ? parseInt(tasksChangedRaw, 10) : 0;
+      const tasksFailed = tasksFailedRaw ? parseInt(tasksFailedRaw, 10) : 0;
 
       // Check if successful
       if (result.success && !result.failed) {
@@ -212,7 +214,10 @@ export async function bootstrap(params: BootstrapParams): Promise<BootstrapResul
       changed: lastResult?.changed || false,
       failed: true,
       tasksChanged: 0,
-      tasksFailed: lastResult?.stdout.match(/failed=(\d+)/)?.[1] ? parseInt(lastResult.stdout.match(/failed=(\d+)/)?.[1] || "0", 10) : 0,
+      tasksFailed: (() => {
+        const failedRaw = lastResult?.stdout.match(/failed=(\d+)/)?.[1];
+        return failedRaw ? parseInt(failedRaw, 10) : 0;
+      })(),
       stdout: lastResult?.stdout || "",
       stderr: lastResult?.stderr || "",
       duration,
@@ -278,4 +283,3 @@ function parseAnsibleErrors(output: string): string[] {
 
   return errors;
 }
-

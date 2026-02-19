@@ -1,6 +1,6 @@
 import { TwinQueryTool } from "../../tools/TwinQueryTool";
-import { BaseTool } from "../../tools/base-tool";
-import { AgentSession } from "../../agent/session";
+import type { BaseTool } from "../../tools/BaseTool";
+import type { ToolSession } from "../../agent/tool-policy";
 
 /**
  * Analyze full exposure for a specific VM.
@@ -8,17 +8,20 @@ import { AgentSession } from "../../agent/session";
 export async function analyzeVmExposureChain(
   vmId: string,
   tools: Map<string, BaseTool>,
-  session: AgentSession
+  _session: ToolSession
 ): Promise<string> {
   const twinQuery = tools.get("twin_query") as TwinQueryTool;
   if (!twinQuery) {
     return "Error: twin_query tool not available";
   }
 
-  const result = await twinQuery.execute({
-    operation: "exposure_vm_analysis",
-    params: { vmId },
-  });
+  const result = await twinQuery.execute(
+    {
+      operation: "exposure_vm_analysis",
+      params: { vmId },
+    },
+    { toolName: "twin_query", startedAt: Date.now() }
+  );
 
   if ("error" in result) {
     return `Error analyzing VM exposure: ${result.error}`;
@@ -80,17 +83,20 @@ export async function analyzeVmExposureChain(
 export async function listVmsExposedToSubnetChain(
   subnetCidr: string,
   tools: Map<string, BaseTool>,
-  session: AgentSession
+  _session: ToolSession
 ): Promise<string> {
   const twinQuery = tools.get("twin_query") as TwinQueryTool;
   if (!twinQuery) {
     return "Error: twin_query tool not available";
   }
 
-  const result = await twinQuery.execute({
-    operation: "exposure_vms_by_subnet",
-    params: { subnet: subnetCidr },
-  });
+  const result = await twinQuery.execute(
+    {
+      operation: "exposure_vms_by_subnet",
+      params: { subnet: subnetCidr },
+    },
+    { toolName: "twin_query", startedAt: Date.now() }
+  );
 
   if ("error" in result) {
     return `Error finding exposed VMs: ${result.error}`;
@@ -129,17 +135,20 @@ export async function attackPathChain(
   fromSubnet: string,
   toVmId: string,
   tools: Map<string, BaseTool>,
-  session: AgentSession
+  _session: ToolSession
 ): Promise<string> {
   const twinQuery = tools.get("twin_query") as TwinQueryTool;
   if (!twinQuery) {
     return "Error: twin_query tool not available";
   }
 
-  const result = await twinQuery.execute({
-    operation: "exposure_path",
-    params: { fromSubnet, toVmId },
-  });
+  const result = await twinQuery.execute(
+    {
+      operation: "exposure_path",
+      params: { fromSubnet, toVmId },
+    },
+    { toolName: "twin_query", startedAt: Date.now() }
+  );
 
   if ("error" in result) {
     return `Error finding attack path: ${result.error}`;
@@ -177,17 +186,20 @@ export async function attackPathChain(
  */
 export async function listInternetExposedVmsChain(
   tools: Map<string, BaseTool>,
-  session: AgentSession
+  _session: ToolSession
 ): Promise<string> {
   const twinQuery = tools.get("twin_query") as TwinQueryTool;
   if (!twinQuery) {
     return "Error: twin_query tool not available";
   }
 
-  const result = await twinQuery.execute({
-    operation: "exposure_internet_exposed",
-    params: {},
-  });
+  const result = await twinQuery.execute(
+    {
+      operation: "exposure_internet_exposed",
+      params: {},
+    },
+    { toolName: "twin_query", startedAt: Date.now() }
+  );
 
   if ("error" in result) {
     return `Error finding internet-exposed VMs: ${result.error}`;
@@ -218,4 +230,3 @@ export async function listInternetExposedVmsChain(
 
   return lines.join("\n");
 }
-

@@ -656,6 +656,7 @@ export class HybridOrchestrator {
             const context: HybridContext = {
               semanticChunks: [],
               structuralPaths,
+              provenance: [],
             };
 
             // Generate response using exact match context
@@ -664,7 +665,7 @@ export class HybridOrchestrator {
             return {
               ...response,
               queryType: "HYBRID",
-              fallbackMode: "exact_match",
+              fallbackMode: null,
               context,
               sTotalScore: 1.0, // Exact match = perfect score
               fusionMetrics: {
@@ -725,4 +726,3 @@ export class HybridOrchestrator {
     }
   }
 }
-

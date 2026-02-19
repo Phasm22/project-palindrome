@@ -22,6 +22,10 @@ const DEFAULT_CONFIG: LocalEmbeddingConfig = {
   baseUrl: "http://localhost:11434",
 };
 
+interface OllamaEmbeddingResponse {
+  embedding?: number[];
+}
+
 export class LocalEmbeddingService {
   private config: LocalEmbeddingConfig;
   private dimension: number;
@@ -56,7 +60,7 @@ export class LocalEmbeddingService {
         throw new Error(`Ollama API error: ${response.statusText}`);
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as OllamaEmbeddingResponse;
       const embedding = data.embedding;
 
       if (!embedding || !Array.isArray(embedding)) {

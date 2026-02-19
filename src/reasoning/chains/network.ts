@@ -332,6 +332,9 @@ export async function vmIpByNameChain(
     return `No VM found with name "${vmNameOrId}".`;
   }
   const first = vms[0];
+  if (!first) {
+    return `No VM found with name "${vmNameOrId}".`;
+  }
   const nodeName = first.nodeName;
   const vmidStr = first.id?.split(":").pop();
   const vmid = vmidStr ? parseInt(vmidStr, 10) : NaN;

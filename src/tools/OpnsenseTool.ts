@@ -16,7 +16,7 @@ export class OpnsenseTool extends BaseTool {
     });
   }
 
-  getSchema(): ToolSchema {
+  override getSchema(): ToolSchema {
     return createToolSchema(this, OpnsenseParams, {
       examples: [
         {
@@ -39,7 +39,7 @@ export class OpnsenseTool extends BaseTool {
     });
   }
 
-  getParameterSchema() {
+  override getParameterSchema() {
     return OpnsenseParams;
   }
 
@@ -178,4 +178,3 @@ export class OpnsenseTool extends BaseTool {
     }
   }
 }
-

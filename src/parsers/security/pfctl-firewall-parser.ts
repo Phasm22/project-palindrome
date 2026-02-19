@@ -88,7 +88,9 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     if (tokens.length < 3) return null;
 
     let idx = 0;
-    let action = tokens[idx++];
+    const actionToken = tokens[idx++];
+    if (!actionToken) return null;
+    let action = actionToken;
     // Handle "block drop" or "block return" - normalize to "block"
     if (action === "block" && idx < tokens.length && (tokens[idx] === "drop" || tokens[idx] === "return")) {
       idx++; // Skip "drop" or "return"
@@ -108,11 +110,21 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
 
     // Parse flags (quick, keep state, etc.)
     let flags: string | null = null;
-    while (idx < tokens.length && ["quick", "keep", "state"].includes(tokens[idx])) {
+    while (idx < tokens.length) {
+      const flagToken = tokens[idx];
+      if (!flagToken || !["quick", "keep", "state"].includes(flagToken)) {
+        break;
+      }
       if (!flags) flags = "";
-      flags += (flags ? " " : "") + tokens[idx++];
-      if (tokens[idx - 1] === "keep" && tokens[idx] === "state") {
-        flags += " " + tokens[idx++];
+      flags += (flags ? " " : "") + flagToken;
+      idx++;
+      if (flagToken === "keep" && tokens[idx] === "state") {
+        const stateToken = tokens[idx];
+        if (!stateToken) {
+          break;
+        }
+        flags += ` ${stateToken}`;
+        idx++;
       }
     }
 
@@ -131,7 +143,8 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
           idx++;
         }
         if (idx < tokens.length) {
-          interfaceName = tokens[idx++];
+          interfaceName = tokens[idx] ?? null;
+          idx++;
         }
       }
     }
@@ -146,7 +159,8 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     if (idx < tokens.length && tokens[idx] === "proto") {
       idx++;
       if (idx < tokens.length) {
-        protocol = tokens[idx++];
+        protocol = tokens[idx] ?? null;
+        idx++;
       }
     }
 
@@ -174,7 +188,11 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     if (idx < tokens.length && tokens[idx] === "port") {
       idx++;
       if (idx < tokens.length) {
-        const portSpec = tokens[idx++];
+        const portSpec = tokens[idx];
+        idx++;
+        if (!portSpec) {
+          return null;
+        }
         // Check if it's source or destination port
         // pfctl doesn't always specify, assume destination unless "from" appears again
         destinationPort = portSpec;
@@ -259,6 +277,7 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
 
     let idx = 0;
     const ruleType = tokens[idx++];
+    if (!ruleType) return null;
     if (!["nat", "rdr"].includes(ruleType)) return null;
 
     // Parse "on [interface]"
@@ -266,7 +285,8 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     if (idx < tokens.length && tokens[idx] === "on") {
       idx++;
       if (idx < tokens.length) {
-        interfaceName = tokens[idx++];
+        interfaceName = tokens[idx] ?? null;
+        idx++;
       }
     }
 
@@ -275,7 +295,8 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     if (idx < tokens.length && tokens[idx] === "proto") {
       idx++;
       if (idx < tokens.length) {
-        protocol = tokens[idx++];
+        protocol = tokens[idx] ?? null;
+        idx++;
       }
     }
 
@@ -302,7 +323,8 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     if (idx < tokens.length && tokens[idx] === "port") {
       idx++;
       if (idx < tokens.length) {
-        destinationPort = tokens[idx++];
+        destinationPort = tokens[idx] ?? null;
+        idx++;
       }
     }
 
@@ -311,7 +333,10 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     if (idx < tokens.length && tokens[idx] === "->") {
       idx++;
       if (idx < tokens.length) {
-        target = tokens[idx++];
+        target = tokens[idx] ?? null;
+        idx++;
+      }
+      if (target !== null) {
         // Remove parentheses if present: (em0) -> em0
         target = target.replace(/^\(|\)$/g, "");
       }
@@ -372,6 +397,9 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
 
     for (let i = 0; i < line.length; i++) {
       const char = line[i];
+      if (char === undefined) {
+        continue;
+      }
       if (char === '"' || char === "'") {
         inQuotes = !inQuotes;
         continue;
@@ -415,6 +443,10 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
       let i = startIdx;
       while (i < tokens.length) {
         const t = tokens[i];
+        if (!t) {
+          i++;
+          continue;
+        }
         parts.push(t);
         if (t.includes("}")) {
           i++;
@@ -465,4 +497,3 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     return /^\d+\.\d+\.\d+\.\d+\/\d+$/.test(str) || /^[0-9a-f:]+::\/\d+$/i.test(str);
   }
 }
-

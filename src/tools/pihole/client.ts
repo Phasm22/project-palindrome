@@ -1,4 +1,5 @@
-import axios, { AxiosInstance } from "axios";
+import axios from "axios";
+import type { AxiosInstance } from "axios";
 import https from "https";
 import { pceLogger as logger } from "../../pce/utils/logger";
 
@@ -96,7 +97,7 @@ export class PiholeClient {
     }
 
     // Create login promise to prevent concurrent logins
-    this.loginPromise = (async () => {
+    const loginPromise: Promise<string> = (async () => {
       try {
         const webPassword = this.config.webPassword?.replace(/^["']|["']$/g, "") || this.config.apiKey?.replace(/^["']|["']$/g, "");
         if (!webPassword) {
@@ -136,15 +137,16 @@ export class PiholeClient {
         
         // Extract sid and csrf from response body (most reliable)
         if (response.data?.session?.sid) {
-          this.sessionCookie = response.data.session.sid;
+          const sid = response.data.session.sid as string;
+          this.sessionCookie = sid;
           this.csrfToken = response.data.session.csrf || null;
           logger.info("Pi-hole session authenticated (from response body)", {
-            sessionId: this.sessionCookie.substring(0, 10) + "...",
+            sessionId: sid.substring(0, 10) + "...",
             csrfToken: this.csrfToken ? this.csrfToken.substring(0, 10) + "..." : "none",
             valid: response.data.session.valid,
             validity: response.data.session.validity,
           });
-          return this.sessionCookie;
+          return sid;
         }
 
         // Fallback: Extract session cookie from Set-Cookie header
@@ -161,12 +163,16 @@ export class PiholeClient {
           // Extract just the sid value (format: sid=value; Path=/; ...)
           const sidMatch = cookieString.match(/sid=([^;]+)/);
           if (sidMatch) {
-            this.sessionCookie = sidMatch[1];
+            const sid = sidMatch[1];
+            if (!sid) {
+              throw new Error("Failed to extract sid value from Set-Cookie header");
+            }
+            this.sessionCookie = sid;
             logger.warn("Pi-hole session authenticated (from Set-Cookie header, CSRF token not available)", {
-              sessionId: this.sessionCookie.substring(0, 10) + "...",
+              sessionId: sid.substring(0, 10) + "...",
               note: "CSRF token not available from header, API calls may fail. Check response body for csrf token.",
             });
-            return this.sessionCookie;
+            return sid;
           }
         }
 
@@ -189,8 +195,9 @@ export class PiholeClient {
         this.loginPromise = null;
       }
     })();
+    this.loginPromise = loginPromise;
 
-    return this.loginPromise;
+    return loginPromise;
   }
 
   /**
@@ -348,7 +355,7 @@ export class PiholeClient {
           const parts = entry.trim().split(/\s+/);
           if (parts.length >= 2) {
             records.push({
-              ip: parts[0],
+              ip: parts[0] ?? "",
               domain: parts.slice(1).join(" "), // Join in case domain has spaces (unlikely but safe)
             });
           } else if (parts.length === 1 && parts[0]) {
@@ -550,4 +557,3 @@ export class PiholeClient {
     return ipv4Regex.test(ip);
   }
 }
-

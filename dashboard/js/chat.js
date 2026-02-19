@@ -322,19 +322,32 @@ export async function restoreConversation() {
 // Helper functions
 function formatClusterNodesSection(nodes) {
   if (nodes.length === 0) {
-    return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No nodes discovered in twin.</div>';
+    return '<div style="margin: 8px 0; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No nodes discovered in twin.</div>';
   }
   
-  let html = '<div style="margin: 12px 0;">';
+  let html = `
+    <div style="margin: 8px 0;">
+      <div style="padding: 6px 10px; margin-bottom: 4px; background: #0b1220; border: 1px solid #334155; border-radius: 6px; color: #94a3b8; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em;">
+        <div style="display: grid; grid-template-columns: minmax(120px, 1.4fr) 80px 90px minmax(140px, 2fr); align-items: center; gap: 8px;">
+          <span>Node</span>
+          <span>VMs</span>
+          <span>Status</span>
+          <span>ID</span>
+        </div>
+      </div>
+  `;
   for (const node of nodes) {
     const statusColor = node.status === 'online' ? '#10b981' : node.status === 'offline' ? '#ef4444' : '#94a3b8';
     html += `
-      <div style="margin-bottom: 8px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 2px solid #f97316;">
-        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-          <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(node.name)}</strong>
-          <span style="background: ${statusColor}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75em; font-weight: 600;">${escapeHtml(node.status)}</span>
-          <span style="color: #94a3b8; font-size: 0.875em;">${node.vmCount} VM${node.vmCount !== 1 ? 's' : ''}</span>
-          <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #64748b; font-family: 'Courier New', monospace; font-size: 0.8em;">${escapeHtml(node.id)}</code>
+      <div style="margin-bottom: 4px; padding: 6px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
+        <div style="display: grid; grid-template-columns: minmax(120px, 1.4fr) 80px 90px minmax(140px, 2fr); align-items: center; gap: 8px; font-size: 0.9em;">
+          <strong style="color: #e2e8f0;">${escapeHtml(node.name)}</strong>
+          <span style="color: #f8fafc;">${node.vmCount} VM${node.vmCount !== 1 ? 's' : ''}</span>
+          <span style="display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1;">
+            <span style="width: 8px; height: 8px; border-radius: 999px; background: ${statusColor}; display: inline-block;"></span>
+            ${escapeHtml(node.status)}
+          </span>
+          <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #94a3b8; font-family: 'Courier New', monospace; font-size: 0.8em; justify-self: start;">${escapeHtml(node.id)}</code>
         </div>
       </div>
     `;
@@ -345,10 +358,23 @@ function formatClusterNodesSection(nodes) {
 
 function formatClusterVmsSection(vms) {
   if (vms.length === 0) {
-    return '<div style="margin: 12px 0; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No VMs discovered in twin.</div>';
+    return '<div style="margin: 8px 0; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No VMs discovered in twin.</div>';
   }
   
-  return '<div style="margin: 12px 0;">' + vms.join('') + '</div>';
+  return `
+    <div style="margin: 8px 0;">
+      <div style="padding: 6px 10px; margin-bottom: 4px; background: #0b1220; border: 1px solid #334155; border-radius: 6px; color: #94a3b8; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em;">
+        <div style="display: grid; grid-template-columns: minmax(130px, 1.7fr) 70px 95px 80px minmax(160px, 2fr); gap: 8px; align-items: center;">
+          <span>Name</span>
+          <span>Type</span>
+          <span>Status</span>
+          <span>Node</span>
+          <span>Trace</span>
+        </div>
+      </div>
+      ${vms.join('')}
+    </div>
+  `;
 }
 
 /**
@@ -503,11 +529,16 @@ function formatAgentResponse(text) {
   const lines = text.split('\n');
   let html = '';
   let inVmEntry = false;
-  let currentVmHtml = '';
   let currentVmName = '';
+  let currentVmType = '';
+  let currentVmState = '';
+  let currentVmNode = '';
+  let currentVmTrace = '';
+  let currentVmSource = '';
   
   let inClusterNodes = false;
   let inClusterVms = false;
+  let pendingNodeField = '';
   let nodeEntries = [];
   let vmList = [];
   let seenVmNames = new Set();
@@ -557,6 +588,50 @@ function formatAgentResponse(text) {
     }
     if (entries.length === 0) return null;
     return { title, entries };
+  };
+
+  const buildVmRow = (vm) => {
+    const stateColor = vm.state === 'running' ? '#10b981' : vm.state === 'stopped' ? '#ef4444' : '#94a3b8';
+    const typeColor = vm.type === 'VM' ? '#f97316' : '#ea580c';
+    return `
+      <div style="margin-bottom: 4px; padding: 7px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
+        <div style="display: grid; grid-template-columns: minmax(130px, 1.7fr) 70px 95px 80px minmax(160px, 2fr); gap: 8px; align-items: center;">
+          <strong style="color: #e2e8f0; font-size: 0.92em; line-height: 1.2;">${escapeHtml(vm.name || '-')}</strong>
+          <span style="background: ${typeColor}; color: white; padding: 1px 6px; border-radius: 999px; font-size: 0.62em; font-weight: 600; width: fit-content;">${escapeHtml(vm.type || '-')}</span>
+          <span style="display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 0.84em;">
+            <span style="width: 8px; height: 8px; border-radius: 999px; background: ${stateColor}; display: inline-block;"></span>
+            ${escapeHtml(vm.state || 'unknown')}
+          </span>
+          <span style="color: #e2e8f0; font-size: 0.84em;">${escapeHtml(vm.node || '-')}</span>
+          <span style="display: inline-flex; align-items: center; gap: 6px;">
+            <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #94a3b8; font-family: 'Courier New', monospace; font-size: 0.78em;">${escapeHtml(vm.trace || '-')}</code>
+            ${vm.source ? `<span style="font-size: 0.74em; color: #94a3b8;">src:${escapeHtml(vm.source)}</span>` : ''}
+          </span>
+        </div>
+      </div>
+    `;
+  };
+
+  const flushCurrentVm = () => {
+    if (!inVmEntry || !currentVmName) return;
+    if (!seenVmNames.has(currentVmName)) {
+      vmList.push(buildVmRow({
+        name: currentVmName,
+        type: currentVmType || 'VM',
+        state: currentVmState || 'unknown',
+        node: currentVmNode || '',
+        trace: currentVmTrace || '',
+        source: currentVmSource || '',
+      }));
+      seenVmNames.add(currentVmName);
+    }
+    inVmEntry = false;
+    currentVmName = '';
+    currentVmType = '';
+    currentVmState = '';
+    currentVmNode = '';
+    currentVmTrace = '';
+    currentVmSource = '';
   };
 
   const kvBlock = parseKeyValueBlock(lines);
@@ -625,10 +700,8 @@ function formatAgentResponse(text) {
       
       const sectionName = trimmed.replace(':', '');
       if (sectionName === 'Cluster Nodes') {
-        // Skip rendering Cluster Nodes section - user doesn't want to see nodes
-        inClusterNodes = false;
+        inClusterNodes = true;
         inClusterVms = false;
-        continue;
       } else if (sectionName === 'Cluster VMs' || sectionName.includes('VMs')) {
         inClusterNodes = false;
         inClusterVms = true;
@@ -640,20 +713,38 @@ function formatAgentResponse(text) {
       continue;
     }
     
-    // Skip node entries - don't render them even if they appear in response
     if (inClusterNodes && trimmed.startsWith('- ')) {
+      const nodeName = trimmed.replace(/^- /, '').trim();
+      if (nodeName) {
+        nodeEntries.push({
+          name: nodeName,
+          id: `compute-node:${nodeName.toLowerCase()}`,
+          vmCount: 0,
+          status: "unknown",
+        });
+      }
+      continue;
+    }
+    if (inClusterNodes) {
+      const normalized = trimmed.toLowerCase();
+      if (normalized === 'id' || normalized === 'vms' || normalized === 'status') {
+        pendingNodeField = normalized;
+        continue;
+      }
+      if (pendingNodeField && nodeEntries.length > 0) {
+        const node = nodeEntries[nodeEntries.length - 1];
+        if (pendingNodeField === 'id') node.id = trimmed;
+        if (pendingNodeField === 'vms') node.vmCount = Number.parseInt(trimmed, 10) || 0;
+        if (pendingNodeField === 'status') node.status = trimmed.toLowerCase();
+        pendingNodeField = '';
+        continue;
+      }
+      // Ignore any other cluster-node lines to prevent noisy paragraphs.
       continue;
     }
     
     if (inClusterVms && trimmed.startsWith('- ') && !trimmed.startsWith('  -')) {
-      if (inVmEntry && currentVmHtml && currentVmName) {
-        if (!seenVmNames.has(currentVmName)) {
-          vmList.push(currentVmHtml + '</div>');
-          seenVmNames.add(currentVmName);
-        }
-        currentVmHtml = '';
-        currentVmName = '';
-      }
+      flushCurrentVm();
       
       const vmMatch = trimmed.match(/^- (.+?) \((.+?),\s*(.+?)\)/);
       if (vmMatch) {
@@ -667,41 +758,27 @@ function formatAgentResponse(text) {
         
         inVmEntry = true;
         currentVmName = vmName;
-        const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-        // Shorten type tags: "QEMU VM" -> "VM", "LXC container" -> "LXC"
-        const shortType = vmType.includes('QEMU') || vmType === 'QEMU VM' ? 'VM' : 
-                         vmType.includes('LXC') || vmType === 'LXC container' ? 'LXC' : vmType.trim();
-        const typeColor = shortType === 'VM' ? '#f97316' : '#ea580c';
-        currentVmHtml = `
-          <div style="margin-bottom: 12px; padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 2px solid ${typeColor};" data-vm-name="${escapeHtml(vmName)}">
-            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px;">
-              <strong style="color: #e2e8f0; font-size: 1.05em;">${escapeHtml(vmName)}</strong>
-              <span style="background: ${typeColor}; color: white; padding: 1px 6px; border-radius: 3px; font-size: 0.6em; font-weight: 500;">${escapeHtml(shortType)}</span>
-              <span style="width: 8px; height: 8px; border-radius: 50%; background: ${stateColor}; display: inline-block;" title="${escapeHtml(state.trim())}"></span>
-            </div>
-        `;
+        currentVmType = vmType.includes('QEMU') || vmType === 'QEMU VM' ? 'VM' :
+          (vmType.includes('LXC') || vmType === 'LXC container' ? 'LXC' : vmType.trim());
+        currentVmState = state.trim();
       }
       continue;
     }
     
     if (inClusterVms && trimmed.startsWith('  - ') && !trimmed.startsWith('    -')) {
       const nestedVmMatch = trimmed.match(/^  - (.+?) \((.+?),\s*(.+?)\)/);
-      if (nestedVmMatch && inVmEntry && currentVmHtml) {
+      if (nestedVmMatch) {
         const [, name, vmType, state] = nestedVmMatch;
-        const stateColor = state === 'running' ? '#10b981' : state === 'stopped' ? '#ef4444' : '#94a3b8';
-        // Shorten type tags: "QEMU VM" -> "VM", "LXC container" -> "LXC"
         const shortType = vmType.includes('QEMU') || vmType === 'QEMU VM' ? 'VM' : 
                          vmType.includes('LXC') || vmType === 'LXC container' ? 'LXC' : vmType.trim();
-        const typeColor = shortType === 'VM' ? '#f97316' : '#ea580c';
-        currentVmHtml += `
-          <div style="margin-top: 8px; margin-left: 16px; padding: 8px; background: #0a0f1a; border: 1px solid #1e293b; border-radius: 4px; border-left: 2px solid ${typeColor};">
-            <div style="display: flex; align-items: center; gap: 6px;">
-              <strong style="color: #cbd5e1; font-size: 0.95em;">${escapeHtml(name.trim())}</strong>
-              <span style="background: ${typeColor}; color: white; padding: 1px 5px; border-radius: 3px; font-size: 0.55em; font-weight: 500;">${escapeHtml(shortType)}</span>
-              <span style="width: 7px; height: 7px; border-radius: 50%; background: ${stateColor}; display: inline-block;" title="${escapeHtml(state.trim())}"></span>
-            </div>
-          </div>
-        `;
+        vmList.push(buildVmRow({
+          name: name.trim(),
+          type: shortType,
+          state: state.trim(),
+          node: '',
+          trace: '',
+          source: '',
+        }));
       }
       continue;
     }
@@ -709,39 +786,18 @@ function formatAgentResponse(text) {
     if (inVmEntry && trimmed.startsWith('  - Details:')) {
       const detailsText = trimmed.replace('  - Details:', '').trim();
       const parts = detailsText.split('|').map(p => p.trim());
-      let detailsHtml = '<div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b;">';
-      
       for (const part of parts) {
         if (part.startsWith('trace=')) {
-          const traceId = part.replace('trace=', '');
-          detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
-            <span style="color: #94a3b8;">Trace ID:</span> 
-            <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #f97316; font-family: 'Courier New', monospace; font-size: 0.9em; cursor: pointer;" 
-                  onclick="navigator.clipboard.writeText('${escapeHtml(traceId)}'); this.style.background='#f97316'; setTimeout(() => this.style.background='#1e293b', 200);"
-                  title="Click to copy">${escapeHtml(traceId)}</code>
-          </div>`;
+          currentVmTrace = part.replace('trace=', '').trim();
         } else if (part.startsWith('node=')) {
-          const nodeName = part.replace('node=', '');
-          detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em;">
-            <span style="color: #94a3b8;">Node:</span> 
-            <span style="color: #e2e8f0; font-weight: 500;">${escapeHtml(nodeName)}</span>
-          </div>`;
-        } else {
-          detailsHtml += `<div style="margin: 4px 0; font-size: 0.875em; color: #94a3b8;">${escapeHtml(part)}</div>`;
+          currentVmNode = part.replace('node=', '').trim();
         }
       }
-      detailsHtml += '</div>';
-      currentVmHtml += detailsHtml;
       continue;
     }
     
     if (inVmEntry && trimmed.startsWith('  - Source:')) {
-      const sourceText = trimmed.replace('  - Source:', '').trim();
-      currentVmHtml += `
-        <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e293b; font-size: 0.8em; color: #64748b; font-style: italic;">
-          <span style="color: #94a3b8;">Source:</span> ${escapeHtml(sourceText)}
-        </div>
-      `;
+      currentVmSource = trimmed.replace('  - Source:', '').trim();
       continue;
     }
     
@@ -756,15 +812,7 @@ function formatAgentResponse(text) {
     }
     
     if (trimmed.startsWith('### ')) {
-      if (inVmEntry && currentVmHtml && currentVmName) {
-        if (!seenVmNames.has(currentVmName)) {
-          vmList.push(currentVmHtml + '</div>');
-          seenVmNames.add(currentVmName);
-        }
-        currentVmHtml = '';
-        currentVmName = '';
-        inVmEntry = false;
-      }
+      flushCurrentVm();
       
       const headerMatch = trimmed.match(/^### Node: (.+?) \(IP: (.+?)\)/);
       if (headerMatch) {
@@ -792,15 +840,7 @@ function formatAgentResponse(text) {
     }
     
     if (trimmed && !trimmed.startsWith('  -')) {
-      if (inVmEntry && currentVmHtml && currentVmName) {
-        if (!seenVmNames.has(currentVmName)) {
-          vmList.push(currentVmHtml + '</div>');
-          seenVmNames.add(currentVmName);
-        }
-        currentVmHtml = '';
-        currentVmName = '';
-        inVmEntry = false;
-      }
+      flushCurrentVm();
       
       let processedLine = escapeHtml(trimmed);
       processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
@@ -814,12 +854,7 @@ function formatAgentResponse(text) {
     html += formatClusterNodesSection(nodeEntries);
   }
   if (inClusterVms) {
-    if (inVmEntry && currentVmHtml && currentVmName) {
-      if (!seenVmNames.has(currentVmName)) {
-        vmList.push(currentVmHtml + '</div>');
-        seenVmNames.add(currentVmName);
-      }
-    }
+    flushCurrentVm();
     if (vmList.length > 0) {
       html += formatClusterVmsSection(vmList);
     }
@@ -854,7 +889,7 @@ function updateChatMessage(messageId, newContent) {
         margin-bottom: 8px;
         padding: 12px 16px;
         border-radius: 18px 18px 18px 4px;
-        max-width: 75%;
+        max-width: 92%;
         word-wrap: break-word;
         position: relative;
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
@@ -986,7 +1021,7 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     margin-bottom: 8px;
     padding: 12px 16px;
     border-radius: ${isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px'};
-    max-width: 75%;
+    max-width: ${isUser ? '78%' : '92%'};
     word-wrap: break-word;
     position: relative;
     ${isUser 
@@ -1270,6 +1305,20 @@ function handleAgentEvent(event, toolExecutions) {
       const formattedText = formatAgentResponse(event.data.text || 'No response');
       const durationSeconds = (event.data.durationMs || 0) / 1000;
       const traceId = event.data.traceId;
+      const confirmationMetaHtml = event.data.confirmationRequired
+        ? `
+        <div style="margin-top: 12px; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 8px;">
+          <div style="color: #e2e8f0; font-weight: 600; margin-bottom: 8px;">Pending change review</div>
+          ${event.data.confirmationPreview
+            ? `<div style="color: #cbd5e1; margin-bottom: 8px;">${escapeHtml(event.data.confirmationPreview)}</div>`
+            : ''}
+          <div style="color: #94a3b8; font-size: 0.9em;">
+            Confirm with <code style="background: #0f172a; padding: 2px 6px; border-radius: 4px;">CONFIRM ${escapeHtml(event.data.confirmationId || '')}</code>
+            or <code style="background: #0f172a; padding: 2px 6px; border-radius: 4px;">CANCEL</code>.
+          </div>
+        </div>
+      `
+        : '';
       
       // Ensure containers are visible before updating
       const containers = getChatMessageContainers();
@@ -1348,6 +1397,7 @@ function handleAgentEvent(event, toolExecutions) {
       const finalHtml = `
         <div class="agent-response" style="line-height: 1.6;">
           ${formattedText}
+          ${confirmationMetaHtml}
         </div>
         ${toolExecutions.length > 0 ? `
           <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em; display: flex; align-items: center; gap: 12px;">

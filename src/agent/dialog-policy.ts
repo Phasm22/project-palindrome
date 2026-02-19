@@ -5,6 +5,7 @@ import type { ResponseMode } from "./response-formatter";
 
 export interface ConfirmationParseResult {
   confirmed: boolean;
+  cancelled?: boolean;
   actionText?: string;
   actionId?: string;
   phrase?: string;
@@ -30,22 +31,32 @@ export interface DialogPolicyDecision {
   reason?: string;
 }
 
-const CONFIRMATION_PATTERNS = [
-  /^confirm\s*[:\s]+([a-z0-9_-]+)\b/i, // explicit confirmation id
+const CONFIRMATION_PATTERNS: [RegExp, ...RegExp[]] = [
+  /^confirm\s+([a-z0-9_-]+)\b/i, // strict confirmation id
   /^confirm\s*:\s*(.+)$/i,
-  /^(?:confirm|apply|do it|doit|go ahead|proceed)\b(?:[:\s]+(.+))?$/i,
+  /^(?:confirm|apply|do it|doit|go ahead|proceed)\b(?:[:\s]+(.+))?$/i, // compatibility fallback
 ];
+const CANCEL_PATTERNS = [/^cancel\b/i, /^abort\b/i, /^never\s*mind\b/i];
 
 const CONFIRMATION_TTL_MS = 15 * 60 * 1000;
 
 export function parseConfirmationInput(input: string): ConfirmationParseResult {
   const trimmed = input.trim();
+  for (const pattern of CANCEL_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return {
+        confirmed: false,
+        cancelled: true,
+        phrase: trimmed,
+      };
+    }
+  }
+
   const idMatch = trimmed.match(CONFIRMATION_PATTERNS[0]);
   if (idMatch) {
     const actionId = idMatch[1]?.trim();
     return {
       confirmed: true,
-      actionText: actionId || undefined,
       actionId: actionId || undefined,
       phrase: idMatch[0],
     };
@@ -100,10 +111,8 @@ export function evaluateDialogPolicy(input: DialogPolicyInput): DialogPolicyDeci
     pendingActionCreatedAt ? (Date.now() - pendingActionCreatedAt) <= CONFIRMATION_TTL_MS : false;
   const confirmationMatchesPending =
     hasPendingAction && !!confirmation?.actionId && confirmation.actionId === pendingActionId;
-  const confirmationAllowed =
-    intent.risk === "DESTRUCTIVE"
-      ? (confirmationMatchesPending && isPendingActionFresh)
-      : (isConfirmed && (!hasPendingAction || isPendingActionFresh));
+  // Strict mode: all write intents require CONFIRM <id> bound to a fresh pending action.
+  const confirmationAllowed = isConfirmed && confirmationMatchesPending && isPendingActionFresh;
 
   let nextState: ConversationState = "READY_READ";
   if (needsClarification) nextState = "NEED_CLARIFICATION";

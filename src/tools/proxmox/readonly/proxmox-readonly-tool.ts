@@ -691,13 +691,13 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     if (configs.length === 0) {
       try {
         const single = this.getApiConfig();
-        configs = [{
-          url: single.url,
-          tokenId: single.tokenId,
-          tokenSecret: single.tokenSecret,
-          verifySsl: single.verifySsl,
-          label: "primary",
-        }];
+          configs = [{
+            url: single.url,
+            tokenId: single.tokenId,
+            tokenSecret: single.tokenSecret,
+            verifySsl: single.verifySsl ?? true,
+            label: "primary",
+          }];
       } catch {
         return {
           data: { nodes: [], count: 0 },
@@ -2179,4 +2179,3 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     }
   }
 }
-

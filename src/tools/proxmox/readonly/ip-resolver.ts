@@ -27,8 +27,9 @@ function extractMACFromNetworkConfig(networkConfig: Record<string, any>): string
     if (key.startsWith("net") && typeof value === "string") {
       // Extract MAC from virtio=MAC or model=MAC format
       const macMatch = value.match(/(?:virtio|model)=([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})/);
-      if (macMatch) {
-        return macMatch[1].toLowerCase();
+      const mac = macMatch?.[1];
+      if (mac) {
+        return mac.toLowerCase();
       }
     }
   }
@@ -124,8 +125,17 @@ export async function resolveVMIP(
 ): Promise<IPResolutionResult> {
   try {
     // Step 1: Get VM network config from Proxmox
-    const vmConfig = await proxmoxClient.getVMConfig(node, vmid);
-    const networkConfig = vmConfig.network || {};
+    const vmConfigResponse = await proxmoxClient.get<Record<string, unknown>>(
+      `/nodes/${node}/qemu/${vmid}/config`
+    );
+    const vmConfig = ((vmConfigResponse.data as { data?: Record<string, unknown> })?.data ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const networkConfig =
+      typeof vmConfig.network === "object" && vmConfig.network !== null
+        ? (vmConfig.network as Record<string, unknown>)
+        : vmConfig;
     const mac = extractMACFromNetworkConfig(networkConfig);
 
     pceLogger.debug("Resolving VM IP", { vmName, node, vmid, mac });
@@ -155,21 +165,21 @@ export async function resolveVMIP(
         // Query guest agent for network info
         // This requires guest agent to be running in the VM
         // Proxmox API: GET /nodes/{node}/qemu/{vmid}/agent/network-get-interfaces
-        const agentResult = await proxmoxClient.execute(
-          `nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`,
-          "GET"
+        const agentResult = await proxmoxClient.get<{ data?: Array<Record<string, unknown>> }>(
+          `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
         );
 
-        if (agentResult && Array.isArray(agentResult.result)) {
+        const interfaces = agentResult.data?.data;
+        if (Array.isArray(interfaces)) {
           // Parse agent response for IP addresses
-          for (const iface of agentResult.result) {
+          for (const iface of interfaces) {
             if (iface["ip-addresses"] && Array.isArray(iface["ip-addresses"])) {
               for (const ipAddr of iface["ip-addresses"]) {
                 if (ipAddr["ip-address-type"] === "ipv4" && !ipAddr["ip-address"].startsWith("127.")) {
                   return {
                     ip: ipAddr["ip-address"],
                     source: "guest_agent",
-                    mac,
+                    mac: mac ?? undefined,
                   };
                 }
               }
@@ -195,4 +205,3 @@ export async function resolveVMIP(
     };
   }
 }
-

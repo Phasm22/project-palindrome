@@ -11,8 +11,10 @@
  * - failed → reclassify with context → new approach → success/failure
  */
 
-import { IntentClassification, classifyIntent, IntentType } from "./intent-classifier";
-import { RoutingDecision, routeIntent } from "./intent-router";
+import { classifyIntent } from "./intent-classifier";
+import type { IntentClassification, IntentType } from "./intent-classifier";
+import { routeIntent } from "./intent-router";
+import type { RoutingDecision } from "./intent-router";
 import { logger } from "../utils/logger";
 
 export interface FailureContext {
@@ -433,4 +435,3 @@ export class FailureTracker {
     return input.trim().toLowerCase();
   }
 }
-

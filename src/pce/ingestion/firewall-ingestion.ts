@@ -73,13 +73,19 @@ export class FirewallIngestionOrchestrator {
 
       // Log sample entity to verify CIDR preservation
       const sampleEntity = parseResult.entities.find(
-        (entity) => entity.type === TwinEntityType.FIREWALL_RULE && (entity.data?.source || entity.data?.destination)
+        (entity) => entity.type === TwinEntityType.FIREWALL_RULE
       );
-      if (sampleEntity) {
+      const sampleRuleData = sampleEntity?.data as
+        | {
+            source?: unknown;
+            destination?: unknown;
+          }
+        | undefined;
+      if (sampleEntity && (sampleRuleData?.source || sampleRuleData?.destination)) {
         pceLogger.debug("Sample parsed entity", {
           id: sampleEntity.id,
-          source: sampleEntity.data?.source,
-          destination: sampleEntity.data?.destination,
+          source: sampleRuleData.source,
+          destination: sampleRuleData.destination,
         });
       }
 
@@ -743,7 +749,8 @@ export class FirewallIngestionOrchestrator {
     for (const subnetId of subnetIds) {
       // Extract CIDR from subnet ID: "network-subnet:172.16.0.0/22" -> "172.16.0.0/22"
       const cidr = subnetId.replace("network-subnet:", "");
-      const mask = cidr.includes("/") ? parseInt(cidr.split("/")[1]) : 0;
+      const cidrMask = cidr.split("/")[1];
+      const mask = cidr.includes("/") && cidrMask ? parseInt(cidrMask, 10) : 0;
       
       subnetEntities.push({
         id: subnetId,
@@ -853,5 +860,4 @@ export class FirewallIngestionOrchestrator {
     }
   }
 }
-
 

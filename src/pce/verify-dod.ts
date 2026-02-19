@@ -125,7 +125,9 @@ async function main() {
       throw new Error("Chunk count differs");
     }
     for (let i = 0; i < chunks1.length; i++) {
-      if (chunks1[i].text !== chunks2[i].text || chunks1[i].id !== chunks2[i].id) {
+      const chunk1 = chunks1[i];
+      const chunk2 = chunks2[i];
+      if (!chunk1 || !chunk2 || chunk1.text !== chunk2.text || chunk1.id !== chunk2.id) {
         throw new Error("Chunks differ for same input");
       }
     }
@@ -141,7 +143,12 @@ async function main() {
       versionHash: "hash-2",
     });
     
-    if (baseChunks[0].text !== modifiedChunks[0].text) {
+    const firstBaseChunk = baseChunks[0];
+    const firstModifiedChunk = modifiedChunks[0];
+    if (!firstBaseChunk || !firstModifiedChunk) {
+      throw new Error("Expected at least one chunk in both base and modified documents");
+    }
+    if (firstBaseChunk.text !== firstModifiedChunk.text) {
       throw new Error("First chunk changed when it shouldn't");
     }
     
@@ -234,7 +241,8 @@ async function main() {
     if (opsResult.chunks.length === 0) {
       throw new Error("Ops should see ops document");
     }
-    if (opsResult.chunks[0].metadata.aclGroup !== "ops") {
+    const firstChunk = opsResult.chunks[0];
+    if (!firstChunk || firstChunk.metadata.aclGroup !== "ops") {
       throw new Error("Retrieved chunk has wrong ACL group");
     }
   })();
@@ -270,4 +278,3 @@ main().catch((error) => {
   console.error("Fatal error:", error);
   process.exit(1);
 });
-

@@ -35,13 +35,13 @@ export interface TerraformResult {
 export interface TerraformOutput {
   vm_info?: Record<
     string,
-    {
-      name: string;
-      node: string;
-      id: number;
-      hostname: string;
-      ip_addresses: string[];
-    }
+      {
+        name: string;
+        node: string;
+        id: number | string;
+        hostname: string;
+        ip_addresses: string[];
+      }
   >;
   vm_hostnames?: Record<string, string>;
 }
@@ -481,4 +481,3 @@ ${vmConfigsBlock}
     return this.executeTerraform("force-unlock", args);
   }
 }
-

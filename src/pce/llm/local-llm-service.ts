@@ -21,6 +21,12 @@ export interface LocalLLMConfig {
   temperature?: number;
 }
 
+interface OllamaChatResponse {
+  message?: {
+    content?: string;
+  };
+}
+
 export class LocalLLMService {
   private config: Required<LocalLLMConfig>;
   private provider: LLMProvider;
@@ -81,7 +87,7 @@ export class LocalLLMService {
           throw new Error(`Ollama API error: ${response.status} ${errorText}`);
         }
 
-        const data = await response.json();
+        const data = (await response.json()) as OllamaChatResponse;
         const content = data.message?.content;
 
         if (!content) {
@@ -169,4 +175,3 @@ Focus on the actual information requested. If the context doesn't contain enough
     }
   }
 }
-

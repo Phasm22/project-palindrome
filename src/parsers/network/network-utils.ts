@@ -27,8 +27,8 @@ export function derivePrimaryIp(cidrs: string[]): string | null {
     return null;
   }
   const ipv4 = cidrs
-    .map((cidr) => cidr.split("/")[0])
-    .filter((ip) => ip && ip.includes("."))
+    .map((cidr) => cidr.split("/")[0] ?? "")
+    .filter((ip): ip is string => ip.length > 0 && ip.includes("."))
     .sort((a, b) => (a > b ? 1 : -1));
   return ipv4[0] ?? cidrs[0] ?? null;
 }
@@ -62,7 +62,8 @@ function ipToInt(ip: string): number | null {
  * Handles CIDR strings like "172.16.0.0/22" or "10.0.0.0/8".
  */
 export function ipInCidr(ip: string, cidr: string): boolean {
-  const [base, maskStr] = cidr.trim().split("/");
+  const [base = "", maskStr] = cidr.trim().split("/");
+  if (!base) return false;
   const prefixLen = maskStr != null ? parseInt(maskStr, 10) : 32;
   if (Number.isNaN(prefixLen) || prefixLen < 0 || prefixLen > 32) return false;
   const ipN = ipToInt(ip);
@@ -90,4 +91,3 @@ export function coerceVlan(value: string | number | undefined | null): string | 
   const str = value.toString().trim();
   return str.length ? str : null;
 }
-

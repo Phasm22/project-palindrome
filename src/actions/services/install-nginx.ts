@@ -15,7 +15,7 @@ export const InstallNginxSchema = z.object({
   vmName: z.string().min(1, "VM name is required"),
   waitForVm: z.boolean().default(true),
   timeout: z.number().int().positive().default(300),
-  extraVars: z.record(z.any()).optional(),
+  extraVars: z.record(z.string(), z.any()).optional(),
   retryOnFailure: z.boolean().default(false),
   maxRetries: z.number().int().positive().default(1),
   dryRun: z.boolean().default(false),
@@ -246,4 +246,3 @@ export async function installNginx(params: InstallNginxParams): Promise<InstallN
     };
   }
 }
-

@@ -25,7 +25,7 @@ export * from "./kg";
 export * from "./edl";
 
 // Graph Retrieval (Phase I-B)
-export * from "./graph-retrieval";
+export { GraphRAGRetrieval } from "./graph-retrieval";
 
 // Types
 export * from "./types";
@@ -35,4 +35,3 @@ export { pceLogger, LogLevel } from "./utils/logger";
 
 // API
 export * from "./api";
-

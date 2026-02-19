@@ -13,30 +13,35 @@ import { IngestionSummaryStore } from "../pce/api/ingestion-summary-store";
  * Levenshtein distance for typo detection
  */
 function levenshteinDistance(a: string, b: string): number {
-  const matrix: number[][] = [];
+  const matrix: number[][] = Array.from(
+    { length: b.length + 1 },
+    () => Array<number>(a.length + 1).fill(0)
+  );
 
   for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
+    matrix[i]![0] = i;
   }
   for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
+    matrix[0]![j] = j;
   }
 
   for (let i = 1; i <= b.length; i++) {
     for (let j = 1; j <= a.length; j++) {
+      const currentRow = matrix[i]!;
+      const previousRow = matrix[i - 1]!;
       if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i][j] = matrix[i - 1][j - 1];
+        currentRow[j] = previousRow[j - 1]!;
       } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1, // substitution
-          matrix[i][j - 1] + 1,     // insertion
-          matrix[i - 1][j] + 1      // deletion
+        currentRow[j] = Math.min(
+          previousRow[j - 1]! + 1, // substitution
+          currentRow[j - 1]! + 1,  // insertion
+          previousRow[j]! + 1      // deletion
         );
       }
     }
   }
 
-  return matrix[b.length][a.length];
+  return matrix[b.length]![a.length]!;
 }
 
 /**
@@ -202,9 +207,14 @@ function isAdjacentKeyTypo(typed: string, intended: string): boolean {
   
   let typoCount = 0;
   for (let i = 0; i < typed.length; i++) {
-    if (typed[i] !== intended[i]) {
-      const adjacent = KEYBOARD_ADJACENT[intended[i].toLowerCase()] || [];
-      if (adjacent.includes(typed[i].toLowerCase())) {
+    const typedChar = typed[i];
+    const intendedChar = intended[i];
+    if (!typedChar || !intendedChar) {
+      return false;
+    }
+    if (typedChar !== intendedChar) {
+      const adjacent = KEYBOARD_ADJACENT[intendedChar.toLowerCase()] || [];
+      if (adjacent.includes(typedChar.toLowerCase())) {
         typoCount++;
       } else {
         return false;

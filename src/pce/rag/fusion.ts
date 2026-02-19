@@ -155,9 +155,14 @@ export class FusionEngine {
       const filteredScores: number[] = [];
 
       for (let i = 0; i < vectorResult.chunks.length; i++) {
-        if (vectorResult.scores[i] >= this.config.minVectorScore) {
-          filtered.push(vectorResult.chunks[i]);
-          filteredScores.push(vectorResult.scores[i]);
+        const chunk = vectorResult.chunks[i];
+        const score = vectorResult.scores[i];
+        if (!chunk || score === undefined) {
+          continue;
+        }
+        if (score >= this.config.minVectorScore) {
+          filtered.push(chunk);
+          filteredScores.push(score);
         }
       }
 
@@ -224,6 +229,9 @@ export class FusionEngine {
     for (let i = 0; i < vectorResult.chunks.length; i++) {
       const chunk = vectorResult.chunks[i];
       const score = vectorResult.scores[i];
+      if (!chunk || score === undefined) {
+        continue;
+      }
       // Use source path as key for matching
       const key = chunk.metadata.sourcePath;
       // Keep highest score if multiple chunks from same source
@@ -256,6 +264,9 @@ export class FusionEngine {
     for (let i = 0; i < vectorResult.chunks.length; i++) {
       const chunk = vectorResult.chunks[i];
       const vectorScore = vectorResult.scores[i];
+      if (!chunk || vectorScore === undefined) {
+        continue;
+      }
       const sourcePath = chunk.metadata.sourcePath;
 
       // Check if this source path has a graph entity
@@ -482,4 +493,3 @@ export class FusionEngine {
     return pruned;
   }
 }
-

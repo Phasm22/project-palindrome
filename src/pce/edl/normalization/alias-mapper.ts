@@ -13,29 +13,34 @@ import { pceLogger } from "../../utils/logger";
 function levenshteinDistance(str1: string, str2: string): number {
   const len1 = str1.length;
   const len2 = str2.length;
-  const matrix: number[][] = [];
+  const matrix: number[][] = Array.from(
+    { length: len1 + 1 },
+    () => Array<number>(len2 + 1).fill(0)
+  );
 
   // Initialize matrix
   for (let i = 0; i <= len1; i++) {
-    matrix[i] = [i];
+    matrix[i]![0] = i;
   }
   for (let j = 0; j <= len2; j++) {
-    matrix[0][j] = j;
+    matrix[0]![j] = j;
   }
 
   // Fill matrix
   for (let i = 1; i <= len1; i++) {
+    const currentRow = matrix[i]!;
+    const previousRow = matrix[i - 1]!;
     for (let j = 1; j <= len2; j++) {
       const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1, // deletion
-        matrix[i][j - 1] + 1, // insertion
-        matrix[i - 1][j - 1] + cost // substitution
+      currentRow[j] = Math.min(
+        previousRow[j]! + 1, // deletion
+        currentRow[j - 1]! + 1, // insertion
+        previousRow[j - 1]! + cost // substitution
       );
     }
   }
 
-  return matrix[len1][len2];
+  return matrix[len1]![len2]!;
 }
 
 /**
@@ -167,4 +172,3 @@ export class AliasMapper {
     this.canonicalEntities.clear();
   }
 }
-

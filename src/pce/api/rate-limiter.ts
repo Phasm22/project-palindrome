@@ -26,7 +26,8 @@ class SlidingWindowRateLimiter {
 
     const recentEntries = entries.filter((timestamp) => timestamp > windowStart);
     if (recentEntries.length >= this.max) {
-      const retryAfterMs = recentEntries[0] + this.windowMs - now;
+      const oldestEntry = recentEntries[0] ?? now;
+      const retryAfterMs = oldestEntry + this.windowMs - now;
       this.hits.set(key, recentEntries);
       return { allowed: false, retryAfterMs: Math.max(retryAfterMs, 0) };
     }

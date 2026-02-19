@@ -62,11 +62,14 @@ export function getProxmoxEndpointConfigs(): ProxmoxEndpointConfig[] {
   try {
     const urlObj = new URL(clusterUrl);
     const hostname = urlObj.hostname.toLowerCase();
-    const nodeName = hostname.split(".")[0].toUpperCase();
+    const nodeSegment = hostname.split(".")[0];
+    const nodeName = nodeSegment ? nodeSegment.toUpperCase() : "";
     const nodeSecret =
-      process.env[`${nodeName}_TOKEN_SECRET`] ||
-      process.env[`PROXMOX_${nodeName}_TF_SECRET`] ||
-      process.env[`PROXMOX_${nodeName}_TOKEN_SECRET`];
+      (nodeName
+        ? process.env[`${nodeName}_TOKEN_SECRET`] ||
+          process.env[`PROXMOX_${nodeName}_TF_SECRET`] ||
+          process.env[`PROXMOX_${nodeName}_TOKEN_SECRET`]
+        : undefined);
     if (nodeSecret) clusterTokenSecret = nodeSecret;
   } catch {
     // ignore

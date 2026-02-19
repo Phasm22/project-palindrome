@@ -151,6 +151,13 @@ function handleStreamEvent(event: any): void {
   }
 }
 
+function createEventSource(url: string): EventSource {
+  const EventSourceCtor = globalThis.EventSource as unknown as {
+    new (sourceUrl: string): EventSource;
+  };
+  return new EventSourceCtor(url);
+}
+
 function formatToolOutput(result: ExecutionResult, toolName: string): string {
   if (result.error) {
     return `❌ Error: ${result.error}`;
@@ -253,21 +260,22 @@ if (args[0] === "hello") {
         sessionId,
       });
       
-      const eventSource = new EventSource(`${apiUrl}/api/agent/stream?sessionId=${sessionId}`);
+      const eventSource = createEventSource(`${apiUrl}/api/agent/stream?sessionId=${sessionId}`);
       
-      eventSource.onmessage = (event) => {
+      eventSource.addEventListener("message", (event: Event) => {
         try {
-          const agentEvent = JSON.parse(event.data);
+          const messageEvent = event as MessageEvent<string>;
+          const agentEvent = JSON.parse(messageEvent.data);
           handleStreamEvent(agentEvent);
         } catch (error: any) {
           console.error("Error parsing SSE event:", error.message);
         }
-      };
+      });
       
-      eventSource.onerror = (error) => {
+      eventSource.addEventListener("error", (error: Event | Error) => {
         console.error("SSE connection error:", error);
         eventSource.close();
-      };
+      });
       
       const response = await agentPromise;
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -349,21 +357,22 @@ if (args[0] === "hello") {
       });
       
       // Connect to SSE stream
-      const eventSource = new EventSource(`${apiUrl}/api/agent/stream?sessionId=${sessionId}`);
+      const eventSource = createEventSource(`${apiUrl}/api/agent/stream?sessionId=${sessionId}`);
       
-      eventSource.onmessage = (event) => {
+      eventSource.addEventListener("message", (event: Event) => {
         try {
-          const agentEvent = JSON.parse(event.data);
+          const messageEvent = event as MessageEvent<string>;
+          const agentEvent = JSON.parse(messageEvent.data);
           handleStreamEvent(agentEvent);
         } catch (error: any) {
           console.error("Error parsing SSE event:", error.message);
         }
-      };
+      });
       
-      eventSource.onerror = (error) => {
+      eventSource.addEventListener("error", (error: Event | Error) => {
         console.error("SSE connection error:", error);
         eventSource.close();
-      };
+      });
       
       // Wait for agent to complete
       const response = await agentPromise;
@@ -563,20 +572,32 @@ if (args[0] === "hello") {
       if (key === "json") {
         flags.json = true;
       } else if (key === "node") {
+        const nextArg = args[i + 1];
         if (rawValue) {
           flags.node = rawValue;
-        } else if (i + 1 < args.length && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--")) {
-          flags.node = args[++i];
+        } else if (typeof nextArg === "string" && !nextArg.startsWith("--")) {
+          const consumedArg = args[++i];
+          if (typeof consumedArg !== "string") {
+            console.error("--node flag requires a value");
+            process.exit(1);
+          }
+          flags.node = consumedArg;
         } else {
           console.error("--node flag requires a value");
           process.exit(1);
         }
       } else if (key === "vmid") {
+        const nextArg = args[i + 1];
         let vmidValue: string;
         if (rawValue) {
           vmidValue = rawValue;
-        } else if (i + 1 < args.length && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--")) {
-          vmidValue = args[++i];
+        } else if (typeof nextArg === "string" && !nextArg.startsWith("--")) {
+          const consumedArg = args[++i];
+          if (typeof consumedArg !== "string") {
+            console.error("--vmid flag requires a value");
+            process.exit(1);
+          }
+          vmidValue = consumedArg;
         } else {
           console.error("--vmid flag requires a value");
           process.exit(1);
@@ -588,10 +609,16 @@ if (args[0] === "hello") {
         }
         flags.vmid = parsed;
       } else if (key === "type") {
+        const nextArg = args[i + 1];
         if (rawValue) {
           flags.type = rawValue;
-        } else if (i + 1 < args.length && typeof args[i + 1] === "string" && !args[i + 1].startsWith("--")) {
-          flags.type = args[++i];
+        } else if (typeof nextArg === "string" && !nextArg.startsWith("--")) {
+          const consumedArg = args[++i];
+          if (typeof consumedArg !== "string") {
+            console.error("--type flag requires a value");
+            process.exit(1);
+          }
+          flags.type = consumedArg;
         } else {
           console.error("--type flag requires a value");
           process.exit(1);

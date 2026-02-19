@@ -1,4 +1,4 @@
-import neo4j from "neo4j-driver";
+import type { QueryResult, Record as Neo4jRecord } from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 import { ProxmoxClient } from "../../tools/proxmox/client";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
@@ -50,7 +50,7 @@ export class TwinQueryService {
     }
   }
 
-  private mapInterface(record: neo4j.Record): any {
+  private mapInterface(record: Neo4jRecord): any {
     const node = record.get("nodeName") ?? undefined;
     const ipsVal = record.get("ips");
     const ips =
@@ -223,6 +223,9 @@ export class TwinQueryService {
     }
 
     const vmInfo = vmResult.records[0];
+    if (!vmInfo) {
+      throw new Error(`VM not found: ${vmId}`);
+    }
     const ifacesResult = await this.runQuery(
       `
         MATCH (iface:TwinEntity {type: $ifaceType, vmId: $vmId})
@@ -295,7 +298,7 @@ export class TwinQueryService {
   private async runQuery(
     query: string,
     params: Record<string, unknown> = {}
-  ): Promise<neo4j.QueryResult> {
+  ): Promise<QueryResult> {
     await this.ensureConnected();
     const session = this.graphStore.getDriver().session();
     try {
@@ -321,7 +324,7 @@ export class TwinQueryService {
       {
         vmType: "compute_vm",
         nodeType: "compute_node",
-        vmKind: vmKind === "all" ? null : vmKind,
+        vmKind,
       }
     );
 
@@ -483,7 +486,7 @@ export class TwinQueryService {
       return {
         id: record.get("id") as string,
         name: record.get("name") as string,
-        temperature: temperature || null, // Explicitly return null if no temperature data
+        temperature, // Keep undefined when absent to match return type
       };
     });
   }
@@ -814,8 +817,7 @@ export class TwinQueryService {
 
       for (const neo4jVm of neo4jVms) {
         // Parse VMID from Neo4j ID (format: "compute-vm:node:vmid" or just "vmid")
-        const idParts = neo4jVm.id.split(":");
-        const vmid = idParts.length > 0 ? parseInt(idParts[idParts.length - 1], 10) : null;
+        const vmid = this.parseVmNumericId(neo4jVm.id);
 
         if (!vmid || isNaN(vmid)) {
           logger.warn("Could not parse VMID from Neo4j ID", { id: neo4jVm.id, name: neo4jVm.name });
@@ -963,8 +965,7 @@ export class TwinQueryService {
       const staleVmIds: string[] = [];
 
       for (const neo4jVm of neo4jVms) {
-        const idParts = neo4jVm.id.split(":");
-        const vmid = idParts.length > 0 ? parseInt(idParts[idParts.length - 1], 10) : null;
+        const vmid = this.parseVmNumericId(neo4jVm.id);
 
         if (!vmid || isNaN(vmid)) {
           continue; // Skip if we can't parse VMID
@@ -1435,6 +1436,12 @@ export class TwinQueryService {
       });
 
     const first = result.records[0];
+    if (!first) {
+      return {
+        ruleId,
+        subnets: [],
+      };
+    }
     return {
       ruleId: first.get("ruleId") as string,
       action: first.get("action") ?? undefined,
@@ -1720,6 +1727,15 @@ export class TwinQueryService {
 
       if (simpleResult.records.length > 0) {
         const record = simpleResult.records[0];
+        if (!record) {
+          return {
+            fromSubnet: fromSubnetCidr,
+            toVm: toVmId,
+            toVmName: toVmId,
+            path: [],
+            reachable: false,
+          };
+        }
         return {
           fromSubnet: record.get("fromSubnet") as string,
           toVm: record.get("toVm") as string,
@@ -1754,6 +1770,15 @@ export class TwinQueryService {
     }
 
     const record = result.records[0];
+    if (!record) {
+      return {
+        fromSubnet: fromSubnetCidr,
+        toVm: toVmId,
+        toVmName: toVmId,
+        path: [],
+        reachable: false,
+      };
+    }
     const path = record.get("path");
     // TODO: Parse Neo4j path object into step array
     // For now, return simple path
@@ -1827,5 +1852,14 @@ export class TwinQueryService {
     const parsed = Number(value);
     return Number.isNaN(parsed) ? 0 : parsed;
   }
-}
 
+  private parseVmNumericId(entityId: string): number | null {
+    const idParts = entityId.split(":");
+    const vmIdPart = idParts[idParts.length - 1];
+    if (!vmIdPart) {
+      return null;
+    }
+    const parsed = parseInt(vmIdPart, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+}

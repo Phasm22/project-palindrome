@@ -69,7 +69,9 @@ const DIRECTORY: DirectoryEntry[] = [
   },
 ];
 
-const FIELD_MAP: Record<LookupUserProfileParamsType["identifierType"], keyof DirectoryEntry> = {
+type LookupField = "email" | "username" | "employeeId";
+
+const FIELD_MAP: Record<LookupUserProfileParamsType["identifierType"], LookupField> = {
   email: "email",
   username: "username",
   employee_id: "employeeId",

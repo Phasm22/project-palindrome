@@ -1,10 +1,7 @@
 import { z } from "zod";
 import { OpnsenseReadOnlyTool } from "../../tools/opnsense/readonly/opnsense-readonly-tool";
-import { TwinQueryService } from "../../twin/api/twin-query-service";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { ProxmoxClient } from "../../tools/proxmox/client";
-import { TerraformRunner, type TerraformConfig } from "../helpers/terraform-runner";
-import { normalizeNodeId } from "../../parsers/compute/helpers";
 
 /**
  * Set Interface VLAN Action Schema
@@ -95,8 +92,9 @@ export async function setInterfaceVlan(params: SetInterfaceVlanParams): Promise<
       action: "interfaces_vlans_list",
     }, {} as any);
 
-    if (vlansResult.success && vlansResult.data?.vlans) {
-      const vlans = vlansResult.data.vlans as any[];
+    const vlansPayload = vlansResult.data as { vlans?: unknown[] } | undefined;
+    if (!vlansResult.error && Array.isArray(vlansPayload?.vlans)) {
+      const vlans = vlansPayload.vlans as any[];
       const vlanExists = vlans.some((v: any) => {
         // OPNsense VLAN format: vlan_id might be in different fields
         const vid = v.tag || v.vlan_id || v.id || v.vlan;
@@ -197,8 +195,9 @@ export async function setInterfaceVlan(params: SetInterfaceVlanParams): Promise<
     // Proxmox network interfaces are named net0, net1, etc.
     let networkInterface = "net0";
     const networkKeys = Object.keys(vmConfig).filter(key => key.startsWith("net"));
-    if (networkKeys.length > 0) {
-      networkInterface = networkKeys[0]; // Use the first network interface
+    const firstNetworkKey = networkKeys[0];
+    if (firstNetworkKey) {
+      networkInterface = firstNetworkKey; // Use the first network interface
     }
 
     // Build network config string
@@ -272,4 +271,3 @@ export async function setInterfaceVlan(params: SetInterfaceVlanParams): Promise<
     };
   }
 }
-

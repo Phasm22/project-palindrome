@@ -54,15 +54,16 @@ export type PalindromeName = typeof PALINDROME_NAMES[number];
  */
 export function getRandomPalindromeName(): string {
   const index = Math.floor(Math.random() * PALINDROME_NAMES.length);
-  return PALINDROME_NAMES[index];
+  return PALINDROME_NAMES[index] ?? PALINDROME_NAMES[0] ?? "level";
 }
 
 /**
  * Get a palindrome name by index (deterministic)
  */
 export function getPalindromeNameByIndex(index: number): string {
-  const safeIndex = index % PALINDROME_NAMES.length;
-  return PALINDROME_NAMES[safeIndex];
+  const length = PALINDROME_NAMES.length;
+  const safeIndex = ((index % length) + length) % length;
+  return PALINDROME_NAMES[safeIndex] ?? PALINDROME_NAMES[0] ?? "level";
 }
 
 /**
@@ -108,4 +109,3 @@ export function getNextAvailablePalindromeName(
     }
   }
 }
-

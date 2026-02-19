@@ -17,7 +17,8 @@
  * - Regular queries: Lower threshold (>= 0.30 required)
  */
 
-import { IntentType, IntentClassification, classifyIntent, isDestructiveAction } from "./intent-classifier";
+import { classifyIntent, isDestructiveAction } from "./intent-classifier";
+import type { IntentType, IntentClassification } from "./intent-classifier";
 import { detectActionIntent } from "./action-intents";
 import { detectComputeIntent } from "./compute-intents";
 import { detectFirewallIntent } from "./detectFirewallIntent";
@@ -403,19 +404,20 @@ export function classifyAndRoute(userInput: string): {
   // Bypass clarification for clear informational questions so we don't ask
   // "observe, diagnose, change, or explain?" when the user is obviously querying.
   if (routing.route === "clarification" && isClearInformationalQuery(userInput)) {
+    const metadata = classification.metadata ?? {};
     const queryClassification: IntentClassification = {
       ...classification,
       type: "QUERY",
       intent: "QUERY",
       confidence: 0.5,
       missing: [],
-      metadata: classification.metadata ?? {},
+      metadata,
     };
-    if (!queryClassification.metadata.domain) {
+    if (!metadata.domain) {
       const n = userInput.toLowerCase();
-      if (/\b(ip|network|interface|subnet|vlan|gateway)\b/.test(n)) queryClassification.metadata.domain = "network";
-      else if (/\b(firewall|rule|allow|block|port)\b/.test(n)) queryClassification.metadata.domain = "firewall";
-      else if (/\b(vm|container|node|host)\b/.test(n)) queryClassification.metadata.domain = "compute";
+      if (/\b(ip|network|interface|subnet|vlan|gateway)\b/.test(n)) metadata.domain = "network";
+      else if (/\b(firewall|rule|allow|block|port)\b/.test(n)) metadata.domain = "firewall";
+      else if (/\b(vm|container|node|host)\b/.test(n)) metadata.domain = "compute";
     }
     routing = routeIntent(userInput, queryClassification);
     classification = queryClassification;
@@ -426,4 +428,3 @@ export function classifyAndRoute(userInput: string): {
     routing,
   };
 }
-

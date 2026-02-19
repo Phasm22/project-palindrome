@@ -1,7 +1,8 @@
 import { BaseTool } from "../../BaseTool";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { logger } from "../../../utils/logger";
-import axios, { AxiosInstance } from "axios";
+import axios from "axios";
+import type { AxiosInstance } from "axios";
 import https from "https";
 import { sanitizeToolPayload } from "../../../agent/tool-sanitizer";
 
@@ -122,4 +123,3 @@ export abstract class OpnsenseReadOnlyBase extends BaseTool {
     return null;
   }
 }
-
