@@ -30,28 +30,25 @@ bun run scripts/test-proxmox-tokens.ts
 Token selection is now **pair-based**. The resolver only uses complete `TOKEN_ID + TOKEN_SECRET` pairs and does not mix unrelated env families.
 
 #### For proxBig (standalone):
-- `PROXBIG_TOKEN_ID` + `PROXBIG_TOKEN_SECRET` (preferred), or
-- `PROXBIG_TF_TOKEN_ID` + `PROXBIG_TF_SECRET`, or
+- `PROXBIG_TF_TOKEN_ID` + `PROXBIG_TF_SECRET` (preferred), or
 - `PROXMOX_PROXBIG_TF_TOKEN_ID` + `PROXMOX_PROXBIG_TF_SECRET`, or
-- `PROXMOX_TOKEN_ID` + `PROXBIG_TOKEN_SECRET` (for shared token IDs), or
 - `CLUSTER_TF_TOKEN_ID` + `PROXBIG_TF_SECRET`
 - URL source: `PROXBIG_URL` then `PROXMOX_URL`
 
 #### For yin (cluster):
 - `CLUSTER_TF_TOKEN_ID` + `PROXMOX_YIN_TF_SECRET` (preferred), or
-- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_CLUSTER_TF_SECRET`, or
-- `PROXMOX_TOKEN_ID` + `YIN_TOKEN_SECRET` / `PROXMOX_YIN_TF_SECRET`
+- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_CLUSTER_TF_SECRET`
 - URL source: `PROXMOX_YIN_URL` then `PROXMOX_URL`
 
 #### For YANG (cluster):
 - `CLUSTER_TF_TOKEN_ID` + `PROXMOX_YANG_TF_SECRET` (preferred), or
-- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_CLUSTER_TF_SECRET`, or
-- `PROXMOX_TOKEN_ID` + `YANG_TOKEN_SECRET` / `PROXMOX_YANG_TF_SECRET`
+- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_CLUSTER_TF_SECRET`
 - URL source: `PROXMOX_YANG_URL` then `PROXMOX_URL`
 
 ### Notes
 
 - The script uses the **same env var logic** as the codebase (`create-vm.ts`, `terraform-runner.ts`)
+- Legacy keys (`PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`, `PROXBIG_TOKEN_SECRET`) are still accepted for compatibility, but should be treated as deprecated.
 - URLs are normalized to lowercase hostnames (Proxmox node names are case-sensitive but URLs are not)
 - 401 errors indicate authentication failure (wrong secret or expired token)
 - 403 errors indicate permission issues (token lacks required permissions)

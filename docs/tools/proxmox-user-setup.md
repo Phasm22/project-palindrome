@@ -31,7 +31,7 @@ pveum user add palindrome-agent@pve --password "$(openssl rand -base64 32)" --co
 pveum user token add palindrome-agent@pve pce-token --privsep 0
 ```
 
-**IMPORTANT**: Save the token secret that is displayed. You'll need it for `PROXMOX_TOKEN_SECRET`.
+**IMPORTANT**: Save the token secret that is displayed. You'll map it to one or more `*_TF_SECRET` variables in your `.env`.
 
 ### 3. Set ACL Permissions
 
@@ -70,34 +70,42 @@ pveum user list
 
 ## Environment Variables
 
-After setup, configure these environment variables:
+After setup, configure these environment variables using token ID + secret pairs:
 
 ```bash
-export PROXMOX_URL="https://your-proxmox-node:8006"
-export PROXMOX_TOKEN_ID="palindrome-agent@pve!pce-token"
-export PROXMOX_TOKEN_SECRET="<token-secret-from-step-2>"
+export PROXMOX_URL="https://proxbig.prox:8006/api2/json"
+export PROXBIG_TF_TOKEN_ID="palindrome-agent@pve!pce-token"
+export PROXBIG_TF_SECRET="<token-secret-from-step-2>"
+
+# Cluster nodes (yin/YANG)
+export CLUSTER_TF_TOKEN_ID="palindrome-agent@pve!pce-token"
+export PROXMOX_CLUSTER_TF_SECRET="<cluster-token-secret>"
+export PROXMOX_YIN_URL="https://yin.prox:8006/api2/json"
+export PROXMOX_YANG_URL="https://yang.prox:8006/api2/json"
 export PROXMOX_VERIFY_SSL="true"  # or "false" for self-signed certs
 ```
 
 ### Node-Specific Token Secrets
 
-If you have multiple Proxmox nodes with different token secrets (but same token ID), you can use node-specific environment variables. The system resolves credentials as **token ID + secret pairs** and selects the first complete pair for the target hostname in `PROXMOX_URL`.
+If you have multiple Proxmox nodes with different token secrets (but same token ID), use node-specific TF secret variables. The system resolves complete **token ID + secret pairs** and selects the first valid pair for the target hostname.
 
 Use matched pairs like this:
 
 ```bash
-# Default/fallback token secret
-export PROXMOX_TOKEN_SECRET="<default-token-secret>"
+# Shared cluster token ID
+export CLUSTER_TF_TOKEN_ID="palindrome-agent@pve!pce-token"
 
-# Node-specific token secrets (optional, takes precedence)
-export PROXBIG_TOKEN_SECRET="<proxbig-specific-token-secret>"
-export YIN_TOKEN_SECRET="<yin-specific-token-secret>"
-export YANG_TOKEN_SECRET="<yang-specific-token-secret>"
+# Shared cluster secret (fallback)
+export PROXMOX_CLUSTER_TF_SECRET="<cluster-default-secret>"
+
+# Node-specific cluster overrides (optional, takes precedence for that node)
+export PROXMOX_YIN_TF_SECRET="<yin-specific-token-secret>"
+export PROXMOX_YANG_TF_SECRET="<yang-specific-token-secret>"
 ```
 
 The resolver extracts the node name from the URL (e.g., `proxbig.example.com` -> `PROXBIG`) and prefers node-scoped pairs before generic fallback pairs.
 
-Avoid mixing unrelated families (example: `CLUSTER_TF_TOKEN_ID` with `PROXBIG_TOKEN_SECRET`) unless that pair is intentionally valid.
+Avoid mixing unrelated families unless that pair is intentionally valid.
 
 ## Role Permissions
 

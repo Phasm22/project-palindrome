@@ -55,9 +55,14 @@ NEO4J_PASSWORD=your_password
 QDRANT_URL=http://localhost:6333
 
 # Optional: Proxmox configuration
-PROXMOX_URL=https://your-proxmox:8006/api2/json
-PROXMOX_TOKEN_ID=user@pve!token-name
-PROXMOX_TOKEN_SECRET=your_secret
+PROXMOX_URL=https://proxbig.prox:8006/api2/json
+PROXBIG_TF_TOKEN_ID=user@pve!token-name
+PROXBIG_TF_SECRET=your_proxbig_secret
+CLUSTER_TF_TOKEN_ID=user@pve!token-name
+PROXMOX_CLUSTER_TF_SECRET=your_cluster_secret
+# Optional node-specific cluster URLs/secrets
+PROXMOX_YIN_URL=https://yin.prox:8006/api2/json
+PROXMOX_YANG_URL=https://yang.prox:8006/api2/json
 
 # Optional: OPNsense configuration
 OPNSENSE_URL=https://your-opnsense
@@ -247,4 +252,3 @@ If you encounter issues:
 ---
 
 **Ready to go?** Start with a simple query: "What VMs are running?"
-

@@ -19,14 +19,19 @@ async function diagnoseAuth() {
   const tokenId = resolvedPrimary?.tokenId;
   const tokenSecret = resolvedPrimary?.tokenSecret;
 
-  console.log(`\nEnvironment Variables:`);
+  console.log(`\nEnvironment Variables (canonical):`);
   console.log(`  PROXMOX_URL: ${url || "❌ Not set"}`);
-  console.log(`  PROXMOX_TOKEN_ID: ${process.env.PROXMOX_TOKEN_ID || "❌ Not set"}`);
-  console.log(`  PROXMOX_TOKEN_SECRET: ${process.env.PROXMOX_TOKEN_SECRET ? `✅ Set (${process.env.PROXMOX_TOKEN_SECRET.length} chars)` : "❌ Not set"}`);
-  console.log(`  PROXBIG_TOKEN_SECRET: ${process.env.PROXBIG_TOKEN_SECRET ? `✅ Set (${process.env.PROXBIG_TOKEN_SECRET.length} chars)` : "❌ Not set"}`);
+  console.log(`  PROXBIG_TF_TOKEN_ID: ${process.env.PROXBIG_TF_TOKEN_ID || "❌ Not set"}`);
   console.log(`  PROXBIG_TF_SECRET: ${process.env.PROXBIG_TF_SECRET ? `✅ Set (${process.env.PROXBIG_TF_SECRET.length} chars)` : "❌ Not set"}`);
   console.log(`  CLUSTER_TF_TOKEN_ID: ${process.env.CLUSTER_TF_TOKEN_ID || "❌ Not set"}`);
   console.log(`  PROXMOX_CLUSTER_TF_SECRET: ${process.env.PROXMOX_CLUSTER_TF_SECRET ? `✅ Set (${process.env.PROXMOX_CLUSTER_TF_SECRET.length} chars)` : "❌ Not set"}`);
+  console.log(`  PROXMOX_YIN_TF_SECRET: ${process.env.PROXMOX_YIN_TF_SECRET ? `✅ Set (${process.env.PROXMOX_YIN_TF_SECRET.length} chars)` : "❌ Not set"}`);
+  console.log(`  PROXMOX_YANG_TF_SECRET: ${process.env.PROXMOX_YANG_TF_SECRET ? `✅ Set (${process.env.PROXMOX_YANG_TF_SECRET.length} chars)` : "❌ Not set"}`);
+
+  console.log(`\nLegacy Compatibility Variables (optional):`);
+  console.log(`  PROXMOX_TOKEN_ID: ${process.env.PROXMOX_TOKEN_ID || "❌ Not set"}`);
+  console.log(`  PROXMOX_TOKEN_SECRET: ${process.env.PROXMOX_TOKEN_SECRET ? `✅ Set (${process.env.PROXMOX_TOKEN_SECRET.length} chars)` : "❌ Not set"}`);
+  console.log(`  PROXBIG_TOKEN_SECRET: ${process.env.PROXBIG_TOKEN_SECRET ? `✅ Set (${process.env.PROXBIG_TOKEN_SECRET.length} chars)` : "❌ Not set"}`);
 
   if (!url || !tokenId || !tokenSecret) {
     console.error("\n❌ Missing required environment variables or no complete token-id/secret pair found");
