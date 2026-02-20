@@ -15,7 +15,7 @@ function getPortalRoot() {
     // Create portal root if it doesn't exist
     portalRoot = document.createElement('div');
     portalRoot.id = PORTAL_ROOT_ID;
-    portalRoot.style.cssText = 'position: relative; z-index: 0;';
+    portalRoot.style.cssText = 'position: relative; z-index: var(--z-max);';
     document.body.appendChild(portalRoot);
   }
   

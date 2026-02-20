@@ -75,6 +75,37 @@
     background: rgba(249, 115, 22, 0.3) !important;
   }
 
+  /* Modal action buttons: avoid sub-pixel edge artifacts */
+  .modal-action-btn {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    outline: none;
+    border: 1px solid transparent;
+    overflow: hidden;
+    box-sizing: border-box;
+    background-clip: padding-box;
+  }
+
+  .modal-cancel-btn {
+    border-color: rgba(71, 85, 105, 0.9);
+  }
+
+  .modal-confirm-btn {
+    border-color: rgba(220, 38, 38, 0.85);
+    box-shadow: none;
+  }
+
+  .modal-action-btn:focus,
+  .modal-action-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.5);
+  }
+
+  .modal-confirm-btn:focus,
+  .modal-confirm-btn:focus-visible {
+    box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.6);
+  }
+
   /* Key/value response cards (pipe format) */
   .kv-card {
     margin: 10px 0;
@@ -607,6 +638,8 @@
   
   .logo-animated {
     animation: logo-float 3s ease-in-out infinite, logo-glow-pulse 2s ease-in-out infinite;
+    transform-origin: center;
+    will-change: transform, filter;
   }
   
   /* Logo refresh button styling - no glow, matches button text color (white) */
@@ -654,6 +687,23 @@
     -webkit-text-fill-color: transparent;
     background-size: 200% auto;
     animation: shimmer 3s linear infinite;
+  }
+
+  @keyframes site-title-float {
+    0%, 100% {
+      transform: translateY(0px);
+      letter-spacing: 0;
+    }
+    50% {
+      transform: translateY(-1px);
+      letter-spacing: 0.015em;
+    }
+  }
+
+  .site-title-animated {
+    display: inline-block;
+    animation: shimmer 3s linear infinite, site-title-float 4s ease-in-out infinite;
+    will-change: transform, letter-spacing, background-position;
   }
   
   /* Drop shadow glow utilities */

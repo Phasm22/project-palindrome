@@ -445,8 +445,13 @@ function initSigma() {
     // We'll go with option 1 - remove 'type' from node attributes that Sigma sees
     // But keep it in the graph for our filtering logic
     if (attrs.type) {
-      // Store the type in a different attribute that won't interfere with Sigma
-      graph.setNodeAttribute(node, 'nodeType', attrs.type);
+      // Keep ontology type (compute_vm, network_interface, ...) for filtering.
+      // Do not replace it with generic Neo4j labels such as "TwinEntity".
+      const normalizedEntityType = (attrs.entityType || attrs.nodeType || attrs.type || 'unknown')
+        .toString()
+        .toLowerCase();
+      graph.setNodeAttribute(node, 'entityType', normalizedEntityType);
+      graph.setNodeAttribute(node, 'nodeType', normalizedEntityType);
       // Remove 'type' so Sigma uses default renderer
       graph.removeNodeAttribute(node, 'type');
     }
@@ -668,7 +673,6 @@ function initSigma() {
         tooltipContent += `<span style="color: ${colorPalette.textMuted}">Agent:</span> <span style="color: ${nodeData.data.agentAvailable ? colorPalette.success : colorPalette.warning}">${nodeData.data.agentAvailable ? 'Available' : 'Missing'}</span><br>`;
       }
     } else if (entityType === 'network_interface') {
-      if (nodeData.status) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Status:</span> <span style="color: ${nodeData.status === 'up' ? colorPalette.success : colorPalette.error}">${nodeData.status}</span><br>`;
       if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
       if (nodeData.primaryIp) tooltipContent += `<span style="color: ${colorPalette.textMuted}">IP:</span> <span style="color: ${colorPalette.text}">${nodeData.primaryIp}</span><br>`;
       if (nodeData.data?.vlan) tooltipContent += `<span style="color: ${colorPalette.textMuted}">VLAN:</span> <span style="color: ${colorPalette.text}">${nodeData.data.vlan}</span><br>`;
@@ -761,15 +765,16 @@ function initSigma() {
       }, 150);
     }, 150);
     
-    const nodePosition = sigma.getNodeDisplayData(node);
-    sigma.getCamera().animate({
-      x: nodePosition.x,
-      y: nodePosition.y,
-      ratio: Math.min(sigma.getCamera().ratio * 0.7, 2),
-    }, {
-      duration: 400,
-      easing: 'quadraticOut',
-    });
+    if (typeof nodeData.x === 'number' && typeof nodeData.y === 'number') {
+      sigma.getCamera().animate({
+        x: nodeData.x,
+        y: nodeData.y,
+        ratio: Math.min(sigma.getCamera().ratio * 0.7, 2),
+      }, {
+        duration: 400,
+        easing: 'quadraticOut',
+      });
+    }
   });
 }
 
@@ -827,7 +832,9 @@ function setupSearch() {
       // Reset highlights
       highlightedNodes.forEach(node => {
         graph.setNodeAttribute(node, 'highlighted', false);
-        graph.setNodeAttribute(node, 'color', graph.getNodeAttribute(node, 'originalColor') || nodeTypeColors[graph.getNodeAttribute(node, 'type')] || nodeTypeColors['unknown']);
+        const nodeAttrs = graph.getNodeAttributes(node);
+        const typeKey = (nodeAttrs.entityType || nodeAttrs.nodeType || nodeAttrs.type || 'unknown').toLowerCase();
+        graph.setNodeAttribute(node, 'color', graph.getNodeAttribute(node, 'originalColor') || nodeTypeColors[typeKey] || nodeTypeColors['unknown']);
       });
       highlightedNodes.clear();
       sigma.refresh();
@@ -839,7 +846,7 @@ function setupSearch() {
       graph.forEachNode((node, attrs) => {
         const label = (attrs.label || '').toLowerCase();
         const id = (node || '').toLowerCase();
-        const type = (attrs.nodeType || attrs.entityType || attrs.type || '').toLowerCase();
+        const type = (attrs.entityType || attrs.nodeType || attrs.type || '').toLowerCase();
         if (label.includes(query) || id.includes(query) || type.includes(query)) {
           matchingNodes.push({ node, attrs });
         }
@@ -848,7 +855,9 @@ function setupSearch() {
       // Reset previous highlights
       highlightedNodes.forEach(node => {
         graph.setNodeAttribute(node, 'highlighted', false);
-        graph.setNodeAttribute(node, 'color', graph.getNodeAttribute(node, 'originalColor') || nodeTypeColors[graph.getNodeAttribute(node, 'type')] || nodeTypeColors['unknown']);
+        const nodeAttrs = graph.getNodeAttributes(node);
+        const typeKey = (nodeAttrs.entityType || nodeAttrs.nodeType || nodeAttrs.type || 'unknown').toLowerCase();
+        graph.setNodeAttribute(node, 'color', graph.getNodeAttribute(node, 'originalColor') || nodeTypeColors[typeKey] || nodeTypeColors['unknown']);
       });
       highlightedNodes.clear();
       
@@ -871,7 +880,7 @@ function setupSearch() {
             <div class="p-2 hover:bg-slate-700 cursor-pointer text-slate-200 text-sm border-b border-slate-700" 
                  data-node-id="${node}">
               <div class="font-medium">${attrs.label || node}</div>
-              <div class="text-xs text-slate-400">${attrs.nodeType || attrs.entityType || attrs.type || 'unknown'}</div>
+              <div class="text-xs text-slate-400">${attrs.entityType || attrs.nodeType || attrs.type || 'unknown'}</div>
             </div>
           `;
         }).join('');
@@ -881,11 +890,11 @@ function setupSearch() {
         resultsDiv.querySelectorAll('[data-node-id]').forEach(el => {
           el.addEventListener('click', () => {
             const nodeId = el.getAttribute('data-node-id');
-            const nodePosition = sigma.getNodeDisplayData(nodeId);
-            if (nodePosition) {
+            const nodeAttrs = nodeId ? graph.getNodeAttributes(nodeId) : null;
+            if (nodeAttrs && typeof nodeAttrs.x === 'number' && typeof nodeAttrs.y === 'number') {
               sigma.getCamera().animate({
-                x: nodePosition.x,
-                y: nodePosition.y,
+                x: nodeAttrs.x,
+                y: nodeAttrs.y,
                 ratio: Math.min(sigma.getCamera().ratio * 0.7, 2),
               }, {
                 duration: 400,
@@ -903,70 +912,127 @@ function setupSearch() {
 
 function setupFilters() {
   if (!graph || !sigma) return;
+  let activeNodeTypeFilter = null;
+  let activeEdgeTypeFilter = null;
+
+  const clearFilterStyles = () => {
+    document.querySelectorAll('[data-filter-type], [data-filter-edge]').forEach((item) => {
+      if (!(item instanceof HTMLElement)) return;
+      item.style.outline = '';
+      item.style.background = '';
+    });
+  };
+
+  const markActiveFilter = (el) => {
+    clearFilterStyles();
+    if (el instanceof HTMLElement) {
+      el.style.outline = '2px solid #f97316';
+      el.style.background = 'rgba(249, 115, 22, 0.12)';
+    }
+  };
+
+  const resetVisibility = () => {
+    graph.forEachNode((node) => {
+      graph.setNodeAttribute(node, 'hidden', false);
+    });
+    graph.forEachEdge((edge) => {
+      graph.setEdgeAttribute(edge, 'hidden', false);
+    });
+    activeNodeTypeFilter = null;
+    activeEdgeTypeFilter = null;
+    clearFilterStyles();
+    sigma.refresh();
+  };
+
+  const applyVisibility = (nodesToShow) => {
+    graph.forEachNode((node) => {
+      graph.setNodeAttribute(node, 'hidden', !nodesToShow.has(node));
+    });
+    graph.forEachEdge((edge, _attrs, source, target) => {
+      graph.setEdgeAttribute(edge, 'hidden', !(nodesToShow.has(source) && nodesToShow.has(target)));
+    });
+    sigma.refresh();
+  };
+
+  const focusVisibleNodes = (nodesToShow) => {
+    const positions = [];
+    nodesToShow.forEach((node) => {
+      const attrs = graph.getNodeAttributes(node);
+      if (typeof attrs?.x === 'number' && typeof attrs?.y === 'number') {
+        positions.push({ x: attrs.x, y: attrs.y });
+      }
+    });
+
+    if (!positions.length) {
+      return;
+    }
+
+    const bounds = positions.reduce((acc, pos) => ({
+      minX: Math.min(acc.minX, pos.x),
+      maxX: Math.max(acc.maxX, pos.x),
+      minY: Math.min(acc.minY, pos.y),
+      maxY: Math.max(acc.maxY, pos.y),
+    }), { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
+
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    const width = Math.max(1, bounds.maxX - bounds.minX);
+    const height = Math.max(1, bounds.maxY - bounds.minY);
+    const dims = sigma.getDimensions();
+    const targetRatio = Math.max(width / Math.max(1, dims.width), height / Math.max(1, dims.height)) * 1.8;
+    const ratio = Number.isFinite(targetRatio) && targetRatio > 0
+      ? Math.min(10, Math.max(0.1, targetRatio))
+      : sigma.getCamera().ratio;
+
+    sigma.getCamera().animate({
+      x: centerX,
+      y: centerY,
+      ratio,
+    }, {
+      duration: 400,
+    });
+  };
   
   // Filter by node type
   document.querySelectorAll('[data-filter-type]').forEach(el => {
     el.addEventListener('click', () => {
       const filterType = el.getAttribute('data-filter-type');
       if (!filterType) return;
+
+      // Toggle current node-type filter off
+      if (activeNodeTypeFilter === filterType) {
+        resetVisibility();
+        return;
+      }
       
       const nodesToShow = new Set();
       
       graph.forEachNode((node, attrs) => {
         // Check all possible type attributes (nodeType, entityType, type)
         // Normalize both to lowercase with underscores for comparison
-        const nodeType = (attrs.nodeType || attrs.entityType || attrs.type || '').toLowerCase().replace(/[-\s]/g, '_');
+        const nodeType = (attrs.entityType || attrs.nodeType || attrs.type || '').toLowerCase().replace(/[-\s]/g, '_');
         const targetType = filterType.toLowerCase().replace(/[-\s]/g, '_');
         
         if (nodeType === targetType) {
           nodesToShow.add(node);
-          // Add connected nodes
+          // Add connected nodes for context
           graph.forEachNeighbor(node, neighbor => {
             nodesToShow.add(neighbor);
           });
         }
       });
-      
-      // Hide nodes not in filter
-      graph.forEachNode((node) => {
-        graph.setNodeAttribute(node, 'hidden', !nodesToShow.has(node));
-      });
-      
-      sigma.refresh();
-      
-      // Fit to visible nodes
-      if (nodesToShow.size > 0) {
-        const nodeArray = Array.from(nodesToShow);
-        const positions = nodeArray.map(node => {
-          const pos = sigma.getNodeDisplayData(node);
-          return pos ? { x: pos.x, y: pos.y } : null;
-        }).filter(Boolean);
-        
-        if (positions.length > 0) {
-          const bounds = positions.reduce((acc, pos) => {
-            return {
-              minX: Math.min(acc.minX, pos.x),
-              maxX: Math.max(acc.maxX, pos.x),
-              minY: Math.min(acc.minY, pos.y),
-              maxY: Math.max(acc.maxY, pos.y),
-            };
-          }, { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity });
-          
-          const centerX = (bounds.minX + bounds.maxX) / 2;
-          const centerY = (bounds.minY + bounds.maxY) / 2;
-          const width = bounds.maxX - bounds.minX;
-          const height = bounds.maxY - bounds.minY;
-          const ratio = Math.max(width, height) / Math.min(sigma.getDimensions().width, sigma.getDimensions().height) * 1.2;
-          
-          sigma.getCamera().animate({
-            x: centerX,
-            y: centerY,
-            ratio: ratio,
-          }, {
-            duration: 400,
-          });
-        }
+
+      if (!nodesToShow.size) {
+        // Never leave the graph fully hidden.
+        resetVisibility();
+        return;
       }
+
+      activeEdgeTypeFilter = null;
+      activeNodeTypeFilter = filterType;
+      markActiveFilter(el);
+      applyVisibility(nodesToShow);
+      focusVisibleNodes(nodesToShow);
     });
   });
   
@@ -974,6 +1040,14 @@ function setupFilters() {
   document.querySelectorAll('[data-filter-edge]').forEach(el => {
     el.addEventListener('click', () => {
       const type = el.getAttribute('data-filter-edge');
+      if (!type) return;
+
+      // Toggle current edge filter off
+      if (activeEdgeTypeFilter === type) {
+        resetVisibility();
+        return;
+      }
+
       const nodesToShow = new Set();
       
       graph.forEachEdge((edge, attrs, source, target) => {
@@ -982,22 +1056,23 @@ function setupFilters() {
           nodesToShow.add(target);
         }
       });
-      
-      // Hide nodes not in filter
-      graph.forEachNode((node) => {
-        graph.setNodeAttribute(node, 'hidden', !nodesToShow.has(node));
-      });
-      
-      sigma.refresh();
+
+      if (!nodesToShow.size) {
+        resetVisibility();
+        return;
+      }
+
+      activeNodeTypeFilter = null;
+      activeEdgeTypeFilter = type;
+      markActiveFilter(el);
+      applyVisibility(nodesToShow);
+      focusVisibleNodes(nodesToShow);
     });
   });
   
   // Reset filter on double-click
   document.addEventListener('dblclick', () => {
     if (!graph || !sigma) return;
-    graph.forEachNode((node) => {
-      graph.setNodeAttribute(node, 'hidden', false);
-    });
-    sigma.refresh();
+    resetVisibility();
   });
 }

@@ -23,10 +23,10 @@
       <!-- Logo -->
       <div class="flex items-center gap-2.5 py-2.5 flex-shrink-0">
         <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo"
-             class="w-11 h-11 object-contain"
+             class="w-11 h-11 object-contain logo-animated"
              style="filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);"
              onerror="this.style.display='none';">
-        <span class="text-sm font-semibold hidden lg:block" style="background: linear-gradient(135deg, #f97316 0%, #fb923c 60%, #e2e8f0 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Palindrome</span>
+        <span class="text-sm font-semibold hidden lg:block text-gradient-shimmer site-title-animated">Palindrome</span>
       </div>
       <!-- Divider -->
       <div class="w-px h-5 bg-slate-700 flex-shrink-0 self-center"></div>
@@ -387,7 +387,7 @@
   </div>
 
   <!-- Portal root for all overlays (modals, tooltips, dropdowns) -->
-  <div id="portal-root" style="position: relative; z-index: 0;"></div>
+  <div id="portal-root" style="position: relative; z-index: var(--z-max);"></div>
 
   <script type="module" src="js/main.js"></script>
 </body>

@@ -14,11 +14,13 @@ import {
 } from "./network-utils";
 
 interface ProxmoxNodeInterface {
-  name: string;
+  name?: string;
+  iface?: string;
   type?: string;
   method?: string;
   cidr?: string;
   address?: string;
+  netmask?: string | number;
   bridge_ports?: string;
   vlan_raw_device?: string;
   tag?: string | number;
@@ -64,13 +66,15 @@ export class ProxmoxInterfaceParser implements Parser<ProxmoxInterfaceParserInpu
 
     for (const nodeEntry of input.nodes || []) {
       for (const iface of nodeEntry.interfaces || []) {
-        if (!iface?.name) {
+        const ifaceName = iface?.name || iface?.iface;
+        if (!ifaceName) {
           continue;
         }
-        const cidrs = parseCidrs([iface.cidr, iface.address]);
+        const inferredCidr = this.inferCidr(iface.address, iface.netmask);
+        const cidrs = parseCidrs([iface.cidr, inferredCidr, iface.address]);
         const entity = this.buildInterfaceEntity(
           nodeEntry.node,
-          iface.name,
+          ifaceName,
           {
             mac: iface.mac || undefined,
             cidrs,
@@ -82,6 +86,13 @@ export class ProxmoxInterfaceParser implements Parser<ProxmoxInterfaceParserInpu
         );
         entities.push(entity);
         this.attachSubnets(entity, cidrs, subnetMap, context.collectedAt, relationships);
+        this.addAttachmentRelationship(
+          relationships,
+          entity.id,
+          this.normalizeNodeEntityId(nodeEntry.node),
+          context.collectedAt,
+          { attachmentKind: "node_interface" }
+        );
       }
     }
 
@@ -138,6 +149,13 @@ export class ProxmoxInterfaceParser implements Parser<ProxmoxInterfaceParserInpu
         );
         entities.push(entity);
         this.attachSubnets(entity, cidrs, subnetMap, context.collectedAt, relationships);
+        this.addAttachmentRelationship(
+          relationships,
+          entity.id,
+          vmId,
+          context.collectedAt,
+          { attachmentKind: "vm_interface", netKey }
+        );
       });
     }
 
@@ -218,6 +236,26 @@ export class ProxmoxInterfaceParser implements Parser<ProxmoxInterfaceParserInpu
     }
   }
 
+  private addAttachmentRelationship(
+    relationships: TwinRelationship[],
+    fromId: string,
+    toId: string,
+    collectedAt: Date,
+    metadata: Record<string, any> = {}
+  ): void {
+    relationships.push({
+      type: TwinRelationshipType.ATTACHED_TO,
+      fromId,
+      toId,
+      metadata,
+      collectedAt,
+    });
+  }
+
+  private normalizeNodeEntityId(nodeName: string): string {
+    return `compute-node:${nodeName.toLowerCase()}`;
+  }
+
   private parseVmNetString(netValue: string): {
     mac?: string;
     bridge?: string;
@@ -239,5 +277,58 @@ export class ProxmoxInterfaceParser implements Parser<ProxmoxInterfaceParserInpu
       ip: result.ip,
     };
   }
-}
 
+  private inferCidr(address?: string, netmask?: string | number): string | null {
+    if (!address || typeof address !== "string") {
+      return null;
+    }
+    if (address.includes("/")) {
+      return address;
+    }
+
+    const prefix = this.netmaskToPrefix(netmask);
+    if (prefix === null) {
+      return null;
+    }
+    return `${address}/${prefix}`;
+  }
+
+  private netmaskToPrefix(netmask?: string | number): number | null {
+    if (netmask === undefined || netmask === null) return null;
+    if (typeof netmask === "number") {
+      return netmask >= 0 && netmask <= 128 ? netmask : null;
+    }
+
+    const trimmed = netmask.trim();
+    if (!trimmed.length) return null;
+    if (/^\d+$/.test(trimmed)) {
+      const numeric = Number.parseInt(trimmed, 10);
+      return numeric >= 0 && numeric <= 128 ? numeric : null;
+    }
+
+    // Dotted-decimal IPv4 netmask (e.g. 255.255.252.0 -> 22)
+    if (!trimmed.includes(".")) return null;
+    const octets = trimmed.split(".");
+    if (octets.length !== 4) return null;
+
+    let bits = 0;
+    let seenZero = false;
+    for (const octet of octets) {
+      const value = Number.parseInt(octet, 10);
+      if (Number.isNaN(value) || value < 0 || value > 255) {
+        return null;
+      }
+      const binary = value.toString(2).padStart(8, "0");
+      for (const bit of binary) {
+        if (bit === "1") {
+          if (seenZero) return null;
+          bits += 1;
+        } else {
+          seenZero = true;
+        }
+      }
+    }
+
+    return bits;
+  }
+}

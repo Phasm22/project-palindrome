@@ -161,14 +161,21 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       return readOnlyCheck;
     }
 
+    // Reset endpoint selection per call so one request cannot leak cluster context
+    // into subsequent calls (e.g., proxBig call accidentally reusing yin/YANG client).
+    this.apiClient = null;
     const client = this.getApiClient();
     const { action, ...actionParams } = parsed.data;
 
     // Route to appropriate handler based on action
-    return this.executeApiCall(
-      () => this.handleAction(action, actionParams, client),
-      context
-    );
+    try {
+      return this.executeApiCall(
+        () => this.handleAction(action, actionParams, client),
+        context
+      );
+    } finally {
+      this.apiClient = null;
+    }
   }
 
   /**
@@ -1135,6 +1142,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
 
     const normalized = vms.map((vm: any) =>
       normalizeProxmoxResponse({
+        node,
         vmid: vm.vmid,
         name: vm.name,
         status: vm.status,

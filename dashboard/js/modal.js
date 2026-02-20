@@ -197,7 +197,7 @@ export function showConfirm(options = {}) {
   actions.className = 'flex gap-3 justify-end mt-6';
   
   const cancelBtn = document.createElement('button');
-  cancelBtn.className = 'px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg font-medium transition-all duration-200 hover:scale-105 active:scale-95';
+  cancelBtn.className = 'modal-action-btn modal-cancel-btn px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg font-medium transition-all duration-200 focus:outline-none';
   cancelBtn.textContent = cancelText;
   cancelBtn.onclick = () => {
     closeModal();
@@ -205,7 +205,7 @@ export function showConfirm(options = {}) {
   };
   
   const confirmBtn = document.createElement('button');
-  confirmBtn.className = 'px-4 py-2 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white rounded-lg font-semibold transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95';
+  confirmBtn.className = 'modal-action-btn modal-confirm-btn px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold transition-all duration-200 focus:outline-none';
   confirmBtn.textContent = confirmText;
   confirmBtn.onclick = () => {
     closeModal();
@@ -222,4 +222,3 @@ export function showConfirm(options = {}) {
     closeOnBackdrop: false
   });
 }
-

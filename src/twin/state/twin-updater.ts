@@ -200,6 +200,44 @@ export class TwinUpdateService {
     }
   }
 
+  async pruneEntitiesByTypeAndSource(
+    type: TwinEntityType,
+    source: string,
+    keepIds: string[]
+  ): Promise<number> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    const driver = this.graphStore.getDriver();
+    const session = driver.session();
+    try {
+      const result = await session.run(
+        `
+          MATCH (n:TwinEntity {type: $type})
+          WHERE coalesce(n.entitySource, "") = $source
+            AND NOT n.id IN $keepIds
+          WITH n
+          DETACH DELETE n
+          RETURN count(n) AS deleted
+        `,
+        {
+          type,
+          source,
+          keepIds,
+        }
+      );
+
+      const deleted = result.records[0]?.get("deleted");
+      if (typeof deleted?.toNumber === "function") {
+        return deleted.toNumber();
+      }
+      return Number(deleted ?? 0);
+    } finally {
+      await session.close();
+    }
+  }
+
   private buildEntityProperties(entity: TwinEntity): Record<string, any> {
     const data = (entity.data ?? {}) as Record<string, any>;
     const normalizedName = entity.displayName?.toLowerCase?.() ?? null;

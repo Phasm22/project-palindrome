@@ -1,4 +1,5 @@
 import { TwinUpdateService } from "../../twin";
+import { TwinEntityType } from "../../twin/models/entities";
 import { ProxmoxInterfaceParser, type ProxmoxInterfaceParserInput } from "../../parsers/network/proxmox-interface-parser";
 import { OpnsenseInterfaceParser, type OpnsenseInterfaceParserInput } from "../../parsers/network/opnsense-interface-parser";
 import { ProxmoxReadOnlyTool } from "../../tools/proxmox/readonly/proxmox-readonly-tool";
@@ -25,6 +26,7 @@ export class NetworkIngestionOrchestrator {
 
     const entities = [];
     const relationships = [];
+    const interfaceIdsBySource = new Map<string, Set<string>>();
 
     if (includeProxmox) {
       try {
@@ -35,6 +37,7 @@ export class NetworkIngestionOrchestrator {
         });
         entities.push(...result.entities);
         relationships.push(...result.relationships);
+        this.captureInterfaceSnapshot(interfaceIdsBySource, "proxmox", result.entities);
       } catch (error: any) {
         pceLogger.warn(`Proxmox interface ingestion failed: ${error.message}`);
       }
@@ -50,6 +53,7 @@ export class NetworkIngestionOrchestrator {
           });
           entities.push(...result.entities);
           relationships.push(...result.relationships);
+          this.captureInterfaceSnapshot(interfaceIdsBySource, "opnsense", result.entities);
         }
       } catch (error: any) {
         pceLogger.warn(`OPNsense interface ingestion failed: ${error.message}`);
@@ -62,6 +66,7 @@ export class NetworkIngestionOrchestrator {
     }
 
     await this.twinUpdater.initialize();
+    await this.pruneStaleInterfaceEntities(interfaceIdsBySource);
     await this.twinUpdater.upsert(entities, relationships);
 
     pceLogger.info("Network ingestion complete", {
@@ -106,15 +111,24 @@ export class NetworkIngestionOrchestrator {
       nodeEntries.push({ node: nodeName, interfaces });
 
       const vmList = await this.proxmoxTool.execute(
-        { action: "list_vms", node: nodeName, type: "qemu" },
+        { action: "list_vms", node: nodeName },
         this.createContext("network_ingest")
       );
       const vms = vmList.data?.vms ?? [];
 
       for (const vm of vms) {
+        if (vm?.node && vm.node.toLowerCase() !== nodeName.toLowerCase()) {
+          pceLogger.warn(`Skipping VM ${vm.vmid} from mismatched node listing`, {
+            expectedNode: nodeName,
+            reportedNode: vm.node,
+            name: vm.name,
+          });
+          continue;
+        }
         if (typeof vm.vmid !== "number") continue;
+        const vmType = vm.type === "qemu" || vm.type === "lxc" ? vm.type : undefined;
         const configRes = await this.proxmoxTool.execute(
-          { action: "get_vm_config", node: nodeName, vmid: vm.vmid },
+          { action: "get_vm_config", node: nodeName, vmid: vm.vmid, ...(vmType ? { type: vmType } : {}) },
           this.createContext("network_ingest")
         );
         const config = configRes.data ?? {};
@@ -127,7 +141,7 @@ export class NetworkIngestionOrchestrator {
         
         // Fetch guest agent network interfaces if available
         let guestInterfaces: any[] | undefined;
-        if (vm.status === "running") {
+        if ((vmType ?? "qemu") === "qemu" && vm.status === "running") {
           try {
             const agentRes = await this.proxmoxTool.execute(
               { action: "get_vm_guest_network", node: nodeName, vmid: vm.vmid, type: "qemu" },
@@ -191,6 +205,45 @@ export class NetworkIngestionOrchestrator {
     };
   }
 
+  private captureInterfaceSnapshot(
+    interfaceIdsBySource: Map<string, Set<string>>,
+    source: string,
+    parsedEntities: Array<{ id: string; type: string }>
+  ): void {
+    const interfaceIds = parsedEntities
+      .filter((entity) => entity.type === TwinEntityType.NETWORK_INTERFACE)
+      .map((entity) => entity.id)
+      .filter((id) => Boolean(id));
+
+    if (!interfaceIds.length) {
+      pceLogger.warn("Skipping stale-interface prune for source; no interfaces discovered", {
+        source,
+      });
+      return;
+    }
+
+    interfaceIdsBySource.set(source, new Set(interfaceIds));
+  }
+
+  private async pruneStaleInterfaceEntities(
+    interfaceIdsBySource: Map<string, Set<string>>
+  ): Promise<void> {
+    for (const [source, interfaceIds] of interfaceIdsBySource.entries()) {
+      const deleted = await this.twinUpdater.pruneEntitiesByTypeAndSource(
+        TwinEntityType.NETWORK_INTERFACE,
+        source,
+        Array.from(interfaceIds)
+      );
+
+      if (deleted > 0) {
+        pceLogger.info("Pruned stale network interfaces", {
+          source,
+          deleted,
+        });
+      }
+    }
+  }
+
   async dispose(): Promise<void> {
     (this.opnsenseTool as any)?.close?.();
     // Close Neo4j connection
@@ -199,4 +252,3 @@ export class NetworkIngestionOrchestrator {
     }
   }
 }
-

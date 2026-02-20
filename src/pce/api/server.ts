@@ -942,9 +942,22 @@ export class PceApiServer {
   private async handleOntologyGraph(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
-      const limitParam = url.searchParams.get("limit") || "100";
+      const limitParam = url.searchParams.get("limit") || "300";
       // Ensure limit is an integer, not a float
-      const limitValue = Math.floor(parseInt(limitParam, 10)) || 100;
+      const limitValue = Math.floor(parseInt(limitParam, 10)) || 300;
+      const defaultGraphTypes = [
+        "compute_vm",
+        "compute_node",
+        "network_interface",
+        "network_subnet",
+        "storage",
+      ];
+      const requestedTypes = url.searchParams
+        .get("types")
+        ?.split(",")
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+      const graphTypes = requestedTypes?.length ? requestedTypes : defaultGraphTypes;
       
       // Get graph store from dependencies (if available) or create new instance
       const graphStore = new Neo4jGraphStore();
@@ -954,16 +967,21 @@ export class PceApiServer {
       // Use neo4j.int() to ensure integer type for LIMIT clause
       const { int } = await import("neo4j-driver");
       
-      // Strategy: Get a connected subgraph by fetching nodes WITH their 1-hop neighbors
-      // This ensures the graph is always connected and visualizable
-      
-      // Fetch nodes and their direct relationships in a single query
-      // This returns connected components, not isolated nodes
+      // Fetch up to N ontology nodes first, then optionally include their outgoing
+      // relationships. This preserves isolated nodes (e.g. interfaces without
+      // subnet links yet) so the graph view reflects full store contents.
       const result = await queryInterface.executeQuery(`
-        MATCH (n:TwinEntity)-[r]->(m:TwinEntity)
-        RETURN n, r, m
+        MATCH (n:TwinEntity)
+        WHERE toLower(coalesce(n.type, "")) IN $types
+        WITH n
+        ORDER BY coalesce(n.displayName, n.id)
         LIMIT $limit
-      `, { limit: int(limitValue) });
+        WITH collect(n) AS selectedNodes
+        UNWIND selectedNodes AS n
+        OPTIONAL MATCH (n)-[r]->(m:TwinEntity)
+        WHERE m IN selectedNodes
+        RETURN n, r, m
+      `, { limit: int(limitValue), types: graphTypes });
 
       await graphStore.close();
       
