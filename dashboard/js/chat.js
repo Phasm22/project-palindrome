@@ -811,9 +811,23 @@ function formatAgentResponse(text) {
       continue;
     }
     
+    if (trimmed.startsWith('## ')) {
+      flushCurrentVm();
+      const headerText = trimmed.replace(/^## /, '');
+      html += `<h2 style="margin: 20px 0 10px 0; color: #f97316; font-size: 1.2em; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px;">${escapeHtml(headerText)}</h2>`;
+      continue;
+    }
+
+    if (trimmed.startsWith('# ')) {
+      flushCurrentVm();
+      const headerText = trimmed.replace(/^# /, '');
+      html += `<h1 style="margin: 20px 0 12px 0; color: #f97316; font-size: 1.35em; font-weight: 700; border-bottom: 1px solid #475569; padding-bottom: 6px;">${escapeHtml(headerText)}</h1>`;
+      continue;
+    }
+
     if (trimmed.startsWith('### ')) {
       flushCurrentVm();
-      
+
       const headerMatch = trimmed.match(/^### Node: (.+?) \(IP: (.+?)\)/);
       if (headerMatch) {
         html += `<h3 style="margin: 16px 0 8px 0; color: #f97316;">${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
@@ -823,14 +837,14 @@ function formatAgentResponse(text) {
       }
       continue;
     }
-    
+
     if (trimmed.startsWith('- ') && !inClusterNodes && !inClusterVms) {
       const listMatch = trimmed.match(/^- \*\*(.+?)\*\*:\s*(.+)$/) || trimmed.match(/^- (.+?):\s*(.+)$/);
       if (listMatch) {
         const label = escapeHtml(listMatch[1]);
         const value = escapeHtml(listMatch[2]);
         html += `<div style="margin: 6px 0; padding-left: 16px;">
-          <span style="color: #94a3b8; font-weight: 500;">${label}:</span> 
+          <span style="color: #94a3b8; font-weight: 500;">${label}:</span>
           <span style="color: #e2e8f0;">${value}</span>
         </div>`;
       } else {
@@ -838,12 +852,13 @@ function formatAgentResponse(text) {
       }
       continue;
     }
-    
+
     if (trimmed && !trimmed.startsWith('  -')) {
       flushCurrentVm();
-      
+
       let processedLine = escapeHtml(trimmed);
       processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
+      processedLine = processedLine.replace(/`([^`]+)`/g, '<code style="background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #fb923c; font-family: monospace; font-size: 0.85em; border: 1px solid #334155;">$1</code>');
       html += `<p style="margin: 8px 0; color: #cbd5e1; line-height: 1.5;">${processedLine}</p>`;
     } else if (!trimmed && !inVmEntry) {
       html += '<br>';
@@ -1305,16 +1320,34 @@ function handleAgentEvent(event, toolExecutions) {
       const formattedText = formatAgentResponse(event.data.text || 'No response');
       const durationSeconds = (event.data.durationMs || 0) / 1000;
       const traceId = event.data.traceId;
+      const confirmId = escapeHtml(event.data.confirmationId || '');
       const confirmationMetaHtml = event.data.confirmationRequired
         ? `
-        <div style="margin-top: 12px; padding: 12px; background: #1e293b; border: 1px solid #334155; border-radius: 8px;">
-          <div style="color: #e2e8f0; font-weight: 600; margin-bottom: 8px;">Pending change review</div>
+        <div style="margin-top: 14px; padding: 14px 16px; background: #1e293b; border: 1px solid rgba(249, 115, 22, 0.4); border-radius: 10px;">
+          <div style="display: flex; align-items: center; gap: 6px; color: #f97316; font-weight: 600; font-size: 0.875em; margin-bottom: 8px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            Pending Change
+          </div>
           ${event.data.confirmationPreview
-            ? `<div style="color: #cbd5e1; margin-bottom: 8px;">${escapeHtml(event.data.confirmationPreview)}</div>`
+            ? `<div style="color: #e2e8f0; margin-bottom: 12px; font-size: 0.95em;">${escapeHtml(event.data.confirmationPreview)}</div>`
             : ''}
-          <div style="color: #94a3b8; font-size: 0.9em;">
-            Confirm with <code style="background: #0f172a; padding: 2px 6px; border-radius: 4px;">CONFIRM ${escapeHtml(event.data.confirmationId || '')}</code>
-            or <code style="background: #0f172a; padding: 2px 6px; border-radius: 4px;">CANCEL</code>.
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button
+              onclick="window.sendChatMessage('CONFIRM ${confirmId}')"
+              style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; padding: 8px 18px; border-radius: 8px; cursor: pointer; font-size: 0.875em; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transition: opacity 0.15s;"
+              onmouseover="this.style.opacity='0.88'" onmouseout="this.style.opacity='1'"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              Confirm
+            </button>
+            <button
+              onclick="window.sendChatMessage('CANCEL')"
+              style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35); padding: 8px 18px; border-radius: 8px; cursor: pointer; font-size: 0.875em; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transition: background 0.15s;"
+              onmouseover="this.style.background='rgba(239,68,68,0.22)'" onmouseout="this.style.background='rgba(239,68,68,0.12)'"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+              Cancel
+            </button>
           </div>
         </div>
       `

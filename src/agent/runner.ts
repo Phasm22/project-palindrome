@@ -862,8 +862,9 @@ export async function runAgent(
     userInput = pendingActionExecuteInput;
     usedPendingAction = true;
     pceLogger.incrementCounter("confirmation_approved");
-    // Confirmation token is consumed; downstream routing should evaluate the replayed action on its own.
-    confirmation = { confirmed: false };
+    // Keep confirmation intact so evaluateDialogPolicy can compute confirmationAllowed=true
+    // and set decision=EXECUTE. Resetting confirmation here causes the replayed high-risk
+    // action to loop back to ASK_CONFIRM because the policy sees no confirmation.
   }
 
   const session: ToolSession = {

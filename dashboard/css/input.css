@@ -55,12 +55,12 @@
   }
 
   .chat-input-wrapper {
-    background: rgba(2, 6, 24, 0.35) !important;
+    background: transparent !important;
     border-top: 1px solid rgba(51, 65, 85, 0.4);
   }
 
   .chat-input-field {
-    background-color: rgba(15, 23, 42, 0.45) !important;
+    background-color: transparent !important;
     border-color: rgba(71, 85, 105, 0.5) !important;
   }
 

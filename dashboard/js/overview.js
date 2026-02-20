@@ -215,7 +215,7 @@ export async function loadExecutionStats() {
                   <td class="whitespace-nowrap">${(e.toolName || 'Unknown').split('\n')[0]}</td>
                   <td class="whitespace-nowrap">${(e.userId || 'Unknown').split('\n')[0]}</td>
                   <td class="max-w-md truncate" title="${(e.error || 'Unknown').replace(/"/g, '&quot;')}">${(e.error || 'Unknown').split('\n')[0]}</td>
-                  <td class="whitespace-nowrap">${new Date(e.timestamp).toLocaleString()}</td>
+                  <td class="whitespace-nowrap" title="${new Date(e.timestamp).toLocaleString()}">${formatRelativeTime(e.timestamp)}</td>
                 `
               )}
             </div>
@@ -507,7 +507,7 @@ export async function loadIngestionStatus(reset = false) {
     html += `
       <div class="stat-card">
         <div class="stat-label">Scheduler</div>
-        <div class="stat-value">
+        <div style="margin-top: 4px;">
           <span class="status-badge ${data.active ? 'status-success' : 'status-error'}">
             ${data.active ? 'Active' : 'Inactive'}
           </span>
@@ -518,7 +518,7 @@ export async function loadIngestionStatus(reset = false) {
     html += `
       <div class="stat-card">
         <div class="stat-label">Currently Running</div>
-        <div class="stat-value">
+        <div style="margin-top: 4px;">
           <span class="status-badge ${data.isRunning ? 'status-warning' : 'status-success'}">
             ${data.isRunning ? 'Running' : 'Idle'}
           </span>
