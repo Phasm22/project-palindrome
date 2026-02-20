@@ -19,38 +19,30 @@ import {
   ProxmoxIngestionOrchestrator,
   pceLogger,
 } from "../src/pce/index";
-import type { ProxmoxApiConfig } from "../src/tools/proxmox/client";
+import { getProxmoxEndpointConfigs } from "../src/tools/proxmox/config";
 
 async function main() {
   const args = process.argv.slice(2);
-  
+
   // Parse arguments
   const reindex = args.includes("--reindex");
   const noRedact = args.includes("--no-redact");
   const aclGroupIndex = args.indexOf("--acl-group");
-  const aclGroup = aclGroupIndex >= 0 && args[aclGroupIndex + 1] 
-    ? args[aclGroupIndex + 1] 
+  const aclGroup = aclGroupIndex >= 0 && args[aclGroupIndex + 1]
+    ? args[aclGroupIndex + 1]
     : (process.env.PCE_USER_ACL_GROUP || "ops");
 
-  // Validate Proxmox environment variables
-  const proxmoxUrl = process.env.PROXMOX_URL;
-  const proxmoxTokenId = process.env.PROXMOX_TOKEN_ID;
-  const proxmoxTokenSecret = process.env.PROXMOX_TOKEN_SECRET;
-
-  if (!proxmoxUrl || !proxmoxTokenId || !proxmoxTokenSecret) {
-    console.error("Error: PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET must be set");
+  // Resolve all configured Proxmox endpoints (cluster + proxBig)
+  const endpointConfigs = getProxmoxEndpointConfigs();
+  if (endpointConfigs.length === 0) {
+    console.error("Error: No Proxmox endpoints configured. Set PROXMOX_URL and at least one complete token pair (for example CLUSTER_TF_TOKEN_ID+PROXMOX_CLUSTER_TF_SECRET or PROXBIG_TF_TOKEN_ID+PROXBIG_TF_SECRET).");
     process.exit(1);
   }
 
-  const proxmoxConfig: ProxmoxApiConfig = {
-    url: proxmoxUrl,
-    tokenId: proxmoxTokenId,
-    tokenSecret: proxmoxTokenSecret,
-    verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
-  };
-
   try {
-    pceLogger.info("Initializing Proxmox ingestion components");
+    pceLogger.info("Initializing Proxmox ingestion components", {
+      endpoints: endpointConfigs.map(c => c.label),
+    });
 
     // Initialize DLM
     const snapshotLog = new SnapshotLog();
@@ -72,7 +64,7 @@ async function main() {
     await graphStore.connect();
     await graphStore.createIndexes();
 
-    // Initialize Pipelines
+    // Initialize Pipelines (shared across all endpoints)
     const vectorPipeline = new IngestionPipeline(
       snapshotLog,
       rawStorage,
@@ -88,43 +80,65 @@ async function main() {
       graphStore
     );
 
-    // Initialize Proxmox Ingestion Orchestrator
-    const orchestrator = new ProxmoxIngestionOrchestrator(
-      vectorPipeline,
-      graphPipeline,
-      graphStore,
-      proxmoxConfig
-    );
+    // Ingest each endpoint
+    let totalVectorDocs = 0;
+    let totalVectorChunks = 0;
+    let totalGraphNodes = 0;
+    let totalGraphRels = 0;
 
-    // Run ingestion
-    pceLogger.info("Starting Proxmox inventory ingestion", {
-      aclGroup,
-      redact: !noRedact,
-      reindex,
-    });
+    for (const endpointConfig of endpointConfigs) {
+      pceLogger.info("Starting Proxmox inventory ingestion", {
+        endpoint: endpointConfig.label,
+        url: endpointConfig.url,
+        aclGroup,
+        redact: !noRedact,
+        reindex,
+      });
 
-    const result = await orchestrator.ingestProxmoxInventory({
-      aclGroup,
-      redact: !noRedact,
-      reindex,
-    });
+      const orchestrator = new ProxmoxIngestionOrchestrator(
+        vectorPipeline,
+        graphPipeline,
+        graphStore,
+        {
+          url: endpointConfig.url,
+          tokenId: endpointConfig.tokenId,
+          tokenSecret: endpointConfig.tokenSecret,
+          verifySsl: endpointConfig.verifySsl,
+        }
+      );
 
-    // Print results
-    console.log("\n=== Proxmox Ingestion Complete ===");
-    console.log(`Vector Store:`);
-    console.log(`  Documents Processed: ${result.vectorIngestion.documentsProcessed}`);
-    console.log(`  Chunks Indexed: ${result.vectorIngestion.chunksIndexed}`);
-    console.log(`\nGraph Store:`);
-    console.log(`  Nodes Written: ${result.graphIngestion.nodesWritten}`);
-    console.log(`  Relationships Written: ${result.graphIngestion.relationshipsWritten}`);
-    console.log(`\nProvenance:`);
-    console.log(`  Version Hashes: ${result.provenance.versionHashes.length}`);
-    console.log(`  Provenance IDs: ${result.provenance.provenanceIds.length}`);
+      const result = await orchestrator.ingestProxmoxInventory({
+        aclGroup,
+        redact: !noRedact,
+        reindex,
+      });
+
+      console.log(`\n=== [${endpointConfig.label}] Ingestion Complete ===`);
+      console.log(`Vector Store:`);
+      console.log(`  Documents Processed: ${result.vectorIngestion.documentsProcessed}`);
+      console.log(`  Chunks Indexed: ${result.vectorIngestion.chunksIndexed}`);
+      console.log(`\nGraph Store:`);
+      console.log(`  Nodes Written: ${result.graphIngestion.nodesWritten}`);
+      console.log(`  Relationships Written: ${result.graphIngestion.relationshipsWritten}`);
+
+      totalVectorDocs += result.vectorIngestion.documentsProcessed;
+      totalVectorChunks += result.vectorIngestion.chunksIndexed;
+      totalGraphNodes += result.graphIngestion.nodesWritten;
+      totalGraphRels += result.graphIngestion.relationshipsWritten;
+    }
+
+    if (endpointConfigs.length > 1) {
+      console.log(`\n=== Totals (${endpointConfigs.length} endpoints) ===`);
+      console.log(`  Vector Docs: ${totalVectorDocs}  Chunks: ${totalVectorChunks}`);
+      console.log(`  Graph Nodes: ${totalGraphNodes}  Relationships: ${totalGraphRels}`);
+    }
 
     // Close graph store connection
     await graphStore.close();
 
-    pceLogger.info("Proxmox ingestion completed successfully");
+    pceLogger.info("Proxmox ingestion completed successfully", {
+      endpoints: endpointConfigs.map(c => c.label),
+    });
     process.exit(0);
   } catch (error: any) {
     pceLogger.error("Proxmox ingestion failed", { error: error.message, stack: error.stack });
@@ -134,4 +148,3 @@ async function main() {
 }
 
 main();
-

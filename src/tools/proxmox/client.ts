@@ -2,6 +2,7 @@ import axios from "axios";
 import type { AxiosInstance, AxiosRequestConfig, AxiosResponse } from "axios";
 import https from "https";
 import { pceLogger as logger } from "../../pce/utils/logger";
+import { getPrimaryProxmoxConfig } from "./config";
 
 export interface ProxmoxApiConfig {
   url: string;
@@ -350,22 +351,16 @@ export class ProxmoxClient {
    * Get API configuration from environment variables
    */
   static fromEnvironment(): ProxmoxClient {
-    const url = process.env.PROXMOX_URL;
-    const tokenId = process.env.PROXMOX_TOKEN_ID;
-    const tokenSecret = process.env.PROXMOX_TOKEN_SECRET;
-    const verifySsl = process.env.PROXMOX_VERIFY_SSL !== "false";
-
-    if (!url || !tokenId || !tokenSecret) {
-      throw new Error(
-        "PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET must be set"
-      );
+    const resolved = getPrimaryProxmoxConfig();
+    if (!resolved) {
+      throw new Error("PROXMOX_URL and a complete Proxmox token ID/secret pair must be set");
     }
 
     return new ProxmoxClient({
-      url,
-      tokenId,
-      tokenSecret,
-      verifySsl,
+      url: resolved.url,
+      tokenId: resolved.tokenId,
+      tokenSecret: resolved.tokenSecret,
+      verifySsl: resolved.verifySsl,
     });
   }
 }

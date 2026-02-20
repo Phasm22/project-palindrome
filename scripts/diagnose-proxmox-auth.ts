@@ -6,6 +6,7 @@
 
 import { ProxmoxClient } from "../src/tools/proxmox/client";
 import { ProxmoxReadOnlyTool } from "../src/tools/proxmox/readonly/proxmox-readonly-tool";
+import { getPrimaryProxmoxConfig, resolveCredentialsForUrl } from "../src/tools/proxmox/config";
 
 async function diagnoseAuth() {
   console.log("=".repeat(60));
@@ -13,46 +14,51 @@ async function diagnoseAuth() {
   console.log("=".repeat(60));
 
   const url = process.env.PROXMOX_URL;
-  const tokenId = process.env.PROXMOX_TOKEN_ID;
-  const defaultSecret = process.env.PROXMOX_TOKEN_SECRET;
+  const resolvedPrimary = getPrimaryProxmoxConfig();
+  const resolvedForUrl = url ? resolveCredentialsForUrl(url) : null;
+  const tokenId = resolvedPrimary?.tokenId;
+  const tokenSecret = resolvedPrimary?.tokenSecret;
 
   console.log(`\nEnvironment Variables:`);
   console.log(`  PROXMOX_URL: ${url || "❌ Not set"}`);
-  console.log(`  PROXMOX_TOKEN_ID: ${tokenId || "❌ Not set"}`);
-  console.log(`  PROXMOX_TOKEN_SECRET: ${defaultSecret ? `✅ Set (${defaultSecret.length} chars)` : "❌ Not set"}`);
+  console.log(`  PROXMOX_TOKEN_ID: ${process.env.PROXMOX_TOKEN_ID || "❌ Not set"}`);
+  console.log(`  PROXMOX_TOKEN_SECRET: ${process.env.PROXMOX_TOKEN_SECRET ? `✅ Set (${process.env.PROXMOX_TOKEN_SECRET.length} chars)` : "❌ Not set"}`);
+  console.log(`  PROXBIG_TOKEN_SECRET: ${process.env.PROXBIG_TOKEN_SECRET ? `✅ Set (${process.env.PROXBIG_TOKEN_SECRET.length} chars)` : "❌ Not set"}`);
+  console.log(`  PROXBIG_TF_SECRET: ${process.env.PROXBIG_TF_SECRET ? `✅ Set (${process.env.PROXBIG_TF_SECRET.length} chars)` : "❌ Not set"}`);
+  console.log(`  CLUSTER_TF_TOKEN_ID: ${process.env.CLUSTER_TF_TOKEN_ID || "❌ Not set"}`);
+  console.log(`  PROXMOX_CLUSTER_TF_SECRET: ${process.env.PROXMOX_CLUSTER_TF_SECRET ? `✅ Set (${process.env.PROXMOX_CLUSTER_TF_SECRET.length} chars)` : "❌ Not set"}`);
 
-  if (!url || !tokenId || !defaultSecret) {
-    console.error("\n❌ Missing required environment variables");
+  if (!url || !tokenId || !tokenSecret) {
+    console.error("\n❌ Missing required environment variables or no complete token-id/secret pair found");
     process.exit(1);
   }
 
-  // Extract node name from URL
   let nodeName: string | null = null;
-  let nodeSpecificSecret: string | undefined;
   try {
     const urlObj = new URL(url);
     const hostname = urlObj.hostname.toLowerCase();
-    nodeName = hostname.split('.')[0].toUpperCase();
-    nodeSpecificSecret = process.env[`${nodeName}_TOKEN_SECRET`];
+    nodeName = hostname.split(".")[0].toUpperCase();
     console.log(`\nNode Detection:`);
     console.log(`  URL hostname: ${hostname}`);
     console.log(`  Extracted node name: ${nodeName}`);
-    console.log(`  ${nodeName}_TOKEN_SECRET: ${nodeSpecificSecret ? `✅ Set (${nodeSpecificSecret.length} chars)` : "⚠️  Not set"}`);
   } catch (error) {
     console.error(`\n⚠️  Failed to parse URL: ${error}`);
   }
 
-  const secretToUse = nodeSpecificSecret || defaultSecret;
-  console.log(`\nSecret Selection:`);
-  console.log(`  Using: ${nodeSpecificSecret ? `${nodeName}_TOKEN_SECRET` : "PROXMOX_TOKEN_SECRET"}`);
-  console.log(`  Secret length: ${secretToUse.length} chars`);
-  console.log(`  Secret prefix: ${secretToUse.substring(0, 4)}...`);
+  console.log(`\nCredential Selection:`);
+  console.log(`  Resolved source: ${resolvedPrimary.credentialSource || "unknown"}`);
+  console.log(`  Token ID: ${tokenId}`);
+  console.log(`  Secret length: ${tokenSecret.length} chars`);
+  console.log(`  Secret prefix: ${tokenSecret.substring(0, 4)}...`);
+  if (resolvedForUrl) {
+    console.log(`  URL-scoped source: ${resolvedForUrl.source}`);
+  }
 
   // Expected Authorization header format
-  const expectedHeader = `PVEAPIToken=${tokenId}=${secretToUse}`;
+  const expectedHeader = `PVEAPIToken=${tokenId}=${tokenSecret}`;
   console.log(`\nAuthorization Header Format:`);
   console.log(`  Expected: PVEAPIToken=<tokenId>=<secret>`);
-  console.log(`  Actual:   PVEAPIToken=${tokenId}=${secretToUse.substring(0, 4)}...`);
+  console.log(`  Actual:   PVEAPIToken=${tokenId}=${tokenSecret.substring(0, 4)}...`);
   console.log(`  Full length: ${expectedHeader.length} chars`);
 
   // Test 1: Direct client test
@@ -63,7 +69,7 @@ async function diagnoseAuth() {
     const client = new ProxmoxClient({
       url,
       tokenId,
-      tokenSecret: secretToUse,
+      tokenSecret,
       verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
     });
 
@@ -118,15 +124,10 @@ async function diagnoseAuth() {
   console.log(`   Expected: user@realm!tokenid`);
   console.log(`   Has @: ${tokenId.includes("@") ? "✅" : "❌"}`);
   console.log(`   Has !: ${tokenId.includes("!") ? "✅" : "❌"}`);
-  console.log(`\nSecret being used: ${nodeSpecificSecret ? `${nodeName}_TOKEN_SECRET (node-specific)` : "PROXMOX_TOKEN_SECRET (default)"}`);
-  if (nodeName && !nodeSpecificSecret) {
-    console.log(`\n⚠️  WARNING: Node name detected (${nodeName}) but ${nodeName}_TOKEN_SECRET not set!`);
-    console.log(`   If this node needs a different secret, set ${nodeName}_TOKEN_SECRET`);
-  }
+  console.log(`\nResolved credential source: ${resolvedPrimary.credentialSource || "unknown"}`);
 }
 
 diagnoseAuth().catch((error) => {
   console.error("Fatal error:", error);
   process.exit(1);
 });
-

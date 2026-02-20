@@ -43,7 +43,7 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
   let mockClient: any;
 
   beforeEach(() => {
-    process.env.PROXMOX_URL = "https://proxmox.example.com";
+    process.env.PROXMOX_URL = "https://pve1.prox:8006";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
 
@@ -113,11 +113,20 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      // Mock pre-flight checks
-      mockClient.get.mockResolvedValue({
-        data: { data: { status: "online" } },
+      const mockNodesResponse = {
+        data: { data: [{ node: "pve1" }, { node: "pve2" }] },
         metadata: mockResponse.metadata,
+      };
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve({
+          data: { data: { status: "online" } },
+          metadata: mockResponse.metadata,
+        });
       });
+      mockClient.post.mockResolvedValue(mockResponse);
 
       const result = await tool.execute(
         { action: "migrate_vm", node: "pve1", vmid: 101, targetNode: "pve2" },
@@ -295,7 +304,16 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      const mockNodesResponse = {
+        data: { data: [{ node: "pve1" }, { node: "pve2" }] },
+        metadata: mockResponse.metadata,
+      };
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute(
         { action: "migrate_vm", node: "pve1", vmid: 101, targetNode: "pve2" },
@@ -308,15 +326,22 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
     });
 
     it("should block migration if pre-flight checks fail", async () => {
-      // Mock source node offline
-      mockClient.get.mockResolvedValueOnce({
-        data: { data: { status: "offline" } },
-        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
-      });
-      // Mock target node online
-      mockClient.get.mockResolvedValueOnce({
-        data: { data: { status: "online" } },
-        metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
+      const metadata = { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" };
+      const mockNodesResponse = {
+        data: { data: [{ node: "pve1" }, { node: "pve2" }] },
+        metadata,
+      };
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        if (endpoint.includes("/nodes/pve1/status")) {
+          return Promise.resolve({ data: { data: { status: "offline" } }, metadata });
+        }
+        if (endpoint.includes("/nodes/pve2/status")) {
+          return Promise.resolve({ data: { data: { status: "online" } }, metadata });
+        }
+        return Promise.resolve({ data: { data: { status: "online" } }, metadata });
       });
 
       const result = await tool.execute(
@@ -356,7 +381,16 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
       };
 
-      mockClient.get.mockResolvedValue(mockResponse);
+      const mockNodesResponse = {
+        data: { data: [{ node: "pve1" }, { node: "pve2" }] },
+        metadata: mockResponse.metadata,
+      };
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
 
       const result = await tool.execute(
         { action: "migrate_vm", node: "pve1", vmid: 101, targetNode: "pve2", dryRun: true },
@@ -370,8 +404,8 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
   });
 
   describe("TL-2B.4: Confirmation Middleware Trigger (HIL)", () => {
-    it("should have requiresConfirmation flag set", () => {
-      expect(tool.metadata.requiresConfirmation).toBe(true);
+    it("should have requiresConfirmation disabled for safe writes", () => {
+      expect(tool.metadata.requiresConfirmation).toBe(false);
     });
 
     it("should have restricted ACL groups", () => {
@@ -416,4 +450,3 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
     });
   });
 });
-

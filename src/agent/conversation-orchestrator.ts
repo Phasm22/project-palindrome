@@ -46,10 +46,34 @@ export function planConversation(input: OrchestratorInput): OrchestratorDecision
 function summarizePendingAction(intent: IntentClassification, userInput: string): string {
   if (intent.operation?.verbs?.length) {
     const verb = intent.operation.verbs[0];
-    const target = intent.entities.resourceIds[0] || intent.entities.hosts[0] || intent.entities.services[0];
-    if (target) {
-      return `${verb} ${target}`;
+
+    // Extract the target name the user actually typed (word right after the verb)
+    const verbTargetMatch = userInput.match(
+      /\b(?:destroy|delete|remove|terminate|kill|stop|start|restart|reboot)\s+([\w][\w.-]*)\b/i
+    );
+    const targetName = verbTargetMatch?.[1];
+
+    const vmid = intent.entities.resourceIds[0];
+    // Node is any host that is not the typed target name
+    const node = intent.entities.hosts.find(
+      h => h.toLowerCase() !== (targetName?.toLowerCase() ?? "")
+    );
+
+    const parts: string[] = [verb];
+    if (targetName) {
+      parts.push(vmid ? `${targetName} (VMID ${vmid})` : targetName);
+    } else if (vmid) {
+      parts.push(`VMID ${vmid}`);
+    } else if (intent.entities.hosts[0]) {
+      parts.push(intent.entities.hosts[0]);
+    } else if (intent.entities.services[0]) {
+      parts.push(intent.entities.services[0]);
     }
+    if (node) {
+      parts.push(`on ${node}`);
+    }
+
+    if (parts.length > 1) return parts.join(" ");
     return `${verb} (target needed)`;
   }
   return userInput;

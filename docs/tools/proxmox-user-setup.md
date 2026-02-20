@@ -81,7 +81,9 @@ export PROXMOX_VERIFY_SSL="true"  # or "false" for self-signed certs
 
 ### Node-Specific Token Secrets
 
-If you have multiple Proxmox nodes with different token secrets (but same token ID), you can use node-specific environment variables. The system will automatically detect and use them based on the hostname in `PROXMOX_URL`:
+If you have multiple Proxmox nodes with different token secrets (but same token ID), you can use node-specific environment variables. The system resolves credentials as **token ID + secret pairs** and selects the first complete pair for the target hostname in `PROXMOX_URL`.
+
+Use matched pairs like this:
 
 ```bash
 # Default/fallback token secret
@@ -93,7 +95,9 @@ export YIN_TOKEN_SECRET="<yin-specific-token-secret>"
 export YANG_TOKEN_SECRET="<yang-specific-token-secret>"
 ```
 
-The system extracts the node name from the `PROXMOX_URL` hostname (e.g., `proxbig.example.com` → `PROXBIG_TOKEN_SECRET`) and uses the node-specific secret if available, otherwise falls back to `PROXMOX_TOKEN_SECRET`.
+The resolver extracts the node name from the URL (e.g., `proxbig.example.com` -> `PROXBIG`) and prefers node-scoped pairs before generic fallback pairs.
+
+Avoid mixing unrelated families (example: `CLUSTER_TF_TOKEN_ID` with `PROXBIG_TOKEN_SECRET`) unless that pair is intentionally valid.
 
 ## Role Permissions
 
@@ -150,4 +154,3 @@ pveum aclmod /vms -token 'palindrome-agent@pve!pce-token' -role PVEAdmin
 # 4. Verify
 pveum acl list | grep palindrome-agent
 ```
-

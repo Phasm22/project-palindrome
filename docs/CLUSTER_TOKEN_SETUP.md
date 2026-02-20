@@ -35,7 +35,11 @@ Add the cluster node tokens to your `.env` file:
 ```bash
 # Cluster tokens (for yin and yang)
 CLUSTER_TF_TOKEN_ID=llm@pve!llm-agent
-PROXMOX_CLUSTER_TF_SECRET=<secret-from-proxBig>  # For proxBig operations
+PROXMOX_CLUSTER_TF_SECRET=<secret-from-yang-or-yin>
+
+# proxBig standalone token pair
+PROXBIG_TF_TOKEN_ID=llm@pve!llm-agent
+PROXBIG_TF_SECRET=<secret-from-proxBig>
 
 # Optional: Node-specific secrets (if different)
 PROXMOX_YIN_TF_SECRET=<secret-from-yin>
@@ -49,11 +53,13 @@ PROXMOX_YANG_URL=https://YANG.prox:8006/api2/json
 
 ### 3. How It Works
 
-The `TerraformRunner` automatically selects the correct token based on the target node:
+The resolver selects deterministic `TOKEN_ID + TOKEN_SECRET` pairs based on endpoint URL:
 
-- **proxBig**: Uses `PROXMOX_URL` + `PROXMOX_CLUSTER_TF_SECRET`
-- **yin**: Uses `PROXMOX_YIN_URL` (or `PROXMOX_URL`) + `PROXMOX_YIN_TF_SECRET` (or `PROXMOX_CLUSTER_TF_SECRET`)
-- **yang**: Uses `PROXMOX_YANG_URL` (or `PROXMOX_URL`) + `PROXMOX_YANG_TF_SECRET` (or `PROXMOX_CLUSTER_TF_SECRET`)
+- **proxBig**: Uses `PROXBIG_TF_TOKEN_ID + PROXBIG_TF_SECRET` (or another complete proxBig pair)
+- **yin**: Uses `CLUSTER_TF_TOKEN_ID + PROXMOX_YIN_TF_SECRET` (or `PROXMOX_CLUSTER_TF_SECRET`)
+- **yang**: Uses `CLUSTER_TF_TOKEN_ID + PROXMOX_YANG_TF_SECRET` (or `PROXMOX_CLUSTER_TF_SECRET`)
+
+It does not mix unrelated token IDs and secrets.
 
 ### 4. Testing
 
@@ -77,9 +83,9 @@ The PCE API (`bun run pce:api`) loads `.env` at startup and uses `getProxmoxEndp
 1. **Restart the API** after changing `.env` (env is read at process start).
 2. **Check startup logs** – you should see either:
    - `Proxmox endpoints configured { count: 2, labels: ['cluster', 'proxbig'] }` (cluster + proxbig), or
-   - `Only proxBig endpoint is configured. To see cluster nodes (yin/YANG), set PROXMOX_URL, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET (or CLUSTER_TF_*) in .env and restart.`
+   - `Only proxBig endpoint is configured...` (cluster credentials missing)
 3. **Check `/health`** – response includes `proxmoxEndpoints: { count, labels }` (no secrets). If `count === 1` and `labels === ['proxbig']`, cluster env is not set for this process.
-4. **Ensure cluster vars** – for cluster (yin/YANG) the API needs at least: `PROXMOX_URL` (or `PROXMOX_YIN_URL`), `PROXMOX_TOKEN_ID` (or `CLUSTER_TF_TOKEN_ID`), and `PROXMOX_TOKEN_SECRET` (or `PROXMOX_CLUSTER_TF_SECRET`). Same `.env` used by `bun run pce:api` must contain these.
+4. **Ensure complete pairs** – for cluster (yin/YANG) set a complete pair like `CLUSTER_TF_TOKEN_ID + PROXMOX_CLUSTER_TF_SECRET` (or node-specific `PROXMOX_YIN_TF_SECRET` / `PROXMOX_YANG_TF_SECRET`). For proxBig set a complete pair like `PROXBIG_TF_TOKEN_ID + PROXBIG_TF_SECRET`.
 
 ## Notes
 
@@ -105,4 +111,3 @@ pveum user token add llm@pve llm-agent --privsep 0
 ```
 
 Then update `.env` with the secrets.
-

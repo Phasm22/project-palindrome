@@ -204,7 +204,7 @@ describe("TL-2A.1: Proxmox REST Client & Provenance", () => {
 
       expect(() => {
         ProxmoxClient.fromEnvironment();
-      }).toThrow("PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET must be set");
+      }).toThrow("PROXMOX_URL and a complete Proxmox token ID/secret pair must be set");
     });
   });
 
@@ -350,4 +350,3 @@ describe("TL-2A.1: Proxmox REST Client & Provenance", () => {
     });
   });
 });
-

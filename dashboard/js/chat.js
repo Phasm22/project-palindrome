@@ -1121,18 +1121,12 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
   ` : '';
 
   if (role === 'user') {
-    messageDiv.innerHTML = `
-      <div style="white-space: pre-wrap; line-height: 1.4; font-size: 15px;">${escapeHtml(content)}</div>
-    `;
+    messageDiv.innerHTML = `<div style="white-space: pre-wrap; line-height: 1.4; font-size: 15px;">${escapeHtml(content)}</div>`;
   } else {
-    messageDiv.innerHTML = `
-      <div style="line-height: 1.5; font-size: 15px;">
-        ${isLoading 
-          ? `<div style="color: #94a3b8; font-style: italic;">${content}</div>`
-          : content}
-        ${traceLink}
-      </div>
-    `;
+    const innerContent = isLoading
+      ? `<div style="color: #94a3b8; font-style: italic;">${content}</div>`
+      : content;
+    messageDiv.innerHTML = `<div style="line-height: 1.5; font-size: 15px;">${innerContent}${traceLink}</div>`;
   }
 
   // Append to all containers and collect which ones need scrolling
@@ -1190,10 +1184,13 @@ function handleAgentEvent(event, toolExecutions) {
       lockScrollToBottom();
       const stepNum = event.data.step ?? '?';
       const maxSteps = event.data.maxSteps ?? '?';
-      updateChatMessage(currentResponseId, 
+      const stepLabel = (maxSteps === 1 || maxSteps === '1')
+        ? 'Working on it...'
+        : `Step ${stepNum} of ${maxSteps}...`;
+      updateChatMessage(currentResponseId,
         `<div class="agent-thinking">
-          <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-          Reasoning step ${stepNum}/${maxSteps}...
+          <svg class="icon spin" viewBox="0 0 24 24" fill="currentColor"><path d="M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z"/></svg>
+          ${stepLabel}
         </div>`);
       break;
       
@@ -1207,18 +1204,26 @@ function handleAgentEvent(event, toolExecutions) {
       };
       toolExecutions.push(toolInfo);
       
-      const paramsStr = Object.entries(event.data.parameters || {})
-        .map(([k, v]) => `${k}=${typeof v === 'string' ? v.substring(0, 30) : JSON.stringify(v).substring(0, 30)}`)
-        .join(', ');
-      
+      const isActionTool = event.data.toolName === 'action';
+      const actionName = event.data.parameters?.action || '';
+      const actionNode = event.data.parameters?.params?.node || event.data.parameters?.node || '';
+      const paramsStr = isActionTool
+        ? `${actionName}${actionNode ? ` on ${actionNode}` : ''}`
+        : Object.entries(event.data.parameters || {})
+            .map(([k, v]) => `${k}=${typeof v === 'string' ? v.substring(0, 30) : JSON.stringify(v).substring(0, 30)}`)
+            .join(', ');
+      const executingLabel = isActionTool
+        ? 'Applying changes — this may take a few minutes...'
+        : 'Executing...';
+
       const toolHtml = `
         <div data-tool-name="${escapeHtml(event.data.toolName)}" style="margin-top: 8px; padding: 8px 10px; background: #1e3a8a; border-radius: 4px; font-size: 0.85em;">
           <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="color: #f97316;"><path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
           <strong style="color: #e2e8f0;">${escapeHtml(event.data.toolName)}</strong>
           ${paramsStr ? `<div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">${escapeHtml(paramsStr)}</div>` : ''}
           <div style="color: #94a3b8; margin-top: 4px; font-size: 0.9em;">
-            <svg class="icon" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-            Executing...
+            <svg class="icon spin" viewBox="0 0 24 24" fill="currentColor" style="width: 14px; height: 14px;"><path d="M12 6v3l4-4-4-4v3c-4.42 0-8 3.58-8 8 0 1.57.46 3.03 1.24 4.26L6.7 14.8c-.45-.83-.7-1.79-.7-2.8 0-3.31 2.69-6 6-6zm6.76 1.74L17.3 9.2c.44.84.7 1.79.7 2.8 0 3.31-2.69 6-6 6v-3l-4 4 4 4v-3c4.42 0 8-3.58 8-8 0-1.57-.46-3.03-1.24-4.26z"/></svg>
+            ${executingLabel}
           </div>
         </div>
       `;
@@ -1331,9 +1336,9 @@ function handleAgentEvent(event, toolExecutions) {
           ${event.data.confirmationPreview
             ? `<div style="color: #e2e8f0; margin-bottom: 12px; font-size: 0.95em;">${escapeHtml(event.data.confirmationPreview)}</div>`
             : ''}
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <div data-confirm-buttons="${confirmId}" style="display: flex; gap: 8px; flex-wrap: wrap;">
             <button
-              onclick="window.sendChatMessage('CONFIRM ${confirmId}')"
+              onclick="window.handleConfirmAction('${confirmId}', this)"
               style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; padding: 8px 18px; border-radius: 8px; cursor: pointer; font-size: 0.875em; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transition: opacity 0.15s;"
               onmouseover="this.style.opacity='0.88'" onmouseout="this.style.opacity='1'"
             >
@@ -1341,7 +1346,7 @@ function handleAgentEvent(event, toolExecutions) {
               Confirm
             </button>
             <button
-              onclick="window.sendChatMessage('CANCEL')"
+              onclick="window.handleCancelAction('${confirmId}', this)"
               style="background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35); padding: 8px 18px; border-radius: 8px; cursor: pointer; font-size: 0.875em; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; transition: background 0.15s;"
               onmouseover="this.style.background='rgba(239,68,68,0.22)'" onmouseout="this.style.background='rgba(239,68,68,0.12)'"
             >
@@ -2136,6 +2141,32 @@ export async function deleteChatMessage(dbId, messageId) {
     }
   });
 }
+
+/**
+ * Disable all confirmation button groups in the chat (prevents double-submit).
+ * Called by handleConfirmAction and handleCancelAction before sending the message.
+ */
+function disableAllConfirmationButtons() {
+  document.querySelectorAll('[data-confirm-buttons]').forEach(wrapper => {
+    wrapper.querySelectorAll('button').forEach(btn => {
+      btn.disabled = true;
+      btn.style.opacity = '0.4';
+      btn.style.cursor = 'not-allowed';
+      btn.onmouseover = null;
+      btn.onmouseout = null;
+    });
+  });
+}
+
+window.handleConfirmAction = function(confirmId, _btn) {
+  disableAllConfirmationButtons();
+  sendChatMessage(`CONFIRM ${confirmId}`);
+};
+
+window.handleCancelAction = function(_confirmId, _btn) {
+  disableAllConfirmationButtons();
+  sendChatMessage('CANCEL');
+};
 
 // Make functions globally accessible for onclick handlers
 window.sendChatMessage = sendChatMessage;

@@ -4,6 +4,7 @@ import { pceLogger as logger } from "../../../pce/utils/logger";
 import { ProxmoxClient } from "../client";
 import type { ProxmoxApiConfig } from "../client";
 import { sanitizeToolPayload } from "../../../agent/tool-sanitizer";
+import { getPrimaryProxmoxConfig } from "../config";
 
 /**
  * Base class for Proxmox read-only tools
@@ -16,76 +17,24 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
    * Get API configuration from environment variables
    */
   protected getApiConfig(): ProxmoxApiConfig {
-    const url = process.env.PROXMOX_URL;
-    const tokenId =
-      process.env.PROXMOX_TOKEN_ID ||
-      process.env.PROXMOX_API_TOKEN_ID ||
-      process.env.CLUSTER_TF_TOKEN_ID ||
-      process.env.PROXBIG_TF_TOKEN_ID;
-    // Support node-specific token secrets (e.g., PROXBIG_TOKEN_SECRET) as fallback
-    // Extract node name from URL if possible, or use default
-    let tokenSecret =
-      process.env.PROXMOX_TOKEN_SECRET ||
-      process.env.PROXMOX_API_TOKEN_SECRET ||
-      process.env.PROXMOX_CLUSTER_TF_SECRET ||
-      process.env.PROXBIG_TOKEN_SECRET ||
-      process.env.PROXBIG_TF_SECRET ||
-      process.env.PROXMOX_PROXBIG_TF_SECRET;
-    
-    // Try to find node-specific token secret based on URL hostname
-    if (url) {
-      try {
-        const urlObj = new URL(url);
-        const hostname = urlObj.hostname.toLowerCase();
-        // Check for node-specific secrets (e.g., proxbig -> PROXBIG_TOKEN_SECRET)
-        // IMPORTANT: If URL is an IP address, this will extract the first octet (e.g., "172")
-        // which won't match node-specific secrets. Use hostname URLs for proper lookup.
-        const nodeSegment = hostname.split(".")[0];
-        const nodeName = nodeSegment ? nodeSegment.toUpperCase() : "";
-        // Try a few common patterns:
-        // - YIN_TOKEN_SECRET / YANG_TOKEN_SECRET / PROXBIG_TOKEN_SECRET
-        // - PROXMOX_YIN_TF_SECRET / PROXMOX_YANG_TF_SECRET (cluster node TF tokens)
-        // - PROXMOX_<NODE>_TOKEN_SECRET (future-proof)
-        const nodeSpecificSecret =
-          (nodeName
-            ? process.env[`${nodeName}_TOKEN_SECRET`] ||
-              process.env[`PROXMOX_${nodeName}_TF_SECRET`] ||
-              process.env[`PROXMOX_${nodeName}_TOKEN_SECRET`]
-            : undefined);
-        if (nodeSpecificSecret) {
-          logger.debug(`Using node-specific secret: ${nodeName}_TOKEN_SECRET (extracted from URL hostname: ${hostname})`);
-          tokenSecret = nodeSpecificSecret;
-        } else {
-          logger.debug(`No node-specific secret found for ${nodeName}_TOKEN_SECRET, using default PROXMOX_TOKEN_SECRET`);
-        }
-      } catch {
-        // If URL parsing fails, use default
-        logger.debug("URL parsing failed, using default PROXMOX_TOKEN_SECRET");
-      }
-    }
-    
-    const verifySsl = process.env.PROXMOX_VERIFY_SSL !== "false";
-
-    // Check after trying to find node-specific secret
-    if (!url || !tokenId || !tokenSecret) {
-      let nodeHint = "";
-      if (url) {
-        try {
-          const hostname = new URL(url).hostname;
-          const nodeSegment = hostname.split(".")[0];
-          if (nodeSegment) {
-            nodeHint = ` (or ${nodeSegment.toUpperCase()}_TOKEN_SECRET for node-specific secret)`;
-          }
-        } catch {
-          // ignore URL parsing failure in hint
-        }
-      }
-      throw new Error(
-        `PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET${nodeHint} must be set`
-      );
+    const config = getPrimaryProxmoxConfig();
+    if (!config) {
+      throw new Error("PROXMOX_URL, PROXMOX_TOKEN_ID, and PROXMOX_TOKEN_SECRET must be set");
     }
 
-    return { url, tokenId, tokenSecret, verifySsl };
+    logger.debug("Resolved primary Proxmox credentials", {
+      url: config.url,
+      credentialSource: config.credentialSource,
+      tokenIdPrefix: `${config.tokenId.substring(0, 16)}...`,
+      secretPrefix: `${config.tokenSecret.substring(0, 4)}...`,
+    });
+
+    return {
+      url: config.url,
+      tokenId: config.tokenId,
+      tokenSecret: config.tokenSecret,
+      verifySsl: config.verifySsl,
+    };
   }
 
   /**

@@ -72,6 +72,7 @@ if (existsSync(envPath)) {
 }
 
 import { ProxmoxClient } from "../src/tools/proxmox/client";
+import { resolveCredentialsForUrl } from "../src/tools/proxmox/config";
 
 interface NodeConfig {
   name: string;
@@ -95,83 +96,43 @@ interface TestResult {
 }
 
 /**
- * Get node configuration using the same logic as create-vm.ts
+ * Get node configuration using the same credential-pair resolution as runtime tools.
  */
 function getNodeConfig(nodeName: string): NodeConfig | null {
   const nodeLower = nodeName.toLowerCase();
   
   let url: string | undefined;
-  let tokenId: string | undefined;
-  let tokenSecret: string | undefined;
-  const sources: string[] = [];
+  const sources: string[] = [`node=${nodeName}`];
   
   if (nodeLower === "yin" || nodeLower === "yang") {
-    // Cluster nodes (yin/yang)
-    // Note: URLs should use lowercase hostnames, not the node name case
     url = nodeLower === "yin"
       ? process.env.PROXMOX_YIN_URL || process.env.PROXMOX_URL
       : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL;
-    
-    // Normalize URL hostname to lowercase (Proxmox node names are case-sensitive but URLs are not)
-    if (url) {
-      url = url.replace(/https?:\/\/([^\/:]+)/i, (match, hostname) => {
-        return match.replace(hostname, hostname.toLowerCase());
-      });
-    }
-    
-    if (nodeLower === "yin") {
-      sources.push(`PROXMOX_YIN_URL: ${process.env.PROXMOX_YIN_URL ? "set" : "unset"}`);
-      sources.push(`PROXMOX_URL: ${process.env.PROXMOX_URL ? "set" : "unset"}`);
-    } else {
-      sources.push(`PROXMOX_YANG_URL: ${process.env.PROXMOX_YANG_URL ? "set" : "unset"}`);
-      sources.push(`PROXMOX_URL: ${process.env.PROXMOX_URL ? "set" : "unset"}`);
-    }
-    
-    tokenId = process.env.CLUSTER_TF_TOKEN_ID;
-    sources.push(`CLUSTER_TF_TOKEN_ID: ${tokenId ? "set" : "unset"}`);
-    
-    if (nodeLower === "yin") {
-      tokenSecret = process.env.PROXMOX_YIN_TF_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
-      sources.push(`PROXMOX_YIN_TF_SECRET: ${process.env.PROXMOX_YIN_TF_SECRET ? "set" : "unset"}`);
-      sources.push(`PROXMOX_CLUSTER_TF_SECRET: ${process.env.PROXMOX_CLUSTER_TF_SECRET ? "set (fallback)" : "unset"}`);
-    } else {
-      tokenSecret = process.env.PROXMOX_YANG_TF_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
-      sources.push(`PROXMOX_YANG_TF_SECRET: ${process.env.PROXMOX_YANG_TF_SECRET ? "set" : "unset"}`);
-      sources.push(`PROXMOX_CLUSTER_TF_SECRET: ${process.env.PROXMOX_CLUSTER_TF_SECRET ? "set (fallback)" : "unset"}`);
-    }
+    sources.push(nodeLower === "yin" ? "url=PROXMOX_YIN_URL||PROXMOX_URL" : "url=PROXMOX_YANG_URL||PROXMOX_URL");
   } else {
-    // proxBig (standalone)
-    url = process.env.PROXMOX_URL;
-    sources.push(`PROXMOX_URL: ${url ? "set" : "unset"}`);
-    
-    tokenId = process.env.CLUSTER_TF_TOKEN_ID || process.env.PROXBIG_TF_TOKEN_ID;
-    sources.push(`CLUSTER_TF_TOKEN_ID: ${process.env.CLUSTER_TF_TOKEN_ID ? "set" : "unset"}`);
-    sources.push(`PROXBIG_TF_TOKEN_ID: ${process.env.PROXBIG_TF_TOKEN_ID ? "set (fallback)" : "unset"}`);
-    
-    tokenSecret = process.env.PROXMOX_PROXBIG_TF_SECRET 
-      || process.env.PROXBIG_TF_SECRET 
-      || process.env.PROXBIG_TOKEN_SECRET 
-      || process.env.PROXMOX_CLUSTER_TF_SECRET;
-    sources.push(`PROXMOX_PROXBIG_TF_SECRET: ${process.env.PROXMOX_PROXBIG_TF_SECRET ? "set" : "unset"}`);
-    sources.push(`PROXBIG_TF_SECRET: ${process.env.PROXBIG_TF_SECRET ? "set (fallback)" : "unset"}`);
-    sources.push(`PROXBIG_TOKEN_SECRET: ${process.env.PROXBIG_TOKEN_SECRET ? "set (fallback)" : "unset"}`);
-    sources.push(`PROXMOX_CLUSTER_TF_SECRET: ${process.env.PROXMOX_CLUSTER_TF_SECRET ? "set (fallback)" : "unset"}`);
+    url = process.env.PROXBIG_URL || process.env.PROXMOX_URL;
+    sources.push("url=PROXBIG_URL||PROXMOX_URL");
   }
   
-  // Clean URL (remove /api2/json if present)
   if (url) {
-    url = url.replace(/\/api2\/json$/, "");
+    url = url.replace(/https?:\/\/([^\/:]+)/i, (match, hostname) => match.replace(hostname, hostname.toLowerCase()));
+    url = url.replace(/\/api2\/json\/?$/, "");
+  }
+
+  const credentials = url ? resolveCredentialsForUrl(url) : null;
+  if (credentials) {
+    sources.push(`credentials=${credentials.source}`);
   }
   
-  if (!url || !tokenId || !tokenSecret) {
+  if (!url || !credentials) {
     return null;
   }
   
   return {
     name: nodeName,
     url,
-    tokenId,
-    tokenSecret,
+    tokenId: credentials.tokenId,
+    tokenSecret: credentials.tokenSecret,
     source: sources.join(", "),
   };
 }
@@ -406,4 +367,3 @@ main().catch((error) => {
   console.error("\n❌ Fatal error:", error);
   process.exit(1);
 });
-

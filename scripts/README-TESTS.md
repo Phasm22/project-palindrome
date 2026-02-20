@@ -27,20 +27,27 @@ bun run scripts/test-proxmox-tokens.ts
 
 ### Expected Environment Variables
 
+Token selection is now **pair-based**. The resolver only uses complete `TOKEN_ID + TOKEN_SECRET` pairs and does not mix unrelated env families.
+
 #### For proxBig (standalone):
-- `PROXMOX_URL` - Proxmox API URL
-- `CLUSTER_TF_TOKEN_ID` or `PROXBIG_TF_TOKEN_ID` - Token ID
-- `PROXMOX_PROXBIG_TF_SECRET` or `PROXBIG_TF_SECRET` or `PROXBIG_TOKEN_SECRET` or `PROXMOX_CLUSTER_TF_SECRET` - Token secret
+- `PROXBIG_TOKEN_ID` + `PROXBIG_TOKEN_SECRET` (preferred), or
+- `PROXBIG_TF_TOKEN_ID` + `PROXBIG_TF_SECRET`, or
+- `PROXMOX_PROXBIG_TF_TOKEN_ID` + `PROXMOX_PROXBIG_TF_SECRET`, or
+- `PROXMOX_TOKEN_ID` + `PROXBIG_TOKEN_SECRET` (for shared token IDs), or
+- `CLUSTER_TF_TOKEN_ID` + `PROXBIG_TF_SECRET`
+- URL source: `PROXBIG_URL` then `PROXMOX_URL`
 
 #### For yin (cluster):
-- `PROXMOX_YIN_URL` or `PROXMOX_URL` - Proxmox API URL
-- `CLUSTER_TF_TOKEN_ID` - Token ID
-- `PROXMOX_YIN_TF_SECRET` or `PROXMOX_CLUSTER_TF_SECRET` - Token secret
+- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_YIN_TF_SECRET` (preferred), or
+- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_CLUSTER_TF_SECRET`, or
+- `PROXMOX_TOKEN_ID` + `YIN_TOKEN_SECRET` / `PROXMOX_YIN_TF_SECRET`
+- URL source: `PROXMOX_YIN_URL` then `PROXMOX_URL`
 
 #### For YANG (cluster):
-- `PROXMOX_YANG_URL` or `PROXMOX_URL` - Proxmox API URL
-- `CLUSTER_TF_TOKEN_ID` - Token ID
-- `PROXMOX_YANG_TF_SECRET` or `PROXMOX_CLUSTER_TF_SECRET` - Token secret
+- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_YANG_TF_SECRET` (preferred), or
+- `CLUSTER_TF_TOKEN_ID` + `PROXMOX_CLUSTER_TF_SECRET`, or
+- `PROXMOX_TOKEN_ID` + `YANG_TOKEN_SECRET` / `PROXMOX_YANG_TF_SECRET`
+- URL source: `PROXMOX_YANG_URL` then `PROXMOX_URL`
 
 ### Notes
 
@@ -48,4 +55,3 @@ bun run scripts/test-proxmox-tokens.ts
 - URLs are normalized to lowercase hostnames (Proxmox node names are case-sensitive but URLs are not)
 - 401 errors indicate authentication failure (wrong secret or expired token)
 - 403 errors indicate permission issues (token lacks required permissions)
-

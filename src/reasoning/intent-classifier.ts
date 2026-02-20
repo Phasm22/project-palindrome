@@ -233,12 +233,24 @@ export function classifyIntent(userInput: string): IntentClassification {
     /\b(destroy|delete|remove|terminate|kill)\b.*\b(vm|virtual machine|container|lxc)\b/i,
     /\b(start|stop|restart|reboot|shutdown)\b.*\b(vm|virtual machine|container|lxc)\b/i,
     /\b(install|configure|assign|set)\b.*\b(firewall|network|vlan|service|nginx|docker)\b/i,
+    // Broad verb+target patterns: "destroy bob", "delete test-vm", "stop opsbox", etc.
+    // These fire even without "vm"/"container" keywords — the target is whatever follows the verb.
+    /\b(destroy|delete|remove|terminate|kill)\b\s+\S+/i,
+    /\b(create|make|provision)\b\s+\S+/i,
+    /\b(stop|start|restart|reboot)\b\s+\S+/i,
   ];
   
   // Check for strong query indicators first
   const hasQueryIndicator = queryIndicators.some(pattern => pattern.test(normalized));
   const hasActionIndicator = actionIndicators.some(pattern => pattern.test(normalized));
-  
+
+  // Explicit destructive patterns get a 0.75 boost to clear the 0.70 router threshold.
+  // Requires verb + at least one non-stopword target token.
+  const hasExplicitDestructive =
+    /\b(destroy|delete|remove|terminate|kill)\b\s+\S+/i.test(normalized) ||
+    /\b(destroy|delete|remove|terminate|kill)\b.*\b(vm|virtual machine|container|lxc)\b/i.test(normalized);
+  const destructiveBoost = hasExplicitDestructive ? 0.75 : 0;
+
   // Calculate similarity scores for each intent type
   const scores: Record<IntentType, number> = {
     QUERY: 0,
@@ -247,7 +259,7 @@ export function classifyIntent(userInput: string): IntentClassification {
     CHAT_REASONING: 0,
     CLARIFICATION: 0,
   };
-  
+
   // Boost QUERY score if strong query indicators are present
   const queryIndicatorBoost = hasQueryIndicator ? 0.5 : 0;
   const actionIndicatorBoost = hasActionIndicator ? 0.55 : 0;
@@ -257,7 +269,7 @@ export function classifyIntent(userInput: string): IntentClassification {
   if (actionIndicatorBoost > 0) {
     scores.ACTION = actionIndicatorBoost; // Start with a base score for action indicators
   }
-  
+
   // Score against archetypes
   for (const [intentType, archetypes] of Object.entries(INTENT_ARCHETYPES)) {
     let maxScore = 0;
@@ -275,6 +287,9 @@ export function classifyIntent(userInput: string): IntentClassification {
   }
   if (actionIndicatorBoost > 0) {
     scores.ACTION = Math.max(scores.ACTION, actionIndicatorBoost);
+  }
+  if (destructiveBoost > 0) {
+    scores.ACTION = Math.max(scores.ACTION, destructiveBoost);
   }
   
   // Find the highest scoring intent
@@ -434,6 +449,20 @@ function extractEntities(input: string): IntentEntities {
     }
   } catch {
     // Best-effort only; don't fail classification if entity list isn't available.
+  }
+
+  // Extract inline verb target: "destroy bob", "stop opsbox", "delete test-vm.prox on yang"
+  // This handles cases where the target isn't in the known entity list yet (e.g. just-created VM).
+  const verbTargetMatch = input.match(
+    /\b(?:destroy|delete|remove|terminate|kill|stop|start|restart|reboot)\s+([\w][\w.-]*)\b/i
+  );
+  if (verbTargetMatch?.[1]) {
+    const candidate = verbTargetMatch[1];
+    // Don't add obvious non-targets: "the", "a", "an", "all", "vm", etc.
+    const stopWords = new Set(["the", "a", "an", "all", "my", "this", "that", "vm", "vms", "container", "containers"]);
+    if (!stopWords.has(candidate.toLowerCase()) && !entities.hosts.includes(candidate)) {
+      entities.hosts.push(candidate);
+    }
   }
 
   const serviceKeywords = [

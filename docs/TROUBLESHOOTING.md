@@ -44,8 +44,8 @@ Make sure your environment variables are set correctly:
 ```bash
 # For proxBig node
 PROXMOX_URL=https://proxBig.prox:8006/api2/json
-PROXMOX_TOKEN_ID=terraform@pve!terraform-token
-PROXMOX_PROXBIG_TF_SECRET=your-token-secret
+PROXBIG_TF_TOKEN_ID=terraform@pve!terraform-token
+PROXBIG_TF_SECRET=your-token-secret
 
 # For yin/yang cluster
 PROXMOX_YIN_URL=https://yin.prox:8006/api2/json
@@ -104,7 +104,7 @@ PROXMOX_CLUSTER_TF_SECRET=<secret-from-YANG-only>
 - You only need ONE secret (from YANG)
 - No more whack-a-mole!
 
-**Codebase already supports this:** The `getProxmoxClientConfig()` function falls back to `PROXMOX_CLUSTER_TF_SECRET` if node-specific secrets aren't set.
+**Codebase behavior:** Proxmox credentials are selected as deterministic `TOKEN_ID + TOKEN_SECRET` pairs. The resolver does not independently mix token IDs and secrets from unrelated env families.
 
 ### Alternative: Node-Specific Secrets (If You Must)
 
@@ -192,4 +192,3 @@ curl http://localhost:4000/api/twin/query?operation=find_vm_by_name&vmName=bib
 1. **Monitor Twin Sync**: Check logs after VM creation
 2. **Automatic Ingestion**: Consider running periodic ingestion jobs
 3. **Error Handling**: Improve error messages in twin sync failures
-

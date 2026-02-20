@@ -11,6 +11,13 @@ export interface ProxmoxEndpointConfig {
   tokenSecret: string;
   verifySsl: boolean;
   label: string;
+  credentialSource?: string;
+}
+
+export interface ProxmoxCredentialSelection {
+  tokenId: string;
+  tokenSecret: string;
+  source: string;
 }
 
 function normalizeUrl(url: string): string {
@@ -27,6 +34,133 @@ function isProxBigUrl(url: string): boolean {
   }
 }
 
+function env(name: string): string | undefined {
+  const value = process.env[name];
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function getNodeNameFromUrl(url: string): string | undefined {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    const nodeSegment = hostname.split(".")[0];
+    const sanitized = nodeSegment?.replace(/[^a-z0-9_-]/g, "");
+    return sanitized ? sanitized.toUpperCase() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+interface CredentialCandidate {
+  tokenId?: string;
+  tokenSecret?: string;
+  source: string;
+}
+
+function addCandidate(
+  candidates: CredentialCandidate[],
+  tokenIdVar: string,
+  tokenSecretVar: string
+): void {
+  candidates.push({
+    tokenId: env(tokenIdVar),
+    tokenSecret: env(tokenSecretVar),
+    source: `${tokenIdVar}+${tokenSecretVar}`,
+  });
+}
+
+function selectCredentials(
+  candidates: CredentialCandidate[]
+): ProxmoxCredentialSelection | null {
+  for (const candidate of candidates) {
+    if (candidate.tokenId && candidate.tokenSecret) {
+      return {
+        tokenId: candidate.tokenId,
+        tokenSecret: candidate.tokenSecret,
+        source: candidate.source,
+      };
+    }
+  }
+  return null;
+}
+
+function resolveClusterCredentials(clusterUrl: string): ProxmoxCredentialSelection | null {
+  const nodeName = getNodeNameFromUrl(clusterUrl);
+  const candidates: CredentialCandidate[] = [];
+
+  if (nodeName) {
+    addCandidate(candidates, `PROXMOX_${nodeName}_TOKEN_ID`, `PROXMOX_${nodeName}_TOKEN_SECRET`);
+    addCandidate(candidates, `${nodeName}_TOKEN_ID`, `${nodeName}_TOKEN_SECRET`);
+    addCandidate(candidates, `PROXMOX_${nodeName}_TF_TOKEN_ID`, `PROXMOX_${nodeName}_TF_SECRET`);
+
+    const nodeSecretVars = [
+      `${nodeName}_TOKEN_SECRET`,
+      `PROXMOX_${nodeName}_TF_SECRET`,
+      `PROXMOX_${nodeName}_TOKEN_SECRET`,
+    ];
+    for (const nodeSecretVar of nodeSecretVars) {
+      addCandidate(candidates, "CLUSTER_TF_TOKEN_ID", nodeSecretVar);
+      addCandidate(candidates, "PROXMOX_TOKEN_ID", nodeSecretVar);
+      addCandidate(candidates, "PROXMOX_API_TOKEN_ID", nodeSecretVar);
+    }
+  }
+
+  addCandidate(candidates, "CLUSTER_TF_TOKEN_ID", "PROXMOX_CLUSTER_TF_SECRET");
+  addCandidate(candidates, "PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET");
+  addCandidate(candidates, "PROXMOX_API_TOKEN_ID", "PROXMOX_API_TOKEN_SECRET");
+  addCandidate(candidates, "PROXMOX_TOKEN_ID", "PROXMOX_CLUSTER_TF_SECRET");
+  addCandidate(candidates, "PROXMOX_API_TOKEN_ID", "PROXMOX_CLUSTER_TF_SECRET");
+
+  return selectCredentials(candidates);
+}
+
+function resolveProxBigCredentials(): ProxmoxCredentialSelection | null {
+  const candidates: CredentialCandidate[] = [];
+  addCandidate(candidates, "PROXBIG_TOKEN_ID", "PROXBIG_TOKEN_SECRET");
+  addCandidate(candidates, "PROXBIG_TF_TOKEN_ID", "PROXBIG_TF_SECRET");
+  addCandidate(candidates, "PROXMOX_PROXBIG_TF_TOKEN_ID", "PROXMOX_PROXBIG_TF_SECRET");
+  addCandidate(candidates, "PROXMOX_TOKEN_ID", "PROXBIG_TOKEN_SECRET");
+  addCandidate(candidates, "PROXMOX_TOKEN_ID", "PROXBIG_TF_SECRET");
+  addCandidate(candidates, "CLUSTER_TF_TOKEN_ID", "PROXBIG_TF_SECRET");
+  addCandidate(candidates, "CLUSTER_TF_TOKEN_ID", "PROXMOX_PROXBIG_TF_SECRET");
+  addCandidate(candidates, "PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET");
+  addCandidate(candidates, "PROXMOX_API_TOKEN_ID", "PROXMOX_API_TOKEN_SECRET");
+  addCandidate(candidates, "CLUSTER_TF_TOKEN_ID", "PROXMOX_CLUSTER_TF_SECRET");
+  return selectCredentials(candidates);
+}
+
+/**
+ * Resolve token credentials for the target URL using deterministic ID/secret pairing.
+ * This prevents mismatches like taking an ID from one env family and a secret from another.
+ */
+export function resolveCredentialsForUrl(url: string): ProxmoxCredentialSelection | null {
+  if (isProxBigUrl(url)) {
+    return resolveProxBigCredentials();
+  }
+  return resolveClusterCredentials(url);
+}
+
+/**
+ * Resolve the primary Proxmox client config using PROXMOX_URL.
+ */
+export function getPrimaryProxmoxConfig(): ProxmoxEndpointConfig | null {
+  const url = env("PROXMOX_URL");
+  if (!url) return null;
+
+  const credentials = resolveCredentialsForUrl(url);
+  if (!credentials) return null;
+
+  return {
+    url,
+    tokenId: credentials.tokenId,
+    tokenSecret: credentials.tokenSecret,
+    verifySsl: env("PROXMOX_VERIFY_SSL") !== "false",
+    label: "primary",
+    credentialSource: credentials.source,
+  };
+}
+
 /**
  * Returns all Proxmox endpoint configs: cluster (yin/YANG) and proxBig.
  * Uses same env precedence as ProxmoxReadOnlyBase and server (CLUSTER_TF_*, PROXMOX_*, PROXBIG_*).
@@ -35,81 +169,47 @@ function isProxBigUrl(url: string): boolean {
  * points at proxBig, we use PROXMOX_YIN_URL or default for cluster so both endpoints are present.
  */
 export function getProxmoxEndpointConfigs(): ProxmoxEndpointConfig[] {
-  const verifySsl = process.env.PROXMOX_VERIFY_SSL !== "false";
+  const verifySsl = env("PROXMOX_VERIFY_SSL") !== "false";
   const configs: ProxmoxEndpointConfig[] = [];
   const seenUrls = new Set<string>();
 
   // --- Cluster (yin + YANG): URL must be cluster, not proxBig ---
-  const rawProxmoxUrl = process.env.PROXMOX_URL;
-  const clusterUrl =
-    process.env.PROXMOX_YIN_URL ||
+  const rawProxmoxUrl = env("PROXMOX_URL");
+  const clusterUrl = env("PROXMOX_YIN_URL") ||
     (rawProxmoxUrl && !isProxBigUrl(rawProxmoxUrl) ? rawProxmoxUrl : undefined) ||
     "https://yin.prox:8006";
-  const clusterTokenId =
-    process.env.PROXMOX_TOKEN_ID ||
-    process.env.PROXMOX_API_TOKEN_ID ||
-    process.env.CLUSTER_TF_TOKEN_ID ||
-    process.env.PROXMOX_YIN_TOKEN_ID ||
-    process.env.YIN_TOKEN_ID;
-  let clusterTokenSecret =
-    process.env.PROXMOX_TOKEN_SECRET ||
-    process.env.PROXMOX_API_TOKEN_SECRET ||
-    process.env.PROXMOX_CLUSTER_TF_SECRET ||
-    process.env.YIN_TOKEN_SECRET ||
-    process.env.PROXMOX_YIN_TF_SECRET ||
-    process.env.PROXMOX_YIN_TOKEN_SECRET;
-  // Node-specific from URL hostname (e.g. yin.prox -> YIN_TOKEN_SECRET)
-  try {
-    const urlObj = new URL(clusterUrl);
-    const hostname = urlObj.hostname.toLowerCase();
-    const nodeSegment = hostname.split(".")[0];
-    const nodeName = nodeSegment ? nodeSegment.toUpperCase() : "";
-    const nodeSecret =
-      (nodeName
-        ? process.env[`${nodeName}_TOKEN_SECRET`] ||
-          process.env[`PROXMOX_${nodeName}_TF_SECRET`] ||
-          process.env[`PROXMOX_${nodeName}_TOKEN_SECRET`]
-        : undefined);
-    if (nodeSecret) clusterTokenSecret = nodeSecret;
-  } catch {
-    // ignore
-  }
+  const clusterCredentials = resolveClusterCredentials(clusterUrl);
 
-  if (clusterTokenId && clusterTokenSecret) {
+  if (clusterCredentials) {
     const base = normalizeUrl(clusterUrl);
     if (!seenUrls.has(base)) {
       seenUrls.add(base);
       configs.push({
         url: clusterUrl,
-        tokenId: clusterTokenId,
-        tokenSecret: clusterTokenSecret,
+        tokenId: clusterCredentials.tokenId,
+        tokenSecret: clusterCredentials.tokenSecret,
         verifySsl,
         label: "cluster",
+        credentialSource: clusterCredentials.source,
       });
     }
   }
 
   // --- proxBig: single node, own token ---
-  const proxbigUrl = process.env.PROXBIG_URL || "https://proxbig.prox:8006";
-  const proxbigTokenId =
-    process.env.PROXBIG_TOKEN_ID ||
-    process.env.PROXBIG_TF_TOKEN_ID ||
-    process.env.PROXMOX_PROXBIG_TF_TOKEN_ID;
-  const proxbigTokenSecret =
-    process.env.PROXBIG_TOKEN_SECRET ||
-    process.env.PROXBIG_TF_SECRET ||
-    process.env.PROXMOX_PROXBIG_TF_SECRET;
+  const proxbigUrl = env("PROXBIG_URL") || "https://proxbig.prox:8006";
+  const proxbigCredentials = resolveProxBigCredentials();
 
-  if (proxbigTokenId && proxbigTokenSecret) {
+  if (proxbigCredentials) {
     const base = normalizeUrl(proxbigUrl);
     if (!seenUrls.has(base)) {
       seenUrls.add(base);
       configs.push({
         url: proxbigUrl,
-        tokenId: proxbigTokenId,
-        tokenSecret: proxbigTokenSecret,
+        tokenId: proxbigCredentials.tokenId,
+        tokenSecret: proxbigCredentials.tokenSecret,
         verifySsl,
         label: "proxbig",
+        credentialSource: proxbigCredentials.source,
       });
     }
   }

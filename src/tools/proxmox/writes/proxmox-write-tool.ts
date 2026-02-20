@@ -6,6 +6,7 @@ import { pceLogger as logger } from "../../../pce/utils/logger";
 import { createToolSchema } from "../../tool-helpers";
 import type { ToolSchema } from "../../tool-schema";
 import { emitToolProgress, type ToolProgressStatus } from "../../../agent/event-bus";
+import { resolveCredentialsForUrl } from "../config";
 
 // Alternative client for multi-cluster support
 let alternativeClient: ProxmoxClient | null = null;
@@ -260,21 +261,19 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
    * Get alternative Proxmox endpoints to try when a node isn't found in the primary cluster
    * Returns array of endpoint configs based on node name patterns
    */
-  private getAlternativeEndpoints(nodeName: string): Array<{ url: string; tokenId?: string; tokenSecret?: string }> {
-    const endpoints: Array<{ url: string; tokenId?: string; tokenSecret?: string }> = [];
+  private getAlternativeEndpoints(nodeName: string): Array<{ url: string; tokenId?: string; tokenSecret?: string; credentialSource?: string }> {
+    const endpoints: Array<{ url: string; tokenId?: string; tokenSecret?: string; credentialSource?: string }> = [];
     const normalizedName = ProxmoxWriteTool.normalizeNodeKey(nodeName);
     
     const endpoint = ProxmoxWriteTool.NODE_ENDPOINT_MAP[normalizedName];
     if (endpoint) {
-      // Try to get node-specific credentials
-      const nodeNameUpper = normalizedName.toUpperCase().replace(/[_-]/g, '');
-      const tokenId = process.env.PROXMOX_TOKEN_ID || process.env[`${nodeNameUpper}_TOKEN_ID`];
-      const tokenSecret = process.env.PROXMOX_TOKEN_SECRET || process.env[`${nodeNameUpper}_TOKEN_SECRET`];
+      const credentials = resolveCredentialsForUrl(endpoint);
       
       endpoints.push({
         url: endpoint,
-        tokenId: tokenId || undefined,
-        tokenSecret: tokenSecret || undefined,
+        tokenId: credentials?.tokenId,
+        tokenSecret: credentials?.tokenSecret,
+        credentialSource: credentials?.source,
       });
     }
     
@@ -306,7 +305,29 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       nodeName = aliased;
     }
 
-    // Step 2: Always validate FIRST by listing nodes (prevents 403s from wrong names)
+    // Step 2: Fast path for local/standalone node by PROXMOX_URL hostname match.
+    // This avoids unnecessary /nodes probes for obvious local-node operations.
+    const proxmoxUrl = process.env.PROXMOX_URL;
+    if (proxmoxUrl) {
+      try {
+        const url = new URL(proxmoxUrl);
+        const urlHostname = url.hostname.toLowerCase().replace(/\.(prox|local)$/, "");
+        const nodeNameLower = nodeName.toLowerCase().replace(/[_-]/g, "");
+        const urlNormalized = urlHostname.replace(/[_-]/g, "");
+        if (
+          urlNormalized === nodeNameLower ||
+          urlHostname.includes(nodeNameLower) ||
+          nodeNameLower.includes(urlHostname)
+        ) {
+          logger.debug(`Node "${nodeName}" matches PROXMOX_URL hostname: ${urlHostname}; using as local node`);
+          return nodeName;
+        }
+      } catch {
+        // URL parsing failed, continue with API-based normalization.
+      }
+    }
+
+    // Step 3: Validate by listing nodes when local fast path does not apply.
     try {
       const result = await client.get("/nodes");
       // Handle various response structures defensively
@@ -321,12 +342,12 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
         logger.warn("No nodes found in cluster - may be standalone node");
         // Fall through to standalone node check
       } else {
-        // Step 3: Try exact case-insensitive match
+        // Step 4: Try exact case-insensitive match
         let normalized = nodes.find(
           (n: any) => n?.node && n.node.toLowerCase() === nodeName.toLowerCase()
         );
         
-        // Step 4: If no exact match, try fuzzy match (ignoring underscores/hyphens)
+        // Step 5: If no exact match, try fuzzy match (ignoring underscores/hyphens)
         if (!normalized) {
           const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
           const searchNormalized = normalizeForMatch(nodeName);
@@ -346,8 +367,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       // Fall through to standalone node check
     }
 
-    // Step 5: Check if this might be a standalone/local node by comparing with PROXMOX_URL
-    const proxmoxUrl = process.env.PROXMOX_URL;
+    // Step 6: Check if this might be a standalone/local node by comparing with PROXMOX_URL
     if (proxmoxUrl) {
       try {
         const url = new URL(proxmoxUrl);
@@ -386,20 +406,18 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       }
     }
 
-    // Step 6: Node not found in primary cluster - try alternative endpoints
+    // Step 7: Node not found in primary cluster - try alternative endpoints
     const alternativeEndpoints = this.getAlternativeEndpoints(nodeName);
     for (const altEndpoint of alternativeEndpoints) {
       try {
         logger.debug(`Trying alternative Proxmox endpoint for node "${nodeName}": ${altEndpoint.url}`);
-        // Get credentials - prefer node-specific, fallback to default
-        const normalizedNameForCreds = nodeName.toLowerCase().replace(/[_-]/g, '');
-        const nodeNameUpper = normalizedNameForCreds.toUpperCase();
-        const tokenId = altEndpoint.tokenId || process.env.PROXMOX_TOKEN_ID;
-        const tokenSecret = altEndpoint.tokenSecret || process.env[`${nodeNameUpper}_TOKEN_SECRET`] || process.env.PROXMOX_TOKEN_SECRET;
+        // Use resolved credentials for this endpoint; never mix token families at call time.
+        const tokenId = altEndpoint.tokenId;
+        const tokenSecret = altEndpoint.tokenSecret;
         const verifySsl = process.env.PROXMOX_VERIFY_SSL !== 'false';
         
         if (!tokenId || !tokenSecret) {
-          logger.debug(`Skipping alternative endpoint ${altEndpoint.url}: missing credentials`);
+          logger.debug(`Skipping alternative endpoint ${altEndpoint.url}: no complete credential pair`);
           continue;
         }
         
@@ -408,6 +426,11 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
           tokenId,
           tokenSecret,
           verifySsl,
+        });
+        logger.debug("Using resolved alternative endpoint credentials", {
+          url: altEndpoint.url,
+          credentialSource: altEndpoint.credentialSource,
+          tokenIdPrefix: `${tokenId.substring(0, 16)}...`,
         });
         
         const result = await altClient.get("/nodes");
@@ -440,7 +463,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       }
     }
 
-    // Step 7: Node not found in any cluster - throw helpful error
+    // Step 8: Node not found in any cluster - throw helpful error
     try {
       const result = await client.get("/nodes");
       // Handle various response structures defensively
@@ -1397,22 +1420,52 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
     const currentState = await this.getVmStatus(client, node, vmid, type);
     const currentStatus = currentState?.status;
 
-    // For destroy, VM must be stopped first
+    // For destroy, VM must be stopped first — auto-stop if still running
     if (currentStatus === "running") {
-      emitProgress("destroy_vm", "failed", `${vmDisplayName} is running - must stop first`, 1, { node, vmid, status: "running" });
-      return {
-        data: {
-          action: "destroy_vm",
-          node,
-          vmid,
-          vmName: vmName || "unknown",
-          status: "cannot_destroy_running",
-          message: `Cannot destroy VM/container ${vmid}${vmName ? ` (${vmName})` : ""} - it is currently running. Stop it first, then destroy.`,
-          currentStatus: "running",
-          warning: vmName ? `VM/container "${vmName}" must be stopped before destruction` : "VM/container must be stopped before destruction",
-        },
-        metadata: { status: 400, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/destroy-blocked-running" },
-      };
+      emitProgress("destroy_vm", "running", `Stopping ${vmDisplayName} before destruction...`, 0.25, { node, vmid });
+      try {
+        await client.post(this.getVmPath(type, node, vmid, "/status/stop"), {});
+        emitProgress("destroy_vm", "waiting", `Waiting for ${vmDisplayName} to stop...`, 0.35, { node, vmid });
+        // Poll up to 30s for the VM to stop
+        let stopped = false;
+        for (let i = 0; i < 15; i++) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const statusCheck = await this.getVmStatus(client, node, vmid, type);
+          if (statusCheck?.status !== "running") {
+            stopped = true;
+            break;
+          }
+        }
+        if (!stopped) {
+          emitProgress("destroy_vm", "failed", `${vmDisplayName} did not stop in time`, 1, { node, vmid });
+          return {
+            data: {
+              action: "destroy_vm",
+              node,
+              vmid,
+              vmName: vmName || "unknown",
+              status: "stop_timeout",
+              message: `Cannot destroy ${vmDisplayName} — VM did not stop within 30s. Stop it manually and try again.`,
+              currentStatus: "running",
+            },
+            metadata: { status: 400, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/destroy-stop-timeout" },
+          };
+        }
+      } catch (stopError: any) {
+        emitProgress("destroy_vm", "failed", `Failed to stop ${vmDisplayName}: ${stopError.message}`, 1, { node, vmid });
+        return {
+          data: {
+            action: "destroy_vm",
+            node,
+            vmid,
+            vmName: vmName || "unknown",
+            status: "stop_failed",
+            message: `Cannot destroy ${vmDisplayName} — failed to stop VM: ${stopError.message}`,
+            error: stopError.message,
+          },
+          metadata: { status: 500, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/destroy-stop-failed" },
+        };
+      }
     }
 
     if (dryRun) {
@@ -1472,8 +1525,8 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
               node,
               vmid,
               vmName: vmName || "unknown",
-              status: "cannot_destroy_running",
-              message: `Cannot destroy VM/container ${vmid}${vmName ? ` (${vmName})` : ""} - it is currently running. Stop it first, then destroy.`,
+              status: "stop_failed",
+              message: `Cannot destroy ${vmDisplayName} — VM is still running. Auto-stop failed: ${errorMsg}`,
               error: errorMsg,
             },
             metadata: { status: 400, timestamp: Date.now(), durationMs: 0, provenanceId: "tool://proxmox/destroy-blocked-running" },
