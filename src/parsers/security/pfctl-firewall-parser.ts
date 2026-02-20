@@ -187,16 +187,9 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     let destinationPort: string | null = null;
     if (idx < tokens.length && tokens[idx] === "port") {
       idx++;
-      if (idx < tokens.length) {
-        const portSpec = tokens[idx];
-        idx++;
-        if (!portSpec) {
-          return null;
-        }
-        // Check if it's source or destination port
-        // pfctl doesn't always specify, assume destination unless "from" appears again
-        destinationPort = portSpec;
-      }
+      const parsedPort = this.parsePortSpec(tokens, idx);
+      destinationPort = parsedPort.port;
+      idx = parsedPort.nextIdx;
     }
 
     // Generate rule ID
@@ -322,10 +315,9 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     let destinationPort: string | null = null;
     if (idx < tokens.length && tokens[idx] === "port") {
       idx++;
-      if (idx < tokens.length) {
-        destinationPort = tokens[idx] ?? null;
-        idx++;
-      }
+      const parsedPort = this.parsePortSpec(tokens, idx);
+      destinationPort = parsedPort.port;
+      idx = parsedPort.nextIdx;
     }
 
     // Parse "-> [target]"
@@ -459,6 +451,68 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
 
     // Default: single token
     return { spec: first, nextIdx: startIdx + 1 };
+  }
+
+  /**
+   * Parse a pfctl port spec after the "port" token.
+   *
+   * Handles:
+   * - "port 22"
+   * - "port = ssh"
+   * - "port = { ssh domain http }"
+   */
+  private parsePortSpec(
+    tokens: string[],
+    startIdx: number
+  ): { port: string | null; nextIdx: number } {
+    let idx = startIdx;
+
+    // Optional comparators/equality symbols.
+    while (
+      idx < tokens.length &&
+      ["=", "==", "!=", "<", ">", "<=", ">="].includes(tokens[idx] ?? "")
+    ) {
+      idx++;
+    }
+
+    if (idx >= tokens.length) {
+      return { port: null, nextIdx: idx };
+    }
+
+    const token = tokens[idx];
+    if (!token) {
+      return { port: null, nextIdx: idx + 1 };
+    }
+
+    // Handle sets: "{ ssh domain http }"
+    if (token === "{" || token.startsWith("{")) {
+      const values: string[] = [];
+      while (idx < tokens.length) {
+        const current = tokens[idx];
+        if (!current) {
+          idx++;
+          continue;
+        }
+        const cleaned = current.replace(/[{},]/g, "").trim();
+        if (cleaned.length > 0) {
+          values.push(cleaned);
+        }
+        idx++;
+        if (current.includes("}")) {
+          break;
+        }
+      }
+      return {
+        port: values.length > 0 ? values.join(",") : null,
+        nextIdx: idx,
+      };
+    }
+
+    // Single value (numeric or service alias)
+    return {
+      port: token.replace(/[,]/g, "").trim() || null,
+      nextIdx: idx + 1,
+    };
   }
 
   /**

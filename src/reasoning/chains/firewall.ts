@@ -20,6 +20,157 @@ interface FirewallRuleSummary {
   chain?: string;
 }
 
+interface ParsedPfRule {
+  line: string;
+  direction?: "in" | "out";
+  iface?: string;
+  source?: string;
+  destination?: string;
+  protocol?: string;
+  port?: string;
+}
+
+const SERVICE_PORT_MAP: Record<string, number> = {
+  ssh: 22,
+  domain: 53,
+  http: 80,
+  https: 443,
+  "ms-wbt-server": 3389,
+  ntp: 123,
+  mdns: 5353,
+  bootps: 67,
+  bootpc: 68,
+};
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function parseInterfaceBindings(lines: string[]): Array<{ label: string; iface: string; cidr?: string }> {
+  const bindings: Array<{ label: string; iface: string; cidr?: string }> = [];
+  const bindingRegex = /^([a-z0-9_-]+)\s+\(([a-z0-9._-]+)\)\s+->.*?:\s+(\d+\.\d+\.\d+\.\d+\/\d+)/i;
+  for (const line of lines) {
+    const match = line.match(bindingRegex);
+    if (!match?.[1] || !match?.[2]) continue;
+    bindings.push({
+      label: match[1],
+      iface: match[2],
+      cidr: match[3],
+    });
+  }
+  return bindings;
+}
+
+function resolveBinding(term: string, bindings: Array<{ label: string; iface: string; cidr?: string }>): { iface?: string; cidr?: string } {
+  const normalizedTerm = normalizeText(term);
+  if (!normalizedTerm) return {};
+
+  let best: { iface?: string; cidr?: string; score: number } = { score: 0 };
+  for (const binding of bindings) {
+    const labelNorm = normalizeText(binding.label);
+    if (!labelNorm) continue;
+    let score = 0;
+    if (labelNorm.includes(normalizedTerm) || normalizedTerm.includes(labelNorm)) {
+      score = 3;
+    } else {
+      const termTokens = term.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      const labelTokens = binding.label.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      const overlap = termTokens.filter((token) => labelTokens.includes(token)).length;
+      score = overlap;
+    }
+    if (score > best.score) {
+      best = { iface: binding.iface, cidr: binding.cidr, score };
+    }
+  }
+  return best.score > 0 ? { iface: best.iface, cidr: best.cidr } : {};
+}
+
+function parsePassRule(line: string): ParsedPfRule | null {
+  const trimmed = line.trim();
+  if (!/^pass\b/i.test(trimmed)) {
+    return null;
+  }
+  const direction = (trimmed.match(/\b(in|out)\b/i)?.[1] ?? "").toLowerCase() as "in" | "out" | "";
+  const iface = trimmed.match(/\bon\s+([a-z0-9._-]+)/i)?.[1]?.toLowerCase();
+  const protocol = trimmed.match(/\bproto\s+([a-z0-9._-]+)/i)?.[1]?.toLowerCase();
+  const source = trimmed.match(/\bfrom\s+(.+?)\s+to\s+/i)?.[1]?.trim();
+  const destination = trimmed.match(/\bto\s+(.+?)(?:\s+port\s*=|\s+flags\b|\s+keep\b|\s+label\b|$)/i)?.[1]?.trim();
+  const port = trimmed.match(/\bport\s*=\s*([a-z0-9._-]+)/i)?.[1]?.toLowerCase();
+  return {
+    line: trimmed,
+    direction: direction || undefined,
+    iface,
+    source,
+    destination,
+    protocol,
+    port,
+  };
+}
+
+function parsePortNumber(portToken: string | undefined): number | null {
+  if (!portToken) return null;
+  if (/^\d+$/.test(portToken)) {
+    const numeric = Number.parseInt(portToken, 10);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+  return SERVICE_PORT_MAP[portToken] ?? null;
+}
+
+function labelForPort(port: number): string {
+  const entry = Object.entries(SERVICE_PORT_MAP).find(([, mapped]) => mapped === port)?.[0];
+  if (!entry) return String(port);
+  if (entry === "ms-wbt-server") return "RDP";
+  if (entry === "domain") return "DNS";
+  return entry.toUpperCase();
+}
+
+function matchesRuleSide(side: string | undefined, iface: string | undefined, cidr: string | undefined, rawTerm: string): boolean {
+  if (!side) return false;
+  const lowered = side.toLowerCase();
+  if (iface && lowered.includes(`(${iface}:network)`)) return true;
+  if (cidr && lowered.includes(cidr.toLowerCase())) return true;
+
+  const termNorm = normalizeText(rawTerm);
+  const sideNorm = normalizeText(side);
+  return Boolean(termNorm && sideNorm && (sideNorm.includes(termNorm) || termNorm.includes(sideNorm)));
+}
+
+function extractAliasTokens(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+  const matches = value.match(/<([^>]+)>/g) ?? [];
+  return matches
+    .map((match) => match.replace(/[<>]/g, "").trim())
+    .filter(Boolean);
+}
+
+function getReferencedAliasNames(rules: FirewallRuleSummary[]): string[] {
+  const names = new Set<string>();
+  for (const rule of rules) {
+    const tokens = [
+      ...extractAliasTokens(rule.source),
+      ...extractAliasTokens(rule.destination),
+    ];
+    for (const token of tokens) {
+      names.add(token.toLowerCase());
+    }
+  }
+  return Array.from(names);
+}
+
+function filterAliasesForRules(
+  aliases: FirewallAliasDef[],
+  rules: FirewallRuleSummary[]
+): FirewallAliasDef[] {
+  const referencedNames = getReferencedAliasNames(rules);
+  if (referencedNames.length === 0) {
+    return [];
+  }
+  const referenced = new Set(referencedNames);
+  return aliases.filter((alias) => referenced.has(alias.name.toLowerCase()));
+}
+
 function toFirewallRules(data: unknown[]): FirewallRuleSummary[] {
   return data.filter((rule): rule is FirewallRuleSummary => {
     if (!rule || typeof rule !== "object") {
@@ -36,6 +187,7 @@ function formatRuleList(
   aliases?: FirewallAliasDef[]
 ): string {
   const lines: string[] = [];
+  const scopedAliases = aliases ? filterAliasesForRules(aliases, rules) : [];
   if (!rules.length) {
     lines.push(`${title}\n- None`);
   } else {
@@ -52,10 +204,11 @@ function formatRuleList(
       lines.push(`- ${parts.join(" | ")}`);
     }
   }
-  if (aliases && aliases.length > 0) {
+
+  if (scopedAliases.length > 0) {
     lines.push("");
     lines.push("Alias definitions:");
-    for (const a of aliases) {
+    for (const a of scopedAliases) {
       const content = a.cidrs.length > 0 ? a.cidrs.join(", ") : (a.entries.length > 0 ? a.entries.join(", ") : "(empty)");
       lines.push(`${a.name} = ${content}`);
     }
@@ -82,6 +235,85 @@ export async function listFirewallRulesChain(
   const rules = toFirewallRules(payload?.data ?? []);
   const aliases = payload?.aliases ?? [];
   return formatRuleList("Firewall Rules:", rules, aliases);
+}
+
+export async function allowedPortsBetweenChain(
+  from: string,
+  to: string,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "opnsense_readonly",
+      parameters: { action: "firewall_rules_list" },
+    },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  const payload = result.data as { rules?: unknown[] };
+  const lines = (payload?.rules ?? []).filter((line): line is string => typeof line === "string");
+  const bindings = parseInterfaceBindings(lines);
+  const fromBinding = resolveBinding(from, bindings);
+  const toBinding = resolveBinding(to, bindings);
+  const parsedRules = lines
+    .map(parsePassRule)
+    .filter((rule): rule is ParsedPfRule => Boolean(rule));
+
+  const matchingRules = parsedRules.filter((rule) => {
+    const destinationMatch = matchesRuleSide(rule.destination, toBinding.iface, toBinding.cidr, to);
+    if (!destinationMatch) return false;
+
+    // Source match is softer: interface or explicit source side.
+    if (!fromBinding.iface && !fromBinding.cidr) {
+      return matchesRuleSide(rule.source, undefined, undefined, from) || rule.iface === toBinding.iface;
+    }
+    return (
+      matchesRuleSide(rule.source, fromBinding.iface, fromBinding.cidr, from) ||
+      rule.iface === fromBinding.iface
+    );
+  });
+
+  const portMap = new Map<number, Set<string>>();
+  for (const rule of matchingRules) {
+    const port = parsePortNumber(rule.port);
+    if (!port) continue;
+    if (!portMap.has(port)) {
+      portMap.set(port, new Set<string>());
+    }
+    const proto = rule.protocol?.toUpperCase() ?? "ANY";
+    portMap.get(port)?.add(proto);
+  }
+
+  if (portMap.size === 0) {
+    const linesOut = [
+      "Access Summary",
+      "No explicit allowed port entries were found for this path in current firewall rules.",
+      `Path context: from=${from} to=${to}.`,
+      'Ask "show full firewall rules for this path" for full rule detail.',
+    ];
+    return linesOut.join("\n");
+  }
+
+  const sortedPorts = Array.from(portMap.keys()).sort((a, b) => a - b);
+  const allowedList = sortedPorts
+    .map((port) => {
+      const protoSet = Array.from(portMap.get(port) ?? []).sort().join("/");
+      return `${port} (${labelForPort(port)}${protoSet && protoSet !== "ANY" ? `, ${protoSet}` : ""})`;
+    })
+    .join(", ");
+
+  const linesOut = [
+    "Access Summary",
+    `${sortedPorts.length} explicit allowed service port(s) found for traffic from ${from} to ${to}.`,
+    `Allowed ports: ${allowedList}.`,
+    'Ask "show full firewall rules for this path" for full rule detail.',
+  ];
+  return linesOut.join("\n");
 }
 
 export async function firewallRulesByChainChain(

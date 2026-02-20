@@ -48,6 +48,7 @@ import {
 import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
 import {
   listFirewallRulesChain,
+  allowedPortsBetweenChain,
   firewallRulesByChainChain,
   rulesAllowingSubnetChain,
   rulesBlockingSubnetChain,
@@ -642,6 +643,8 @@ async function executeFirewallIntent(
     switch (intent.type) {
       case "list_rules":
         return await listFirewallRulesChain(tools, session);
+      case "allowed_ports_between":
+        return await allowedPortsBetweenChain(intent.from, intent.to, tools, session);
       case "rules_by_chain":
         return await firewallRulesByChainChain(intent.chain, tools, session);
       case "rules_allowing_subnet":
@@ -660,6 +663,34 @@ async function executeFirewallIntent(
   } catch (error: any) {
     logger.error(`Firewall reasoning chain failed: ${error.message}`);
     return null;
+  }
+}
+
+function buildFirewallToolCalls(intent: FirewallIntent): Array<{ toolName: string; parameters: Record<string, any> }> {
+  switch (intent.type) {
+    case "list_rules":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
+    case "allowed_ports_between":
+      return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } }];
+    case "rules_by_chain":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_by_chain", params: { chain: intent.chain } } }];
+    case "rules_allowing_subnet":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_allowing_subnet", params: { subnet: intent.subnet } } }];
+    case "rules_blocking_subnet":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_blocking_subnet", params: { subnet: intent.subnet } } }];
+    case "exposure_map":
+      return [{
+        toolName: "twin_query",
+        parameters: intent.vmId
+          ? { operation: "firewall_exposure_map", params: { vmId: intent.vmId } }
+          : { operation: "firewall_exposure_map" },
+      }];
+    case "reachability_from_chain":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_reachability_from_chain", params: { chain: intent.chain } } }];
+    case "rule_impact":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_rule_impact", params: { ruleId: intent.ruleId } } }];
+    default:
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
   }
 }
 
@@ -897,9 +928,23 @@ export async function runAgent(
   const failureTracker = new FailureTracker();
 
   // Helper to record reasoning trace for early returns
-  const recordEarlyReturnTrace = async (answer: string, intent: string, toolCalls: number = 1): Promise<string | undefined> => {
+  const recordEarlyReturnTrace = async (
+    answer: string,
+    intent: string,
+    toolCalls: number = 1,
+    toolCallDetails?: Array<{ toolName: string; parameters?: Record<string, any> }>
+  ): Promise<string | undefined> => {
     const durationMs = Date.now() - startTime;
     try {
+      const stepToolCalls = (toolCallDetails && toolCallDetails.length > 0
+        ? toolCallDetails
+        : [{ toolName: "twin_query", parameters: { intent } }]).map((toolCall) => ({
+          toolName: toolCall.toolName,
+          parameters: toolCall.parameters ?? {},
+          result: { success: true },
+          durationMs,
+        }));
+
       const traceStore = getReasoningTraceStore();
       const traceId = await traceStore.recordTrace({
         userId: session.userId,
@@ -908,12 +953,7 @@ export async function runAgent(
         finalResponse: answer,
         steps: [{
           step: 1,
-          toolCalls: [{
-            toolName: "twin_query",
-            parameters: { intent },
-            result: { success: true },
-            durationMs,
-          }],
+          toolCalls: stepToolCalls,
           decisions: [{
             type: "tool_choice",
             description: `Used twin-first reasoning chain for ${intent}`,
@@ -1905,6 +1945,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       if (firewallAnswer) {
         logger.info("Responding via twin-first firewall reasoning chain.");
         emitStepEvent({ step: 1, maxSteps: 1, intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
+        const firewallToolCalls = buildFirewallToolCalls(firewallIntent);
         
         // Format firewall response for bot-like style
         let formattedAnswer = firewallAnswer;
@@ -1912,14 +1953,19 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           formattedAnswer = await formatResponseForBot(firewallAnswer, {
             userQuery: userInput,
             intentType: "firewall_rules",
-            toolCalls: [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }],
+            toolCalls: firewallToolCalls,
             mode: responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format firewall answer", { error: error.message });
         }
         
-        const traceId = await recordEarlyReturnTrace(formattedAnswer, firewallIntent.type, 1);
+        const traceId = await recordEarlyReturnTrace(
+          formattedAnswer,
+          firewallIntent.type,
+          firewallToolCalls.length,
+          firewallToolCalls
+        );
         emitFinalEvent(formattedAnswer, { 
           intent: firewallIntent.type,
           traceId,

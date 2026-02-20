@@ -914,6 +914,12 @@ function setupFilters() {
   if (!graph || !sigma) return;
   let activeNodeTypeFilter = null;
   let activeEdgeTypeFilter = null;
+  const autoFitAfterFilter = () => {
+    // Mirror the "focus" button behavior so filtered graphs are immediately visible.
+    requestAnimationFrame(() => {
+      sigma.getCamera().animatedReset({ duration: 300 });
+    });
+  };
 
   const clearFilterStyles = () => {
     document.querySelectorAll('[data-filter-type], [data-filter-edge]').forEach((item) => {
@@ -944,7 +950,7 @@ function setupFilters() {
     sigma.refresh();
   };
 
-  const applyVisibility = (nodesToShow) => {
+  const applyNodeTypeVisibility = (nodesToShow) => {
     graph.forEachNode((node) => {
       graph.setNodeAttribute(node, 'hidden', !nodesToShow.has(node));
     });
@@ -952,6 +958,29 @@ function setupFilters() {
       graph.setEdgeAttribute(edge, 'hidden', !(nodesToShow.has(source) && nodesToShow.has(target)));
     });
     sigma.refresh();
+  };
+
+  const applyEdgeTypeVisibility = (edgeType) => {
+    const nodesToShow = new Set();
+
+    // First pass: mark edges that match the selected type and collect incident nodes.
+    graph.forEachEdge((edge, attrs, source, target) => {
+      const relType = (attrs?.type || attrs?.label || '').toString();
+      const matches = relType.toLowerCase() === edgeType.toLowerCase();
+      graph.setEdgeAttribute(edge, 'hidden', !matches);
+      if (matches) {
+        nodesToShow.add(source);
+        nodesToShow.add(target);
+      }
+    });
+
+    // Second pass: only show nodes that participate in matching edges.
+    graph.forEachNode((node) => {
+      graph.setNodeAttribute(node, 'hidden', !nodesToShow.has(node));
+    });
+
+    sigma.refresh();
+    return nodesToShow;
   };
 
   const focusVisibleNodes = (nodesToShow) => {
@@ -1031,8 +1060,9 @@ function setupFilters() {
       activeEdgeTypeFilter = null;
       activeNodeTypeFilter = filterType;
       markActiveFilter(el);
-      applyVisibility(nodesToShow);
+      applyNodeTypeVisibility(nodesToShow);
       focusVisibleNodes(nodesToShow);
+      autoFitAfterFilter();
     });
   });
   
@@ -1048,14 +1078,7 @@ function setupFilters() {
         return;
       }
 
-      const nodesToShow = new Set();
-      
-      graph.forEachEdge((edge, attrs, source, target) => {
-        if (attrs.type === type) {
-          nodesToShow.add(source);
-          nodesToShow.add(target);
-        }
-      });
+      const nodesToShow = applyEdgeTypeVisibility(type);
 
       if (!nodesToShow.size) {
         resetVisibility();
@@ -1065,8 +1088,8 @@ function setupFilters() {
       activeNodeTypeFilter = null;
       activeEdgeTypeFilter = type;
       markActiveFilter(el);
-      applyVisibility(nodesToShow);
       focusVisibleNodes(nodesToShow);
+      autoFitAfterFilter();
     });
   });
   

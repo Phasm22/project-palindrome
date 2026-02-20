@@ -951,6 +951,7 @@ export class PceApiServer {
         "network_interface",
         "network_subnet",
         "storage",
+        "firewall_rule",
       ];
       const requestedTypes = url.searchParams
         .get("types")

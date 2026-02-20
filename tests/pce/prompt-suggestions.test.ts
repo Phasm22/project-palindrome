@@ -20,6 +20,8 @@ test("buildTwinPromptSuggestions uses twin names and temperature", () => {
         vmKind: "qemu",
       },
     ],
+    maxSuggestions: 20, // Increase to ensure all relevant suggestions are included after rotation
+    seed: "test-seed-deterministic",
   });
 
   const prompts = suggestions.map((s) => s.prompt);
@@ -38,6 +40,8 @@ test("buildTwinPromptSuggestions includes node health when offline", () => {
       },
     ],
     vms: [],
+    maxSuggestions: 20, // Increase to ensure all relevant suggestions are included after rotation
+    seed: "test-seed-deterministic",
   });
 
   expect(suggestions.some((s) => s.title === "Node health")).toBe(true);

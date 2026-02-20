@@ -14,6 +14,74 @@
     import { createIcon } from './js/icons.js';
     window.createIcon = createIcon;
   </script>
+  <style>
+    /* Amplify the base viewport glow (not the logo element itself). */
+    html.dark body.bg-slate-950.text-slate-100.min-h-screen {
+      background-color: #020617 !important;
+      background-image:
+        radial-gradient(
+          78rem 52rem at 21% -4%,
+          rgba(249, 115, 22, 0.34) 0%,
+          rgba(249, 115, 22, 0.18) 28%,
+          rgba(249, 115, 22, 0.07) 52%,
+          rgba(249, 115, 22, 0.00) 84%
+        ),
+        radial-gradient(
+          50rem 34rem at 30% 0%,
+          rgba(251, 146, 60, 0.20) 0%,
+          rgba(251, 146, 60, 0.08) 40%,
+          rgba(251, 146, 60, 0.00) 80%
+        ),
+        radial-gradient(
+          60rem 40rem at 100% 100%,
+          rgba(168, 85, 247, 0.10) 0%,
+          rgba(168, 85, 247, 0.00) 62%
+        );
+      background-repeat: no-repeat;
+    }
+
+    /* Header title: readable white base + explicit orange animated sweep. */
+    #app-header .site-title-wordmark {
+      position: relative;
+      display: inline-block;
+      color: #ffffff;
+      letter-spacing: 0.01em;
+      text-shadow:
+        0 0 1px rgba(2, 6, 23, 0.95),
+        0 0 8px rgba(255, 255, 255, 0.18),
+        0 0 14px rgba(249, 115, 22, 0.20);
+    }
+
+    #app-header .site-title-wordmark::after {
+      content: attr(data-text);
+      position: absolute;
+      inset: 0;
+      color: transparent;
+      background: linear-gradient(
+        112deg,
+        transparent 34%,
+        rgba(249, 115, 22, 0.96) 50%,
+        transparent 66%
+      );
+      background-size: 240% 100%;
+      background-position: 130% 50%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      pointer-events: none;
+      text-shadow: 0 0 14px rgba(249, 115, 22, 0.36);
+      animation: palindrome-title-orange-sweep 2.4s linear infinite;
+    }
+
+    @keyframes palindrome-title-orange-sweep {
+      0% {
+        background-position: 130% 50%;
+      }
+      100% {
+        background-position: -130% 50%;
+      }
+    }
+  </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen" style="margin: 0; padding: 0;">
 
@@ -24,9 +92,9 @@
       <div class="flex items-center gap-2.5 py-2.5 flex-shrink-0">
         <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo"
              class="w-11 h-11 object-contain logo-animated"
-             style="filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);"
+             style="filter: drop-shadow(0 0 14px rgba(249, 115, 22, 0.95)) drop-shadow(0 0 28px rgba(251, 146, 60, 0.72)) drop-shadow(0 0 42px rgba(249, 115, 22, 0.45)) brightness(1.24) contrast(1.12);"
              onerror="this.style.display='none';">
-        <span class="text-sm font-semibold hidden lg:block text-gradient-shimmer site-title-animated">Palindrome</span>
+        <span class="text-lg font-bold hidden lg:block site-title-wordmark" data-text="Palindrome">Palindrome</span>
       </div>
       <!-- Divider -->
       <div class="w-px h-5 bg-slate-700 flex-shrink-0 self-center"></div>

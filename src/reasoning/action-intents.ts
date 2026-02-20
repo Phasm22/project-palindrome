@@ -15,6 +15,12 @@ export type ActionIntent =
   | { type: "configure_firewall"; vmName: string }
   | { type: "set_static_ip"; vmName: string; ip?: string; gateway?: string };
 
+function isLikelyQuestion(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.endsWith("?")) return true;
+  return /^(what|which|who|where|when|why|how|is|are|do|does|can|could|would|will)\b/.test(normalized);
+}
+
 function extractVmName(text: string): string | null {
   // Match patterns like "create VM named X", "create a VM called X", "VM named X"
   const namedMatch = text.match(/\b(?:vm|virtual machine)\s+(?:named|called|with name)\s+([a-z0-9\-_]+)/i);
@@ -75,6 +81,7 @@ function extractNodeName(text: string): string | null {
  */
 export function detectActionIntent(userInput: string): ActionIntent | null {
   const normalized = userInput.toLowerCase();
+  const isQuestion = isLikelyQuestion(userInput);
 
   // Create VM
   if (
@@ -184,7 +191,8 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
     normalized.includes("ufw") ||
     normalized.includes("port");
   
-  if (hasActionKeyword && hasFirewallKeyword) {
+  // Question-style requests like "what ports are allowed..." are informational queries.
+  if (!isQuestion && hasActionKeyword && hasFirewallKeyword) {
     const vmName = extractVmName(userInput) || extractVmNameFromContext(userInput);
     if (vmName) {
       return { type: "configure_firewall", vmName };
@@ -219,9 +227,13 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
  */
 function extractVmNameFromContext(text: string): string | null {
   // Match patterns like "on X", "for X", "to X" where X is a VM name
-  const onMatch = text.match(/\b(?:on|for|to)\s+([a-z0-9\-_]+)/i);
+  const onMatch = text.match(/\b(?:on|for|to)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
   if (onMatch) {
-    return onMatch[1] ?? null;
+    const candidate = onMatch[1]?.toLowerCase();
+    if (!candidate) return null;
+    const stopwords = new Set(["the", "a", "an", "my", "your", "our", "this", "that"]);
+    if (stopwords.has(candidate)) return null;
+    return candidate;
   }
   return null;
 }

@@ -189,10 +189,8 @@ export function buildTwinPromptSuggestions(input: {
     addSuggestion("LXC inventory", "List all LXC containers in the cluster.");
   }
 
-  if (suggestions.length <= maxSuggestions) {
-    return suggestions;
-  }
-
+  // Always apply rotation logic to ensure deterministic, seeded shuffling
+  // This preserves the "Cluster overview" anchor and evenly shuffles the rest
   const [anchor, ...rest] = suggestions;
   const rotated = shuffleWithSeed(rest, `${seed}:rotation`);
   if (!anchor) {

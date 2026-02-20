@@ -1,5 +1,6 @@
 export type FirewallIntent =
   | { type: "list_rules" }
+  | { type: "allowed_ports_between"; from: string; to: string }
   | { type: "rules_by_chain"; chain: string }
   | { type: "rules_allowing_subnet"; subnet: string }
   | { type: "rules_blocking_subnet"; subnet: string }
@@ -10,6 +11,7 @@ export type FirewallIntent =
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
 const VM_ID_REGEX = /(?:vm|vm-)(\d+)|compute-vm:[\w:-]+/i;
 const RULE_ID_REGEX = /\bfw-rule:[a-z0-9:._-]+/i;
+const WIREGUARD_PATTERN = /\b(?:wireguard|wg)\b/i;
 
 function extractSubnet(text: string): string | null {
   const match = text.match(CIDR_REGEX);
@@ -32,34 +34,67 @@ function extractRuleId(text: string): string | null {
   return match ? match[0] : null;
 }
 
+function extractAllowedPortsScope(text: string): { from: string; to: string } | null {
+  const match =
+    text.match(/\bports?\b.*\bfrom\s+(.+?)\s+to\s+(.+?)(?:\?|$)/i) ??
+    text.match(/\ballowed\b.*\bfrom\s+(.+?)\s+to\s+(.+?)(?:\?|$)/i);
+  const from = match?.[1]?.trim();
+  const to = match?.[2]?.trim();
+  if (!from || !to) {
+    return null;
+  }
+  return { from, to };
+}
+
 function extractChain(text: string): string | null {
+  if (WIREGUARD_PATTERN.test(text)) {
+    return "chain:wireguard";
+  }
+
   const match = text.match(/\b(?:chain|interface|if)\s*[:=]?\s*([a-z0-9\-_]+)/i);
   if (match) {
-    return `chain:${match[1]}`;
+    const chainValue = match[1];
+    if (!chainValue) {
+      return null;
+    }
+    const chain = chainValue.toLowerCase();
+    return chain === "wg" ? "chain:wireguard" : `chain:${chain}`;
   }
   // Try to extract interface name directly
-  const ifMatch = text.match(/\b(em\d+|vtnet\d+|eth\d+|ens\d+)/i);
+  const ifMatch = text.match(/\b(em\d+|vtnet\d+|eth\d+|ens\d+|wireguard)\b/i);
   if (ifMatch) {
-    return `chain:${ifMatch[1]}`;
+    const chainValue = ifMatch[1];
+    if (!chainValue) {
+      return null;
+    }
+    const chain = chainValue.toLowerCase();
+    return chain === "wg" ? "chain:wireguard" : `chain:${chain}`;
   }
   return null;
 }
 
 export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   const normalized = userInput.toLowerCase();
+  const trimmed = normalized.trim();
+  const isQuestion = trimmed.endsWith("?") || /^(what|which|how|is|are|do|does|can|could|would|will)\b/.test(trimmed);
 
   // Skip if this looks like an action request (configure/setup/allow port on VM)
   // Action intents are handled separately and take priority
   const hasActionKeywords = 
     (normalized.includes("configure") || normalized.includes("setup") || normalized.includes("set")) &&
     (normalized.includes("firewall") || normalized.includes("port"));
-  
-  const hasAllowPortOnVm = 
-    normalized.includes("allow") && 
-    normalized.includes("port") && 
-    (normalized.includes("on ") || normalized.match(/\b(on|for|to)\s+[a-z0-9\-_]+/i));
-  
-  if (hasActionKeywords || hasAllowPortOnVm) {
+
+  const vmTargetMatch = normalized.match(/\b(?:on|for|to)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
+  const vmTarget = vmTargetMatch?.[1]?.toLowerCase() ?? "";
+  const nonVmTargets = new Set(["the", "a", "an", "home", "lab", "network", "subnet"]);
+  const hasAllowPortOnVm =
+    !isQuestion &&
+    normalized.includes("allow") &&
+    normalized.includes("port") &&
+    vmTarget.length > 0 &&
+    !nonVmTargets.has(vmTarget);
+
+  if ((hasActionKeywords && !isQuestion) || hasAllowPortOnVm) {
     // This is an action, not a query - let action intent detection handle it
     return null;
   }
@@ -73,7 +108,9 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     normalized.includes("exposed") ||
     normalized.includes("exposure") ||
     normalized.includes("port") ||
-    normalized.includes("nat");
+    normalized.includes("nat") ||
+    normalized.includes("wireguard") ||
+    /\bwg\b/i.test(normalized);
 
   if (!hasFirewallKeywords) {
     return null;
@@ -90,6 +127,14 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   const chain = extractChain(userInput);
   if (reachabilityKeywords && chain) {
     return { type: "reachability_from_chain", chain };
+  }
+
+  // "What ports are allowed from X to Y?"
+  if ((normalized.includes("port") || normalized.includes("ports")) && normalized.includes("allow")) {
+    const scope = extractAllowedPortsScope(userInput);
+    if (scope) {
+      return { type: "allowed_ports_between", from: scope.from, to: scope.to };
+    }
   }
 
   // Rules allowing/blocking subnet
@@ -118,14 +163,11 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
 
   // Default: list all rules
   if (
-    normalized.includes("list") ||
-    normalized.includes("show") ||
-    normalized.includes("all") ||
-    normalized.includes("rules")
+    /\b(list|show|rules?)\b/.test(normalized) ||
+    /\ball\b/.test(normalized)
   ) {
     return { type: "list_rules" };
   }
 
   return null;
 }
-
