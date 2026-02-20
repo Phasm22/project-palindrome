@@ -13,6 +13,9 @@ let isCreatingConversation = false; // Prevent spamming New Chat button
 let promptSuggestionCache = null;
 let promptSuggestionCacheAt = 0;
 const PROMPT_SUGGESTIONS_TTL_MS = 5 * 60 * 1000;
+const PROMPT_SUGGESTION_REFRESH_FEEDBACK_MS = 3000;
+let promptSuggestionsRefreshing = false;
+let promptSuggestionsFeedbackUntil = 0;
 const FALLBACK_PROMPT_SUGGESTIONS = [
   { title: "Cluster overview", prompt: "Describe the cluster status and VM counts." },
   { title: "Node temperatures", prompt: "Show temperature readings for all nodes." },
@@ -163,14 +166,19 @@ function syncToAllContainers(html) {
   });
 }
 
-async function fetchPromptSuggestions() {
+async function fetchPromptSuggestionsWithOptions(options = {}) {
+  const { forceRefresh = false } = options;
   const now = Date.now();
-  if (promptSuggestionCache && (now - promptSuggestionCacheAt) < PROMPT_SUGGESTIONS_TTL_MS) {
+  if (!forceRefresh && promptSuggestionCache && (now - promptSuggestionCacheAt) < PROMPT_SUGGESTIONS_TTL_MS) {
     return promptSuggestionCache;
   }
 
   try {
-    const response = await fetch(`${API_URL}/api/dashboard/prompt-suggestions`);
+    const query = forceRefresh ? `?refresh=1&ts=${now}` : "";
+    const response = await fetch(
+      `${API_URL}/api/dashboard/prompt-suggestions${query}`,
+      { cache: "no-store" }
+    );
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -185,6 +193,9 @@ async function fetchPromptSuggestions() {
     console.warn("Failed to fetch prompt suggestions, using defaults.", error);
   }
 
+  if (promptSuggestionCache && promptSuggestionCache.length > 0) {
+    return promptSuggestionCache;
+  }
   return FALLBACK_PROMPT_SUGGESTIONS;
 }
 
@@ -199,14 +210,50 @@ function attachPromptSuggestionHandlers(container) {
       }
     });
   });
+
+  const refreshBtn = container.querySelector("[data-refresh-suggestions]");
+  if (refreshBtn && refreshBtn.dataset.bound !== "true") {
+    refreshBtn.dataset.bound = "true";
+    refreshBtn.addEventListener("click", async () => {
+      if (promptSuggestionsRefreshing) return;
+      promptSuggestionsRefreshing = true;
+      promptSuggestionsFeedbackUntil = 0;
+      try {
+        await renderPreChatSuggestions({ forceRefresh: true });
+        promptSuggestionsFeedbackUntil = Date.now() + PROMPT_SUGGESTION_REFRESH_FEEDBACK_MS;
+      } finally {
+        promptSuggestionsRefreshing = false;
+        await renderPreChatSuggestions();
+        setTimeout(() => {
+          if (Date.now() >= promptSuggestionsFeedbackUntil) {
+            promptSuggestionsFeedbackUntil = 0;
+            renderPreChatSuggestions().catch((error) => {
+              console.warn("Failed to clear refresh feedback", error);
+            });
+          }
+        }, PROMPT_SUGGESTION_REFRESH_FEEDBACK_MS + 100);
+      }
+    });
+  }
 }
 
-async function renderPreChatSuggestions() {
+async function renderPreChatSuggestions(options = {}) {
+  const { forceRefresh = false } = options;
   if (!isNewConversationMode) return;
   const containers = getChatMessageContainers();
   if (containers.length === 0) return;
 
-  const suggestions = await fetchPromptSuggestions();
+  const suggestions = await fetchPromptSuggestionsWithOptions({ forceRefresh });
+  const showRefreshFeedback = Date.now() < promptSuggestionsFeedbackUntil;
+  const refreshButtonLabel = promptSuggestionsRefreshing
+    ? "Refreshing..."
+    : "Refresh suggestions";
+  const refreshButtonStateClass = promptSuggestionsRefreshing
+    ? "border-primary-400/80 text-primary-200 bg-primary-500/20 shadow-[0_0_20px_rgba(249,115,22,0.28)]"
+    : "border-slate-700 text-slate-300 hover:border-primary-500 hover:text-primary-300";
+  const refreshStatusLabel = showRefreshFeedback
+    ? '<div class="text-emerald-400 text-xs font-medium">Suggestions updated just now</div>'
+    : '<div class="text-slate-500 text-xs"> </div>';
   const tilesHtml = suggestions.map((suggestion) => {
     const title = escapeHtml(suggestion.title || "Suggested prompt");
     const prompt = suggestion.prompt || "";
@@ -227,7 +274,37 @@ async function renderPreChatSuggestions() {
 
   const html = `
     <div class="w-full max-w-5xl mx-auto px-4 py-4" data-pre-chat-suggestions="true">
-      <div class="text-slate-400 text-center text-sm mb-4">Suggested prompts</div>
+      <div class="flex items-center justify-between gap-3 mb-4">
+        <div>
+          <div class="text-slate-400 text-sm">Suggested prompts</div>
+          ${refreshStatusLabel}
+        </div>
+        <button
+          type="button"
+          data-refresh-suggestions="true"
+          class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all duration-200 ${refreshButtonStateClass}"
+          ${promptSuggestionsRefreshing ? "disabled" : ""}
+        >
+          <svg
+            class="${promptSuggestionsRefreshing ? "spin" : ""}"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M3 12a9 9 0 0 1 15.55-6.36L21 8"></path>
+            <path d="M21 3v5h-5"></path>
+            <path d="M21 12a9 9 0 0 1-15.55 6.36L3 16"></path>
+            <path d="M3 21v-5h5"></path>
+          </svg>
+          ${refreshButtonLabel}
+        </button>
+      </div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         ${tilesHtml || '<div class="text-slate-500 text-center text-sm">No suggestions available yet.</div>'}
       </div>
@@ -590,6 +667,63 @@ function formatAgentResponse(text) {
     return { title, entries };
   };
 
+  const parsePipeColonSummary = (line) => {
+    if (!line.includes("|") || !line.includes(":")) return null;
+    const fields = line
+      .split("|")
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .map((segment) => {
+        const index = segment.indexOf(":");
+        if (index <= 0 || index === segment.length - 1) return null;
+        return {
+          key: segment.slice(0, index).trim(),
+          value: segment.slice(index + 1).trim(),
+        };
+      })
+      .filter(Boolean);
+    return fields.length >= 2 ? fields : null;
+  };
+
+  const buildOperationStatusCard = (title, fields) => {
+    const normalized = new Map(
+      fields.map((field) => [field.key.toLowerCase().replace(/\s+/g, "_"), field.value])
+    );
+    const status = normalized.get("status") || normalized.get("state") || "unknown";
+    const operation = normalized.get("operation") || normalized.get("action") || "";
+    const isDestructive = /\b(destroy|delete|remove|terminate|permanent)\b/i.test(
+      `${title} ${status} ${operation}`
+    );
+    const accent = isDestructive ? "#ef4444" : "#f97316";
+    const accentSoft = isDestructive ? "rgba(239, 68, 68, 0.12)" : "rgba(249, 115, 22, 0.12)";
+    const statusBadge = `<span style="display:inline-flex;align-items:center;gap:6px;background:${accent};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;">${escapeHtml(status)}</span>`;
+    const opBadge = operation
+      ? `<span style="display:inline-flex;align-items:center;gap:6px;background:${accentSoft};color:${accent};border:1px solid ${accent};padding:4px 10px;border-radius:999px;font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;">${escapeHtml(operation)}</span>`
+      : "";
+
+    const detailRows = fields
+      .filter((field) => !["status", "state", "operation", "action"].includes(field.key.toLowerCase()))
+      .map((field) => {
+        return `
+          <div style="display:flex;gap:8px;align-items:flex-start;min-width:0;">
+            <span style="color:#94a3b8;font-size:0.78em;font-weight:600;min-width:70px;">${escapeHtml(field.key)}</span>
+            <span style="color:#e2e8f0;font-size:0.88em;word-break:break-word;">${escapeHtml(field.value)}</span>
+          </div>
+        `;
+      })
+      .join("");
+
+    return `
+      <div style="margin: 4px 0; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(51, 65, 85, 0.7); background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.72) 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          <div style="color:${accent};font-weight:700;letter-spacing:0.01em;font-size:0.95em;">${escapeHtml(title)}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">${statusBadge}${opBadge}</div>
+        </div>
+        <div style="display:grid;gap:6px;">${detailRows || '<span style="color:#94a3b8;font-size:0.85em;">No additional details.</span>'}</div>
+      </div>
+    `;
+  };
+
   const buildVmRow = (vm) => {
     const stateColor = vm.state === 'running' ? '#10b981' : vm.state === 'stopped' ? '#ef4444' : '#94a3b8';
     const typeColor = vm.type === 'VM' ? '#f97316' : '#ea580c';
@@ -661,6 +795,21 @@ function formatAgentResponse(text) {
       </div>
     `;
     return html;
+  }
+
+  const nonEmptyLines = lines.map((line) => line.trim()).filter(Boolean);
+  if (nonEmptyLines.length >= 2) {
+    const summaryTitle = nonEmptyLines[0].replace(/:$/, "");
+    const summaryFields = parsePipeColonSummary(nonEmptyLines[1]);
+    if (summaryFields && /(status|result|operation|vm|task|action)/i.test(summaryTitle)) {
+      return buildOperationStatusCard(summaryTitle, summaryFields);
+    }
+  }
+  if (nonEmptyLines.length === 1) {
+    const summaryFields = parsePipeColonSummary(nonEmptyLines[0]);
+    if (summaryFields) {
+      return buildOperationStatusCard("Operation Summary", summaryFields);
+    }
   }
 
   for (let i = 0; i < lines.length; i++) {
@@ -1885,7 +2034,7 @@ export async function createNewConversation() {
         c.innerHTML = '<div class="text-slate-400 text-center py-6 text-sm">Loading suggestions...</div>';
       }
     });
-    await renderPreChatSuggestions();
+    await renderPreChatSuggestions({ forceRefresh: true });
     
     // Show input box (it will be shown by updateInputVisibility)
     updateInputVisibility(true);

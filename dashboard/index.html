@@ -18,12 +18,12 @@
 <body class="bg-slate-950 text-slate-100 min-h-screen" style="margin: 0; padding: 0;">
 
   <!-- Global sticky header: logo + nav (desktop only) -->
-  <header id="app-header" class="hidden md:block sticky top-0 nav-glass border-b-4 border-slate-600" style="z-index: var(--z-sticky);">
+  <header id="app-header" class="hidden md:block sticky top-0 nav-glass" style="z-index: var(--z-sticky);">
     <div class="mx-auto max-w-7xl px-4 md:px-6 flex items-center gap-3">
       <!-- Logo -->
       <div class="flex items-center gap-2.5 py-2.5 flex-shrink-0">
-        <img src="assets/images/logo.png" alt="Palindrome Logo"
-             class="w-8 h-8 object-contain"
+        <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo"
+             class="w-11 h-11 object-contain"
              style="filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.8)) brightness(1.2) contrast(1.1);"
              onerror="this.style.display='none';">
         <span class="text-sm font-semibold hidden lg:block" style="background: linear-gradient(135deg, #f97316 0%, #fb923c 60%, #e2e8f0 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Palindrome</span>
@@ -379,6 +379,7 @@
                 </div>
               </div>
             </div>
+            <div class="chat-sidebar-balance" aria-hidden="true"></div>
           </div>
         </div>
       </div>

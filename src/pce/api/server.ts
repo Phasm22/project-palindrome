@@ -1500,18 +1500,33 @@ export class PceApiServer {
     }
   }
 
-  private async handlePromptSuggestions(_req: Request): Promise<Response> {
+  private async handlePromptSuggestions(req: Request): Promise<Response> {
     try {
-      const latest = await this.promptSuggestionStore.getLatestBatch();
-      if (latest) {
-        return this.jsonResponse(200, { data: latest });
+      const requestUrl = new URL(req.url);
+      const refreshParam = (requestUrl.searchParams.get("refresh") || "").toLowerCase();
+      const forceRefresh =
+        refreshParam === "1" || refreshParam === "true" || refreshParam === "yes";
+      const refreshSeed =
+        requestUrl.searchParams.get("seed") ||
+        requestUrl.searchParams.get("ts") ||
+        undefined;
+
+      if (!forceRefresh) {
+        const latest = await this.promptSuggestionStore.getLatestBatch();
+        if (latest) {
+          return this.jsonResponse(200, { data: latest, meta: { source: "cache" } });
+        }
       }
 
       const generator = new PromptSuggestionService({
         store: this.promptSuggestionStore,
+        refreshSeed,
       });
       const generated = await generator.generateAndStore();
-      return this.jsonResponse(200, { data: generated });
+      return this.jsonResponse(200, {
+        data: generated,
+        meta: { source: forceRefresh ? "refreshed" : "generated" },
+      });
     } catch (error: any) {
       pceLogger.error("Failed to fetch prompt suggestions", { error: error.message });
       return this.jsonResponse(200, { data: null, error: "prompt_suggestions_unavailable" });
