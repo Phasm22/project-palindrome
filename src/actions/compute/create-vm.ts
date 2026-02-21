@@ -42,6 +42,13 @@ export interface CreateVmResult {
   terraformOutput?: any;
 }
 
+export function sanitizeVmName(input: string): string {
+  const lower = input.toLowerCase().replace(/[_\s]+/g, "-");
+  const cleaned = lower.replace(/[^a-z0-9-]/g, "");
+  const trimmed = cleaned.replace(/^-+/, "").replace(/-+$/, "");
+  return trimmed.substring(0, 63);
+}
+
 type ProxmoxVmListItem = {
   vmid?: number | string;
   name?: string;
@@ -64,6 +71,33 @@ type ProxmoxNetworkListItem = {
   type?: string;
   active?: number | boolean | string;
 };
+
+export function parseTerraformPlanSummary(planOutput: string): { add: number; change: number; destroy: number } | null {
+  const planMatch = planOutput.match(/Plan:\s*(\d+)\s+to add,\s*(\d+)\s+to change,\s*(\d+)\s+to destroy\./i);
+  if (planMatch?.[1] && planMatch?.[2] && planMatch?.[3]) {
+    return {
+      add: Number.parseInt(planMatch[1], 10),
+      change: Number.parseInt(planMatch[2], 10),
+      destroy: Number.parseInt(planMatch[3], 10),
+    };
+  }
+  if (/No changes\./i.test(planOutput)) {
+    return { add: 0, change: 0, destroy: 0 };
+  }
+  return null;
+}
+
+export function extractTerraformVmDestroyTargets(planOutput: string): string[] {
+  const targets = new Set<string>();
+  const pattern =
+    /#\s+(proxmox_virtual_environment_vm\.lab_vms\[[^\]]+\])\s+(will be destroyed|must be replaced)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(planOutput)) !== null) {
+    const target = match[1];
+    if (target) targets.add(target);
+  }
+  return Array.from(targets);
+}
 
 export function parseTemplateCandidates(resources: unknown[]): Array<{ vmid: number; name: string }> {
   const templates: Array<{ vmid: number; name: string }> = [];
@@ -275,14 +309,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   }
 
   // Sanitize name to DNS-safe format: lowercase, alphanumerics and hyphens, max 63 chars, cannot start/end with hyphen
-  const sanitizeName = (input: string): string => {
-    const lower = input.toLowerCase().replace(/[_\\s]+/g, "-");
-    const cleaned = lower.replace(/[^a-z0-9-]/g, "");
-    const trimmed = cleaned.replace(/^-+/, "").replace(/-+$/, "");
-    return trimmed.substring(0, 63);
-  };
-
-  const sanitizedName = sanitizeName(finalName);
+  const sanitizedName = sanitizeVmName(finalName);
   if (!sanitizedName) {
     return {
       success: false,
@@ -598,6 +625,25 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   }
 
   // 4. Execute terraform
+  // Safety gate: create_vm should never include destroys in plan.
+  const preApplyPlan = await terraformRunner.plan(tfConfig);
+  if (!preApplyPlan.success) {
+    throw new Error(`Terraform plan failed before apply: ${preApplyPlan.stderr || "unknown error"}`);
+  }
+  const planSummary = parseTerraformPlanSummary(preApplyPlan.stdout || "");
+  const vmDestroyTargets = extractTerraformVmDestroyTargets(preApplyPlan.stdout || "");
+  if (vmDestroyTargets.length > 0) {
+    throw new Error(
+      `Safety check blocked VM creation: Terraform plan would destroy/replace existing VM resources (${vmDestroyTargets.join(", ")}). ` +
+      `This protects existing VMs from accidental deletion.`
+    );
+  }
+  if ((planSummary?.destroy ?? 0) > 0) {
+    logger.warn("Terraform plan includes destroy operations that do not target VM resources", {
+      destroyCount: planSummary?.destroy ?? 0,
+    });
+  }
+
   logger.info("Executing terraform apply", { name: finalName, node: normalizedNode, vmId: allocatedVmId });
   // Progress: entering terraform apply (midpoint)
   emitToolProgress({

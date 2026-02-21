@@ -5,13 +5,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Palindrome Dashboard</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23fb923c'/%3E%3Cstop offset='65%25' stop-color='%23f97316'/%3E%3Cstop offset='100%25' stop-color='%23fdba74'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='32' cy='32' r='28' fill='url(%23g)'/%3E%3Ccircle cx='32' cy='32' r='12' fill='none' stroke='%23fff7ed' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/styles.css">
-  <script src="lib/graphology.umd.js"></script>
-  <script src="lib/graphology-layout-forceatlas2.umd.js"></script>
-  <script src="lib/sigma.min.js"></script>
+  <link id="app-stylesheet" rel="stylesheet" href="/css/styles.css">
+  <script>
+    (function () {
+      const linkEl = document.getElementById("app-stylesheet");
+      if (!linkEl) return;
+      const candidates = ["/css/styles.css", "css/styles.css", "./css/styles.css"];
+      let index = 0;
+      linkEl.addEventListener("error", () => {
+        index += 1;
+        if (index >= candidates.length) {
+          console.error("Failed to load dashboard stylesheet from all fallback paths.");
+          return;
+        }
+        linkEl.setAttribute("href", candidates[index] + "?v=" + Date.now());
+      });
+    })();
+  </script>
+  <script src="/lib/graphology.umd.js"></script>
+  <script src="/lib/graphology-layout-forceatlas2.umd.js"></script>
+  <script src="/lib/sigma.min.js"></script>
   <script type="module">
     // Import icon utilities for use in HTML
-    import { createIcon } from './js/icons.js';
+    import { createIcon } from '/js/icons.js';
     window.createIcon = createIcon;
   </script>
   <style>
@@ -57,28 +73,28 @@
       position: absolute;
       inset: 0;
       color: transparent;
-      background: linear-gradient(
+      background: repeating-linear-gradient(
         112deg,
-        transparent 34%,
-        rgba(249, 115, 22, 0.96) 50%,
-        transparent 66%
+        transparent 0% 44%,
+        rgba(249, 115, 22, 0.96) 48% 52%,
+        transparent 56% 100%
       );
-      background-size: 240% 100%;
-      background-position: 130% 50%;
+      background-size: 200% 100%;
+      background-position: 0% 50%;
       -webkit-background-clip: text;
       background-clip: text;
       -webkit-text-fill-color: transparent;
       pointer-events: none;
       text-shadow: 0 0 14px rgba(249, 115, 22, 0.36);
-      animation: palindrome-title-orange-sweep 2.4s linear infinite;
+      animation: palindrome-title-orange-sweep 6.4s linear infinite;
     }
 
     @keyframes palindrome-title-orange-sweep {
       0% {
-        background-position: 130% 50%;
+        background-position: 0% 50%;
       }
       100% {
-        background-position: -130% 50%;
+        background-position: -200% 50%;
       }
     }
   </style>
@@ -86,18 +102,18 @@
 <body class="bg-slate-950 text-slate-100 min-h-screen" style="margin: 0; padding: 0;">
 
   <!-- Global sticky header: logo + nav (desktop only) -->
-  <header id="app-header" class="hidden md:block sticky top-0 nav-glass" style="z-index: var(--z-sticky);">
+  <header id="app-header" class="hidden md:block sticky top-0 nav-glass" style="z-index: var(--z-sticky); border-top: 1px solid rgba(241, 245, 249, 0.48); box-shadow: inset 0 1px 0 rgba(251, 146, 60, 0.22);">
     <div class="mx-auto max-w-7xl px-4 md:px-6 flex items-center gap-3">
       <!-- Logo -->
       <div class="flex items-center gap-2.5 py-2.5 flex-shrink-0">
-        <img id="header-logo" src="assets/images/logo.png" alt="Palindrome Logo"
+        <img id="header-logo" src="/assets/images/logo.png" alt="Palindrome Logo"
              class="w-11 h-11 object-contain logo-animated"
              style="filter: drop-shadow(0 0 14px rgba(249, 115, 22, 0.95)) drop-shadow(0 0 28px rgba(251, 146, 60, 0.72)) drop-shadow(0 0 42px rgba(249, 115, 22, 0.45)) brightness(1.24) contrast(1.12);"
              onerror="this.style.display='none';">
         <span class="text-lg font-bold hidden lg:block site-title-wordmark" data-text="Palindrome">Palindrome</span>
       </div>
       <!-- Divider -->
-      <div class="w-px h-5 bg-slate-700 flex-shrink-0 self-center"></div>
+      <div class="flex-shrink-0 self-center" style="width: 3px; height: 24px; border-radius: 9999px; background: linear-gradient(to bottom, rgba(255, 255, 255, 0.96), rgba(226, 232, 240, 0.96)); box-shadow: 0 0 12px rgba(248, 250, 252, 0.52), 0 0 16px rgba(249, 115, 22, 0.26);"></div>
       <!-- Nav tabs -->
       <div class="flex gap-2 overflow-x-auto flex-1" role="tablist" aria-label="Dashboard tabs">
         <button class="tab active px-5 py-3 cursor-pointer text-primary-500 border-b-2 border-primary-500 hover:text-primary-400 transition-all duration-200 whitespace-nowrap font-semibold relative group" onclick="window.switchTab('chat', this)" role="tab" aria-selected="true" aria-controls="chat" tabindex="0">
@@ -457,6 +473,6 @@
   <!-- Portal root for all overlays (modals, tooltips, dropdowns) -->
   <div id="portal-root" style="position: relative; z-index: var(--z-max);"></div>
 
-  <script type="module" src="js/main.js"></script>
+  <script type="module" src="/js/main.js"></script>
 </body>
 </html>

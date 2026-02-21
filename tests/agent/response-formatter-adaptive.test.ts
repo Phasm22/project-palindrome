@@ -90,3 +90,59 @@ Lack of explicit rules for home to lab network traffic.`;
   expect(packaged).toContain("Anomaly:");
   expect(packaged).toContain("from home network to lab network");
 });
+
+test("preserves canonical VM inventory formatting for list queries", () => {
+  const response = `VMs on node yin:
+- sentinelZero (VM, running)
+  - Details: node=yin | trace=compute-vm:yin:200
+  - Source: Digital twin (Proxmox ingest); agent status unknown
+- ubuntu-cloud-template (VM, stopped)
+  - Details: node=yin | trace=compute-vm:yin:8001
+  - Source: Digital twin (Proxmox ingest); agent status unknown`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "List all VMs currently on yin.",
+    intentType: "compute_status",
+  });
+
+  expect(packaged).toBeTruthy();
+  expect(packaged).toContain("VMs on node yin:");
+  expect(packaged).toContain("- sentinelZero (VM, running)");
+  expect(packaged).toContain("- ubuntu-cloud-template (VM, stopped)");
+});
+
+test("normalizes inline VM inventory rows into renderer-friendly format", () => {
+  const response = `VMs on node yin
+- sentinelZero | Status: running | Details: node=yin | trace=compute-vm:yin:200 | Source: Digital twin (Proxmox ingest); agent status unknown
+- ubuntu-cloud-template | Status: stopped | Details: node=yin | trace=compute-vm:yin:8001 | Source: Digital twin (Proxmox ingest); agent status unknown`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "List all VMs currently on yin.",
+    intentType: "compute_status",
+  });
+
+  expect(packaged).toBeTruthy();
+  expect(packaged).toContain("VMs on node yin:");
+  expect(packaged).toContain("- sentinelZero (VM, running)");
+  expect(packaged).toContain("- ubuntu-cloud-template (VM, stopped)");
+  expect(packaged).toContain("trace=compute-vm:yin:200");
+  expect(packaged).toContain("trace=compute-vm:yin:8001");
+});
+
+test("normalizes LXC inline inventory rows into renderer-friendly format", () => {
+  const response = `LXC Containers
+- PvVPN-Home | Status: running | Node: YANG | Trace: compute-vm:yang:103
+- homebridge | Status: running | Node: YANG | Trace: compute-vm:yang:100`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "list all the lxcs running",
+    intentType: "compute_status",
+  });
+
+  expect(packaged).toBeTruthy();
+  expect(packaged).toContain("LXC Containers:");
+  expect(packaged).toContain("- PvVPN-Home (LXC, running)");
+  expect(packaged).toContain("- homebridge (LXC, running)");
+  expect(packaged).toContain("trace=compute-vm:yang:103");
+  expect(packaged).toContain("trace=compute-vm:yang:100");
+});

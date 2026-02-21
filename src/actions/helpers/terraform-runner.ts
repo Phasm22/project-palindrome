@@ -46,6 +46,137 @@ export interface TerraformOutput {
   vm_hostnames?: Record<string, string>;
 }
 
+export type VmConfigEntry = {
+  target_node: string;
+  cores: number;
+  memory: number;
+  disk_size: string;
+  vm_id?: number;
+};
+
+function extractHclObjectBlock(content: string, key: string): string | null {
+  const assignmentRegex = new RegExp(`\\b${key}\\b\\s*=\\s*\\{`, "m");
+  const assignmentMatch = assignmentRegex.exec(content);
+  if (!assignmentMatch) return null;
+
+  const openBraceIndex = content.indexOf("{", assignmentMatch.index);
+  if (openBraceIndex < 0) return null;
+
+  let depth = 0;
+  for (let i = openBraceIndex; i < content.length; i++) {
+    const ch = content[i];
+    if (ch === "{") {
+      depth++;
+      continue;
+    }
+    if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return content.slice(openBraceIndex + 1, i);
+      }
+    }
+  }
+
+  return null;
+}
+
+function extractHclAssignmentString(content: string, key: string): string | undefined {
+  const regex = new RegExp(`^\\s*${key}\\s*=\\s*"([^"\\n]*)"\\s*$`, "m");
+  const match = content.match(regex);
+  return match?.[1];
+}
+
+function extractHclAssignmentNumber(content: string, key: string): number | undefined {
+  const regex = new RegExp(`^\\s*${key}\\s*=\\s*(\\d+)\\s*$`, "m");
+  const match = content.match(regex);
+  if (!match?.[1]) return undefined;
+  const value = Number.parseInt(match[1], 10);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function extractHclAssignmentBoolean(content: string, key: string): boolean | undefined {
+  const regex = new RegExp(`^\\s*${key}\\s*=\\s*(true|false)\\s*$`, "mi");
+  const match = content.match(regex);
+  if (!match?.[1]) return undefined;
+  return match[1].toLowerCase() === "true";
+}
+
+function parseVmConfigBlock(block: string): VmConfigEntry | null {
+  const targetNode = block.match(/\btarget_node\s*=\s*"([^"\n]+)"/)?.[1];
+  const coresRaw = block.match(/\bcores\s*=\s*(\d+)/)?.[1];
+  const memoryRaw = block.match(/\bmemory\s*=\s*(\d+)/)?.[1];
+  const diskSize = block.match(/\bdisk_size\s*=\s*"([^"\n]+)"/)?.[1];
+  const vmIdRaw = block.match(/\bvm_id\s*=\s*(\d+)/)?.[1];
+
+  if (!targetNode || !coresRaw || !memoryRaw || !diskSize) {
+    return null;
+  }
+
+  const cores = Number.parseInt(coresRaw, 10);
+  const memory = Number.parseInt(memoryRaw, 10);
+  if (!Number.isFinite(cores) || !Number.isFinite(memory)) {
+    return null;
+  }
+
+  const vmId = vmIdRaw ? Number.parseInt(vmIdRaw, 10) : undefined;
+  return {
+    target_node: targetNode,
+    cores,
+    memory,
+    disk_size: diskSize,
+    vm_id: Number.isFinite(vmId) ? vmId : undefined,
+  };
+}
+
+export function parseVmConfigsFromTfvars(content: string): Record<string, VmConfigEntry> {
+  const vmConfigsBlock = extractHclObjectBlock(content, "vm_configs");
+  if (!vmConfigsBlock) return {};
+
+  const vmConfigs: Record<string, VmConfigEntry> = {};
+  const entryRegex = /"([^"]+)"\s*=\s*\{/g;
+  let entryMatch: RegExpExecArray | null;
+
+  while ((entryMatch = entryRegex.exec(vmConfigsBlock)) !== null) {
+    const vmName = entryMatch[1];
+    const openBraceIndex = vmConfigsBlock.indexOf("{", entryMatch.index);
+    if (!vmName || openBraceIndex < 0) continue;
+
+    let depth = 0;
+    let closeBraceIndex = -1;
+    for (let i = openBraceIndex; i < vmConfigsBlock.length; i++) {
+      const ch = vmConfigsBlock[i];
+      if (ch === "{") {
+        depth++;
+        continue;
+      }
+      if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          closeBraceIndex = i;
+          break;
+        }
+      }
+    }
+
+    if (closeBraceIndex < 0) continue;
+    const entryBlock = vmConfigsBlock.slice(openBraceIndex + 1, closeBraceIndex);
+    const parsed = parseVmConfigBlock(entryBlock);
+    if (parsed) vmConfigs[vmName] = parsed;
+  }
+
+  return vmConfigs;
+}
+
+export function mergeVmConfigsWithExistingTfvars(
+  existingTfvarsContent: string,
+  incomingVmConfigs: Record<string, VmConfigEntry>
+): Record<string, VmConfigEntry> {
+  return {
+    ...parseVmConfigsFromTfvars(existingTfvarsContent),
+    ...incomingVmConfigs,
+  };
+}
+
 /**
  * TerraformRunner - Executes terraform commands in the lab-infra directory
  */
@@ -112,12 +243,31 @@ export class TerraformRunner {
    */
   private async generateTfVars(config: TerraformConfig): Promise<string> {
     const tfvarsPath = this.getTfvarsPath();
+    let existingContent = "";
+    try {
+      existingContent = await readFile(tfvarsPath, "utf-8");
+    } catch {
+      existingContent = "";
+    }
 
     // Get SSH public key
     const sshPublicKey = await this.getSshPublicKey(config);
 
+    const mergedVmConfigs = mergeVmConfigsWithExistingTfvars(existingContent, config.vmConfigs);
+    const vmBridgeValue = config.vmBridge || extractHclAssignmentString(existingContent, "vm_bridge") || "vmbr0";
+    const vlanIdValue = config.vlanId ?? extractHclAssignmentNumber(existingContent, "vm_vlan_id");
+    const useSshAgentValue = extractHclAssignmentBoolean(existingContent, "use_ssh_agent") ?? true;
+    const cloudInitDatastoreValue =
+      config.cloudInitDatastore ||
+      extractHclAssignmentString(existingContent, "cloud_init_datastore") ||
+      "local";
+    const vmTemplateIdValue =
+      config.templateId ||
+      extractHclAssignmentNumber(existingContent, "vm_template_id") ||
+      8001;
+
     // Build vm_configs block
-    const vmConfigsBlock = Object.entries(config.vmConfigs)
+    const vmConfigsBlock = Object.entries(mergedVmConfigs)
       .map(([name, cfg]) => {
         // Use 0 as sentinel for auto-assign (Terraform will convert to null)
         const vmIdValue = cfg.vm_id !== undefined && cfg.vm_id > 0 ? cfg.vm_id : 0;
@@ -132,13 +282,13 @@ export class TerraformRunner {
       .join(",\n");
 
     // Generate new content
-    const vlanIdLine = config.vlanId ? `vm_vlan_id = ${config.vlanId}\n` : "";
+    const vlanIdLine = typeof vlanIdValue === "number" ? `vm_vlan_id = ${vlanIdValue}\n` : "";
     const newContent = `# Generated by Palindrome Action Layer
-vm_bridge = "${config.vmBridge || "vmbr0"}"
-${vlanIdLine}use_ssh_agent = true
+vm_bridge = "${vmBridgeValue}"
+${vlanIdLine}use_ssh_agent = ${useSshAgentValue ? "true" : "false"}
 ssh_public_key = "${sshPublicKey}"
-cloud_init_datastore = "${config.cloudInitDatastore || "local"}"
-vm_template_id = ${config.templateId || 8001}
+cloud_init_datastore = "${cloudInitDatastoreValue}"
+vm_template_id = ${vmTemplateIdValue}
 
 vm_configs = {
 ${vmConfigsBlock}
@@ -146,7 +296,113 @@ ${vmConfigsBlock}
 `;
 
     await writeFile(tfvarsPath, newContent, "utf-8");
+    logger.info("Updated terraform tfvars vm_configs", {
+      incomingVmCount: Object.keys(config.vmConfigs).length,
+      mergedVmCount: Object.keys(mergedVmConfigs).length,
+      tfvarsPath,
+    });
     return tfvarsPath;
+  }
+
+  async removeVmFromTfvars(vmName: string): Promise<boolean> {
+    const tfvarsPath = this.getTfvarsPath();
+    let existingContent = "";
+    try {
+      existingContent = await readFile(tfvarsPath, "utf-8");
+    } catch {
+      return false;
+    }
+
+    const existingVmConfigs = parseVmConfigsFromTfvars(existingContent);
+    if (!existingVmConfigs[vmName]) {
+      return false;
+    }
+
+    delete existingVmConfigs[vmName];
+
+    const vmBridgeValue = extractHclAssignmentString(existingContent, "vm_bridge") || "vmbr0";
+    const vlanIdValue = extractHclAssignmentNumber(existingContent, "vm_vlan_id");
+    const useSshAgentValue = extractHclAssignmentBoolean(existingContent, "use_ssh_agent") ?? true;
+    const sshPublicKey =
+      extractHclAssignmentString(existingContent, "ssh_public_key") ||
+      (await this.getSshPublicKey({}));
+    const cloudInitDatastoreValue =
+      extractHclAssignmentString(existingContent, "cloud_init_datastore") || "local";
+    const vmTemplateIdValue =
+      extractHclAssignmentNumber(existingContent, "vm_template_id") || 8001;
+
+    const vmConfigsBlock = Object.entries(existingVmConfigs)
+      .map(([name, cfg]) => {
+        const vmIdValue = cfg.vm_id !== undefined && cfg.vm_id > 0 ? cfg.vm_id : 0;
+        return `  "${name}" = {
+    target_node = "${cfg.target_node}"
+    cores       = ${cfg.cores}
+    memory      = ${cfg.memory}
+    disk_size   = "${cfg.disk_size}"
+    vm_id       = ${vmIdValue}
+  }`;
+      })
+      .join(",\n");
+    const vlanIdLine = typeof vlanIdValue === "number" ? `vm_vlan_id = ${vlanIdValue}\n` : "";
+    const updatedContent = `# Generated by Palindrome Action Layer
+vm_bridge = "${vmBridgeValue}"
+${vlanIdLine}use_ssh_agent = ${useSshAgentValue ? "true" : "false"}
+ssh_public_key = "${sshPublicKey}"
+cloud_init_datastore = "${cloudInitDatastoreValue}"
+vm_template_id = ${vmTemplateIdValue}
+
+vm_configs = {
+${vmConfigsBlock}
+}
+`;
+
+    await writeFile(tfvarsPath, updatedContent, "utf-8");
+    logger.info("Removed VM from terraform tfvars vm_configs", {
+      vmName,
+      remainingVmCount: Object.keys(existingVmConfigs).length,
+      tfvarsPath,
+    });
+    return true;
+  }
+
+  async removeVmFromState(vmName: string): Promise<{ removed: string[]; missing: string[] }> {
+    const targets = [
+      `proxmox_virtual_environment_vm.lab_vms["${vmName}"]`,
+      `proxmox_virtual_environment_file.cloud_config["${vmName}"]`,
+    ];
+    const removed: string[] = [];
+    const missing: string[] = [];
+
+    for (const target of targets) {
+      try {
+        const result = await execAsync(`terraform state rm '${target}'`, {
+          cwd: this.terraformDir,
+          env: process.env as Record<string, string>,
+          maxBuffer: 10 * 1024 * 1024,
+          timeout: 120000,
+        });
+        const output = `${result.stdout || ""}\n${result.stderr || ""}`.trim();
+        if (/No matching objects found/i.test(output)) {
+          missing.push(target);
+        } else {
+          removed.push(target);
+        }
+      } catch (error: any) {
+        const output = `${error?.stdout || ""}\n${error?.stderr || ""}\n${error?.message || ""}`;
+        if (/No matching objects found/i.test(output)) {
+          missing.push(target);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    logger.info("Terraform state cleanup for destroyed VM completed", {
+      vmName,
+      removed,
+      missing,
+    });
+    return { removed, missing };
   }
 
   /**

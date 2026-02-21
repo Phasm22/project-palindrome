@@ -50,6 +50,38 @@ export class AskMissingTool extends BaseTool {
       return { error: parsed.error.message };
     }
 
+    const normalizedMissing = parsed.data.missing.map((slot) => slot.trim().toLowerCase());
+
+    // Deterministic fast-paths for common slots to avoid LLM latency/hangs.
+    if (normalizedMissing.includes("intent")) {
+      return {
+        data: {
+          question:
+            "What do you want to do next — observe status, diagnose a problem, make a change, or get an explanation?",
+        },
+      };
+    }
+
+    if (
+      normalizedMissing.some((slot) =>
+        ["target", "node", "host", "environment", "cluster", "destination"].includes(slot)
+      )
+    ) {
+      return { data: { question: "What is the target environment for the VM?" } };
+    }
+
+    if (normalizedMissing.some((slot) => ["vmid", "resourceid", "resource_id"].includes(slot))) {
+      return { data: { question: "Which VMID is this for?" } };
+    }
+
+    if (normalizedMissing.some((slot) => ["name", "vm_name", "hostname"].includes(slot))) {
+      return { data: { question: "What should the VM be named?" } };
+    }
+
+    if (normalizedMissing.some((slot) => ["type", "vm_type", "template"].includes(slot))) {
+      return { data: { question: "What type of VM do you want to create?" } };
+    }
+
     const systemPrompt = `You ask a single, specific question to unblock an ops assistant.
 Return one short question, no extra text.`;
 
@@ -58,7 +90,11 @@ Missing: ${parsed.data.missing.join(", ")}
 Context: ${parsed.data.context ?? "none"}`;
 
     try {
-      const question = await runToolCompletion(systemPrompt, userPrompt, { temperature: 0.2, maxTokens: 120 });
+      const question = await runToolCompletion(systemPrompt, userPrompt, {
+        temperature: 0.2,
+        maxTokens: 120,
+        timeoutMs: 8000,
+      });
       return { data: { question } };
     } catch (error: any) {
       pceLogger.warn("ask_missing failed", { error: error.message });

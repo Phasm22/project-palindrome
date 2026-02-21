@@ -115,6 +115,118 @@ interface PathScope {
   to?: string;
 }
 
+function isVmInventoryQuery(userQuery: string): boolean {
+  const query = userQuery.toLowerCase();
+  const asksForVmKind = /\b(vm|vms|container|containers|lxc|lxcs)\b/.test(query);
+  const asksForList = /\b(list|show|all|running|stopped|currently|inventory)\b/.test(query);
+  return asksForVmKind && asksForList;
+}
+
+function normalizeVmInventoryPackaging(
+  responseText: string,
+  context: FormatContext
+): string | null {
+  if (!responseText || !isVmInventoryQuery(context.userQuery)) {
+    return null;
+  }
+
+  const lines = responseText.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+
+  const headingIndex = lines.findIndex((line) =>
+    /^(all\s+.+\b(vms?|containers?|lxc)|cluster\s+vms?|running\s+.+\b(vms?|containers?|lxc)|stopped\s+.+\b(vms?|containers?|lxc)|.*\b(vms?|containers?|lxc)\b.*\bnode\b|\b(?:lxc(?:\s+containers?)?|containers?|vms?)\b.*)$/i.test(
+      line.replace(/:$/, "")
+    )
+  );
+  if (headingIndex < 0) return null;
+
+  const hasCanonicalRows = lines.some((line) => /^-\s+.+\((?:VM|LXC|QEMU)/i.test(line));
+  const hasInlinePipeRows = lines.some((line) => /^-\s+.+\|\s*status\s*:/i.test(line));
+
+  if (!hasCanonicalRows && !hasInlinePipeRows) {
+    return null;
+  }
+
+  const rawHeading = lines[headingIndex] ?? "VM inventory";
+  const heading = rawHeading.endsWith(":") ? rawHeading : `${rawHeading}:`;
+  if (hasCanonicalRows && !hasInlinePipeRows) {
+    const normalized = [...lines];
+    normalized[headingIndex] = heading;
+    return normalized.join("\n");
+  }
+
+  const isLxcHeading = /\b(lxc|container)\b/i.test(heading);
+  const vmType = isLxcHeading ? "LXC" : "VM";
+  const normalizedRows: string[] = [heading];
+
+  for (const line of lines) {
+    if (!line.startsWith("- ")) continue;
+    const segments = line
+      .replace(/^-+\s*/, "")
+      .split("|")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    if (segments.length < 2) continue;
+
+    const name = segments[0] ?? "Unnamed";
+    let state = "unknown";
+    let node = "";
+    let trace = "";
+    let source = "";
+    const detailParts: string[] = [];
+
+    for (const segment of segments.slice(1)) {
+      if (/^status\s*:/i.test(segment)) {
+        state = segment.replace(/^status\s*:/i, "").trim() || "unknown";
+        continue;
+      }
+      if (/^details\s*:/i.test(segment)) {
+        const detailValue = segment.replace(/^details\s*:/i, "").trim();
+        if (detailValue) detailParts.push(detailValue);
+        continue;
+      }
+      if (/^trace\s*[:=]/i.test(segment)) {
+        trace = segment.replace(/^trace\s*[:=]/i, "").trim();
+        continue;
+      }
+      if (/^source\s*:/i.test(segment)) {
+        source = segment.replace(/^source\s*:/i, "").trim();
+        continue;
+      }
+      if (/^node\s*[:=]/i.test(segment)) {
+        node = segment.replace(/^node\s*[:=]/i, "").trim();
+        continue;
+      }
+      detailParts.push(segment);
+    }
+
+    if (!node) {
+      const nodeFromDetail = detailParts.find((part) => /^node=.+/i.test(part));
+      if (nodeFromDetail) node = nodeFromDetail.replace(/^node=/i, "").trim();
+    }
+    if (!trace) {
+      const traceFromDetail = detailParts.find((part) => /^trace=.+/i.test(part));
+      if (traceFromDetail) trace = traceFromDetail.replace(/^trace=/i, "").trim();
+    }
+
+    const details = [
+      node ? `node=${node}` : null,
+      trace ? `trace=${trace}` : null,
+      ...detailParts.filter((part) => !/^node=/i.test(part) && !/^trace=/i.test(part)),
+    ].filter(Boolean) as string[];
+
+    normalizedRows.push(`- ${name} (${vmType}, ${state})`);
+    if (details.length > 0) {
+      normalizedRows.push(`  - Details: ${details.join(" | ")}`);
+    }
+    if (source) {
+      normalizedRows.push(`  - Source: ${source}`);
+    }
+  }
+
+  return normalizedRows.length > 1 ? normalizedRows.join("\n") : null;
+}
+
 function cleanScopeTerm(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim().replace(/[.?!,;:]+$/g, "");
@@ -410,6 +522,11 @@ export function applyAdaptivePackaging(
   context: FormatContext
 ): string | null {
   if (!responseText) return null;
+
+  const vmInventoryPackaging = normalizeVmInventoryPackaging(responseText, context);
+  if (vmInventoryPackaging) {
+    return vmInventoryPackaging;
+  }
 
   const normalizedQuery = context.userQuery.toLowerCase();
   const wantsFullList =

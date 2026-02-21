@@ -441,12 +441,11 @@ function formatClusterVmsSection(vms) {
   return `
     <div style="margin: 8px 0;">
       <div style="padding: 6px 10px; margin-bottom: 4px; background: #0b1220; border: 1px solid #334155; border-radius: 6px; color: #94a3b8; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em;">
-        <div style="display: grid; grid-template-columns: minmax(130px, 1.7fr) 70px 95px 80px minmax(160px, 2fr); gap: 8px; align-items: center;">
+        <div style="display: grid; grid-template-columns: minmax(130px, 1.8fr) 70px 95px 100px; gap: 8px; align-items: center;">
           <span>Name</span>
           <span>Type</span>
           <span>Status</span>
           <span>Node</span>
-          <span>Trace</span>
         </div>
       </div>
       ${vms.join('')}
@@ -608,6 +607,7 @@ function formatAgentResponse(text) {
   let inVmEntry = false;
   let currentVmName = '';
   let currentVmType = '';
+  let currentVmSectionType = 'VM';
   let currentVmState = '';
   let currentVmNode = '';
   let currentVmTrace = '';
@@ -633,6 +633,8 @@ function formatAgentResponse(text) {
       let value = part.slice(eqIdx + 1).trim();
       // Strip surrounding quotes
       value = value.replace(/^"(.*)"$/, '$1');
+      // Decode escaped quotes from historical trace payloads.
+      value = value.replace(/\\"/g, '"');
       if (key) fields.push({ key, value });
     }
     if (!fields.length) return null;
@@ -729,7 +731,7 @@ function formatAgentResponse(text) {
     const typeColor = vm.type === 'VM' ? '#f97316' : '#ea580c';
     return `
       <div style="margin-bottom: 4px; padding: 7px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
-        <div style="display: grid; grid-template-columns: minmax(130px, 1.7fr) 70px 95px 80px minmax(160px, 2fr); gap: 8px; align-items: center;">
+        <div style="display: grid; grid-template-columns: minmax(130px, 1.8fr) 70px 95px 100px; gap: 8px; align-items: center;">
           <strong style="color: #e2e8f0; font-size: 0.92em; line-height: 1.2;">${escapeHtml(vm.name || '-')}</strong>
           <span style="background: ${typeColor}; color: white; padding: 1px 6px; border-radius: 999px; font-size: 0.62em; font-weight: 600; width: fit-content;">${escapeHtml(vm.type || '-')}</span>
           <span style="display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 0.84em;">
@@ -737,10 +739,6 @@ function formatAgentResponse(text) {
             ${escapeHtml(vm.state || 'unknown')}
           </span>
           <span style="color: #e2e8f0; font-size: 0.84em;">${escapeHtml(vm.node || '-')}</span>
-          <span style="display: inline-flex; align-items: center; gap: 6px;">
-            <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #94a3b8; font-family: 'Courier New', monospace; font-size: 0.78em;">${escapeHtml(vm.trace || '-')}</code>
-            ${vm.source ? `<span style="font-size: 0.74em; color: #94a3b8;">src:${escapeHtml(vm.source)}</span>` : ''}
-          </span>
         </div>
       </div>
     `;
@@ -751,7 +749,7 @@ function formatAgentResponse(text) {
     if (!seenVmNames.has(currentVmName)) {
       vmList.push(buildVmRow({
         name: currentVmName,
-        type: currentVmType || 'VM',
+        type: currentVmType || currentVmSectionType || 'VM',
         state: currentVmState || 'unknown',
         node: currentVmNode || '',
         trace: currentVmTrace || '',
@@ -817,27 +815,32 @@ function formatAgentResponse(text) {
     const trimmed = line.trim();
 
     // Key/value pipe format cards (e.g., Definition | term=... | meaning="..." | context="...")
-    const kv = tryParsePipeKv(trimmed);
-    if (kv) {
-      html += `
-        <div class="kv-card">
-          <div class="kv-card-header">
-            <span class="kv-pill">${escapeHtml(kv.label)}</span>
+    // Skip VM detail/source list lines so they stay attached to the VM row parser.
+    const isVmListDetailLine = inClusterVms && /^- (Details|Source):/i.test(trimmed);
+    if (!isVmListDetailLine) {
+      const kv = tryParsePipeKv(trimmed);
+      if (kv) {
+        html += `
+          <div class="kv-card">
+            <div class="kv-card-header">
+              <span class="kv-pill">${escapeHtml(kv.label)}</span>
+            </div>
+            <div class="kv-grid">
+              ${kv.fields.map(f => `
+                <div class="kv-row">
+                  <div class="kv-key">${escapeHtml(f.key)}</div>
+                  <div class="kv-value">${escapeHtml(f.value)}</div>
+                </div>
+              `).join('')}
+            </div>
           </div>
-          <div class="kv-grid">
-            ${kv.fields.map(f => `
-              <div class="kv-row">
-                <div class="kv-key">${escapeHtml(f.key)}</div>
-                <div class="kv-value">${escapeHtml(f.value)}</div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
-      continue;
+        `;
+        continue;
+      }
     }
     
-    if (trimmed.endsWith(':') && !trimmed.startsWith('-')) {
+    const isVmInventoryHeading = /^(Cluster VMs|LXC Containers|VMs on node .+|Running .+\b(?:VMs?|LXC|containers?)\b|All .+\b(?:VMs?|LXC|containers?)\b)$/i.test(trimmed.replace(/:$/, ''));
+    if ((trimmed.endsWith(':') || isVmInventoryHeading) && !trimmed.startsWith('-')) {
       if (inClusterNodes && nodeEntries.length > 0) {
         html += formatClusterNodesSection(nodeEntries);
         nodeEntries = [];
@@ -847,16 +850,23 @@ function formatAgentResponse(text) {
         vmList = [];
       }
       
-      const sectionName = trimmed.replace(':', '');
+      const sectionName = trimmed.replace(/:$/, '');
       if (sectionName === 'Cluster Nodes') {
         inClusterNodes = true;
         inClusterVms = false;
-      } else if (sectionName === 'Cluster VMs' || sectionName.includes('VMs')) {
+        currentVmSectionType = 'VM';
+      } else if (
+        sectionName === 'Cluster VMs' ||
+        sectionName.includes('VMs') ||
+        /\b(lxc|container)\b/i.test(sectionName)
+      ) {
         inClusterNodes = false;
         inClusterVms = true;
+        currentVmSectionType = /\b(lxc|container)\b/i.test(sectionName) ? 'LXC' : 'VM';
       } else {
         inClusterNodes = false;
         inClusterVms = false;
+        currentVmSectionType = 'VM';
         html += `<h3 style="margin: 16px 0 8px 0; color: #f97316; font-size: 1.1em; font-weight: 600;">${escapeHtml(sectionName)}</h3>`;
       }
       continue;
@@ -892,8 +902,59 @@ function formatAgentResponse(text) {
       continue;
     }
     
-    if (inClusterVms && trimmed.startsWith('- ') && !trimmed.startsWith('  -')) {
+    if (inClusterVms && /^- /.test(trimmed) && !/^- (Details|Source):/i.test(trimmed)) {
       flushCurrentVm();
+
+      const inlineSegments = trimmed
+        .replace(/^- /, '')
+        .split('|')
+        .map(part => part.trim())
+        .filter(Boolean);
+      if (inlineSegments.length > 1 && inlineSegments.some(part => /^status\s*:/i.test(part))) {
+        const vmName = inlineSegments[0] || '';
+        if (!seenVmNames.has(vmName)) {
+          let inlineState = 'unknown';
+          let inlineNode = '';
+          let inlineTrace = '';
+          let inlineSource = '';
+          let inlineDetails = '';
+
+          for (const segment of inlineSegments.slice(1)) {
+            if (/^status\s*:/i.test(segment)) {
+              inlineState = segment.replace(/^status\s*:/i, '').trim() || 'unknown';
+            } else if (/^node\s*[:=]/i.test(segment)) {
+              inlineNode = segment.replace(/^node\s*[:=]/i, '').trim();
+            } else if (/^details\s*:/i.test(segment)) {
+              inlineDetails = segment.replace(/^details\s*:/i, '').trim();
+            } else if (/^trace\s*[:=]/i.test(segment)) {
+              inlineTrace = segment.replace(/^trace\s*[:=]/i, '').trim();
+            } else if (/^source\s*:/i.test(segment)) {
+              inlineSource = segment.replace(/^source\s*:/i, '').trim();
+            }
+          }
+
+          if (!inlineNode && /node[:=]/i.test(inlineDetails)) {
+            const detailsNodeMatch = inlineDetails.match(/node\s*[:=]\s*([^|]+)/i);
+            if (detailsNodeMatch?.[1]) inlineNode = detailsNodeMatch[1].trim();
+          }
+          if (!inlineTrace && inlineDetails.includes('trace=')) {
+            const detailsTraceMatch = inlineDetails.match(/trace=([^|]+)/i);
+            if (detailsTraceMatch?.[1]) inlineTrace = detailsTraceMatch[1].trim();
+          }
+
+          vmList.push(buildVmRow({
+            name: vmName,
+            type: currentVmType || currentVmSectionType || 'VM',
+            state: inlineState,
+            node: inlineNode,
+            trace: inlineTrace,
+            source: inlineSource,
+          }));
+          seenVmNames.add(vmName);
+        }
+        inVmEntry = false;
+        continue;
+      }
       
       const vmMatch = trimmed.match(/^- (.+?) \((.+?),\s*(.+?)\)/);
       if (vmMatch) {
@@ -914,39 +975,21 @@ function formatAgentResponse(text) {
       continue;
     }
     
-    if (inClusterVms && trimmed.startsWith('  - ') && !trimmed.startsWith('    -')) {
-      const nestedVmMatch = trimmed.match(/^  - (.+?) \((.+?),\s*(.+?)\)/);
-      if (nestedVmMatch) {
-        const [, name, vmType, state] = nestedVmMatch;
-        const shortType = vmType.includes('QEMU') || vmType === 'QEMU VM' ? 'VM' : 
-                         vmType.includes('LXC') || vmType === 'LXC container' ? 'LXC' : vmType.trim();
-        vmList.push(buildVmRow({
-          name: name.trim(),
-          type: shortType,
-          state: state.trim(),
-          node: '',
-          trace: '',
-          source: '',
-        }));
-      }
-      continue;
-    }
-    
-    if (inVmEntry && trimmed.startsWith('  - Details:')) {
-      const detailsText = trimmed.replace('  - Details:', '').trim();
+    if (inVmEntry && /^- Details:/i.test(trimmed)) {
+      const detailsText = trimmed.replace(/^- Details:/i, '').trim();
       const parts = detailsText.split('|').map(p => p.trim());
       for (const part of parts) {
-        if (part.startsWith('trace=')) {
-          currentVmTrace = part.replace('trace=', '').trim();
-        } else if (part.startsWith('node=')) {
-          currentVmNode = part.replace('node=', '').trim();
+        if (/^trace\s*[:=]/i.test(part)) {
+          currentVmTrace = part.replace(/^trace\s*[:=]/i, '').trim();
+        } else if (/^node\s*[:=]/i.test(part)) {
+          currentVmNode = part.replace(/^node\s*[:=]/i, '').trim();
         }
       }
       continue;
     }
     
-    if (inVmEntry && trimmed.startsWith('  - Source:')) {
-      currentVmSource = trimmed.replace('  - Source:', '').trim();
+    if (inVmEntry && /^- Source:/i.test(trimmed)) {
+      currentVmSource = trimmed.replace(/^- Source:/i, '').trim();
       continue;
     }
     
@@ -1626,6 +1669,73 @@ function handleAgentEvent(event, toolExecutions) {
   }
 }
 
+function bindAgentEventSourceHandlers(eventSource, toolExecutions) {
+  let finalText = "";
+
+  eventSource.onmessage = (event) => {
+    try {
+      const agentEvent = JSON.parse(event.data);
+      console.log('Received SSE event:', agentEvent.type, agentEvent);
+      handleAgentEvent(agentEvent, toolExecutions);
+
+      if (agentEvent.type === 'agent:final') {
+        finalText = agentEvent.data.text || '';
+        console.log('Final text received:', finalText);
+      }
+    } catch (error) {
+      console.error('Error parsing SSE event:', error, event.data);
+    }
+  };
+
+  eventSource.onerror = (error) => {
+    console.error('SSE connection error:', error);
+
+    if (finalEventTimeout) {
+      clearTimeout(finalEventTimeout);
+      finalEventTimeout = null;
+    }
+
+    if (currentEventSource && currentEventSource.readyState === EventSource.CLOSED) {
+      if (finalText) {
+        updateChatMessage(currentResponseId, `
+          <div class="agent-response" style="line-height: 1.6;">
+            ${formatAgentResponse(finalText)}
+          </div>
+          ${toolExecutions.length > 0 ? `
+            <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
+              Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
+            </div>
+          ` : ''}
+        `);
+      } else {
+        updateChatMessage(currentResponseId, `
+          <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 2px solid #fbbf24; margin-top: 10px;">
+            <strong>⚠️ Connection closed</strong><br>
+            <span style="font-size: 0.9em;">The agent may still be processing. Try refreshing or asking again.</span>
+          </div>
+        `);
+      }
+
+      const inputs = getChatInputs();
+      const buttons = getSendButtons();
+      inputs.forEach(i => { i.disabled = false; });
+      buttons.forEach(b => {
+        b.disabled = false;
+        b.textContent = 'Send';
+      });
+      const primaryInput = getPrimaryChatInput();
+      if (primaryInput) primaryInput.focus();
+    }
+
+    if (currentEventSource) {
+      currentEventSource.close();
+      currentEventSource = null;
+    }
+  };
+
+  return () => finalText;
+}
+
 // Main chat functions
 export async function sendChatMessage(messageOverride = null) {
   const inputs = getChatInputs();
@@ -1696,67 +1806,10 @@ export async function sendChatMessage(messageOverride = null) {
     const currentQuery = message;
 
     currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
-    currentEventSource.onmessage = (event) => {
-      try {
-        const agentEvent = JSON.parse(event.data);
-        console.log('Received SSE event:', agentEvent.type, agentEvent);
-        handleAgentEvent(agentEvent, toolExecutions);
-        
-        if (agentEvent.type === 'agent:final') {
-          finalText = agentEvent.data.text || '';
-          console.log('Final text received:', finalText);
-        }
-      } catch (error) {
-        console.error('Error parsing SSE event:', error, event.data);
-      }
-    };
-
-    currentEventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-      
-      if (finalEventTimeout) {
-        clearTimeout(finalEventTimeout);
-        finalEventTimeout = null;
-      }
-      
-      if (currentEventSource.readyState === EventSource.CLOSED) {
-        if (finalText) {
-          updateChatMessage(currentResponseId, `
-            <div class="agent-response" style="line-height: 1.6;">
-              ${formatAgentResponse(finalText)}
-            </div>
-            ${toolExecutions.length > 0 ? `
-              <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
-                Executed ${toolExecutions.length} tool${toolExecutions.length !== 1 ? 's' : ''}
-              </div>
-            ` : ''}
-          `);
-        } else {
-          updateChatMessage(currentResponseId, `
-            <div style="color: #fbbf24; padding: 12px; background: #78350f; border-radius: 6px; border-left: 2px solid #fbbf24; margin-top: 10px;">
-              <strong>⚠️ Connection closed</strong><br>
-              <span style="font-size: 0.9em;">The agent may still be processing. Try refreshing or asking again.</span>
-            </div>
-          `);
-        }
-        
-        // Re-enable inputs and buttons
-        const inputs = getChatInputs();
-        const buttons = getSendButtons();
-        inputs.forEach(i => { i.disabled = false; });
-        buttons.forEach(b => { 
-          b.disabled = false;
-          b.textContent = 'Send';
-        });
-        const primaryInput = getPrimaryChatInput();
-        if (primaryInput) primaryInput.focus();
-      }
-      
-      currentEventSource.close();
-      currentEventSource = null;
-    };
+    const getFinalText = bindAgentEventSourceHandlers(currentEventSource, toolExecutions);
 
     finalEventTimeout = setTimeout(() => {
+      finalText = getFinalText();
       if (currentEventSource && finalText) {
         updateChatMessage(currentResponseId, `
           <div class="agent-response" style="line-height: 1.6;">
@@ -1853,6 +1906,7 @@ export async function sendChatMessage(messageOverride = null) {
       currentSessionId = startResult.sessionId;
       if (currentEventSource) currentEventSource.close();
       currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
+      bindAgentEventSourceHandlers(currentEventSource, toolExecutions);
     }
     
     if (startResult.conversationId && !currentConversationId) {

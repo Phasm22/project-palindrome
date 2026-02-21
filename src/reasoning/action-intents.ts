@@ -6,7 +6,7 @@
 
 export type ActionIntent =
   | { type: "create_vm"; name: string; node: string }
-  | { type: "destroy_vm"; name?: string; vmId?: number }
+  | { type: "destroy_vm"; name?: string; vmId?: number; node?: string }
   | { type: "start_vm"; name: string }
   | { type: "stop_vm"; name: string }
   | { type: "restart_vm"; name: string }
@@ -19,6 +19,65 @@ function isLikelyQuestion(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (normalized.endsWith("?")) return true;
   return /^(what|which|who|where|when|why|how|is|are|do|does|can|could|would|will)\b/.test(normalized);
+}
+
+function normalizeVmNameCandidate(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  const cleaned = candidate
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .trim()
+    .replace(/[.,!?;:]+$/g, "");
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function extractRegexCandidate(match: RegExpMatchArray | null): string | null {
+  if (!match) return null;
+  for (let i = 1; i < match.length; i++) {
+    const candidate = normalizeVmNameCandidate(match[i]);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function extractCreateVmName(text: string): string | null {
+  const explicitNamePattern =
+    /\b(?:vm|virtual machine)\s+(?:named|called|with\s+name|name(?:\s+is|=|:)?|hostname(?:\s+is|=|:)?)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
+  const explicitName = extractRegexCandidate(text.match(explicitNamePattern));
+  if (explicitName) return explicitName;
+
+  const inlineNamePattern =
+    /\b(?:create|make|provision|spin up)\s+(?:a|an|new)?\s*(?:vm|virtual machine)\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
+  const inlineName = extractRegexCandidate(text.match(inlineNamePattern));
+  if (!inlineName) return null;
+
+  const stopwords = new Set([
+    "on",
+    "in",
+    "at",
+    "with",
+    "for",
+    "to",
+    "from",
+    "using",
+    "via",
+    "named",
+    "called",
+    "name",
+    "hostname",
+    "node",
+    "vm",
+    "virtual",
+    "machine",
+    "the",
+    "a",
+    "an",
+    "my",
+    "your",
+    "our",
+  ]);
+  if (stopwords.has(inlineName.toLowerCase())) return null;
+  return inlineName;
 }
 
 function extractVmName(text: string): string | null {
@@ -93,7 +152,7 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
     ) &&
     (normalized.includes("vm") || normalized.includes("virtual machine"))
   ) {
-    const vmName = extractVmName(userInput);
+    const vmName = extractCreateVmName(userInput) || extractVmName(userInput);
     const nodeName = extractNodeName(userInput);
 
     // Node name is required, VM name is optional (will be auto-generated)
@@ -106,16 +165,17 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
   if (
     normalized.includes("destroy") || normalized.includes("delete") || normalized.includes("remove")
   ) {
+    const nodeName = extractNodeName(userInput) || undefined;
     // Try to extract VM ID first (more specific)
     const vmId = extractVmId(userInput);
     if (vmId) {
-      return { type: "destroy_vm", vmId };
+      return { type: "destroy_vm", vmId, node: nodeName };
     }
     
     // Fall back to VM name extraction
     const vmName = extractVmName(userInput);
     if (vmName) {
-      return { type: "destroy_vm", name: vmName };
+      return { type: "destroy_vm", name: vmName, node: nodeName };
     }
   }
 

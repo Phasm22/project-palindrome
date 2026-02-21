@@ -29,6 +29,18 @@ export interface DestroyVmResult {
   terraformOutput?: any;
 }
 
+export function normalizeDestroyVmIdentifiers(rawName: string): {
+  infraName: string;
+  dnsDomain: string;
+} {
+  const trimmed = rawName.trim().replace(/\.$/, "");
+  const infraName = trimmed.replace(/\.prox$/i, "");
+  const dnsDomain = trimmed.toLowerCase().endsWith(".prox")
+    ? trimmed
+    : `${infraName}.prox`;
+  return { infraName, dnsDomain };
+}
+
 /**
  * Destroy VM Action
  * 
@@ -147,7 +159,24 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
   try {
     // Use verifyAgainstProxmox: false to avoid filtering out VMs that might have timing issues
     // We'll let Terraform handle the actual verification
-    const existingVms = await twinQuery.findVmByName(finalName, { verifyAgainstProxmox: false });
+    let existingVms = await twinQuery.findVmByName(finalName, { verifyAgainstProxmox: false });
+    if (existingVms.length === 0) {
+      const { infraName, dnsDomain } = normalizeDestroyVmIdentifiers(finalName);
+      const fallbacks = [infraName, dnsDomain]
+        .filter((candidate, index, all) => candidate.length > 0 && all.indexOf(candidate) === index);
+      for (const fallbackName of fallbacks) {
+        if (fallbackName.toLowerCase() === finalName.toLowerCase()) continue;
+        existingVms = await twinQuery.findVmByName(fallbackName, { verifyAgainstProxmox: false });
+        if (existingVms.length > 0) {
+          logger.info("Resolved VM using fallback name during destroy lookup", {
+            requestedName: finalName,
+            fallbackName,
+            matchCount: existingVms.length,
+          });
+          break;
+        }
+      }
+    }
     
     if (existingVms.length > 0) {
       vmFoundInTwin = true;
@@ -174,6 +203,9 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
         // This shouldn't happen since we checked existingVms.length > 0, but TypeScript needs this
         logger.warn("VM found in twin but first entry is undefined", { name: finalName });
       } else {
+        if (typeof targetVm.name === "string" && targetVm.name.trim().length > 0) {
+          finalName = targetVm.name.trim();
+        }
         // Update finalNode if we found it from twin
         if (!finalNode && targetVm.nodeName) {
           finalNode = targetVm.nodeName;
@@ -241,17 +273,25 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
   }
 
   try {
+    const { infraName: terraformVmName, dnsDomain } = normalizeDestroyVmIdentifiers(finalName);
+    if (!terraformVmName) {
+      return {
+        success: false,
+        message: `Unable to determine Terraform VM name from "${finalName}".`,
+      };
+    }
+
     // Use terraform destroy -target to destroy specific VM resource
     // Format: -target='proxmox_virtual_environment_vm.lab_vms["vm-name"]'
     // Terraform requires quotes around the entire target expression
-    const targetResource = `proxmox_virtual_environment_vm.lab_vms["${finalName}"]`;
-    const cloudConfigTarget = `proxmox_virtual_environment_file.cloud_config["${finalName}"]`;
+    const targetResource = `proxmox_virtual_environment_vm.lab_vms["${terraformVmName}"]`;
+    const cloudConfigTarget = `proxmox_virtual_environment_file.cloud_config["${terraformVmName}"]`;
 
     if (dryRun) {
-      logger.info("Dry run: Would destroy VM", { name: finalName, targetResource });
+      logger.info("Dry run: Would destroy VM", { name: terraformVmName, targetResource });
       return {
         success: true,
-        message: `Dry run: Would destroy VM "${finalName}" using terraform destroy -target='${targetResource}' (VM will be stopped automatically if running)`,
+        message: `Dry run: Would destroy VM "${terraformVmName}" using terraform destroy -target='${targetResource}' (VM will be stopped automatically if running)`,
       };
     }
 
@@ -263,7 +303,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       
       // Check if the VM config in tfvars is missing vm_id
       // Look for the VM name in the config and check if vm_id is present
-      const escapedName = finalName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedName = terraformVmName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       // Match the VM config block: "vm-name" = { ... }
       const vmConfigRegex = new RegExp(
         `("${escapedName}"\\s*=\\s*\\{[\\s\\S]*?)(\\})`,
@@ -288,7 +328,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
             }
           );
           await writeFile(tfvarsPath, tfvarsContent, "utf-8");
-          logger.info("Patched tfvars file to add missing vm_id field", { name: finalName });
+          logger.info("Patched tfvars file to add missing vm_id field", { name: terraformVmName });
         }
       }
     } catch (error: any) {
@@ -322,7 +362,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
     // Check for "No changes" first - this means the VM doesn't exist in Terraform state
     if (stdout.includes("No changes") || stdout.includes("No objects need to be destroyed")) {
       logger.warn("VM not found in Terraform state", {
-        name: finalName,
+        name: terraformVmName,
         vmId,
         node: finalNode,
         note: "VM may have been created outside Terraform or already destroyed",
@@ -330,7 +370,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       
       return {
         success: false,
-        message: `VM "${finalName}"${vmId ? ` (ID: ${vmId})` : ""} not found in Terraform state. It may have been created outside of Terraform or already destroyed. If the VM still exists in Proxmox, you may need to destroy it manually or import it to Terraform first.`,
+        message: `VM "${terraformVmName}"${vmId ? ` (ID: ${vmId})` : ""} not found in Terraform state. It may have been created outside of Terraform or already destroyed. If the VM still exists in Proxmox, you may need to destroy it manually or import it to Terraform first.`,
         terraformOutput: destroyResult,
       };
     }
@@ -339,7 +379,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       let errorMessage = `Terraform destroy failed: ${stderr}`;
       
       if (stderr.includes("Resource targeting is required")) {
-        errorMessage = `VM "${finalName}" not found in Terraform state. It may have already been destroyed or was created outside of Terraform.`;
+        errorMessage = `VM "${terraformVmName}" not found in Terraform state. It may have already been destroyed or was created outside of Terraform.`;
       } else if (stderr.includes("No such file or directory")) {
         errorMessage = `Terraform state file not found. The VM may have already been destroyed.`;
       }
@@ -352,30 +392,29 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
     }
 
     // 8. Delete DNS record if VM was successfully destroyed (non-blocking)
+    let dnsRecordDeleted = false;
     if (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY) {
       try {
         const { getPiholeClient } = await import("../../tools/pihole/client");
         const piholeClient = getPiholeClient(); // Use singleton to share session
 
-        // Construct DNS domain (VM name + .prox)
-        const dnsDomain = `${finalName}.prox`;
-        
         // Check if DNS record exists before attempting deletion
         // Use case-insensitive matching and handle variations
         const existingRecords = await piholeClient.listDnsRecords();
+        const normalizedDomain = dnsDomain.toLowerCase().replace(/\.$/, "");
         const dnsRecord = existingRecords.find(r => 
-          r.domain.toLowerCase() === dnsDomain.toLowerCase() ||
-          r.domain.toLowerCase() === dnsDomain.toLowerCase().replace(/\.$/, '') // Handle trailing dot
+          r.domain.toLowerCase().replace(/\.$/, "") === normalizedDomain
         );
         
         if (dnsRecord) {
           // Delete using the exact domain format from Pi-hole
           await piholeClient.deleteDnsRecord(dnsRecord.domain, dnsRecord.ip);
+          dnsRecordDeleted = true;
           
           // Verify deletion by listing records again
           const recordsAfterDelete = await piholeClient.listDnsRecords();
           const stillExists = recordsAfterDelete.find(r => 
-            r.domain.toLowerCase() === dnsRecord.domain.toLowerCase()
+            r.domain.toLowerCase().replace(/\.$/, "") === dnsRecord.domain.toLowerCase().replace(/\.$/, "")
           );
           
           if (stillExists) {
@@ -394,23 +433,54 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
         } else {
           logger.warn("DNS record not found, skipping deletion", {
             domain: dnsDomain,
-            vmName: finalName,
+            vmName: terraformVmName,
             availableRecords: existingRecords.map(r => ({ domain: r.domain, ip: r.ip })).slice(0, 10), // Log first 10 for debugging
             note: "DNS record may have already been deleted or never existed. Check available records above.",
           });
         }
       } catch (error: any) {
-        logger.warn("Failed to delete DNS record automatically (non-critical)", {
-          vmName: finalName,
+      logger.warn("Failed to delete DNS record automatically (non-critical)", {
+          vmName: terraformVmName,
           error: error.message,
         });
         // Don't fail VM destruction if DNS deletion fails
       }
     }
 
+    try {
+      await terraformRunner.removeVmFromState(terraformVmName);
+    } catch (error: any) {
+      logger.warn("Failed to remove destroyed VM from terraform state", {
+        vmName: terraformVmName,
+        tfvarsPath,
+        error: error.message,
+      });
+    }
+
+    try {
+      const removed = await terraformRunner.removeVmFromTfvars(terraformVmName);
+      if (!removed) {
+        logger.warn("Destroyed VM was not present in tfvars vm_configs (nothing removed)", {
+          vmName: terraformVmName,
+          tfvarsPath,
+        });
+      }
+    } catch (error: any) {
+      logger.warn("Failed to remove destroyed VM from tfvars vm_configs", {
+        vmName: terraformVmName,
+        tfvarsPath,
+        error: error.message,
+      });
+    }
+
+    const dnsStatusMessage = process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY
+      ? dnsRecordDeleted
+        ? " DNS record deleted."
+        : " DNS record not found or could not be deleted automatically."
+      : "";
     return {
       success: true,
-      message: `VM "${finalName}"${vmId ? ` (ID: ${vmId})` : ""} has been successfully destroyed. DNS record deleted.`,
+      message: `VM "${terraformVmName}"${vmId ? ` (ID: ${vmId})` : ""} has been successfully destroyed.${dnsStatusMessage}`,
       terraformOutput: destroyResult,
     };
 
@@ -422,4 +492,3 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
     };
   }
 }
-

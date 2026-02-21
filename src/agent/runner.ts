@@ -74,8 +74,10 @@ import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from
 import { formatResponseForBot, detectResponseIntent, type FormatContext, type ResponseMode } from "./response-formatter";
 import { planConversation } from "./conversation-orchestrator";
 import { parseConfirmationInput } from "./dialog-policy";
+import { resolveClarificationContinuationInput } from "./clarification-continuation";
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-risk";
 import { pceLogger } from "../pce/utils/logger";
+import { TerraformRunner } from "../actions/helpers/terraform-runner";
 
 let openaiClient: OpenAI | null = null;
 const ASSISTANT_NAME = "Pally";
@@ -898,6 +900,15 @@ export async function runAgent(
     // action to loop back to ASK_CONFIRM because the policy sees no confirmation.
   }
 
+  const clarificationContinuation = resolveClarificationContinuationInput({
+    userInput,
+    conversationState: options.conversationState,
+    conversationHistory: options.conversationHistory,
+  });
+  if (clarificationContinuation.usedContinuation) {
+    userInput = clarificationContinuation.effectiveInput;
+  }
+
   const session: ToolSession = {
     userId: options.userId ?? "agent-user",
     aclGroup: options.aclGroup ?? "admin",
@@ -1048,7 +1059,27 @@ export async function runAgent(
 
   const summarizeToolCall = (toolName: string, params: Record<string, any>): string => {
     if (toolName === "action" && params.action) {
-      return `action ${params.action}`;
+      const actionName = String(params.action);
+      const actionParams =
+        params.params && typeof params.params === "object" && !Array.isArray(params.params)
+          ? params.params
+          : {};
+      const detailParts: string[] = [];
+      if (typeof actionParams.name === "string" && actionParams.name.trim().length > 0) {
+        detailParts.push(`name ${actionParams.name.trim()}`);
+      }
+      if (typeof actionParams.node === "string" && actionParams.node.trim().length > 0) {
+        detailParts.push(`node ${actionParams.node.trim()}`);
+      }
+      if (typeof actionParams.vmId === "number") {
+        detailParts.push(`vmid ${actionParams.vmId}`);
+      }
+      if (typeof actionParams.vmid === "number") {
+        detailParts.push(`vmid ${actionParams.vmid}`);
+      }
+      return detailParts.length > 0
+        ? `action ${actionName} (${detailParts.join(", ")})`
+        : `action ${actionName}`;
     }
     if (toolName === "proxmox_write" && params.action) {
       const target = params.vmid ? `vmid ${params.vmid}` : params.node ? `node ${params.node}` : "";
@@ -1058,6 +1089,128 @@ export async function runAgent(
       return `opnsense ${params.action}`;
     }
     return `${toolName} change`;
+  };
+
+  const formatStructuredFieldValue = (value: unknown): string => {
+    return String(value ?? "")
+      .replace(/[\r\n]+/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/\|/g, "/")
+      .trim();
+  };
+
+  const inferMissingToolSlots = (toolName: string, params: Record<string, any>): string[] => {
+    const missing = new Set<string>();
+
+    if (toolName === "action" && typeof params.action === "string") {
+      const actionName = params.action;
+      const actionParams =
+        params.params && typeof params.params === "object" && !Array.isArray(params.params)
+          ? params.params
+          : {};
+
+      if (actionName === "compute.create_vm") {
+        const node =
+          typeof actionParams.node === "string" ? actionParams.node.trim() : "";
+        if (!node) {
+          missing.add("target");
+          missing.add("node");
+        }
+      }
+
+      if (actionName === "compute.destroy_vm") {
+        const hasName = typeof actionParams.name === "string" && actionParams.name.trim().length > 0;
+        const hasVmId =
+          typeof actionParams.vmId === "number" ||
+          (typeof actionParams.vmid === "number") ||
+          (typeof actionParams.vmId === "string" && actionParams.vmId.trim().length > 0) ||
+          (typeof actionParams.vmid === "string" && actionParams.vmid.trim().length > 0);
+        if (!hasName && !hasVmId) {
+          missing.add("target");
+        }
+      }
+    }
+
+    if (toolName === "proxmox_write" && typeof params.action === "string") {
+      const actionName = params.action.toLowerCase();
+      const requiresVmTarget = ["start_vm", "stop_vm", "restart_vm", "destroy_vm"].includes(actionName);
+      if (requiresVmTarget) {
+        const hasNode = typeof params.node === "string" && params.node.trim().length > 0;
+        const hasVmId =
+          typeof params.vmid === "number" ||
+          (typeof params.vmid === "string" && params.vmid.trim().length > 0);
+        if (!hasNode) missing.add("node");
+        if (!hasVmId) missing.add("vmid");
+      }
+    }
+
+    return Array.from(missing);
+  };
+
+  const cleanupAfterProxmoxDestroy = async (vmName: string): Promise<void> => {
+    const normalizedName = vmName.trim();
+    const infraName = normalizedName.replace(/\.prox$/i, "");
+    if (!infraName || infraName.toLowerCase() === "unknown") {
+      return;
+    }
+
+    try {
+      if (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY) {
+        const { getPiholeClient } = await import("../tools/pihole/client");
+        const piholeClient = getPiholeClient();
+        const dnsDomain = normalizedName.toLowerCase().endsWith(".prox")
+          ? normalizedName
+          : `${infraName}.prox`;
+        const existingRecords = await piholeClient.listDnsRecords();
+        const dnsRecord = existingRecords.find((record) => {
+          const left = record.domain.toLowerCase().replace(/\.$/, "");
+          const right = dnsDomain.toLowerCase().replace(/\.$/, "");
+          return left === right;
+        });
+        if (dnsRecord) {
+          await piholeClient.deleteDnsRecord(dnsRecord.domain, dnsRecord.ip);
+          logger.info("Deleted DNS record after proxmox_write destroy_vm", {
+            vmName: normalizedName,
+            domain: dnsRecord.domain,
+            ip: dnsRecord.ip,
+          });
+        } else {
+          logger.warn("No DNS record found after proxmox_write destroy_vm", {
+            vmName: normalizedName,
+            expectedDomain: dnsDomain,
+          });
+        }
+      }
+    } catch (error: any) {
+      logger.warn("Failed DNS cleanup after proxmox_write destroy_vm", {
+        vmName: normalizedName,
+        error: error.message,
+      });
+    }
+
+    const terraformRunner = new TerraformRunner();
+    try {
+      await terraformRunner.removeVmFromState(infraName);
+    } catch (error: any) {
+      logger.warn("Failed to clean Terraform state after proxmox_write destroy_vm", {
+        vmName: infraName,
+        error: error.message,
+      });
+    }
+
+    try {
+      const removed = await terraformRunner.removeVmFromTfvars(infraName);
+      if (!removed) {
+        logger.warn("Destroyed VM not present in tfvars during proxmox_write cleanup", {
+          vmName: infraName,
+        });
+      }
+    } catch (error: any) {
+      logger.warn("Failed to clean tfvars after proxmox_write destroy_vm", {
+        vmName: infraName,
+        error: error.message,
+      });
+    }
   };
 
   // ============================================================
@@ -1117,6 +1270,8 @@ export async function runAgent(
     confidence: classification.confidence,
     metadata: classification.metadata,
     route: routing.route,
+    clarification_continuation: clarificationContinuation.usedContinuation,
+    clarification_anchor: clarificationContinuation.anchorUserInput,
   });
   logger.info("Conversation transition", {
     conversation_state_before: options.conversationState ?? "IDLE",
@@ -1328,7 +1483,7 @@ export async function runAgent(
 
   // Handle high-risk confirmation gate (bound to pending action)
   if (conversationPlan.decision === "ASK_CONFIRM") {
-    const pendingActionExecute = originalUserInput;
+    const pendingActionExecute = userInput;
     const pendingSummary = conversationPlan.pendingAction ?? pendingActionExecute;
     const pendingRecord = buildPendingActionRecord(
       pendingActionExecute,
@@ -1755,8 +1910,8 @@ export async function runAgent(
       const hostname = data?.hostname || data?.name;
 
       const text = ok
-        ? `VMCreate | node=${node} | ${hostname ? `name=${hostname} | ` : ""}${vmId ? `vmid=${vmId} | ` : ""}message="${String(message).replace(/"/g, '\\"')}"`
-        : `Error | action=compute.create_vm | node=${node} | message="${String(message).replace(/"/g, '\\"')}"`;
+        ? `VMCreate | node=${node} | ${hostname ? `name=${hostname} | ` : ""}${vmId ? `vmid=${vmId} | ` : ""}message=${formatStructuredFieldValue(message)}`
+        : `Error | action=compute.create_vm | node=${node} | message=${formatStructuredFieldValue(message)}`;
 
       let createVmTraceId: string | undefined;
       try {
@@ -1807,6 +1962,162 @@ export async function runAgent(
         conversationState: postExecutionState,
         conversationContext: finalContextUpdate,
         traceId: createVmTraceId,
+      });
+      return { text };
+    }
+
+    if (actionIntent.type === "destroy_vm") {
+      const requestedNode = (actionIntent as any).node as string | undefined;
+      const requestedName = (actionIntent as any).name as string | undefined;
+      const requestedVmId = (actionIntent as any).vmId as number | undefined;
+      const lookup = requestedVmId ? String(requestedVmId) : requestedName;
+
+      let resolvedDestroyVm: ResolvedVmDetails | null = null;
+      if (!lookup) {
+        const prompt = "Which VM should I destroy? Provide a VM name or VMID.";
+        emitFinalEvent(prompt, {
+          clarification: true,
+          needsResponse: true,
+          conversationState: "NEED_CLARIFICATION",
+          conversationContext: contextUpdate,
+        });
+        return { text: prompt };
+      }
+
+      try {
+        const resolved = await resolveVmDetailsChain(tools, session, lookup);
+        if (!resolved.found) {
+          const prompt = requestedVmId
+            ? `I couldn't find VMID ${requestedVmId}.`
+            : `I couldn't find VM "${requestedName}".`;
+          emitFinalEvent(prompt, {
+            clarification: true,
+            needsResponse: true,
+            conversationState: "NEED_CLARIFICATION",
+            conversationContext: contextUpdate,
+          });
+          return { text: prompt };
+        }
+        resolvedDestroyVm = resolved;
+      } catch (error: any) {
+        const prompt = `I couldn't resolve the VM details: ${error.message}`;
+        emitFinalEvent(prompt, {
+          clarification: true,
+          needsResponse: true,
+          conversationState: "NEED_CLARIFICATION",
+          conversationContext: contextUpdate,
+        });
+        return { text: prompt };
+      }
+
+      if (
+        requestedNode &&
+        resolvedDestroyVm &&
+        requestedNode.toLowerCase() !== resolvedDestroyVm.node.toLowerCase()
+      ) {
+        const prompt =
+          `VM "${resolvedDestroyVm.name}" (VMID ${resolvedDestroyVm.vmid}) is on node "${resolvedDestroyVm.node}", not "${requestedNode}". ` +
+          "Confirm the correct node or VM target.";
+        emitFinalEvent(prompt, {
+          clarification: true,
+          needsResponse: true,
+          conversationState: "NEED_CLARIFICATION",
+          conversationContext: contextUpdate,
+        });
+        return { text: prompt };
+      }
+
+      emitStepEvent({ step: 1, maxSteps: 1, userInput, intent: "destroy_vm", tool: "action" });
+
+      const params: Record<string, any> = {};
+      const resolvedName = resolvedDestroyVm?.name?.trim();
+      const requestedTrimmedName = requestedName?.trim();
+      const canonicalDestroyName =
+        resolvedName && resolvedName.length > 0
+          ? resolvedName
+          : requestedTrimmedName && requestedTrimmedName.length > 0
+            ? requestedTrimmedName
+            : undefined;
+      if (canonicalDestroyName) params.name = canonicalDestroyName;
+      if (typeof requestedVmId === "number") params.vmId = requestedVmId;
+      if (resolvedDestroyVm?.node) params.node = resolvedDestroyVm.node;
+      else if (requestedNode && requestedNode.trim().length > 0) params.node = requestedNode.trim();
+      if (/\bdry\s*run\b/i.test(userInput) || /\bdryrun\b/i.test(userInput) || /\bpreview\b/i.test(userInput) || /\bplan\b/i.test(userInput)) {
+        params.dryRun = true;
+      }
+
+      const result = await executeToolCall(
+        {
+          toolName: "action",
+          parameters: {
+            action: "compute.destroy_vm",
+            params,
+          },
+        },
+        tools,
+        { userId: session.userId, aclGroup: session.aclGroup }
+      );
+
+      const data = (result as any)?.data;
+      const ok = (result as any)?.success === true || data?.success === true;
+      const message = data?.message || (result as any)?.message || (result as any)?.error || "Action completed.";
+      const vmId = requestedVmId ?? resolvedDestroyVm?.vmid;
+      const vmName = canonicalDestroyName ?? requestedTrimmedName ?? resolvedDestroyVm?.name;
+      const vmNode = params.node ?? requestedNode ?? resolvedDestroyVm?.node;
+
+      const text = ok
+        ? `VMDestroy | ${vmNode ? `node=${vmNode} | ` : ""}${vmName ? `name=${vmName} | ` : ""}${vmId ? `vmid=${vmId} | ` : ""}message=${formatStructuredFieldValue(message)}`
+        : `Error | action=compute.destroy_vm | ${vmNode ? `node=${vmNode} | ` : ""}message=${formatStructuredFieldValue(message)}`;
+
+      let destroyVmTraceId: string | undefined;
+      try {
+        const traceStore = getReasoningTraceStore();
+        const durationMs = Date.now() - startTime;
+        destroyVmTraceId = await traceStore.recordTrace({
+          userId: session.userId,
+          aclGroup: session.aclGroup,
+          userInput,
+          finalResponse: text,
+          steps: [{
+            step: 1,
+            toolCalls: [{
+              toolName: "action",
+              parameters: { action: "compute.destroy_vm", params },
+              result: ok
+                ? {
+                    success: true,
+                    dataPreview: JSON.stringify({ vmId, vmName, vmNode, message }),
+                    dataSize: JSON.stringify({ vmId, vmName, vmNode, message }).length,
+                    resultType: "destroy_vm",
+                  }
+                : {
+                    success: false,
+                    error: String(message),
+                  },
+              durationMs,
+            }],
+            decisions: [{
+              type: "tool_choice",
+              description: "Direct action: compute.destroy_vm",
+              metadata: { intent: "destroy_vm", vmName: vmName ?? "", vmId: vmId ?? null, node: vmNode ?? null },
+            }],
+          }],
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          totalSteps: 1,
+          totalToolCalls: 1,
+          maxStepsReached: false,
+          timestamp: new Date(),
+          durationMs,
+        });
+      } catch (error: any) {
+        logger.warn("Failed to record reasoning trace for destroy_vm", { error: error.message });
+      }
+
+      emitFinalEvent(text, {
+        classification,
+        conversationState: postExecutionState,
+        conversationContext: finalContextUpdate,
+        traceId: destroyVmTraceId,
       });
       return { text };
     }
@@ -2209,6 +2520,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   }
 
   let confirmationAbort: { prompt: string; context: ConversationContext; state: ConversationState } | null = null;
+  let clarificationAbort: { prompt: string; context: ConversationContext; state: ConversationState } | null = null;
 
   for (let step = 0; step < MAX_STEPS; step++) {
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
@@ -2583,6 +2895,58 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           confirmation.actionId === pendingActionId &&
           !pendingActionExpired;
 
+        const missingToolSlots = inferMissingToolSlots(toolName, parsedArgs);
+        if (missingToolSlots.length > 0) {
+          let clarificationQuestion = "Could you clarify the missing details?";
+          try {
+            const askMissingResult = await executeToolCall(
+              {
+                toolName: "ask_missing",
+                parameters: {
+                  missing: missingToolSlots,
+                  intent: "ACTION",
+                  context: `Tool call: ${toolName} ${JSON.stringify(parsedArgs)}`,
+                },
+              },
+              tools,
+              { userId: session.userId, aclGroup: session.aclGroup }
+            );
+            const question = (askMissingResult as any)?.data?.question;
+            if (typeof question === "string" && question.trim().length > 0) {
+              clarificationQuestion = question.trim();
+            }
+          } catch (error: any) {
+            logger.warn("ask_missing failed during tool pre-validation", { error: error.message, toolName });
+          }
+
+          const shouldResetPendingContext =
+            usedPendingAction ||
+            (confirmation.confirmed && !!pendingActionId && confirmation.actionId === pendingActionId);
+          clarificationAbort = {
+            prompt: clarificationQuestion,
+            state: "NEED_CLARIFICATION",
+            context: shouldResetPendingContext
+              ? {
+                  pendingAction: "",
+                  pendingActionId: "",
+                  pendingActionDigest: "",
+                  pendingActionCreatedAt: 0,
+                  pendingActionSummary: "",
+                  pendingActionType: "",
+                  pendingActionPreview: "",
+                  pendingActionExecuteInput: "",
+                  pendingActionExpiresAt: 0,
+                }
+              : {},
+          };
+          reasoningStep.decisions.push({
+            type: "validation_failed",
+            description: "Tool execution blocked until required action details are provided",
+            metadata: { toolName, missing: missingToolSlots },
+          });
+          break;
+        }
+
         if (requiresApproval && !explicitConfirmationOk) {
           const summary = summarizeToolCall(toolName, parsedArgs);
           const existingId = pendingActionId;
@@ -2594,11 +2958,11 @@ IMPORTANT: When calling proxmox_write, you MUST use:
                 expiresAt: pendingActionExpiresAt ?? (Date.now() + 15 * 60 * 1000),
                 type: options.conversationContext?.pendingActionType ?? `tool:${toolName}`,
                 preview: pendingActionPreview ?? pendingActionSummary ?? summary,
-                executeInput: pendingActionExecuteInput ?? pendingAction ?? originalUserInput,
+                executeInput: pendingActionExecuteInput ?? pendingAction ?? userInput,
                 summary: pendingActionSummary ?? pendingActionPreview ?? summary,
               }
             : buildPendingActionRecord(
-                originalUserInput,
+                userInput,
                 summary,
                 `tool:${toolName}`
               );
@@ -2787,6 +3151,23 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             }
           }
         } else {
+          if (
+            toolName === "proxmox_write" &&
+            parsedArgs.action === "destroy_vm" &&
+            parsedArgs.dryRun !== true &&
+            (result.data as any)?.status === "destroyed"
+          ) {
+            const destroyedVmName = (result.data as any)?.vmName;
+            if (typeof destroyedVmName === "string" && destroyedVmName.trim().length > 0) {
+              await cleanupAfterProxmoxDestroy(destroyedVmName);
+            } else {
+              logger.warn("Skipping Terraform cleanup for proxmox_write destroy_vm due to missing vmName", {
+                node: parsedArgs.node,
+                vmid: parsedArgs.vmid,
+              });
+            }
+          }
+
           logger.debug(`Tool execution succeeded: ${toolName}`, {
             dataKeys: result.data && typeof result.data === 'object' ? Object.keys(result.data) : [],
           });
@@ -2899,6 +3280,21 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
       }
 
+      if (clarificationAbort) {
+        const mergedContext: ConversationContext = {
+          ...contextUpdate,
+          ...clarificationAbort.context,
+        };
+        emitFinalEvent(clarificationAbort.prompt, {
+          clarification: true,
+          needsResponse: true,
+          classification,
+          conversationState: clarificationAbort.state,
+          conversationContext: mergedContext,
+        });
+        return { text: clarificationAbort.prompt };
+      }
+
       if (confirmationAbort) {
         const mergedContext: ConversationContext = {
           ...contextUpdate,
@@ -2929,6 +3325,15 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
     let finalText = coerceTextContent(message?.content).trim();
     if (finalText) {
+      const shouldPreserveClarificationQuestion =
+        classification.intent === "ACTION" &&
+        reasoningStep.toolCalls.length === 0 &&
+        /\?\s*$/.test(finalText);
+      const shouldPreserveConfirmationPrompt =
+        /^Review pending change:\s*/i.test(finalText) &&
+        /Reply with CONFIRM\s+[a-z0-9_-]+\s+to apply,\s+or\s+CANCEL\.?/i.test(finalText);
+      const shouldBypassFormatting = shouldPreserveClarificationQuestion || shouldPreserveConfirmationPrompt;
+
       // Validate "all nodes" queries - prevent partial answers
       if (isAllNodesQuery) {
         logger.warn(`[ALL NODES VALIDATION] discovered=${discoveredNodeCount}, queried=${queriedNodeCount}, hasText=${!!finalText}`);
@@ -2949,33 +3354,35 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
       }
       
-      // Format response for bot-like style before returning
-      try {
-        // Extract tool calls from reasoning steps for context
-        const allToolCalls = reasoningSteps.flatMap(step => 
-          step.toolCalls.map(tc => ({
-            toolName: tc.toolName,
-            parameters: tc.parameters,
-          }))
-        );
-        
-        const intentType = detectResponseIntent(userInput, allToolCalls);
-        let enrichedText = finalText;
-        if (responseMode === "ASSISTIVE" || responseMode === "EXPLAINER") {
-          const movesContext = await buildBotMoveContext(finalText, classification.intent);
-          if (movesContext) {
-            enrichedText = `${movesContext}\n\n${finalText}`;
+      if (!shouldBypassFormatting) {
+        // Format response for bot-like style before returning
+        try {
+          // Extract tool calls from reasoning steps for context
+          const allToolCalls = reasoningSteps.flatMap(step => 
+            step.toolCalls.map(tc => ({
+              toolName: tc.toolName,
+              parameters: tc.parameters,
+            }))
+          );
+          
+          const intentType = detectResponseIntent(userInput, allToolCalls);
+          let enrichedText = finalText;
+          if (responseMode === "ASSISTIVE" || responseMode === "EXPLAINER") {
+            const movesContext = await buildBotMoveContext(finalText, classification.intent);
+            if (movesContext) {
+              enrichedText = `${movesContext}\n\n${finalText}`;
+            }
           }
+          finalText = await formatResponseForBot(enrichedText, {
+            userQuery: userInput,
+            intentType,
+            toolCalls: allToolCalls,
+            mode: responseMode,
+          });
+        } catch (error: any) {
+          logger.warn("Failed to format final response", { error: error.message });
+          // Continue with unformatted response
         }
-        finalText = await formatResponseForBot(enrichedText, {
-          userQuery: userInput,
-          intentType,
-          toolCalls: allToolCalls,
-          mode: responseMode,
-        });
-      } catch (error: any) {
-        logger.warn("Failed to format final response", { error: error.message });
-        // Continue with unformatted response
       }
       
       context.addAssistantMessage(finalText);
@@ -3008,8 +3415,14 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         totalSteps: step + 1,
         totalToolCalls,
         traceId,
-        conversationState: postExecutionState,
+        conversationState: shouldPreserveClarificationQuestion
+          ? "NEED_CLARIFICATION"
+          : shouldPreserveConfirmationPrompt
+            ? "AWAITING_CONFIRMATION"
+            : postExecutionState,
         conversationContext: finalContextUpdate,
+        clarification: shouldPreserveClarificationQuestion,
+        needsResponse: shouldPreserveClarificationQuestion || shouldPreserveConfirmationPrompt,
       });
       
       return { text: finalText };

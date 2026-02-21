@@ -43,6 +43,14 @@ test("Missing target triggers clarification", () => {
   expect(decision.nextState).toBe("NEED_CLARIFICATION");
 });
 
+test("Merged create typo still routes to clarification before confirmation", () => {
+  const classification = classifyIntent("createa vm");
+  const decision = evaluateDialogPolicy({ intent: classification, confirmation: { confirmed: false } });
+  expect(classification.intent).toBe("ACTION");
+  expect(classification.missing).toContain("target");
+  expect(decision.decision).toBe("ASK_CLARIFY");
+});
+
 test("Query defaults to ready read", () => {
   const classification = classifyIntent("list all vms");
   const decision = evaluateDialogPolicy({ intent: classification, confirmation: { confirmed: false } });

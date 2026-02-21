@@ -200,11 +200,22 @@ function semanticSimilarity(query: string, archetype: string): number {
 }
 
 /**
+ * Fix common merged-token typos that collapse an action verb + article
+ * into one token (e.g., "createa vm" -> "create a vm").
+ */
+function normalizeMergedActionArticles(input: string): string {
+  return input.replace(
+    /\b(create|make|provision|destroy|delete|remove|start|stop|restart|reboot)(a|an|the)\b/gi,
+    "$1 $2"
+  );
+}
+
+/**
  * Classify user intent using semantic similarity
  * Returns the most likely intent type with confidence score
  */
 export function classifyIntent(userInput: string): IntentClassification {
-  const normalized = userInput.trim();
+  const normalized = normalizeMergedActionArticles(userInput.trim());
   
   // Strong indicators for QUERY intent (existence queries, information requests)
   // These patterns strongly suggest QUERY, not ACTION
