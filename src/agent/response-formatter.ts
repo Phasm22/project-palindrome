@@ -10,6 +10,12 @@
 
 import OpenAI from "openai";
 import { logger } from "../utils/logger";
+import {
+  buildEntityListSection,
+  parseEntityLine,
+  parseEntityListSection,
+  type EntityListEntry,
+} from "./canonical-response-format";
 
 let openaiClient: OpenAI | null = null;
 
@@ -44,10 +50,10 @@ Guidelines:
 2. Structure data in consistent formats:
    - Firewall rules: "ACTION | dir=direction | src=source | dst=destination | proto=protocol | if=interface"
    - Definitions: "Definition | term=<term> | meaning=\"...\" | context=\"...\""
-   - VM/container lists: Structured lists with key metrics (name, status, resources)
+   - VM/container lists and status/uptime: Use canonical entity-list format: section title, then one line per entity: "- name | Key1=value1 | Key2=value2"
    - Network info: Tabular or pipe-separated formats
-   - Status queries: Direct answers with key metrics
-3. Use pipe separators (|) for structured data lists
+   - Status queries: Direct answers with key metrics; for lists of VMs/nodes use entity-list format above
+3. Use pipe separators (|) for structured data lists; for entity lists use key=value pairs (e.g. VMID=100 | Uptime=32 days)
 4. Keep only essential information
 5. If the response is already well-formatted, return it as-is
 6. Preserve any structured data formats that are already present
@@ -61,7 +67,13 @@ Example transformations:
   → "VM 101\nStatus: running\nMemory: 14.36 GB / 16 GB"
 
 - "Here are the nodes in the cluster: prox_big, yin, yang"
-  → "Cluster Nodes\n- prox_big\n- yin\n- yang"`,
+  → "Cluster Nodes\n- prox_big\n- yin\n- yang"
+
+- "Uptime on proxBig: windowsVM 32 days, opnsense 32 days, ubuntu-cloudinit-8001 0 days"
+  → "VM Uptime on proxBig\n- windowsVM | VMID=100 | Uptime=32 days\n- opnsense | VMID=101 | Uptime=32 days\n- ubuntu-cloudinit-8001 | VMID=8001 | Uptime=0 days"
+
+- "List of VMs with status: vm1 running, vm2 stopped"
+  → "VMs\n- vm1 | VMID=100 | Status=running\n- vm2 | VMID=101 | Status=stopped"`,
   ASSISTIVE: `You are a concise assistant formatter. Turn tool-heavy responses into a helpful, structured answer.
 
 Format:
@@ -120,6 +132,14 @@ function isVmInventoryQuery(userQuery: string): boolean {
   const asksForVmKind = /\b(vm|vms|container|containers|lxc|lxcs)\b/.test(query);
   const asksForList = /\b(list|show|all|running|stopped|currently|inventory)\b/.test(query);
   return asksForVmKind && asksForList;
+}
+
+/** True when query asks for status/uptime (of a node, host, or VM list). */
+function isStatusListQuery(userQuery: string): boolean {
+  const query = userQuery.toLowerCase();
+  const asksStatus = /\b(status|uptime|metrics?)\b/.test(query);
+  const hasTarget = /\b(of|for)\s+\S+/.test(query) || /\b(on)\s+\S+/.test(query);
+  return asksStatus && (hasTarget || /\b(node|host|prox|vm|container)\b/.test(query));
 }
 
 function normalizeVmInventoryPackaging(
@@ -225,6 +245,92 @@ function normalizeVmInventoryPackaging(
   }
 
   return normalizedRows.length > 1 ? normalizedRows.join("\n") : null;
+}
+
+/**
+ * Normalize response to canonical entity-list format for status/uptime/compute_list.
+ * Runs when intent is status, compute_status, or compute_list, or query is status-list-like.
+ */
+function normalizeEntityListPackaging(
+  responseText: string,
+  context: FormatContext
+): string | null {
+  const intent = context.intentType;
+  const useEntityList =
+    intent === "status" || intent === "compute_status" || intent === "compute_list" ||
+    isStatusListQuery(context.userQuery);
+  if (!useEntityList || !responseText) return null;
+
+  const lines = responseText.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+
+  // Already in canonical shape: ensure consistent and return
+  const parsed = parseEntityListSection(responseText);
+  if (parsed && parsed.entries.length >= 1) {
+    return buildEntityListSection(parsed.title, parsed.entries);
+  }
+
+  // Try to extract entities from common tool/output shapes
+  const entries: EntityListEntry[] = [];
+  let sectionTitle = "";
+
+  for (const line of lines) {
+    // Canonical-style line with = or : attributes
+    const entity = parseEntityLine(line);
+    if (entity) {
+      entries.push(entity);
+      continue;
+    }
+    // "[vmid] name: status | Memory: ..." (e.g. from list_vms CLI formatter)
+    const bracketMatch = line.match(/^\s*\[(\d+)\]\s+(.+?):\s*(.+)$/);
+    if (bracketMatch) {
+      const [, vmid, name, rest] = bracketMatch;
+      const restStr = rest ?? "";
+      const attrs: Record<string, string> = { VMID: vmid ?? "" };
+      if (restStr.includes("|")) {
+        const parts = restStr.split("|").map((p) => p.trim());
+        for (const part of parts) {
+          const colonIdx = part.indexOf(":");
+          if (colonIdx > 0) {
+            const k = part.slice(0, colonIdx).trim();
+            const v = part.slice(colonIdx + 1).trim();
+            if (k && v) attrs[k] = v;
+          }
+        }
+      } else {
+        attrs["Status"] = restStr;
+      }
+      entries.push({ label: (name ?? "").trim(), attributes: attrs });
+      continue;
+    }
+    // "- name (Type, state)" without pipe - treat as single entity
+    const parenMatch = line.match(/^-\s+(.+?)\s+\(([^,]+),\s*([^)]+)\)\s*$/);
+    if (parenMatch && !line.includes("|")) {
+      const [, name, type, state] = parenMatch;
+      entries.push({
+        label: (name ?? "").trim(),
+        attributes: { Type: (type ?? "").trim(), Status: (state ?? "").trim() },
+      });
+    }
+  }
+
+  if (entries.length === 0) return null;
+
+  // Derive title from first non-entity line or query
+  const firstNonEntity = lines.find((l) => !parseEntityLine(l) && !l.match(/^\s*\[\d+\]/));
+  if (firstNonEntity && !firstNonEntity.startsWith("- ")) {
+    sectionTitle = firstNonEntity.replace(/:$/, "").trim();
+  }
+  if (!sectionTitle) {
+    const q = context.userQuery.trim();
+    if (/\buptime\b/i.test(q)) sectionTitle = "VM Uptime";
+    else if (/\bstatus\b/i.test(q)) sectionTitle = "Status";
+    else sectionTitle = "Results";
+    const nodeMatch = context.userQuery.match(/\b(of|on|for)\s+(\S+)/i);
+    if (nodeMatch?.[2]) sectionTitle += ` on ${nodeMatch[2]}`;
+  }
+
+  return buildEntityListSection(sectionTitle, entries);
 }
 
 function cleanScopeTerm(value: string | undefined): string | undefined {
@@ -528,6 +634,11 @@ export function applyAdaptivePackaging(
     return vmInventoryPackaging;
   }
 
+  const entityListPackaging = normalizeEntityListPackaging(responseText, context);
+  if (entityListPackaging) {
+    return entityListPackaging;
+  }
+
   const normalizedQuery = context.userQuery.toLowerCase();
   const wantsFullList =
     /\bshow\b.*\b(full|complete|entire)\b.*\b(list|ports?|rules?)\b/i.test(normalizedQuery) ||
@@ -640,13 +751,20 @@ export async function formatResponseForBot(
       ? rawResponse.slice(rawResponse.indexOf("Alias definitions:"))
       : "";
 
+    const entityListIntents = ["status", "compute_status", "compute_list"];
+    const useEntityListFormat =
+      context.intentType && entityListIntents.includes(context.intentType);
+    const formatInstruction = useEntityListFormat
+      ? " Use the canonical entity-list format: a section title on the first line, then one line per item: - name | Key1=value1 | Key2=value2 (e.g. VMID=100 | Uptime=32 days)."
+      : "";
+
     const userPrompt = `Original response to format:
 ${rawResponse}
 
 ${intentContext ? `${intentContext}\n` : ""}${toolContext ? `${toolContext}\n` : ""}
 User query: "${context.userQuery}"
 
-Format this response in a structured, data-oriented style. Return only the formatted response, no explanations.${preserveAliasDefs ? " IMPORTANT: Keep the entire 'Alias definitions:' section at the end unchanged (do not truncate or summarize it)." : ""}`;
+Format this response in a structured, data-oriented style. Return only the formatted response, no explanations.${formatInstruction}${preserveAliasDefs ? " IMPORTANT: Keep the entire 'Alias definitions:' section at the end unchanged (do not truncate or summarize it)." : ""}`;
 
     const response = await client.chat.completions.create({
       model: "gpt-4o-mini", // Use fast, cheap model for formatting

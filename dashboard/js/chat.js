@@ -601,6 +601,63 @@ function formatAgentResponse(text) {
   if (text.includes('🔍') && text.includes('Did you mean')) {
     return formatClarificationMessage(text);
   }
+
+  // Canonical entity-list contract: "Section title" then "- name | key=value | key=value" lines (shared with formatter)
+  const parseCanonicalEntityList = (raw) => {
+    const lineList = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lineList.length < 2) return null;
+    let title = '';
+    const entries = [];
+    for (let i = 0; i < lineList.length; i++) {
+      const line = lineList[i];
+      if (!line.startsWith('- ') || !line.includes('|')) {
+        if (entries.length === 0) title = line.replace(/:$/, '').trim();
+        continue;
+      }
+      const rest = line.slice(2).trim();
+      const segments = rest.split('|').map((s) => s.trim()).filter(Boolean);
+      if (segments.length < 2) continue;
+      const label = segments[0];
+      const fields = [];
+      for (const seg of segments.slice(1)) {
+        const eqIdx = seg.indexOf('=');
+        const colonIdx = seg.indexOf(':');
+        if (eqIdx > 0) {
+          const key = seg.slice(0, eqIdx).trim();
+          let value = seg.slice(eqIdx + 1).trim().replace(/^"(.*)"$/, '$1').replace(/\\"/g, '"');
+          if (key) fields.push({ key, value });
+        } else if (colonIdx > 0) {
+          const key = seg.slice(0, colonIdx).trim();
+          const value = seg.slice(colonIdx + 1).trim();
+          if (key) fields.push({ key, value });
+        }
+      }
+      if (fields.length) entries.push({ label, fields });
+    }
+    return entries.length >= 1 && title ? { title, entries } : null;
+  };
+  const canonicalSection = parseCanonicalEntityList(text);
+  if (canonicalSection) {
+    const sectionHtml = `
+      <h3 style="margin: 16px 0 8px 0; color: #f97316; font-size: 1.1em; font-weight: 600;">${escapeHtml(canonicalSection.title)}</h3>
+      ${canonicalSection.entries.map((e) => `
+        <div class="kv-card" style="margin-bottom: 8px;">
+          <div class="kv-card-header">
+            <span class="kv-pill">${escapeHtml(e.label)}</span>
+          </div>
+          <div class="kv-grid">
+            ${e.fields.map((f) => `
+              <div class="kv-row">
+                <div class="kv-key">${escapeHtml(f.key)}</div>
+                <div class="kv-value">${escapeHtml(f.value)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join('')}
+    `;
+    return sectionHtml;
+  }
   
   const lines = text.split('\n');
   let html = '';

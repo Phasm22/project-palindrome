@@ -39,6 +39,28 @@ export function formatProxmoxOutput(
 }
 
 /**
+ * Format uptime (seconds or ISO8601) as short human string (e.g. "32 days", "0 days").
+ */
+function formatUptimeShort(
+  uptimeSeconds: number | undefined,
+  uptimeIso8601: string | undefined
+): string {
+  if (uptimeSeconds !== undefined && Number.isFinite(uptimeSeconds)) {
+    const days = Math.floor(uptimeSeconds / 86400);
+    return `${days} day${days !== 1 ? "s" : ""}`;
+  }
+  if (uptimeIso8601) {
+    const parsed = Date.parse(uptimeIso8601);
+    if (!isNaN(parsed)) {
+      const sec = Math.floor((Date.now() - parsed) / 1000);
+      const days = Math.floor(sec / 86400);
+      return `${days} day${days !== 1 ? "s" : ""}`;
+    }
+  }
+  return "";
+}
+
+/**
  * Format list output (nodes, VMs, etc.)
  */
 function formatListOutput(data: any, action: string): string {
@@ -71,7 +93,9 @@ function formatListOutput(data: any, action: string): string {
       const maxMem = vm.maxmem_normalized
         ? `${vm.maxmem_normalized.value} ${vm.maxmem_normalized.unit}`
         : "N/A";
-      lines.push(`  [${vm.vmid}] ${name}: ${status} | Memory: ${mem}/${maxMem}`);
+      const uptimeStr = formatUptimeShort(vm.uptime, vm.uptime_iso8601);
+      const uptimePart = uptimeStr ? ` | Uptime: ${uptimeStr}` : "";
+      lines.push(`  [${vm.vmid}] ${name}: ${status} | Memory: ${mem}/${maxMem}${uptimePart}`);
     }
     lines.push(`\nTotal: ${data.count || 0} VMs`);
   } else if (data.disks && Array.isArray(data.disks)) {
