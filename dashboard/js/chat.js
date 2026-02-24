@@ -2,6 +2,78 @@ import { API_URL, escapeHtml } from './utils.js';
 import { createButton } from './components.js';
 import { showConfirm } from './modal.js';
 
+/**
+ * Copy trace ID to clipboard. Uses data-trace-id on the button to avoid
+ * embedding the ID in onclick (which can break with quotes or long IDs).
+ * Handles clipboard API errors (e.g. non-secure context) with visual feedback.
+ */
+function copyTraceIdToClipboard(buttonEl) {
+  const id = buttonEl?.getAttribute?.('data-trace-id');
+  if (!id) return;
+  const labelHtml = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg> Trace: ${escapeHtml(id.substring(0, 8))}...`;
+  navigator.clipboard.writeText(id).then(() => {
+    const prev = buttonEl.innerHTML;
+    buttonEl.innerHTML = 'Copied!';
+    setTimeout(() => {
+      buttonEl.innerHTML = prev;
+    }, 1200);
+  }).catch(() => {
+    const prev = buttonEl.innerHTML;
+    buttonEl.title = 'Copy failed – ID: ' + id;
+    buttonEl.innerHTML = 'Copy failed';
+    setTimeout(() => {
+      buttonEl.innerHTML = prev;
+      buttonEl.title = 'Copy trace ID';
+    }, 2000);
+  });
+}
+// Expose for inline onclick (trace buttons use data-trace-id + this to avoid quoting issues)
+window.copyTraceIdToClipboard = copyTraceIdToClipboard;
+
+/**
+ * Copy text from a button's data-copyable attribute (e.g. SSH command in VM create message).
+ */
+function copyCopyableText(buttonEl) {
+  const text = buttonEl?.getAttribute?.('data-copyable');
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const prev = buttonEl.textContent;
+    buttonEl.textContent = 'Copied!';
+    setTimeout(() => {
+      buttonEl.textContent = prev;
+    }, 1200);
+  }).catch(() => {
+    buttonEl.textContent = 'Copy failed';
+    setTimeout(() => {
+      buttonEl.textContent = 'Copy';
+    }, 2000);
+  });
+}
+window.copyCopyableText = copyCopyableText;
+
+/**
+ * Format message value for display. If it contains "Connect with: ssh ...", render that part
+ * as a markdown-style copyable code block with a Copy button.
+ */
+function formatMessageValue(key, value) {
+  if (!value || typeof value !== 'string') return escapeHtml(value);
+  const connectMatch = value.match(/^(.+?)\s+Connect with:\s*(ssh\s+\S+?)\s*\.?\s*$/);
+  if (key !== 'message' || !connectMatch) {
+    return escapeHtml(value);
+  }
+  const before = connectMatch[1].trim();
+  const command = connectMatch[2].trim().replace(/\.+$/, '');
+  return escapeHtml(before) + `
+    <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(51,65,85,0.5);">
+      <div style="color:#94a3b8;font-size:0.85em;margin-bottom:6px;">Connect with:</div>
+      <pre style="margin:0;padding:10px 12px;background:#0f172a;border:1px solid #334155;border-radius:8px;font-size:0.9em;color:#e2e8f0;font-family:ui-monospace,monospace;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+        <code style="flex:1;min-width:0;word-break:break-all;">${escapeHtml(command)}</code>
+        <button type="button" data-copyable="${escapeHtml(command)}" onclick="window.copyCopyableText(this)" style="flex-shrink:0;background:rgba(249,115,22,0.2);border:1px solid rgba(249,115,22,0.5);color:#f97316;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.8em;font-weight:600;">Copy</button>
+      </pre>
+    </div>
+  `;
+}
+
 // Chat state
 let currentEventSource = null;
 let currentSessionId = null;
@@ -336,15 +408,208 @@ async function saveLastActiveConversation(conversationId) {
     await fetch(`${API_URL}/api/user/preferences`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         userId,
-        lastActiveConversationId: conversationId 
+        lastActiveConversationId: conversationId
       }),
     });
   } catch (error) {
     console.error('Failed to save last active conversation:', error);
     // Non-critical, don't throw
   }
+}
+
+const USER_ID = 'dashboard-user';
+
+function isValidPublicKeyInput(value) {
+  if (!value || typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith('ssh-ed25519 ') ||
+    trimmed.startsWith('ssh-rsa ') ||
+    trimmed.startsWith('ecdsa-sha2-')
+  );
+}
+
+function renderProfileItem(profile) {
+  const name = escapeHtml(profile.displayName || profile.sshUsername || profile.userId);
+  const username = escapeHtml(profile.sshUsername || '');
+  const keyBadge = profile.hasPublicKey
+    ? '<span style="color:#34d399;font-size:0.7rem;">Key set</span>'
+    : '<span style="color:#475569;font-size:0.7rem;">No key</span>';
+  const userId = escapeHtml(profile.userId);
+  return `
+    <div class="flex items-center gap-2 px-2.5 py-2 rounded-lg bg-slate-900/50 border border-slate-800/70" style="min-width:0;">
+      <div class="flex flex-col min-w-0 flex-1" style="gap:1px;">
+        <span style="color:#e2e8f0;font-size:0.78rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="color:#64748b;font-size:0.7rem;">${username}</span>
+          <span style="color:#334155;font-size:0.7rem;">•</span>
+          ${keyBadge}
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0;">
+        <button type="button" onclick="window._editProfile('${userId}')"
+          style="color:#475569;padding:4px;border-radius:4px;background:none;border:none;cursor:pointer;display:flex;align-items:center;"
+          title="Edit profile"
+          onmouseover="this.style.color='#fb923c'" onmouseout="this.style.color='#475569'">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+        </button>
+        <button type="button" onclick="window._deleteProfile('${userId}')"
+          style="color:#475569;padding:4px;border-radius:4px;background:none;border:none;cursor:pointer;display:flex;align-items:center;"
+          title="Delete profile"
+          onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#475569'">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM5 4h14v2H5zM9 3h6v1H9z"/>
+          </svg>
+        </button>
+      </div>
+    </div>`;
+}
+
+async function loadAllProfiles() {
+  const listEl = document.getElementById('profile-list');
+  if (!listEl) return;
+  try {
+    const response = await fetch(`${API_URL}/api/user/profiles`);
+    if (!response.ok) {
+      listEl.innerHTML = '<div style="color:#f87171;font-size:0.72rem;padding:4px 4px;">Failed to load profiles</div>';
+      return;
+    }
+    const result = await response.json();
+    const profiles = result.data || [];
+    if (profiles.length === 0) {
+      listEl.innerHTML = '<div style="color:#475569;font-size:0.72rem;padding:4px 4px;">No profiles — add one above</div>';
+      return;
+    }
+    listEl.innerHTML = profiles.map(renderProfileItem).join('');
+  } catch (error) {
+    console.error('Failed to load profiles', error);
+    listEl.innerHTML = '<div style="color:#f87171;font-size:0.72rem;padding:4px 4px;">Could not reach API</div>';
+  }
+}
+
+function showProfileForm({ userId = '', displayName = '', sshUsername = 'ops', hasKey = false } = {}) {
+  const formEl = document.getElementById('profile-form');
+  if (!formEl) return;
+  document.getElementById('profile-form-userid').value = userId;
+  document.getElementById('profile-form-name').value = displayName;
+  document.getElementById('profile-form-username').value = sshUsername;
+  const keyEl = document.getElementById('profile-form-key');
+  keyEl.value = '';
+  keyEl.placeholder = hasKey ? 'Leave blank to keep existing key' : 'SSH public key (e.g. ssh-ed25519 AAAA…)';
+  const statusEl = document.getElementById('profile-form-status');
+  if (statusEl) statusEl.textContent = '';
+  formEl.classList.remove('hidden');
+  document.getElementById('profile-form-name').focus();
+}
+
+async function _editProfile(userId) {
+  try {
+    const response = await fetch(`${API_URL}/api/user/profile?userId=${encodeURIComponent(userId)}`);
+    if (!response.ok) return;
+    const result = await response.json();
+    const p = result.data || {};
+    showProfileForm({
+      userId: p.userId,
+      displayName: p.displayName || '',
+      sshUsername: p.sshUsername || 'ops',
+      hasKey: !!p.publicKey,
+    });
+  } catch (error) {
+    console.error('Failed to load profile for editing', error);
+  }
+}
+
+async function _deleteProfile(userId) {
+  if (!confirm('Delete this profile?')) return;
+  try {
+    const response = await fetch(`${API_URL}/api/user/profile?userId=${encodeURIComponent(userId)}`, {
+      method: 'DELETE',
+    });
+    if (response.ok) await loadAllProfiles();
+  } catch (error) {
+    console.error('Failed to delete profile', error);
+  }
+}
+
+async function saveProfileForm() {
+  const useridEl = document.getElementById('profile-form-userid');
+  const nameEl = document.getElementById('profile-form-name');
+  const usernameEl = document.getElementById('profile-form-username');
+  const keyEl = document.getElementById('profile-form-key');
+  const statusEl = document.getElementById('profile-form-status');
+
+  const isEdit = !!(useridEl && useridEl.value);
+  const displayName = nameEl ? nameEl.value.trim() : '';
+  const sshUsername = usernameEl ? (usernameEl.value.trim() || 'ops') : 'ops';
+  const publicKey = keyEl ? keyEl.value.trim() : '';
+
+  if (!displayName && !sshUsername) {
+    if (statusEl) { statusEl.textContent = 'Enter a profile name'; statusEl.style.color = '#f87171'; }
+    return;
+  }
+  if (publicKey && !isValidPublicKeyInput(publicKey)) {
+    if (statusEl) { statusEl.textContent = 'Invalid key format'; statusEl.style.color = '#f87171'; }
+    return;
+  }
+
+  const userId = isEdit
+    ? useridEl.value
+    : (displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'profile-' + Date.now());
+
+  if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = '#94a3b8'; }
+
+  try {
+    const body = { userId, displayName: displayName || null, sshUsername };
+    if (publicKey) body.publicKey = publicKey;
+    else if (!isEdit) body.publicKey = null;
+
+    const response = await fetch(`${API_URL}/api/user/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      if (statusEl) { statusEl.textContent = result.error || 'Save failed'; statusEl.style.color = '#f87171'; }
+      return;
+    }
+    document.getElementById('profile-form')?.classList.add('hidden');
+    await loadAllProfiles();
+  } catch (error) {
+    if (statusEl) { statusEl.textContent = 'Save failed'; statusEl.style.color = '#f87171'; }
+  }
+}
+
+// Kept for backward-compat (called from main.js on chat tab load)
+export async function loadUserProfile() {
+  await loadAllProfiles();
+}
+
+export function initProfileSection() {
+  const addBtn = document.getElementById('profile-add-btn');
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = '1';
+    addBtn.addEventListener('click', () => showProfileForm());
+  }
+  const cancelBtn = document.getElementById('profile-form-cancel');
+  if (cancelBtn && !cancelBtn.dataset.bound) {
+    cancelBtn.dataset.bound = '1';
+    cancelBtn.addEventListener('click', () => {
+      document.getElementById('profile-form')?.classList.add('hidden');
+    });
+  }
+  const saveBtn = document.getElementById('profile-form-save');
+  if (saveBtn && !saveBtn.dataset.bound) {
+    saveBtn.dataset.bound = '1';
+    saveBtn.addEventListener('click', saveProfileForm);
+  }
+  window._editProfile = _editProfile;
+  window._deleteProfile = _deleteProfile;
 }
 
 // Restore conversation - prioritize URL, then backend preference
@@ -763,10 +1028,11 @@ function formatAgentResponse(text) {
     const detailRows = fields
       .filter((field) => !["status", "state", "operation", "action"].includes(field.key.toLowerCase()))
       .map((field) => {
+        const valueHtml = formatMessageValue(field.key, field.value);
         return `
           <div style="display:flex;gap:8px;align-items:flex-start;min-width:0;">
             <span style="color:#94a3b8;font-size:0.78em;font-weight:600;min-width:70px;">${escapeHtml(field.key)}</span>
-            <span style="color:#e2e8f0;font-size:0.88em;word-break:break-word;">${escapeHtml(field.value)}</span>
+            <span style="color:#e2e8f0;font-size:0.88em;word-break:break-word;">${valueHtml}</span>
           </div>
         `;
       })
@@ -886,7 +1152,7 @@ function formatAgentResponse(text) {
               ${kv.fields.map(f => `
                 <div class="kv-row">
                   <div class="kv-key">${escapeHtml(f.key)}</div>
-                  <div class="kv-value">${escapeHtml(f.value)}</div>
+                  <div class="kv-value" style="word-break:break-word;">${formatMessageValue(f.key, f.value)}</div>
                 </div>
               `).join('')}
             </div>
@@ -1325,7 +1591,8 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
   const traceLink = (role === 'assistant' && reasoningTraceId) ? `
     <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; display: flex; align-items: center; gap: 8px; font-size: 0.75em;">
       <button
-        onclick="navigator.clipboard.writeText('${reasoningTraceId}'); this.style.background='#f97316'; setTimeout(() => this.style.background='#1e293b', 200);"
+        data-trace-id="${escapeHtml(reasoningTraceId)}"
+        onclick="window.copyTraceIdToClipboard(this)"
         style="
           background: #1e293b;
           border: 1px solid #334155;
@@ -1343,7 +1610,7 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
         <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
           <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
         </svg>
-        Trace: ${reasoningTraceId.substring(0, 8)}...
+        Trace: ${escapeHtml(reasoningTraceId.substring(0, 8))}...
       </button>
       <button
         onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
@@ -1631,7 +1898,8 @@ function handleAgentEvent(event, toolExecutions) {
       const traceLinkHtml = traceId ? `
         <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(51, 65, 85, 0.5); display: flex; align-items: center; gap: 8px; font-size: 0.8em;">
           <button
-            onclick="navigator.clipboard.writeText('${traceId}'); this.style.background='#f97316'; setTimeout(() => this.style.background='rgba(30, 41, 59, 0.6)', 200);"
+            data-trace-id="${escapeHtml(traceId)}"
+            onclick="window.copyTraceIdToClipboard(this)"
             style="
               background: rgba(30, 41, 59, 0.6);
               border: 1px solid rgba(51, 65, 85, 0.5);
@@ -1652,7 +1920,7 @@ function handleAgentEvent(event, toolExecutions) {
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
               <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
             </svg>
-            Trace: ${traceId.substring(0, 8)}...
+            Trace: ${escapeHtml(traceId.substring(0, 8))}...
           </button>
           <button
             onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"

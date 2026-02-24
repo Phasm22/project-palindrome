@@ -236,6 +236,24 @@ services:
     # Can access Prometheus at localhost:9090 directly
     # Persistence: grafana_data volume stores dashboards, datasources, and provisioning logs
 
+  # One-off: clear default PCE vector collection (e.g. after isolation change to remove test data).
+  # Run: docker compose run --rm clear-vector-store
+  # Then re-run ingestion (pce:ingest-all or pce:ingest-proxmox). Does not affect other services.
+  clear-vector-store:
+    image: curlimages/curl:latest
+    container_name: clear-vector-store
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    environment:
+      QDRANT_HOST: qdrant
+      COLLECTION_NAME: ${PCE_COLLECTION_NAME:-pce_documents}
+    command: >
+      sh -c 'echo "Deleting collection $${COLLECTION_NAME}..." &&
+        curl -sS -X DELETE "http://$${QDRANT_HOST}:6333/collections/$${COLLECTION_NAME}" &&
+        echo " Done. Re-run ingestion (e.g. bun run pce:ingest-all) to repopulate."'
+    restart: "no"
+
 volumes:
   qdrant_storage:
   neo4j_data:

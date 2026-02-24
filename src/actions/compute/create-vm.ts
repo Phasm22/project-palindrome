@@ -845,12 +845,16 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     selectionWarnings,
   });
 
+  const sshUsername = "ops";
+  const connectLine =
+    firstIp ? ` Connect with: ssh ${sshUsername}@${firstIp}.` : "";
+
   return {
     success: true,
     vmId: vmInfo.id.toString(),
     hostname: vmInfo.hostname,
     ipAddresses,
-    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}. Bridge: ${finalVmBridge}. Datastore: ${finalDatastore}.${firstIp ? ` DNS record created: ${finalName}.prox → ${firstIp}.` : ""}${bootstrapMessage}${selectionNoteText}`,
+    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}. Bridge: ${finalVmBridge}. Datastore: ${finalDatastore}.${firstIp ? ` DNS record created: ${finalName}.prox → ${firstIp}.` : ""}${connectLine}${bootstrapMessage}${selectionNoteText}`,
     terraformOutput: outputs,
   };
 }

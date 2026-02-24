@@ -219,6 +219,35 @@ function formatRuleList(
   return lines.join("\n");
 }
 
+export async function countFirewallRulesChain(
+  direction: "in" | "out" | undefined,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    { toolName: "twin_query", parameters: { operation: "firewall_list_rules" } },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as { data?: unknown[] };
+  const all = toFirewallRules(payload?.data ?? []);
+  const rules = direction ? all.filter(r => r.direction === direction) : all;
+  const passes = rules.filter(r => r.action.toLowerCase() === "pass").length;
+  const blocks = rules.filter(r => r.action.toLowerCase() === "block").length;
+  const nats   = rules.filter(r => r.action.toLowerCase() === "nat").length;
+  const dirLabel = direction === "out" ? "outgoing" : direction === "in" ? "incoming" : "total";
+  const attrs = [
+    `Count=${rules.length}`,
+    passes ? `PASS=${passes}` : null,
+    blocks ? `BLOCK=${blocks}` : null,
+    nats   ? `NAT=${nats}`   : null,
+  ].filter(Boolean).join(" | ");
+  return `Firewall Rule Count\n- ${dirLabel} | ${attrs}`;
+}
+
 export async function listFirewallRulesChain(
   tools: BaseTool[],
   session: ToolSession

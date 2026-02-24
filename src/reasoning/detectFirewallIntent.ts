@@ -1,5 +1,6 @@
 export type FirewallIntent =
   | { type: "list_rules" }
+  | { type: "count_rules"; direction?: "in" | "out" }
   | { type: "allowed_ports_between"; from: string; to: string }
   | { type: "rules_by_chain"; chain: string }
   | { type: "rules_allowing_subnet"; subnet: string }
@@ -159,6 +160,19 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     if (ruleId) {
       return { type: "rule_impact", ruleId };
     }
+  }
+
+  // Count queries — must precede the list_rules fallback so "how many rules" doesn't dump
+  const isCountQuery =
+    /\bhow\s+many\b/.test(normalized) ||
+    /\bcount\b.*\brules?\b/.test(normalized) ||
+    /\btotal\b.*\brules?\b/.test(normalized);
+  if (isCountQuery) {
+    const direction =
+      /\b(outgoing|out|egress)\b/.test(normalized) ? "out" :
+      /\b(incoming|inbound|ingress)\b/.test(normalized) ? "in" :
+      undefined;
+    return { type: "count_rules", direction };
   }
 
   // Default: list all rules

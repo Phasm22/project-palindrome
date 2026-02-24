@@ -48,6 +48,7 @@ import {
 import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
 import {
   listFirewallRulesChain,
+  countFirewallRulesChain,
   allowedPortsBetweenChain,
   firewallRulesByChainChain,
   rulesAllowingSubnetChain,
@@ -649,6 +650,8 @@ async function executeFirewallIntent(
     switch (intent.type) {
       case "list_rules":
         return await listFirewallRulesChain(tools, session);
+      case "count_rules":
+        return await countFirewallRulesChain(intent.direction, tools, session);
       case "allowed_ports_between":
         return await allowedPortsBetweenChain(intent.from, intent.to, tools, session);
       case "rules_by_chain":
@@ -675,6 +678,8 @@ async function executeFirewallIntent(
 function buildFirewallToolCalls(intent: FirewallIntent): Array<{ toolName: string; parameters: Record<string, any> }> {
   switch (intent.type) {
     case "list_rules":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
+    case "count_rules":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
     case "allowed_ports_between":
       return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } }];
@@ -712,6 +717,8 @@ export type AgentRunOptions = {
   conversationContext?: ConversationContext;
   userPreferences?: UserPreferences;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>; // Previous messages in conversation
+  /** When set (e.g. by PCE API), used to inject profile public key into create_vm params for dashboard users */
+  getProfilePublicKey?: (userId: string) => string | null;
 };
 
 function coerceTextContent(content: any): string {
@@ -1893,6 +1900,10 @@ export async function runAgent(
       if (name && name.trim().length > 0) params.name = name.trim();
       if (/\bdry\s*run\b/i.test(userInput) || /\bdryrun\b/i.test(userInput) || /\bpreview\b/i.test(userInput) || /\bplan\b/i.test(userInput)) {
         params.dryRun = true;
+      }
+      if (options.getProfilePublicKey && session.userId) {
+        const profileKey = options.getProfilePublicKey(session.userId);
+        if (profileKey && profileKey.trim().length > 0) params.sshPublicKey = profileKey.trim();
       }
 
       const result = await executeToolCall(

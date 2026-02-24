@@ -23,6 +23,7 @@
     "pce:ingest-all": "bun run scripts/ingest-all.ts",
     "pce:debug-vector": "bun run src/pce/debug-vector.ts",
     "pce:check-indexed": "bun run src/pce/check-indexed.ts",
+    "pce:clear-vector-store": "bun run scripts/clear-default-vector-collection.ts",
     "opnsense:generate-unified-schema": "bun run src/tools/opnsense/generate-unified-schema.ts",
     "services:start": "./scripts/start-services.sh",
     "services:stop": "./scripts/stop-services.sh",

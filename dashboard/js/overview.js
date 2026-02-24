@@ -123,10 +123,11 @@ export async function loadExecutionStats() {
     const stats = await response.json();
     
     const ingestion = stats.ingestion || {};
+    const windowNote = stats.window === '7d' ? ' <span style="color: #64748b; font-weight: 400; font-size: 0.85em;">(last 7 days)</span>' : '';
     const html = `
       <div class="status-grid">
         <div class="stat-card">
-          <div class="stat-label">Total Executions</div>
+          <div class="stat-label">Total Executions${windowNote}</div>
           <div class="stat-value">${stats.total || 0}</div>
         </div>
         <div class="stat-card">
@@ -205,7 +206,7 @@ export async function loadExecutionStats() {
       ` : ''}
       ${stats.recentErrors && stats.recentErrors.length > 0 ? `
         <details class="overview-details">
-          <summary class="overview-summary text-red-400">Recent Errors</summary>
+          <summary class="overview-summary text-red-400">Recent Errors${stats.window === '7d' ? ' (last 7 days)' : ''}</summary>
           <div class="overview-details-body">
             <div class="flex justify-center">
               ${renderResponsiveTable(

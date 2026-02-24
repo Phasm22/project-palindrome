@@ -956,7 +956,10 @@ export class SSHTool extends BaseTool {
         durationMs: Date.now() - started,
       };
     } catch (err: any) {
-      const errorMessage = err.message || "SSH command execution failed";
+      let errorMessage = typeof err?.message === "string" ? err.message.trim() : "";
+      if (!errorMessage || errorMessage.length < 5) {
+        errorMessage = "SSH command execution failed";
+      }
       logger.error(`SSH error: ${errorMessage}`);
       return {
         error: errorMessage,

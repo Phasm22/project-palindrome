@@ -13,6 +13,7 @@ import type { ApiHistoryPayload, ApiQueryResponse, DependencyHealthCheck, Health
 import { ApiRateLimiter, type RateLimitConfig } from "./rate-limiter";
 import { ContextHistoryStore } from "./history-store";
 import { ChatHistoryStore } from "./chat-history-store";
+import { ProfileStore, isValidPublicKeyLine } from "./profile-store";
 import { PromptSuggestionStore } from "./prompt-suggestion-store";
 import { PromptSuggestionService } from "./prompt-suggestion-service";
 import { IngestionSummaryStore } from "./ingestion-summary-store";
@@ -53,6 +54,7 @@ export interface PceApiServerDependencies {
   };
   historyStore?: ContextHistoryStore;
   chatHistoryStore?: ChatHistoryStore;
+  profileStore?: ProfileStore;
   promptSuggestionStore?: PromptSuggestionStore;
   ingestionSummaryStore?: IngestionSummaryStore;
   metricsCollector?: MetricsCollector;
@@ -68,6 +70,7 @@ export class PceApiServer {
   private orchestrator: PceApiServerDependencies["orchestrator"];
   private historyStore: ContextHistoryStore;
   private chatHistoryStore: ChatHistoryStore;
+  private profileStore: ProfileStore;
   private promptSuggestionStore: PromptSuggestionStore;
   private ingestionSummaryStore: IngestionSummaryStore;
   private metricsCollector: MetricsCollector;
@@ -92,6 +95,7 @@ export class PceApiServer {
     this.orchestrator = deps.orchestrator;
     this.historyStore = deps.historyStore ?? new ContextHistoryStore(this.options.historyLimit);
     this.chatHistoryStore = deps.chatHistoryStore ?? new ChatHistoryStore();
+    this.profileStore = deps.profileStore ?? new ProfileStore();
     this.promptSuggestionStore = deps.promptSuggestionStore ?? new PromptSuggestionStore();
     this.ingestionSummaryStore = deps.ingestionSummaryStore ?? new IngestionSummaryStore();
     this.metricsCollector = deps.metricsCollector ?? new MetricsCollector();
@@ -360,6 +364,22 @@ export class PceApiServer {
 
     if (req.method === "PUT" && url.pathname === "/api/user/preferences") {
       return await this.handleSetUserPreferences(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/user/profile") {
+      return await this.handleGetUserProfile(req);
+    }
+
+    if (req.method === "PUT" && url.pathname === "/api/user/profile") {
+      return await this.handleSetUserProfile(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/user/profiles") {
+      return await this.handleListProfiles(req);
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/user/profile") {
+      return await this.handleDeleteProfile(req);
     }
 
     return this.jsonResponse(404, { error: "Not Found" });
@@ -1295,14 +1315,15 @@ export class PceApiServer {
   private async handleExecutionStats(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
-      const since = url.searchParams.get("since");
+      const sinceParam = url.searchParams.get("since");
+      const defaultSinceMs = 7 * 24 * 60 * 60 * 1000;
+      const since = sinceParam ? new Date(sinceParam) : new Date(Date.now() - defaultSinceMs);
+      const usedDefaultWindow = !sinceParam;
 
       const { ToolExecutionStore } = await import("./tool-execution-store");
       const store = new ToolExecutionStore();
-      
-      const stats = await store.getExecutionStats(
-        since ? new Date(since) : undefined
-      );
+
+      const stats = await store.getExecutionStats(since);
 
       // Add ingestion scheduler metrics
       const ingestionMetrics = this.getIngestionSchedulerMetrics();
@@ -1319,6 +1340,7 @@ export class PceApiServer {
 
       return this.jsonResponse(200, {
         ...stats,
+        window: usedDefaultWindow ? "7d" : undefined,
         ingestion: {
           ...ingestionMetrics,
           runCount: ingestionRunCount,
@@ -1782,6 +1804,7 @@ export class PceApiServer {
         conversationContext,
         userPreferences,
         conversationHistory, // Pass history to agent
+        getProfilePublicKey: (uid: string) => this.profileStore.get(uid)?.publicKey ?? null,
       }).catch((error: any) => {
         pceLogger.error("Agent execution error", { error: error.message, sessionId });
         unsubscribe();
@@ -2183,6 +2206,129 @@ export class PceApiServer {
       });
     } catch (error: any) {
       pceLogger.error("Failed to set user preferences", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle GET /api/user/profile - Get user profile (display name, SSH username, public key)
+   */
+  private async handleGetUserProfile(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId") || "dashboard-user";
+
+      const profile = this.profileStore.get(userId);
+      if (!profile) {
+        return this.jsonResponse(200, {
+          success: true,
+          data: {
+            userId,
+            displayName: null,
+            sshUsername: "ops",
+            publicKey: null,
+            updatedAt: null,
+          },
+        });
+      }
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: {
+          userId: profile.userId,
+          displayName: profile.displayName,
+          sshUsername: profile.sshUsername,
+          publicKey: profile.publicKey,
+          updatedAt: profile.updatedAt,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to get user profile", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle PUT /api/user/profile - Set user profile (display name, SSH username, public key)
+   */
+  private async handleSetUserProfile(req: Request): Promise<Response> {
+    try {
+      const body = (await req.json()) as {
+        userId?: string;
+        displayName?: string | null;
+        sshUsername?: string;
+        publicKey?: string | null;
+      };
+      const userId = body.userId || "dashboard-user";
+
+      if (body.publicKey !== undefined && body.publicKey !== null && body.publicKey !== "") {
+        const keyTrimmed = String(body.publicKey).trim();
+        if (!isValidPublicKeyLine(keyTrimmed)) {
+          return this.jsonResponse(400, {
+            error: "Invalid public key format. Expected a line starting with ssh-ed25519, ssh-rsa, or ecdsa-sha2-.",
+          });
+        }
+      }
+
+      const profile = this.profileStore.upsert({
+        userId,
+        displayName: body.displayName,
+        sshUsername: body.sshUsername,
+        publicKey: body.publicKey === "" ? null : body.publicKey ?? undefined,
+      });
+
+      return this.jsonResponse(200, {
+        success: true,
+        data: {
+          userId: profile.userId,
+          displayName: profile.displayName,
+          sshUsername: profile.sshUsername,
+          publicKey: profile.publicKey,
+          updatedAt: profile.updatedAt,
+        },
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to set user profile", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle GET /api/user/profiles - List all user profiles
+   */
+  private async handleListProfiles(req: Request): Promise<Response> {
+    try {
+      const profiles = this.profileStore.list();
+      return this.jsonResponse(200, {
+        success: true,
+        data: profiles.map(p => ({
+          userId: p.userId,
+          displayName: p.displayName,
+          sshUsername: p.sshUsername,
+          hasPublicKey: !!p.publicKey,
+          updatedAt: p.updatedAt,
+        })),
+      });
+    } catch (error: any) {
+      pceLogger.error("Failed to list profiles", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  /**
+   * Handle DELETE /api/user/profile - Delete a user profile
+   */
+  private async handleDeleteProfile(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId");
+      if (!userId) {
+        return this.jsonResponse(400, { error: "userId is required" });
+      }
+      this.profileStore.delete(userId);
+      return this.jsonResponse(200, { success: true });
+    } catch (error: any) {
+      pceLogger.error("Failed to delete profile", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
     }
   }

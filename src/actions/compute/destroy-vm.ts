@@ -4,6 +4,7 @@ import { TwinQueryService } from "../../twin/api/twin-query-service";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { checkTerraformEnv } from "../helpers/env-validator";
 import { readFile, writeFile } from "fs/promises";
+import type { DnsRecord } from "../../tools/pihole/client";
 
 /**
  * Destroy VM Action Schema
@@ -39,6 +40,63 @@ export function normalizeDestroyVmIdentifiers(rawName: string): {
     ? trimmed
     : `${infraName}.prox`;
   return { infraName, dnsDomain };
+}
+
+/** Client interface for DNS cleanup (allows mocking in tests). */
+export interface PiholeDnsClient {
+  listDnsRecords(): Promise<DnsRecord[]>;
+  deleteDnsRecord(domain: string, ip?: string): Promise<void>;
+}
+
+/**
+ * Delete the Pi-hole DNS record for a destroyed VM. Uses case-insensitive domain
+ * matching and verifies deletion by listing again. Exported for testing.
+ */
+export async function deleteDnsRecordForDestroyedVm(
+  piholeClient: PiholeDnsClient,
+  dnsDomain: string,
+  vmName: string
+): Promise<{ dnsRecordDeleted: boolean }> {
+  const existingRecords = await piholeClient.listDnsRecords();
+  const normalizedDomain = dnsDomain.toLowerCase().replace(/\.$/, "");
+  const dnsRecord = existingRecords.find(
+    (r) => r.domain.toLowerCase().replace(/\.$/, "") === normalizedDomain
+  );
+
+  if (!dnsRecord) {
+    logger.warn("DNS record not found, skipping deletion", {
+      domain: dnsDomain,
+      vmName,
+      availableRecords: existingRecords.map((r) => ({ domain: r.domain, ip: r.ip })).slice(0, 10),
+      note: "DNS record may have already been deleted or never existed. Check available records above.",
+    });
+    return { dnsRecordDeleted: false };
+  }
+
+  await piholeClient.deleteDnsRecord(dnsRecord.domain, dnsRecord.ip);
+
+  const recordsAfterDelete = await piholeClient.listDnsRecords();
+  const stillExists = recordsAfterDelete.find(
+    (r) =>
+      r.domain.toLowerCase().replace(/\.$/, "") ===
+      dnsRecord.domain.toLowerCase().replace(/\.$/, "")
+  );
+
+  if (stillExists) {
+    logger.warn("DNS record deletion may have failed - record still exists", {
+      domain: dnsRecord.domain,
+      vmName,
+      ip: dnsRecord.ip,
+    });
+  } else {
+    logger.info("DNS record deleted automatically", {
+      domain: dnsRecord.domain,
+      vmName,
+      ip: dnsRecord.ip,
+    });
+  }
+
+  return { dnsRecordDeleted: true };
 }
 
 /**
@@ -396,54 +454,14 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
     if (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY) {
       try {
         const { getPiholeClient } = await import("../../tools/pihole/client");
-        const piholeClient = getPiholeClient(); // Use singleton to share session
-
-        // Check if DNS record exists before attempting deletion
-        // Use case-insensitive matching and handle variations
-        const existingRecords = await piholeClient.listDnsRecords();
-        const normalizedDomain = dnsDomain.toLowerCase().replace(/\.$/, "");
-        const dnsRecord = existingRecords.find(r => 
-          r.domain.toLowerCase().replace(/\.$/, "") === normalizedDomain
-        );
-        
-        if (dnsRecord) {
-          // Delete using the exact domain format from Pi-hole
-          await piholeClient.deleteDnsRecord(dnsRecord.domain, dnsRecord.ip);
-          dnsRecordDeleted = true;
-          
-          // Verify deletion by listing records again
-          const recordsAfterDelete = await piholeClient.listDnsRecords();
-          const stillExists = recordsAfterDelete.find(r => 
-            r.domain.toLowerCase().replace(/\.$/, "") === dnsRecord.domain.toLowerCase().replace(/\.$/, "")
-          );
-          
-          if (stillExists) {
-            logger.warn("DNS record deletion may have failed - record still exists", {
-              domain: dnsRecord.domain,
-              vmName: finalName,
-              ip: dnsRecord.ip,
-            });
-          } else {
-            logger.info("DNS record deleted automatically", {
-              domain: dnsRecord.domain,
-              vmName: finalName,
-              ip: dnsRecord.ip,
-            });
-          }
-        } else {
-          logger.warn("DNS record not found, skipping deletion", {
-            domain: dnsDomain,
-            vmName: terraformVmName,
-            availableRecords: existingRecords.map(r => ({ domain: r.domain, ip: r.ip })).slice(0, 10), // Log first 10 for debugging
-            note: "DNS record may have already been deleted or never existed. Check available records above.",
-          });
-        }
+        const piholeClient = getPiholeClient();
+        const result = await deleteDnsRecordForDestroyedVm(piholeClient, dnsDomain, finalName ?? terraformVmName);
+        dnsRecordDeleted = result.dnsRecordDeleted;
       } catch (error: any) {
-      logger.warn("Failed to delete DNS record automatically (non-critical)", {
+        logger.warn("Failed to delete DNS record automatically (non-critical)", {
           vmName: terraformVmName,
           error: error.message,
         });
-        // Don't fail VM destruction if DNS deletion fails
       }
     }
 

@@ -1,4 +1,4 @@
-import { loadConversations, sendChatMessage, selectConversation, createNewConversation, deleteConversation, deleteChatMessage, restoreConversation } from './chat.js';
+import { loadConversations, loadUserProfile, initProfileSection, sendChatMessage, selectConversation, createNewConversation, deleteConversation, deleteChatMessage, restoreConversation } from './chat.js';
 import { loadToolExecutions } from './executions.js';
 import { loadReasoningTraces, copyTraceData } from './reasoning.js';
 import { loadGraph } from './graph.js';
@@ -206,8 +206,9 @@ function updateTabUI(tabName, clickedElement = null) {
   }
   if (tabName === 'query') setupQueryInterface();
   if (tabName === 'chat') {
-    // Load conversations when switching to chat tab
+    // Load conversations and profile when switching to chat tab
     loadConversations();
+    loadUserProfile();
     // Focus chat input when switching to chat tab
     setTimeout(() => {
       const chatInput = document.getElementById('chat-input');
@@ -301,7 +302,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Initialize custom dropdown for mobile tabs - use current route
   const currentTab = getActiveTabFromURL();
   createCustomDropdown('mobile-tab-dropdown-container', currentTab);
-  
+
+  // Bind profile section Save button and load profile when chat is shown
+  initProfileSection();
+
   // Sync initial nav height offset
   updateChatNavOffset();
   

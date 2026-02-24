@@ -36,18 +36,24 @@ export async function executeToolCall(
   // Record execution for dashboard (if context provided)
   if (executionContext?.userId) {
     try {
+      const rawError = result.error;
+      const storedError =
+        rawError != null && (String(rawError).trim().length < 10 || /^\s*[.\s]*$/.test(String(rawError)))
+          ? `${call.toolName} failed: ${rawError}`
+          : rawError ?? undefined;
+
       const store = getToolExecutionStore();
       await store.recordExecution({
         toolName: call.toolName,
         parameters: call.parameters ?? {},
-        result,
+        result: storedError !== undefined ? { ...result, error: storedError } : result,
         userId: executionContext.userId,
         aclGroup: executionContext.aclGroup || "viewer",
         durationMs,
         timestamp: new Date(),
         node: executionContext.node,
         vmid: executionContext.vmid,
-        error: result.error,
+        error: storedError,
       });
     } catch (error: any) {
       // Don't fail tool execution if audit logging fails

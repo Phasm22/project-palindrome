@@ -75,6 +75,11 @@
     background: rgba(249, 115, 22, 0.3) !important;
   }
 
+  /* Profile pubkey textarea: opacity placeholder for hint text */
+  .profile-pubkey-input::placeholder {
+    opacity: 0.6;
+  }
+
   /* Modal action buttons: avoid sub-pixel edge artifacts */
   .modal-action-btn {
     transform: translateZ(0);
@@ -245,6 +250,7 @@
     padding-left: 1rem;
     padding-right: 1rem;
     display: flex;
+    flex-direction: column;
     justify-content: flex-start;
   }
 
