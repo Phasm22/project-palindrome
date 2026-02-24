@@ -16,6 +16,7 @@ import {
   RAGOrchestrator,
   pceLogger,
 } from "./index";
+import { isTestOrScratchPath } from "./ingestion/path-guard";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -41,12 +42,21 @@ async function main() {
     process.exit(results.failed > 0 ? 1 : 0);
   } else if (command === "ingest") {
     // Ingest a document
-    const filePath = args[1];
-    const documentType = (args[2] || "generic_text") as any;
-    const aclGroup = args[3] || "admin";
-    
+    const ingestArgs = args.slice(1).filter((a) => a !== "--allow-test-path");
+    const allowTestPath = args.includes("--allow-test-path");
+    const filePath = ingestArgs[0];
+    const documentType = (ingestArgs[1] || "generic_text") as any;
+    const aclGroup = ingestArgs[2] || "admin";
+
     if (!filePath) {
-      console.error("Usage: pce ingest <file-path> [document-type] [acl-group]");
+      console.error("Usage: pce ingest <file-path> [document-type] [acl-group] [--allow-test-path]");
+      process.exit(1);
+    }
+
+    if (isTestOrScratchPath(filePath) && !allowTestPath) {
+      console.error(
+        "Path is under a test/scratch directory. Use --allow-test-path to override."
+      );
       process.exit(1);
     }
 

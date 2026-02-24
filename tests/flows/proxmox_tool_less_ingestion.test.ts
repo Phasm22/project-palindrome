@@ -20,6 +20,7 @@ import {
   Redactor,
   EmbeddingService,
   QdrantVectorStore,
+  TEST_COLLECTION,
   IngestionPipeline,
   GraphIngestionPipeline,
   Neo4jGraphStore,
@@ -71,7 +72,7 @@ runDescribe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     const redactor = new Redactor();
     const embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore();
+    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
 
     graphStore = new Neo4jGraphStore();

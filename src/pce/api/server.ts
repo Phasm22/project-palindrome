@@ -8,7 +8,7 @@ import { MetricsCollector, QueryMetrics, ErrorMetrics } from "../metrics";
 import { HybridOrchestrator, QueryAnalyzer, QueryEntityResolver, FusionEngine, RetrievalService, GenerationService } from "../rag";
 import { GraphRAGRetrieval } from "../graph-retrieval";
 import { GraphQueryInterface, Neo4jGraphStore } from "../kg";
-import { EmbeddingService, QdrantVectorStore } from "../vector";
+import { DEFAULT_COLLECTION, EmbeddingService, QdrantVectorStore } from "../vector";
 import type { ApiHistoryPayload, ApiQueryResponse, DependencyHealthCheck, HealthPayload, MetricsPayload } from "./types";
 import { ApiRateLimiter, type RateLimitConfig } from "./rate-limiter";
 import { ContextHistoryStore } from "./history-store";
@@ -2190,12 +2190,15 @@ export class PceApiServer {
 
 export interface BootstrapPceApiServerOptions extends PceApiServerOptions {
   fusionConfig?: Partial<FusionConfig>;
+  /** Use this Qdrant collection instead of default (e.g. for audit/gold-path scripts). */
+  vectorStoreCollectionName?: string;
 }
 
 export async function bootstrapPceApiServer(options: BootstrapPceApiServerOptions = {}) {
-  const { fusionConfig, ...serverOptions } = options;
+  const { fusionConfig, vectorStoreCollectionName, ...serverOptions } = options;
   const embeddingService = new EmbeddingService();
-  const vectorStore = new QdrantVectorStore();
+  const collectionName = vectorStoreCollectionName ?? DEFAULT_COLLECTION;
+  const vectorStore = new QdrantVectorStore(undefined, undefined, collectionName);
   await vectorStore.initializeCollection(embeddingService.getDimension());
 
   const retrievalService = new RetrievalService(vectorStore, embeddingService);

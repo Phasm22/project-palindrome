@@ -17,7 +17,7 @@ import {
 import { GraphRAGRetrieval } from "../../src/pce/graph-retrieval";
 import { GraphQueryInterface } from "../../src/pce/kg";
 import { Neo4jGraphStore } from "../../src/pce/kg/indexation/neo4j-client";
-import { EmbeddingService, QdrantVectorStore } from "../../src/pce/vector";
+import { EmbeddingService, QdrantVectorStore, TEST_COLLECTION } from "../../src/pce/vector";
 import { GraphIngestionPipeline } from "../../src/pce/ingestion/graph-pipeline";
 import { IngestionPipeline } from "../../src/pce/ingestion";
 import { SnapshotLog, RawDocumentStorage } from "../../src/pce/dlm";
@@ -57,7 +57,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
 
     redactor = new Redactor();
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore();
+    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
 
     graphStore = new Neo4jGraphStore();

@@ -13,6 +13,7 @@ import {
   chunkDocument,
   EmbeddingService,
   QdrantVectorStore,
+  TEST_COLLECTION,
   IngestionPipeline,
   RetrievalService,
   GenerationService,
@@ -298,7 +299,7 @@ describe("DOD 4: Vector DB Integration Produces Real Results", () => {
     await fs.mkdir(TEST_DIR, { recursive: true });
 
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore();
+    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
     
     retrievalService = new RetrievalService(vectorStore, embeddingService);
@@ -363,7 +364,7 @@ describe("DOD 5: Access Control Filtering Works", () => {
     await fs.mkdir(TEST_DIR, { recursive: true });
 
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore();
+    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
     
     retrievalService = new RetrievalService(vectorStore, embeddingService);
@@ -466,7 +467,7 @@ describe("DOD 6: Logging Provides a Record of Everything", () => {
     snapshotLog = new SnapshotLog(TEST_SNAPSHOT_LOG);
     await snapshotLog.initialize();
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore();
+    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
   });
 

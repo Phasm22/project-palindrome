@@ -506,8 +506,12 @@ function cleanupRagAnswer(answer: string): string {
   return cleaned;
 }
 
-function formatRagSummary(rag: HybridApiContext) {
+/** Exported for tests (synthesis exploration). */
+export function formatRagSummary(rag: HybridApiContext) {
   const lines: string[] = [];
+  lines.push(
+    "The following CandidateAnswer was generated from retrieved context. Use it when it answers the user's question; if you also call tools, combine it with tool results in your final answer."
+  );
   const fusion = rag.sTotalScore ?? rag.fusionMetrics?.avgTotalScore ?? null;
   lines.push(`RAG_CONTEXT: queryType=${rag.queryType}`);
   if (fusion !== null) {
@@ -2394,6 +2398,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       description: "Retrieval skipped before execution.",
       metadata: { reason: eligibility.reason },
     });
+    logger.info("RAG retrieval skipped", { reason: eligibility.reason, query: userInput.slice(0, 80) });
   } else {
     ragPayload = await fetchHybridContext(userInput, {
       baseUrl: options.ragBaseUrl,
@@ -2442,6 +2447,13 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       graphContextId = artifactBundle.graphContextId;
       fusionContextId = artifactBundle.fusionContextId;
       retrievalToolCalls = buildRetrievalToolCalls(ragPayload);
+      logger.info("RAG retrieval executed", {
+        injected: retrievalInjected,
+        reason: retrievalInjectedReason,
+        hasCandidateAnswer: !!(ragPayload.answer?.trim()),
+        candidateAnswerLength: ragPayload.answer?.length ?? 0,
+        query: userInput.slice(0, 80),
+      });
     } else {
       retrievalInjected = false;
       retrievalInjectedReason = "unavailable";
@@ -2450,6 +2462,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         description: "Retrieval request failed or returned no payload.",
         metadata: { reason: "unavailable" },
       });
+      logger.info("RAG retrieval unavailable", { query: userInput.slice(0, 80) });
     }
   }
 
@@ -3409,6 +3422,29 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         logger.warn("Failed to record reasoning trace", { error: error.message });
       }
       
+      // Synthesis marker: log possible RAG underuse when CandidateAnswer was provided but reply may not use it
+      if (retrievalInjected && ragPayload?.answer?.trim() && finalText) {
+        const candidate = ragPayload.answer.trim();
+        const reply = finalText.trim();
+        const minLen = Math.min(30, Math.floor(candidate.length / 2));
+        if (minLen >= 15) {
+          const candidateNorm = candidate.toLowerCase().replace(/\s+/g, " ");
+          const replyNorm = reply.toLowerCase().replace(/\s+/g, " ");
+          let found = false;
+          for (let i = 0; i <= candidateNorm.length - minLen && !found; i++) {
+            const slice = candidateNorm.slice(i, i + minLen);
+            if (replyNorm.includes(slice)) found = true;
+          }
+          if (!found) {
+            logger.info("Possible RAG underuse: reply may not incorporate CandidateAnswer", {
+              candidateAnswerLength: candidate.length,
+              replyLength: reply.length,
+              query: userInput.slice(0, 80),
+            });
+          }
+        }
+      }
+
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
       emitFinalEvent(finalText, { 

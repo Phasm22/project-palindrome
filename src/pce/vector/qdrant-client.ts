@@ -8,17 +8,17 @@ import type { DocumentChunk, VectorDocument } from "../types";
 import type { QdrantPayload } from "./schema";
 import { metadataToPayload, payloadToMetadata } from "./schema";
 import { pceLogger } from "../utils/logger";
+import { DEFAULT_COLLECTION } from "./collection-names";
 
 const QDRANT_URL = process.env.QDRANT_URL || "http://localhost:6333";
 const QDRANT_API_KEY = process.env.QDRANT_API_KEY;
-const COLLECTION_NAME = process.env.PCE_COLLECTION_NAME || "pce_documents";
 
 export class QdrantVectorStore {
   private client: QdrantClient;
   private collectionName: string;
   private vectorDimension: number = 1536; // Default, will be set by initializeCollection
 
-  constructor(url: string = QDRANT_URL, apiKey?: string, collectionName: string = COLLECTION_NAME) {
+  constructor(url: string = QDRANT_URL, apiKey?: string, collectionName: string = DEFAULT_COLLECTION) {
     this.client = new QdrantClient({
       url,
       apiKey,

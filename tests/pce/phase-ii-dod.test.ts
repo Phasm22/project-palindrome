@@ -23,7 +23,7 @@ import { IngestionPipeline } from "../../src/pce/ingestion";
 import { GraphIngestionPipeline } from "../../src/pce/ingestion/graph-pipeline";
 import { SnapshotLog, RawDocumentStorage } from "../../src/pce/dlm";
 import { Redactor } from "../../src/pce/redaction";
-import { EmbeddingService, QdrantVectorStore } from "../../src/pce/vector";
+import { EmbeddingService, QdrantVectorStore, TEST_COLLECTION } from "../../src/pce/vector";
 import { Neo4jGraphStore } from "../../src/pce/kg/indexation/neo4j-client";
 import { pceLogger } from "../../src/pce/utils/logger";
 
@@ -63,7 +63,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
     rawStorage = new RawDocumentStorage(TEST_RAW_STORAGE);
     redactor = new Redactor();
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore();
+    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
     graphStore = new Neo4jGraphStore();
 
     // Initialize vector store collection

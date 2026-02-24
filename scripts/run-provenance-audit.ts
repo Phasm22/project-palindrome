@@ -4,7 +4,7 @@ import path from "node:path";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { SnapshotLog, RawDocumentStorage } from "../src/pce/dlm";
 import { Redactor } from "../src/pce/redaction";
-import { EmbeddingService } from "../src/pce/vector";
+import { EmbeddingService, AUDIT_COLLECTION } from "../src/pce/vector";
 import { QdrantVectorStore } from "../src/pce/vector/qdrant-client";
 import { IngestionPipeline, GraphIngestionPipeline } from "../src/pce/ingestion";
 import { Neo4jGraphStore } from "../src/pce/kg";
@@ -36,11 +36,11 @@ async function runIngestion(docPath: string) {
   await rawStorage.initialize();
   const redactor = new Redactor();
   const embeddingService = new EmbeddingService();
-  const vectorStore = new QdrantVectorStore();
-  
-  // Clear vector store for test isolation
+  const vectorStore = new QdrantVectorStore(undefined, undefined, AUDIT_COLLECTION);
+
+  // Clear scratch collection only (never production pce_documents)
   await vectorStore.clearCollection();
-  
+
   await vectorStore.initializeCollection(embeddingService.getDimension());
   const ingestionPipeline = new IngestionPipeline(
     snapshotLog,
@@ -126,6 +126,7 @@ export async function runProvenanceAudit() {
 
   const { server } = await bootstrapPceApiServer({
     port: 0,
+    vectorStoreCollectionName: AUDIT_COLLECTION,
     fusionConfig: {
       minTotalScore: 0.5,
     },
