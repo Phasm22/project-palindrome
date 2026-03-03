@@ -2,6 +2,8 @@
 
 This directory contains project status, progress tracking, and phase completion reports.
 
+**For current iteration status and priorities:** see **[REVIEW.md](../../REVIEW.md)** at repo root (realAgent branch source of truth). The files below are historical phase/TL reference.
+
 ## Contents
 
 ### Phase Status
