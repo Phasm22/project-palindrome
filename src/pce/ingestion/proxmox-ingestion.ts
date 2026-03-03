@@ -144,7 +144,17 @@ export class ProxmoxIngestionOrchestrator {
    */
   private async writeTempFile(document: ProxmoxDocument, index: number): Promise<string> {
     await this.ensureTempDir();
-    const filename = `proxmox-${document.metadata.documentType}-${index}-${Date.now()}.txt`;
+    // Use a stable filename so the pipeline's content-hash dedup (UNCHANGED check)
+    // can detect when a document hasn't changed and skip re-embedding.
+    // Previously used Date.now() which caused every run to create new files,
+    // flooding Qdrant with duplicate documents.
+    const stableId =
+      document.metadata.node && document.metadata.vmid != null
+        ? `${document.metadata.node}-${document.metadata.vmid}`
+        : document.metadata.node
+          ? document.metadata.node
+          : String(index);
+    const filename = `proxmox-${document.metadata.documentType}-${stableId}.txt`;
     const filePath = join(this.tempDir, filename);
     await fs.writeFile(filePath, document.content, "utf-8");
     return filePath;

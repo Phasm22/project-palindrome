@@ -1538,6 +1538,21 @@ export async function runAgent(
 
   // Handle clarification flow
   if (conversationPlan.decision === "ASK_CLARIFY") {
+    // Short-circuit: if domain-specific intent detectors can confidently handle this query,
+    // skip clarification and fall through to the direct-handler section below.
+    // The semantic intent classifier can misclassify specific infra queries as ambiguous
+    // (e.g. "can port 22 reach the lab from home" or "summarize wireguard rules").
+    const canHandleDirectly =
+      detectFirewallIntent(userInput) !== null ||
+      detectNetworkIntent(userInput) !== null ||
+      detectComputeIntent(userInput) !== null ||
+      detectExposureIntent(userInput) !== null;
+
+    if (canHandleDirectly) {
+      logger.info("ASK_CLARIFY bypassed: domain intent detector matched", { userInput: userInput.slice(0, 80) });
+      // Fall through to domain-intent handlers below
+    } else {
+
     // If we only know that the intent itself is ambiguous, ask for intent disambiguation
     // rather than calling ask_missing (which is slot-oriented).
     if (classification.missing.length === 1 && classification.missing[0] === "intent") {
@@ -1598,12 +1613,29 @@ export async function runAgent(
       });
       return { text: disambiguation };
     }
+    } // end else (canHandleDirectly was false)
   }
-  
+
   // Handle clarification requests (low confidence or genuinely ambiguous)
   // BUT: If we have domain metadata, try RAG first - it might have the answer
   // EXCEPT: Skip RAG for real-time metric queries (uptime, memory, cpu, etc.) - these need tools
   if (routing.route === "clarification") {
+    // Short-circuit: if a domain-specific intent detector can handle this query directly,
+    // skip clarification entirely and fall through to the direct-handler section below.
+    // This catches queries like "can port 22 come into the lab from home" which score low
+    // on the semantic ACTION classifier but are clearly firewall reachability questions.
+    const canHandleDirectlyFromRoute =
+      detectFirewallIntent(userInput) !== null ||
+      detectNetworkIntent(userInput) !== null ||
+      detectComputeIntent(userInput) !== null ||
+      detectExposureIntent(userInput) !== null;
+    if (canHandleDirectlyFromRoute) {
+      logger.info("routing.clarification bypassed: domain intent detector matched", {
+        userInput: userInput.slice(0, 80),
+      });
+      // Fall through to domain-intent handlers below
+    } else {
+
     logger.info("Input needs clarification", {
       confidence: classification.confidence,
       type: classification.type,
@@ -1858,15 +1890,16 @@ export async function runAgent(
     // Small delay to ensure SSE stream is subscribed before emitting
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    emitFinalEvent(clarificationMessage, { 
-      clarification: true, 
-      needsResponse: true, 
+    emitFinalEvent(clarificationMessage, {
+      clarification: true,
+      needsResponse: true,
       classification,
       conversationState: conversationPlan.nextState,
       conversationContext: contextUpdate,
       traceId: clarificationTraceId,
     });
     return { text: clarificationMessage };
+    } // end else (canHandleDirectlyFromRoute was false)
   }
 
   // Check action intent FIRST (before ALL query intents)
@@ -2273,14 +2306,18 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         emitStepEvent({ step: 1, maxSteps: 1, intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
         const firewallToolCalls = buildFirewallToolCalls(firewallIntent);
         
-        // Format firewall response for bot-like style
+        // Format firewall response — use ASSISTIVE by default so the LLM synthesizes
+        // the raw chain output into a clear answer with evidence. Fall back to user's
+        // responseMode if one was explicitly chosen (e.g. TERSE_DATA or EXPLAINER).
+        const firewallSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
+        const firewallMode: ResponseMode = responseMode ?? (firewallSummaryWords ? "EXPLAINER" : "ASSISTIVE");
         let formattedAnswer = firewallAnswer;
         try {
           formattedAnswer = await formatResponseForBot(firewallAnswer, {
             userQuery: userInput,
             intentType: "firewall_rules",
             toolCalls: firewallToolCalls,
-            mode: responseMode,
+            mode: firewallMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format firewall answer", { error: error.message });
@@ -2326,11 +2363,13 @@ IMPORTANT: When calling proxmox_write, you MUST use:
               : usesIngestionSummary
                 ? [{ toolName: "ingestion_summary_store", parameters: { snapshot: "latest" } }]
                 : [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }];
+          const networkSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
+          const networkMode: ResponseMode = responseMode ?? (networkSummaryWords ? "EXPLAINER" : "ASSISTIVE");
           formattedAnswer = await formatResponseForBot(networkAnswer, {
             userQuery: userInput,
             intentType: "network_info",
             toolCalls,
-            mode: responseMode,
+            mode: networkMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format network answer", { error: error.message });

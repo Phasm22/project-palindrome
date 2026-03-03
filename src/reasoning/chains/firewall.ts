@@ -189,7 +189,8 @@ function formatRuleList(
   const lines: string[] = [];
   const scopedAliases = aliases ? filterAliasesForRules(aliases, rules) : [];
   if (!rules.length) {
-    lines.push(`${title}\n- None`);
+    lines.push(`${title}\n- No rules found in the digital twin for this query.`);
+    lines.push(`  (If data is missing, run: bun run pce:ingest-firewall)`);
   } else {
     lines.push(title);
     for (const rule of rules) {

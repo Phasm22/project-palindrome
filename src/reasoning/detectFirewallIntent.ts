@@ -36,15 +36,27 @@ function extractRuleId(text: string): string | null {
 }
 
 function extractAllowedPortsScope(text: string): { from: string; to: string } | null {
+  // Standard: "ports allowed from X to Y"
   const match =
     text.match(/\bports?\b.*\bfrom\s+(.+?)\s+to\s+(.+?)(?:\?|$)/i) ??
     text.match(/\ballowed\b.*\bfrom\s+(.+?)\s+to\s+(.+?)(?:\?|$)/i);
-  const from = match?.[1]?.trim();
-  const to = match?.[2]?.trim();
-  if (!from || !to) {
-    return null;
+  if (match?.[1] && match?.[2]) {
+    return { from: match[1].trim(), to: match[2].trim() };
   }
-  return { from, to };
+
+  // Natural language: "come into DEST from SRC" / "reach DEST from SRC"
+  const intoFromMatch = text.match(/\b(?:into|reach|access)\s+(?:the\s+)?(.+?)\s+from\s+(?:the\s+)?(.+?)(?:\?|$)/i);
+  if (intoFromMatch?.[1] && intoFromMatch?.[2]) {
+    return { from: intoFromMatch[2].trim(), to: intoFromMatch[1].trim() };
+  }
+
+  // Natural language: "from SRC to/into DEST"
+  const fromToMatch = text.match(/\bfrom\s+(?:the\s+)?(.+?)\s+(?:to|into)\s+(?:the\s+)?(.+?)(?:\?|$)/i);
+  if (fromToMatch?.[1] && fromToMatch?.[2]) {
+    return { from: fromToMatch[1].trim(), to: fromToMatch[2].trim() };
+  }
+
+  return null;
 }
 
 function extractChain(text: string): string | null {
@@ -130,8 +142,23 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     return { type: "reachability_from_chain", chain };
   }
 
-  // "What ports are allowed from X to Y?"
-  if ((normalized.includes("port") || normalized.includes("ports")) && normalized.includes("allow")) {
+  // Port/service reachability: "what ports from X to Y?", "can port 22 come from home to lab?",
+  // "is SSH open from X to Y?", "can X reach Y on port Z?"
+  const KNOWN_SERVICES = ["ssh", "http", "https", "rdp", "smtp", "dns", "ntp", "ftp", "snmp"];
+  const hasPortKeyword = normalized.includes("port") || normalized.includes("ports");
+  const hasServiceKeyword = KNOWN_SERVICES.some(s => normalized.includes(s));
+  const hasTrafficVerb =
+    normalized.includes("allow") ||
+    normalized.includes("reach") ||
+    normalized.includes("come") ||
+    normalized.includes("pass") ||
+    normalized.includes("open") ||
+    normalized.includes("accessible") ||
+    normalized.includes("connect") ||
+    normalized.includes("travel") ||
+    normalized.includes("get through") ||
+    normalized.includes("permitted");
+  if ((hasPortKeyword || hasServiceKeyword) && hasTrafficVerb) {
     const scope = extractAllowedPortsScope(userInput);
     if (scope) {
       return { type: "allowed_ports_between", from: scope.from, to: scope.to };
@@ -175,9 +202,9 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     return { type: "count_rules", direction };
   }
 
-  // Default: list all rules
+  // Default: list all rules (also catch summarize/describe/explain without specific scope)
   if (
-    /\b(list|show|rules?)\b/.test(normalized) ||
+    /\b(list|show|rules?|summarize|describe|explain|overview|summary)\b/.test(normalized) ||
     /\ball\b/.test(normalized)
   ) {
     return { type: "list_rules" };
