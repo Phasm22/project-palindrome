@@ -79,6 +79,12 @@ import { resolveClarificationContinuationInput } from "./clarification-continuat
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-risk";
 import { pceLogger } from "../pce/utils/logger";
 import { TerraformRunner } from "../actions/helpers/terraform-runner";
+import {
+  handleConfirmation,
+  handleIdentityAndSocial,
+  handleConfirmRequest,
+  handleClarifyFromPlan,
+} from "./handlers";
 
 let openaiClient: OpenAI | null = null;
 const ASSISTANT_NAME = "Pally";
@@ -795,121 +801,25 @@ export async function runAgent(
     });
   };
 
-  if (confirmation.cancelled) {
-    const prompt = pendingActionId
-      ? "Cancelled the pending change. Nothing was applied."
-      : "There is no pending change to cancel.";
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "IDLE",
-      conversationContext: {
-        pendingAction: "",
-        pendingActionId: "",
-        pendingActionDigest: "",
-        pendingActionCreatedAt: 0,
-        pendingActionSummary: "",
-        pendingActionType: "",
-        pendingActionPreview: "",
-        pendingActionExecuteInput: "",
-        pendingActionExpiresAt: 0,
-      },
-    });
-    pceLogger.incrementCounter("confirmation_rejected");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && !pendingActionId) {
-    const prompt = "There is no pending action to confirm. Re-submit the change request first.";
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "IDLE",
-    });
-    pceLogger.incrementCounter("confirmation_mismatch");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && !confirmation.actionId && pendingActionId) {
-    const prompt = `Pending change requires explicit confirmation. Reply with CONFIRM ${pendingActionId} to apply, or CANCEL.`;
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "AWAITING_CONFIRMATION",
-      conversationContext: {
-        pendingAction,
-        pendingActionId,
-        pendingActionDigest: options.conversationContext?.pendingActionDigest,
-        pendingActionCreatedAt,
-        pendingActionSummary,
-        pendingActionPreview,
-        pendingActionExecuteInput,
-        pendingActionExpiresAt,
-      },
-      confirmationRequired: true,
-      confirmationId: pendingActionId,
-      confirmationPreview: pendingActionPreview ?? pendingActionSummary ?? pendingAction ?? "",
-      confirmationExpiresAt: pendingActionExpiresAt ?? 0,
-    });
-    pceLogger.incrementCounter("confirmation_mismatch");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && confirmation.actionId && pendingActionId && confirmation.actionId !== pendingActionId) {
-    const prompt = `Confirmation id does not match the pending action. Reply with CONFIRM ${pendingActionId} to apply, or CANCEL.`;
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "AWAITING_CONFIRMATION",
-      conversationContext: {
-        pendingAction,
-        pendingActionId,
-        pendingActionDigest: options.conversationContext?.pendingActionDigest,
-        pendingActionCreatedAt,
-        pendingActionSummary,
-        pendingActionPreview,
-        pendingActionExecuteInput,
-        pendingActionExpiresAt,
-      },
-      confirmationRequired: true,
-      confirmationId: pendingActionId,
-      confirmationPreview: pendingActionPreview ?? pendingActionSummary ?? pendingAction ?? "",
-      confirmationExpiresAt: pendingActionExpiresAt ?? 0,
-    });
-    pceLogger.incrementCounter("confirmation_mismatch");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && pendingActionExpired && pendingActionId) {
-    const prompt = "Confirmation expired. Please re-request the change.";
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "IDLE",
-      conversationContext: {
-        pendingAction: "",
-        pendingActionId: "",
-        pendingActionDigest: "",
-        pendingActionCreatedAt: 0,
-        pendingActionSummary: "",
-        pendingActionType: "",
-        pendingActionPreview: "",
-        pendingActionExecuteInput: "",
-        pendingActionExpiresAt: 0,
-      },
-    });
-    pceLogger.incrementCounter("confirmation_expired");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && pendingActionExecuteInput && pendingActionId && confirmation.actionId === pendingActionId) {
-    userInput = pendingActionExecuteInput;
-    usedPendingAction = true;
-    pceLogger.incrementCounter("confirmation_approved");
-    // Keep confirmation intact so evaluateDialogPolicy can compute confirmationAllowed=true
-    // and set decision=EXECUTE. Resetting confirmation here causes the replayed high-risk
-    // action to loop back to ASK_CONFIRM because the policy sees no confirmation.
-  }
+  const confirmResult = handleConfirmation({
+    confirmation,
+    userInput,
+    pendingActionId,
+    pendingActionExecuteInput,
+    pendingAction,
+    pendingActionPreview,
+    pendingActionSummary,
+    pendingActionCreatedAt,
+    pendingActionExpiresAt,
+    pendingActionExpired,
+    conversationContext: options.conversationContext,
+    eventBus,
+    sessionId,
+    startTime,
+  });
+  if (confirmResult.handled) return confirmResult.response;
+  userInput = confirmResult.effectiveInput;
+  usedPendingAction = confirmResult.usedPendingAction;
 
   const clarificationContinuation = resolveClarificationContinuationInput({
     userInput,
@@ -1293,255 +1203,69 @@ export async function runAgent(
 
   const policyMode = options.userPreferences?.safeMode ? "safe" : "standard";
   const memoryUserName = options.conversationContext?.userName;
-  const nameUpdate = extractUserNameUpdate(originalUserInput);
-  if (!confirmation.confirmed && nameUpdate) {
-    const text = `Got it. I'll call you ${nameUpdate}.`;
-    const traceStore = getReasoningTraceStore();
-    const traceStep: ReasoningStep = {
-      step: 1,
-      toolCalls: [],
-      decisions: [
-        {
-          type: "retrieval_skipped",
-          description: "Retrieval skipped for explicit identity update.",
-          metadata: { reason: "meta_identity" },
-        },
-      ],
-    };
-    let traceId: string | undefined;
-    try {
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [traceStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record identity update trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      conversationState: "FOLLOWUP",
-      conversationContext: { ...contextUpdate, userName: nameUpdate },
-      memorySource: "user_explicit",
-      memoryConfidence: 0.95,
-      traceId,
-    });
-    return { text };
-  }
-
-  if (!confirmation.confirmed && isUserNameQuery(originalUserInput)) {
-    const text = memoryUserName
-      ? `Your name is ${memoryUserName}.`
-      : "I don't have your name yet. Tell me with \"my name is <name>\".";
-    const traceStore = getReasoningTraceStore();
-    const traceStep: ReasoningStep = {
-      step: 1,
-      toolCalls: [],
-      decisions: [
-        {
-          type: "retrieval_skipped",
-          description: "Retrieval skipped for identity lookup.",
-          metadata: { reason: "meta_identity" },
-        },
-      ],
-    };
-    let traceId: string | undefined;
-    try {
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [traceStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record identity lookup trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-      traceId,
-    });
-    return { text };
-  }
-
-  if (!confirmation.confirmed && isAssistantNameQuery(originalUserInput)) {
-    const text = `My name is ${ASSISTANT_NAME}.`;
-    const traceStore = getReasoningTraceStore();
-    const traceStep: ReasoningStep = {
-      step: 1,
-      toolCalls: [],
-      decisions: [
-        {
-          type: "retrieval_skipped",
-          description: "Retrieval skipped for assistant identity query.",
-          metadata: { reason: "meta_identity" },
-        },
-      ],
-    };
-    let traceId: string | undefined;
-    try {
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [traceStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record assistant identity trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-      traceId,
-    });
-    return { text };
-  }
-
-  // Fast-path social chat: do not run tools/LLM formatting pipeline.
-  // This prevents "Answer/Evidence/Next steps" nonsense for greetings like "Hello".
-  if (classification.intent === "CHAT_SOCIAL" && !confirmation.confirmed) {
-    const text = "Hi — what do you want to check or change in your lab?";
-    let traceId: string | undefined;
-    try {
+  const identityResult = await handleIdentityAndSocial({
+    originalUserInput,
+    userInput,
+    confirmation,
+    classification,
+    contextUpdate,
+    memoryUserName,
+    session,
+    eventBus,
+    sessionId,
+    startTime,
+    responseMode,
+    assistantName: ASSISTANT_NAME,
+    recordIdentityTrace: async ({ finalResponse, reason }) => {
       const traceStore = getReasoningTraceStore();
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [{
-          step: 1,
-          toolCalls: [],
-          decisions: [{
-            type: "retrieval_skipped",
-            description: "Retrieval skipped for social greeting.",
-            metadata: { reason: "chat_social" },
+      try {
+        return await traceStore.recordTrace({
+          userId: session.userId,
+          aclGroup: session.aclGroup,
+          userInput,
+          finalResponse,
+          steps: [{
+            step: 1,
+            toolCalls: [],
+            decisions: [{
+              type: "retrieval_skipped",
+              description: `Retrieval skipped for ${reason}.`,
+              metadata: { reason },
+            }],
           }],
-        }],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record social trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      classification,
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-      traceId,
-    });
-    return { text };
-  }
-
-  // Fast-path subnet sizing questions (avoid falling into intent disambiguation).
-  // Example: "i need a subnet for 128 hosts" → /24 (254 usable), /25 is only 126 usable.
-  const subnetSizing = (() => {
-    const q = (originalUserInput || "").toLowerCase();
-    const match = q.match(/\bsubnet\b[\s\S]*?\b(\d+)\b[\s\S]*?\bhosts?\b/) || q.match(/\b(\d+)\b[\s\S]*?\bhosts?\b[\s\S]*?\bsubnet\b/);
-    if (!match) return null;
-    const hostsRaw = match[1];
-    if (!hostsRaw) return null;
-    const hosts = parseInt(hostsRaw, 10);
-    if (!Number.isFinite(hosts) || hosts <= 0) return null;
-    // IPv4: need 2 extra addresses for network+broadcast
-    const needed = hosts + 2;
-    let size = 1;
-    while (size < needed) size *= 2;
-    const prefix = 32 - Math.log2(size);
-    const usable = Math.max(0, size - 2);
-    // If exactly 128 was requested, call out /25 nuance explicitly.
-    const note = hosts === 128
-      ? "Note: /25 has 128 total addresses but only 126 usable host IPs; /24 is the smallest that supports 128 usable hosts."
-      : undefined;
-    return { hosts, prefix, usable, total: size, note };
-  })();
-  if (subnetSizing) {
-    const text =
-      `SubnetSizing | required_hosts=${subnetSizing.hosts} | smallest_ipv4_prefix=/${subnetSizing.prefix} | usable_hosts=${subnetSizing.usable} | total_addresses=${subnetSizing.total}` +
-      (subnetSizing.note ? ` | note="${subnetSizing.note}"` : "");
-    emitFinalEvent(text, {
-      classification,
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-    });
-    return { text };
-  }
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          totalSteps: 1,
+          totalToolCalls: 0,
+          maxStepsReached: false,
+          timestamp: new Date(),
+          durationMs: Date.now() - startTime,
+        });
+      } catch (error: any) {
+        logger.warn("Failed to record identity trace", { error: error.message });
+        return undefined;
+      }
+    },
+  });
+  if (identityResult.handled) return identityResult.response;
 
   // Handle high-risk confirmation gate (bound to pending action)
   if (conversationPlan.decision === "ASK_CONFIRM") {
-    const pendingActionExecute = userInput;
-    const pendingSummary = conversationPlan.pendingAction ?? pendingActionExecute;
-    const pendingRecord = buildPendingActionRecord(
-      pendingActionExecute,
-      pendingSummary,
-      `intent:${classification.intent.toLowerCase()}`
-    );
-    const confirmationPrompt =
-      `Review pending change: ${pendingRecord.preview}\n` +
-      `Reply with CONFIRM ${pendingRecord.id} to apply, or CANCEL.`;
-    pceLogger.incrementCounter("confirmation_requested");
-    logger.info("Conversation transition", {
-      conversation_state_before: options.conversationState ?? "IDLE",
-      decision: conversationPlan.decision,
-      confirmation_id: pendingRecord.id,
-      pending_action_source: "plan_conversation",
-    });
-
-    emitFinalEvent(confirmationPrompt, {
-      confirmationRequired: true,
-      confirmationId: pendingRecord.id,
-      confirmationPreview: pendingRecord.preview,
-      confirmationExpiresAt: pendingRecord.expiresAt,
+    return handleConfirmRequest({
+      pendingActionExecute: userInput,
+      pendingSummary: conversationPlan.pendingAction,
+      intentType: `intent:${classification.intent.toLowerCase()}`,
       classification,
-      conversationState: conversationPlan.nextState,
-      pendingAction: pendingRecord.preview,
-      conversationContext: {
-        ...contextUpdate,
-        pendingAction: pendingRecord.executeInput,
-        pendingActionId: pendingRecord.id,
-        pendingActionDigest: pendingRecord.digest,
-        pendingActionCreatedAt: pendingRecord.createdAt,
-        pendingActionSummary: pendingRecord.summary,
-        pendingActionType: pendingRecord.type,
-        pendingActionPreview: pendingRecord.preview,
-        pendingActionExecuteInput: pendingRecord.executeInput,
-        pendingActionExpiresAt: pendingRecord.expiresAt,
-      },
+      contextUpdate,
+      nextState: conversationPlan.nextState,
+      conversationStateBefore: options.conversationState ?? "IDLE",
+      eventBus,
+      sessionId,
+      startTime,
     });
-    return { text: confirmationPrompt };
   }
 
   // Handle clarification flow
   if (conversationPlan.decision === "ASK_CLARIFY") {
-    // Short-circuit: if domain-specific intent detectors can confidently handle this query,
-    // skip clarification and fall through to the direct-handler section below.
-    // The semantic intent classifier can misclassify specific infra queries as ambiguous
-    // (e.g. "can port 22 reach the lab from home" or "summarize wireguard rules").
     const canHandleDirectly =
       detectFirewallIntent(userInput) !== null ||
       detectNetworkIntent(userInput) !== null ||
@@ -1552,68 +1276,20 @@ export async function runAgent(
       logger.info("ASK_CLARIFY bypassed: domain intent detector matched", { userInput: userInput.slice(0, 80) });
       // Fall through to domain-intent handlers below
     } else {
-
-    // If we only know that the intent itself is ambiguous, ask for intent disambiguation
-    // rather than calling ask_missing (which is slot-oriented).
-    if (classification.missing.length === 1 && classification.missing[0] === "intent") {
-      const disambiguation =
-        "What do you want to do next — observe status, diagnose a problem, make a change, or get an explanation?";
-      emitFinalEvent(disambiguation, {
-        clarification: true,
-        needsResponse: true,
+      return handleClarifyFromPlan({
+        originalUserInput,
+        userInput,
         classification,
-        conversationState: conversationPlan.nextState,
-        conversationContext: contextUpdate,
+        routing,
+        contextUpdate,
+        nextState: conversationPlan.nextState,
+        tools,
+        execContext: { userId: session.userId, aclGroup: session.aclGroup },
+        eventBus,
+        sessionId,
+        startTime,
       });
-      return { text: disambiguation };
     }
-
-    if (classification.missing.length > 0) {
-      let clarificationQuestion = "Could you clarify the missing details?";
-      try {
-        const toolResult = await executeToolCall(
-          {
-            toolName: "ask_missing",
-            parameters: {
-              missing: classification.missing,
-              intent: classification.intent,
-              context: `Input: ${originalUserInput}`,
-            },
-          },
-          tools,
-          { userId: session.userId, aclGroup: session.aclGroup }
-        );
-        const question = (toolResult as any)?.data?.question;
-        if (typeof question === "string" && question.trim().length > 0) {
-          clarificationQuestion = question.trim();
-        }
-      } catch (error: any) {
-        logger.warn("ask_missing tool failed, using fallback clarification", { error: error.message });
-      }
-
-      emitFinalEvent(clarificationQuestion, {
-        clarification: true,
-        needsResponse: true,
-        classification,
-        conversationState: conversationPlan.nextState,
-        conversationContext: contextUpdate,
-      });
-      return { text: clarificationQuestion };
-    }
-
-    if (routing.route === "clarification") {
-      const disambiguation =
-        "Are you asking to observe, diagnose, change, explain, or plan? Please specify.";
-      emitFinalEvent(disambiguation, {
-        clarification: true,
-        needsResponse: true,
-        classification,
-        conversationState: conversationPlan.nextState,
-        conversationContext: contextUpdate,
-      });
-      return { text: disambiguation };
-    }
-    } // end else (canHandleDirectly was false)
   }
 
   // Handle clarification requests (low confidence or genuinely ambiguous)

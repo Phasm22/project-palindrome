@@ -145,7 +145,7 @@ describe("TL-1C.1: Diagnostic Reasoning Flow (Read Tool Use)", () => {
 
     const opnsenseDef = toolDefs.find((t) => t.name === "opnsense_readonly");
     expect(opnsenseDef).toBeDefined();
-    expect(opnsenseDef?.description).toContain("Diagnostics");
+    expect(opnsenseDef?.description).toContain("OPNsense");
     
     const params = opnsenseDef?.parameters as any;
     const actions = params?.properties?.action?.enum || [];

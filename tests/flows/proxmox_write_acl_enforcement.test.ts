@@ -93,8 +93,9 @@ describe("TL-2B.6: Write ACL Enforcement (Agent Runner Integration)", () => {
     expect(writeTool!.metadata.allowedAcls).toContain("ops");
     expect(writeTool!.metadata.allowedAcls).not.toContain("viewer");
     
-    // Verify requiresConfirmation is set
-    expect(writeTool!.metadata.requiresConfirmation).toBe(true);
+    // HIL confirmation is handled by the runner's policy layer (requiresConfirmation flag is false
+    // on the tool itself; the runner evaluates high-risk tool calls and sets ASK_CONFIRM).
+    expect(writeTool!.metadata.requiresConfirmation).toBe(false);
   });
 });
 
