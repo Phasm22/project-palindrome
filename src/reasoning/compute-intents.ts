@@ -157,6 +157,14 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
     return { type: "describe_cluster" };
   }
 
+  // "VM counts per node" / "show counts per node" / "how many vms per node" → describe_cluster (summary), not list_all_vms (full dump)
+  if (
+    (normalized.includes("count") || normalized.includes("how many")) &&
+    (normalized.includes("per node") || normalized.includes("per-node") || (normalized.includes("node") && (normalized.includes("vm") || normalized.includes("container"))))
+  ) {
+    return { type: "describe_cluster" };
+  }
+
   // Match "all VMs" or "all virtual machines" or "list all containers" (whole word "all", not substring)
   // BUT only if NOT asking about a specific node
   if (/\ball\b/.test(normalized) && (normalized.includes("vm") || normalized.includes("virtual machine") || normalized.includes("container") || normalized.includes("lxc"))) {

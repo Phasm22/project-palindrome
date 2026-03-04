@@ -70,7 +70,9 @@ import {
   loadKnownEntitiesFromIngestionSummary,
   loadKnownEntitiesFromProxmox,
 } from "../reasoning/clarification";
-import { classifyAndRoute } from "../reasoning/intent-router";
+import { classifyAndRoute, classifyAndRouteWithLLM, classifyIntentWithLLM } from "../reasoning/intent-router";
+import { isLikelyCompositeQuery } from "../reasoning/composite-query";
+import { getRetrievalEligibility, TOOL_FIRST_DOMAINS } from "./retrieval-eligibility";
 import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../reasoning/failure-reclassification";
 import { formatResponseForBot, detectResponseIntent, type FormatContext, type ResponseMode } from "./response-formatter";
 import { planConversation } from "./conversation-orchestrator";
@@ -224,36 +226,9 @@ function isMetaIdentityQuery(input: string): boolean {
 
 const RETRIEVAL_MIN_SCORE = 0.35;
 
-function getRetrievalEligibility(params: {
-  intent: string;
-  isTrivialQuery: boolean;
-  isActionIntent: boolean;
-  isRealTimeMetricQuery: boolean;
-  isMetaIdentityQuery: boolean;
-}): { eligible: boolean; reason?: string } {
-  if (params.isMetaIdentityQuery) {
-    return { eligible: false, reason: "meta_identity" };
-  }
-  if (params.intent === "CHAT_SOCIAL") {
-    return { eligible: false, reason: "chat_social" };
-  }
-  if (params.intent === "CLARIFICATION") {
-    return { eligible: false, reason: "clarification" };
-  }
-  if (params.isTrivialQuery) {
-    return { eligible: false, reason: "trivial_query" };
-  }
-  if (params.isActionIntent) {
-    return { eligible: false, reason: "action_intent" };
-  }
-  if (params.isRealTimeMetricQuery) {
-    return { eligible: false, reason: "real_time_metrics" };
-  }
-  if (params.intent !== "QUERY" && params.intent !== "CHAT_REASONING") {
-    return { eligible: false, reason: "intent_not_retrieval" };
-  }
-  return { eligible: true };
-}
+/** Injected when the query is composite so the LLM uses multiple tool calls and synthesizes. */
+const COMPOSITE_MULTI_STEP_INSTRUCTION =
+  "The user's question has multiple parts (e.g. list items in a scope AND a property like exposure level). You MUST use multiple tool calls to satisfy each part (e.g. first list VMs in the subnet, then get exposure/level for those VMs), then synthesize one answer. Do not answer from only one tool if the question asks for multiple dimensions.";
 
 function hasDomainMatch(domain: string | undefined, rag: HybridApiContext): boolean {
   if (!domain || domain === "general") return true;
@@ -801,6 +776,41 @@ export async function runAgent(
     });
   };
 
+  /** Record a minimal reasoning trace for router/handler early-returns so observability matches PCE logs. */
+  const recordRouterTrace = async (
+    userInput: string,
+    finalResponse: string,
+    handler: string,
+    decision: string,
+    sessionLike: { userId: string; aclGroup: string }
+  ) => {
+    try {
+      const traceStore = getReasoningTraceStore();
+      await traceStore.recordTrace({
+        userId: sessionLike.userId,
+        aclGroup: sessionLike.aclGroup,
+        userInput,
+        finalResponse,
+        steps: [{
+          step: 1,
+          toolCalls: [],
+          decisions: [{
+            type: "conversation_path",
+            description: `Router: ${handler} (decision=${decision}). Response returned without EXECUTE.`,
+            metadata: { handler, decision, router: "runAgent" },
+          }],
+        }],
+        totalSteps: 1,
+        totalToolCalls: 0,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record router trace", { error: error.message, handler, decision });
+    }
+  };
+
   const confirmResult = handleConfirmation({
     confirmation,
     userInput,
@@ -817,7 +827,13 @@ export async function runAgent(
     sessionId,
     startTime,
   });
-  if (confirmResult.handled) return confirmResult.response;
+  if (confirmResult.handled) {
+    await recordRouterTrace(originalUserInput, confirmResult.response.text, "handleConfirmation", "CONFIRM_HANDLED", {
+      userId: options.userId ?? "agent-user",
+      aclGroup: options.aclGroup ?? "admin",
+    });
+    return confirmResult.response;
+  }
   userInput = confirmResult.effectiveInput;
   usedPendingAction = confirmResult.usedPendingAction;
 
@@ -1146,8 +1162,12 @@ export async function runAgent(
     return tool.execute(params, { toolName, startedAt: Date.now() });
   });
   
-  // Classify intent using probabilistic classifier
-  const { classification, routing } = classifyAndRoute(userInput);
+  // Classify intent: LLM (generateObject) when ENABLE_LLM_INTENT_CLASSIFIER=true, else regex classifier
+  const { classification, routing } =
+    process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true"
+      ? await classifyAndRouteWithLLM(userInput)
+      : classifyAndRoute(userInput);
+  const isCompositeQuery = isLikelyCompositeQuery(userInput, classification);
   const conversationPlan = planConversation({
     userInput: originalUserInput,
     intent: classification,
@@ -1250,7 +1270,7 @@ export async function runAgent(
 
   // Handle high-risk confirmation gate (bound to pending action)
   if (conversationPlan.decision === "ASK_CONFIRM") {
-    return handleConfirmRequest({
+    const confirmRequestResult = handleConfirmRequest({
       pendingActionExecute: userInput,
       pendingSummary: conversationPlan.pendingAction,
       intentType: `intent:${classification.intent.toLowerCase()}`,
@@ -1262,6 +1282,11 @@ export async function runAgent(
       sessionId,
       startTime,
     });
+    await recordRouterTrace(originalUserInput, confirmRequestResult.text, "handleConfirmRequest", "ASK_CONFIRM", {
+      userId: session.userId,
+      aclGroup: session.aclGroup,
+    });
+    return confirmRequestResult;
   }
 
   // Handle clarification flow
@@ -1276,7 +1301,7 @@ export async function runAgent(
       logger.info("ASK_CLARIFY bypassed: domain intent detector matched", { userInput: userInput.slice(0, 80) });
       // Fall through to domain-intent handlers below
     } else {
-      return handleClarifyFromPlan({
+      const clarifyResult = await handleClarifyFromPlan({
         originalUserInput,
         userInput,
         classification,
@@ -1289,6 +1314,11 @@ export async function runAgent(
         sessionId,
         startTime,
       });
+      await recordRouterTrace(originalUserInput, clarifyResult.text, "handleClarifyFromPlan", "ASK_CLARIFY", {
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+      });
+      return clarifyResult;
     }
   }
 
@@ -1319,14 +1349,15 @@ export async function runAgent(
     });
     
     // Detect real-time metric queries that should use tools, not RAG
-    // These queries need current/live data that RAG can't provide accurately
     const realTimeMetricPatterns = [
       /\b(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
       /\b(what|what's|what is)\s+(the\s+)?(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
       /\b(how\s+much\s+)?(memory|ram|cpu|disk)\s+(does|has|is)\s+/i,
       /\b(how\s+long\s+)?(has|is)\s+.*\s+(been\s+)?(running|up)\b/i,
+      /\b(how\s+many\s+).*\b(uptime|running|up)\b/i,
+      /\b(uptime|running)\s+(higher|greater|more|over|>\s*)\s*(\d+)\s*(days?|hours?)/i,
+      /\b(uptime\s+>\s*\d+|\d+\s*\+\s*days?\s+uptime)/i,
     ];
-    
     const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
     
     const clarificationRetrievalDecisions: ReasoningStep["decisions"] = [];
@@ -1337,9 +1368,9 @@ export async function runAgent(
     let clarificationFusionContextId: string | undefined;
 
     // If we have domain metadata, try RAG first - the data might answer the question
-    // This leverages the PCE data we're collecting even when confidence is low
-    // BUT: Skip RAG for real-time metric queries - they need tools for accurate data
-    if (classification.metadata?.domain && classification.confidence >= 0.2 && !isRealTimeMetricQuery) {
+    // BUT: Skip RAG for real-time metric queries and for tool-first domains
+    const isToolFirstDomain = classification.metadata?.domain && (TOOL_FIRST_DOMAINS as readonly string[]).includes(classification.metadata.domain);
+    if (classification.metadata?.domain && classification.confidence >= 0.2 && !isRealTimeMetricQuery && !isToolFirstDomain) {
       logger.info("Low confidence but domain detected - trying RAG before clarification", {
         domain: classification.metadata.domain,
         confidence: classification.confidence,
@@ -1891,7 +1922,15 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     // The LLM will use the action tool with proper parameters
     // For compound requests (e.g., "install nginx and configure firewall"), the LLM will execute sequentially
   } else {
-    // Only check query intents if no action intent was detected
+    // Only check query intents if no action intent was detected.
+    // Composite queries (e.g. node + exposure, subnet + level) skip twin-first and use EXECUTE path.
+    if (isCompositeQuery) {
+      logger.info("Composite query detected, skipping twin-first chains and using EXECUTE path", {
+        userInput: userInput.slice(0, 80),
+        compositeFromMetadata: classification?.metadata?.composite === true,
+      });
+    }
+    if (!isCompositeQuery) {
     // Check exposure intent first (most specific)
     const exposureIntent = detectExposureIntent(userInput);
     if (exposureIntent) {
@@ -2061,6 +2100,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         return { text: formattedAnswer };
       }
     }
+    }
   }
 
   const openaiTools = buildToolDefinitions(tools);
@@ -2089,16 +2129,21 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     /\b(what|what's|what is)\s+(the\s+)?(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
     /\b(how\s+much\s+)?(memory|ram|cpu|disk)\s+(does|has|is)\s+/i,
     /\b(how\s+long\s+)?(has|is)\s+.*\s+(been\s+)?(running|up)\b/i,
+    /\b(how\s+many\s+).*\b(uptime|running|up)\b/i,
+    /\b(uptime|running)\s+(higher|greater|more|over|>\s*)\s*(\d+)\s*(days?|hours?)/i,
+    /\b(uptime\s+>\s*\d+|\d+\s*\+\s*days?\s+uptime)/i,
   ];
   
   const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
   const isMetaQuery = isMetaIdentityQuery(userInput);
   const eligibility = getRetrievalEligibility({
     intent: classification.intent,
+    domain: classification.metadata?.domain,
     isTrivialQuery: isTrivialQuery(userInput),
     isActionIntent: !!actionIntent,
     isRealTimeMetricQuery,
     isMetaIdentityQuery: isMetaQuery,
+    isCompositeQuery,
   });
 
   if (isRealTimeMetricQuery) {
@@ -2279,8 +2324,28 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       decisions: [],
     };
 
-    // Attach retrieval decisions + artifact references on step 1.
+    // Attach retrieval decisions + artifact references and conversation path on step 1.
     if (step === 0) {
+      // Observability: record how we reached EXECUTE (direct vs after clarify/confirm).
+      const pathParts: string[] = ["EXECUTE"];
+      if (clarificationContinuation.usedContinuation) pathParts.unshift("clarification_continuation");
+      if (usedPendingAction) pathParts.unshift("user_confirmed");
+      reasoningStep.decisions.push({
+        type: "conversation_path",
+        description: `Conversation path: ${pathParts.join(" → ")}. Router decision=EXECUTE. Trace reflects this run.`,
+        metadata: {
+          decision: "EXECUTE",
+          planDecision: conversationPlan.decision,
+          handler: "execute",
+          conversationStateBefore: options.conversationState ?? "IDLE",
+          usedClarificationContinuation: clarificationContinuation.usedContinuation,
+          clarificationAnchor: clarificationContinuation.anchorUserInput ?? undefined,
+          usedPendingAction,
+          pendingActionId: pendingActionId ?? undefined,
+          originalUserInput,
+          effectiveUserInput: userInput,
+        },
+      });
       if (retrievalDecisions.length > 0) {
         reasoningStep.decisions.push(...retrievalDecisions);
       }
@@ -2302,8 +2367,12 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     { role: "system", content: memoryContext }
   ] : [];
     
+    const compositeInstructionMessage = isCompositeQuery
+      ? [{ role: "system" as const, content: COMPOSITE_MULTI_STEP_INSTRUCTION }]
+      : [];
     const messages = [
       { role: "system", content: SYSTEM_PROMPT },
+      ...compositeInstructionMessage,
     ...memoryContextMessage,
       ...ragMessage,
       ...realTimeMetricInstruction,
@@ -2844,10 +2913,11 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             const originalClassification = failureTracker.getOriginalClassification(userInput);
             
             // Reclassify with context (confidence will be capped to original if no new evidence)
-            const reclassification = reclassifyIntentWithContext(
-              userInput, 
+            const reclassification = await reclassifyIntentWithContext(
+              userInput,
               failureContext,
-              originalClassification
+              originalClassification,
+              process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true" ? classifyIntentWithLLM : undefined
             );
             
             logger.info(`Reclassified intent after failure`, {

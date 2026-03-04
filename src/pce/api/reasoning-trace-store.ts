@@ -23,6 +23,7 @@ export interface ReasoningStep {
   fusionContextId?: string;
   decisions: Array<{
     type:
+      | "conversation_path"
       | "duplicate_detected"
       | "limit_reached"
       | "fallback"

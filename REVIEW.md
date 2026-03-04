@@ -919,4 +919,36 @@ The runner looks up the policy based on classified intent and sets `tool_choice`
 
 ---
 
-*This document was generated through static analysis of the full source tree (≈180 TypeScript files), augmented by CLI diagnostic queries against the live codebase. All line numbers reference the state of the codebase as of 2026-03-03.*
+## 14. Implementation status (post–Phase 3, 2026-03-04)
+
+The following reflects the current codebase relative to this review.
+
+### §4 Thin router (Bottleneck 1 — monolith)
+
+- **Done.** `runAgent()` delegates to typed handlers instead of inlining all branches:
+  - **handleConfirmation** — cancellation, confirm/no-pending, confirm/wrong-id, expired, or pass-through with `effectiveInput`.
+  - **handleIdentityAndSocial** — name update, name query, assistant name, CHAT_SOCIAL, subnet sizing; returns `{ handled, response }` or `{ handled: false }`.
+  - **handleConfirmRequest** — ASK_CONFIRM: builds pending action record, emits confirmation prompt, returns prompt text.
+  - **handleClarifyFromPlan** — ASK_CLARIFY (when not bypassed by domain detectors): intent disambiguation, ask_missing, or generic clarification.
+  - **Execute path** — remains in `runner.ts` (RAG, LLM loop, tool execution, reclassification). No separate `handle-execute.ts` yet; the router calls the execute block inline.
+- Handler modules live under `src/agent/handlers/` (handle-confirmation, handle-identity, handle-confirm-request, handle-clarify, emit-helpers, index). Runner imports and calls them; line count of `runner.ts` is reduced from ~3,550 to ~3,2xx.
+
+### Observability aligned with router
+
+- **Reasoning traces** now record the router/handler path for every turn so trace DB and UI match PCE logs:
+  - **CONFIRM_HANDLED** — when `handleConfirmation` returns a response (cancel, no pending, wrong id, expired): one step with `conversation_path`, `metadata: { handler: "handleConfirmation", decision: "CONFIRM_HANDLED" }`.
+  - **ASK_CONFIRM** — when `handleConfirmRequest` returns: one step with `handler: "handleConfirmRequest", decision: "ASK_CONFIRM"`.
+  - **ASK_CLARIFY** — when `handleClarifyFromPlan` returns: one step with `handler: "handleClarifyFromPlan", decision: "ASK_CLARIFY"`.
+  - **EXECUTE** — first step in the main loop includes `conversation_path` with `metadata: { decision: "EXECUTE", planDecision, handler: "execute", usedPendingAction, usedClarificationContinuation, ... }`.
+- So for a flow like “create a vm” → ASK_CLARIFY → “YANG” → ASK_CONFIRM → “CONFIRM id” → EXECUTE, each turn has a trace row with the same handler/decision as in the `[info] Conversation transition` logs.
+
+### Not yet done (from this review)
+
+- **§5** — Intent routing still uses the existing classifier (no LLM-based `classifyAndRouteWithLLM` in production path).
+- **§6** — Response formatter and event payloads are not yet fully migrated to `generateObject` + Zod schemas.
+- **§7** — Action layer: `ActionTool` still exists; per-action tools (e.g. CreateVmTool, DestroyVmTool) are added in tool-loader but the single generic `action` tool is still used by the LLM.
+- **§8** — Conversation state remains a flat array; no typed `AgentStateV1` persisted across turns.
+
+---
+
+*This document was generated through static analysis of the full source tree (≈180 TypeScript files), augmented by CLI diagnostic queries against the live codebase. All line numbers reference the state of the codebase as of 2026-03-03. Section 14 added 2026-03-04.*

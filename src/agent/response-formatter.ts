@@ -12,6 +12,7 @@ import OpenAI from "openai";
 import { logger } from "../utils/logger";
 import {
   buildEntityListSection,
+  formatCountAnswer,
   parseEntityLine,
   parseEntityListSection,
   type EntityListEntry,
@@ -142,6 +143,42 @@ function isStatusListQuery(userQuery: string): boolean {
   return asksStatus && (hasTarget || /\b(node|host|prox|vm|container)\b/.test(query));
 }
 
+/** True when query asks for a count (e.g. "how many vms have uptime > 20 days"). Count answers use canonical count format, not entity-list. */
+function isCountQuery(userQuery: string): boolean {
+  return /\bhow\s+many\b/i.test(userQuery.trim());
+}
+
+/**
+ * Canonical count packaging: for "how many X" queries, return a single-line count answer
+ * so we never feed count responses into entity-list parsing (which would produce fake rows like "None | Uptime=0 days").
+ */
+function normalizeCountPackaging(responseText: string, context: FormatContext): string | null {
+  if (!isCountQuery(context.userQuery) || !responseText?.trim()) return null;
+  const trimmed = responseText.trim();
+  // Already a single short line → keep as-is (canonical count shape)
+  const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 1 && lines[0]!.length < 120) return lines[0]!;
+  // Extract numeric count: "None" / "no VMs" → 0; "N VMs" / "N nodes" / "Count: N" → N
+  let count: number | null = null;
+  if (/none\s+of\s+the|no\s+vms?|zero\s+vms?|0\s+vms?/i.test(trimmed)) count = 0;
+  const countMatch = trimmed.match(/(?:count\s*:\s*)?(\d+)\s*(vms?|nodes?|containers?|lxcs?)/i)
+    ?? trimmed.match(/(\d+)\s+(?:vms?|nodes?|containers?|lxcs?)\s+(?:have|with)/i);
+  if (countMatch) count = parseInt(countMatch[1]!, 10);
+  if (count === null && lines.length > 0) {
+    const first = lines[0]!;
+    const numInFirst = first.match(/\b(\d+)\s+(?:vms?|nodes?|containers?)/i);
+    if (numInFirst) count = parseInt(numInFirst[1]!, 10);
+  }
+  const unit = /\b(vms?|nodes?|containers?|lxcs?)\b/i.test(context.userQuery)
+    ? (context.userQuery.match(/\b(vms?|nodes?|containers?|lxcs?)\b/i)?.[1] ?? "VMs")
+    : "items";
+  if (count !== null && !Number.isNaN(count)) {
+    const qualifier = lines[0]?.replace(/^\D*\d+\s*(vms?|nodes?|containers?|lxcs?)\s*/i, "").replace(/\.$/, "").trim();
+    return formatCountAnswer(count, unit, qualifier && qualifier.length < 80 ? qualifier : undefined);
+  }
+  return lines[0] ?? trimmed;
+}
+
 function normalizeVmInventoryPackaging(
   responseText: string,
   context: FormatContext
@@ -256,10 +293,13 @@ function normalizeEntityListPackaging(
   context: FormatContext
 ): string | null {
   const intent = context.intentType;
+  if (!responseText) return null;
+  // Count queries are handled by normalizeCountPackaging; skip entity-list as a safeguard
+  if (isCountQuery(context.userQuery)) return null;
   const useEntityList =
     intent === "status" || intent === "compute_status" || intent === "compute_list" ||
     isStatusListQuery(context.userQuery);
-  if (!useEntityList || !responseText) return null;
+  if (!useEntityList) return null;
 
   const lines = responseText.split("\n").map((l) => l.trim()).filter(Boolean);
   if (lines.length < 2) return null;
@@ -628,6 +668,12 @@ export function applyAdaptivePackaging(
   context: FormatContext
 ): string | null {
   if (!responseText) return null;
+
+  // Count queries: canonical one-line count format only (never entity-list)
+  const countPackaging = normalizeCountPackaging(responseText, context);
+  if (countPackaging) {
+    return countPackaging;
+  }
 
   const vmInventoryPackaging = normalizeVmInventoryPackaging(responseText, context);
   if (vmInventoryPackaging) {

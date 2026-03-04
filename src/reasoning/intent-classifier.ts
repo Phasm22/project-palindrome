@@ -50,6 +50,8 @@ export interface IntentClassification {
     domain?: "compute" | "network" | "firewall" | "metrics" | "general";
     actionType?: string;
     queryType?: string;
+    /** When true, query has multiple dimensions (e.g. node + exposure, subnet + level); route to EXECUTE path. */
+    composite?: boolean;
   };
 }
 

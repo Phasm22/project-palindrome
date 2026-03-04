@@ -17,13 +17,24 @@
  * - Regular queries: Lower threshold (>= 0.30 required)
  */
 
+import { generateObject } from "ai";
+import { openai } from "@ai-sdk/openai";
 import { classifyIntent, isDestructiveAction } from "./intent-classifier";
 import type { IntentType, IntentClassification } from "./intent-classifier";
+import {
+  IntentClassificationSchema,
+  CLASSIFICATION_SYSTEM_PROMPT,
+  mapLLMResultToIntentClassification,
+} from "./intent-schema";
 import { detectActionIntent } from "./action-intents";
 import { detectComputeIntent } from "./compute-intents";
 import { detectFirewallIntent } from "./detectFirewallIntent";
 import { detectNetworkIntent } from "./detectNetworkIntent";
 import { detectExposureIntent } from "./detectExposureIntent";
+import { logger } from "../utils/logger";
+
+const ENABLE_LLM_INTENT_CLASSIFIER = process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true";
+const INTENT_CLASSIFIER_MODEL = process.env.INTENT_CLASSIFIER_MODEL || "gpt-4o-mini";
 
 export interface RoutingDecision {
   route: "direct_handler" | "llm_reasoning" | "clarification";
@@ -403,6 +414,72 @@ export function classifyAndRoute(userInput: string): {
 
   // Bypass clarification for clear informational questions so we don't ask
   // "observe, diagnose, change, or explain?" when the user is obviously querying.
+  if (routing.route === "clarification" && isClearInformationalQuery(userInput)) {
+    const metadata = classification.metadata ?? {};
+    const queryClassification: IntentClassification = {
+      ...classification,
+      type: "QUERY",
+      intent: "QUERY",
+      confidence: 0.5,
+      missing: [],
+      metadata,
+    };
+    if (!metadata.domain) {
+      const n = userInput.toLowerCase();
+      if (/\b(ip|network|interface|subnet|vlan|gateway)\b/.test(n)) metadata.domain = "network";
+      else if (/\b(firewall|rule|allow|block|port)\b/.test(n)) metadata.domain = "firewall";
+      else if (/\b(vm|container|node|host)\b/.test(n)) metadata.domain = "compute";
+    }
+    routing = routeIntent(userInput, queryClassification);
+    classification = queryClassification;
+  }
+
+  return {
+    classification,
+    routing,
+  };
+}
+
+/**
+ * Classify user intent using LLM (generateObject). Falls back to sync classifyIntent on API/parse failure.
+ */
+export async function classifyIntentWithLLM(userInput: string): Promise<IntentClassification> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey?.trim()) {
+    return classifyIntent(userInput);
+  }
+  try {
+    const { object } = await generateObject({
+      // Provider may expose LanguageModelV3; ai@5 types expect LanguageModelV2 — cast for compatibility
+      model: openai(INTENT_CLASSIFIER_MODEL) as unknown as Parameters<typeof generateObject>[0]["model"],
+      schema: IntentClassificationSchema,
+      system: CLASSIFICATION_SYSTEM_PROMPT,
+      prompt: `Classify this homelab request: "${userInput.replace(/"/g, '\\"')}"`,
+    });
+    return mapLLMResultToIntentClassification(object);
+  } catch (err) {
+    logger.warn("LLM intent classification failed, falling back to regex classifier", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return classifyIntent(userInput);
+  }
+}
+
+/**
+ * Classify and route using LLM when ENABLE_LLM_INTENT_CLASSIFIER=true; otherwise sync classifyAndRoute.
+ * Applies same bypass-clarification logic for clear informational queries as classifyAndRoute.
+ */
+export async function classifyAndRouteWithLLM(userInput: string): Promise<{
+  classification: IntentClassification;
+  routing: RoutingDecision;
+}> {
+  if (!ENABLE_LLM_INTENT_CLASSIFIER) {
+    return classifyAndRoute(userInput);
+  }
+  let classification = await classifyIntentWithLLM(userInput);
+  let routing = routeIntent(userInput, classification);
+
+  // Bypass clarification for clear informational questions (same as classifyAndRoute)
   if (routing.route === "clarification" && isClearInformationalQuery(userInput)) {
     const metadata = classification.metadata ?? {};
     const queryClassification: IntentClassification = {

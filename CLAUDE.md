@@ -117,7 +117,12 @@ PROXMOX_TOKEN_SECRET=
 OPNSENSE_URL=
 OPNSENSE_API_KEY=
 OPNSENSE_API_SECRET=
+
+# Optional: LLM-based intent classification (default: regex classifier)
+ENABLE_LLM_INTENT_CLASSIFIER=true   # Use generateObject for intent routing when set
+INTENT_CLASSIFIER_MODEL=gpt-4o-mini # Model for intent classification (when LLM enabled)
 ```
+Composite queries (e.g. "VMs on yang exposed to internet", "nodes and their exposure level") are detected via `isLikelyCompositeQuery()` and classification metadata `composite: true`. For those, the runner skips twin-first chains and uses the EXECUTE path so the LLM can coordinate multiple tools. For composite queries, RAG is allowed (tool_first_domain is not applied) and a multi-step system instruction is injected so the agent uses multiple tools and synthesizes one answer.
 
 SSH credentials use per-host env vars: `SSH_USER_<IP>` and `SSH_PASSWORD_<IP>`.
 
