@@ -33,8 +33,13 @@ import { detectNetworkIntent } from "./detectNetworkIntent";
 import { detectExposureIntent } from "./detectExposureIntent";
 import { logger } from "../utils/logger";
 
-const ENABLE_LLM_INTENT_CLASSIFIER = process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true";
-const INTENT_CLASSIFIER_MODEL = process.env.INTENT_CLASSIFIER_MODEL || "gpt-4o-mini";
+function isLLMIntentClassifierEnabled(): boolean {
+  return process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true";
+}
+
+function getIntentClassifierModelId(): string {
+  return process.env.INTENT_CLASSIFIER_MODEL || "gpt-4o-mini";
+}
 
 export interface RoutingDecision {
   route: "direct_handler" | "llm_reasoning" | "clarification";
@@ -451,7 +456,7 @@ export async function classifyIntentWithLLM(userInput: string): Promise<IntentCl
   try {
     const { object } = await generateObject({
       // Provider may expose LanguageModelV3; ai@5 types expect LanguageModelV2 — cast for compatibility
-      model: openai(INTENT_CLASSIFIER_MODEL) as unknown as Parameters<typeof generateObject>[0]["model"],
+      model: openai(getIntentClassifierModelId()) as unknown as Parameters<typeof generateObject>[0]["model"],
       schema: IntentClassificationSchema,
       system: CLASSIFICATION_SYSTEM_PROMPT,
       prompt: `Classify this homelab request: "${userInput.replace(/"/g, '\\"')}"`,
@@ -473,7 +478,7 @@ export async function classifyAndRouteWithLLM(userInput: string): Promise<{
   classification: IntentClassification;
   routing: RoutingDecision;
 }> {
-  if (!ENABLE_LLM_INTENT_CLASSIFIER) {
+  if (!isLLMIntentClassifierEnabled()) {
     return classifyAndRoute(userInput);
   }
   let classification = await classifyIntentWithLLM(userInput);

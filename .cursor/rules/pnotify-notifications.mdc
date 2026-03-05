@@ -1,0 +1,36 @@
+---
+description: Use pnotify for completion/long-running notifications; prefer the project script for reliability.
+globs: 
+  - "**/*"
+alwaysApply: false
+---
+
+# pnotify (Pushover) notifications
+
+This project uses a custom CLI **pnotify** for phone notifications (e.g. when long-running tasks or agent work completes).
+
+**Usage patterns:**
+- `pnotify "Title" "Message"`
+- `command 2>&1 | pnotify "Title"`
+
+The tool truncates long messages, can attach output as log.txt, and handles Pushover API limits.
+
+**When to use:**
+- Prefer piping long-running build/script/CI output into pnotify over notify-send.
+- When an agent completes a multi-step task, suggest the user run a notification or run the project script (see below).
+
+**Reliable "task done" notification (recommended):**
+- Use the project script so PATH and env are handled consistently (e.g. in Cursor agent or CI, `pnotify` may not be in PATH until `~/.bashrc` is sourced; the script tries pnotify then sources bashrc and retries):
+  ```bash
+  ./scripts/pnotify-done.sh "Title" "Message"
+  ```
+- One-liner fallback if the script is not runnable:
+  ```bash
+  pnotify "Title" "Message" 2>&1 || (source ~/.bashrc 2>/dev/null; pnotify "Title" "Message")
+  ```
+
+**Why inline `(source ~/.bashrc; pnotify ...) || echo "failed"` can report failure:**
+- The subshell exits with pnotify’s exit code. If Pushover returns an error (rate limit, invalid token, network), pnotify exits non-zero and the `|| echo` branch runs even though pnotify executed.
+- In non-interactive or non-bash shells, `source ~/.bashrc` might not add the same PATH (e.g. `~/bin`), so the second pnotify may still not be found. The script uses `command -v pnotify` and always exits 0 so the step does not fail.
+
+Assume Ubuntu 24.04, GNOME, kitty terminal.

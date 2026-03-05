@@ -1,0 +1,33 @@
+/**
+ * Agent handlers: confirmation, identity/social, confirm-request, clarify.
+ * handle-execute remains in runner (EXECUTE path).
+ */
+
+export { handleConfirmation } from "./handle-confirmation";
+export type { HandleConfirmationInput, HandleConfirmationResult } from "./handle-confirmation";
+
+export { handleIdentityAndSocial } from "./handle-identity";
+export type { HandleIdentityInput, HandleIdentityResult } from "./handle-identity";
+
+export { handleConfirmRequest } from "./handle-confirm-request";
+export type {
+  HandleConfirmRequestInput,
+  HandleConfirmRequestResult,
+  PendingActionRecord,
+} from "./handle-confirm-request";
+
+export { handleClarifyFromPlan } from "./handle-clarify";
+export type {
+  HandleClarifyFromPlanInput,
+  HandleClarifyFromPlanResult,
+} from "./handle-clarify";
+
+export { emitStepEvent, emitFinalEvent } from "./emit-helpers";
+export type { AgentStepEventData } from "./emit-helpers";
+
+export {
+  extractUserNameUpdate,
+  isUserNameQuery,
+  isAssistantNameQuery,
+  isMetaIdentityQuery,
+} from "./identity-helpers";
