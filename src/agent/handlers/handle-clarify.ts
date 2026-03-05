@@ -3,28 +3,17 @@
  * ask_missing for missing slots, or generic "observe/diagnose/change" disambiguation.
  */
 
-import type { IntentClassification } from "../../reasoning/intent-classifier";
-import type { RoutingDecision } from "../../reasoning/intent-router";
-import type { ConversationContext } from "../../types";
 import type { AgentEventBus } from "../event-bus";
-import type { BaseTool } from "../../tools/BaseTool";
+import type { AgentStateV1 } from "../state";
 import type { ExecutionResult } from "../../types/execution";
 import { emitFinalEvent } from "./emit-helpers";
 import { executeToolCall } from "../tool-executor";
 import { logger } from "../../utils/logger";
 
 export interface HandleClarifyFromPlanInput {
-  originalUserInput: string;
-  userInput: string;
-  classification: IntentClassification;
-  routing: RoutingDecision;
-  contextUpdate: ConversationContext;
-  nextState: string;
-  tools: BaseTool[];
+  state: AgentStateV1;
   execContext: { userId: string; aclGroup: string };
   eventBus: AgentEventBus;
-  sessionId: string;
-  startTime: number;
 }
 
 export interface HandleClarifyFromPlanResult {
@@ -39,17 +28,20 @@ export async function handleClarifyFromPlan(
   input: HandleClarifyFromPlanInput
 ): Promise<HandleClarifyFromPlanResult> {
   const {
+    state,
+    execContext,
+    eventBus,
+  } = input;
+  const {
     originalUserInput,
     classification,
     routing,
     contextUpdate,
-    nextState,
+    conversationPlan,
     tools,
-    execContext,
-    eventBus,
     sessionId,
     startTime,
-  } = input;
+  } = state;
 
   if (classification.missing.length === 1 && classification.missing[0] === "intent") {
     const disambiguation =
@@ -58,7 +50,7 @@ export async function handleClarifyFromPlan(
       clarification: true,
       needsResponse: true,
       classification,
-      conversationState: nextState,
+      conversationState: conversationPlan.nextState,
       conversationContext: contextUpdate,
     });
     return { text: disambiguation };
@@ -93,7 +85,7 @@ export async function handleClarifyFromPlan(
       clarification: true,
       needsResponse: true,
       classification,
-      conversationState: nextState,
+      conversationState: conversationPlan.nextState,
       conversationContext: contextUpdate,
     });
     return { text: clarificationQuestion };
@@ -106,7 +98,7 @@ export async function handleClarifyFromPlan(
       clarification: true,
       needsResponse: true,
       classification,
-      conversationState: nextState,
+      conversationState: conversationPlan.nextState,
       conversationContext: contextUpdate,
     });
     return { text: disambiguation };
@@ -118,7 +110,7 @@ export async function handleClarifyFromPlan(
     clarification: true,
     needsResponse: true,
     classification,
-    conversationState: nextState,
+    conversationState: conversationPlan.nextState,
     conversationContext: contextUpdate,
   });
   return { text: fallback };

@@ -29,8 +29,34 @@ export interface AgentStateV1 {
   ragPayload: HybridApiContext | null;
 }
 
+export interface BuildAgentStateInput {
+  originalUserInput: string;
+  effectiveUserInput: string;
+  sessionId: string;
+  startTime: number;
+  session: ToolSession;
+  options: AgentRunOptions;
+  classification: IntentClassification;
+  routing: RoutingDecision;
+  conversationPlan: OrchestratorDecision;
+  confirmation: ConfirmationParseResult;
+  clarificationContinuation: ClarificationContinuationResult;
+  tools: BaseTool[];
+  contextUpdate: Partial<ConversationContext>;
+  finalContextUpdate: Partial<ConversationContext>;
+  postExecutionState: ConversationState;
+  responseMode: ResponseMode | undefined;
+  ragPayload?: HybridApiContext | null;
+}
+
+export function buildAgentState(input: BuildAgentStateInput): AgentStateV1 {
+  return {
+    ...input,
+    ragPayload: input.ragPayload ?? null,
+  };
+}
+
 // Local re-export of AgentRunOptions to avoid circular imports.
 // The canonical type lives in runner.ts; this alias keeps handler files decoupled
 // from the full runner implementation.
 export type AgentRunOptions = import("./runner").AgentRunOptions;
-

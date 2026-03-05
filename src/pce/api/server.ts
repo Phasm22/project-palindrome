@@ -52,6 +52,7 @@ export interface PceApiServerDependencies {
   orchestrator: {
     query: (query: string, aclGroup: ACLGroup) => Promise<HybridRAGResponse>;
   };
+  agentRunner?: typeof runAgent;
   historyStore?: ContextHistoryStore;
   chatHistoryStore?: ChatHistoryStore;
   profileStore?: ProfileStore;
@@ -68,6 +69,7 @@ export class PceApiServer {
   private server: BunServer | null = null;
   private options: Required<PceApiServerOptions>;
   private orchestrator: PceApiServerDependencies["orchestrator"];
+  private agentRunner: typeof runAgent;
   private historyStore: ContextHistoryStore;
   private chatHistoryStore: ChatHistoryStore;
   private profileStore: ProfileStore;
@@ -93,6 +95,7 @@ export class PceApiServer {
     };
 
     this.orchestrator = deps.orchestrator;
+    this.agentRunner = deps.agentRunner ?? runAgent;
     this.historyStore = deps.historyStore ?? new ContextHistoryStore(this.options.historyLimit);
     this.chatHistoryStore = deps.chatHistoryStore ?? new ChatHistoryStore();
     this.profileStore = deps.profileStore ?? new ProfileStore();
@@ -1731,38 +1734,42 @@ export class PceApiServer {
       // Subscribe to agent:final event to save assistant response
       const eventBus = AgentEventBus.getInstance();
       const unsubscribe = eventBus.onType("agent:final", async (event: AgentEvent) => {
-        if (event.sessionId === sessionId && event.data?.text && activeConversationId) {
+        const finalData = event.data;
+        if (finalData.type !== "agent:final") {
+          return;
+        }
+        if (event.sessionId === sessionId && finalData.text && activeConversationId) {
           try {
             await this.chatHistoryStore.saveMessage({
               conversationId: activeConversationId,
               userId,
               aclGroup,
               role: "assistant",
-              content: event.data.text,
+              content: finalData.text,
               timestamp: new Date(event.timestamp),
-              reasoningTraceId: event.data.traceId,
+              reasoningTraceId: finalData.traceId,
             });
 
-            if (event.data.conversationState) {
+            if (finalData.conversationState) {
               await this.chatHistoryStore.updateConversationState(
                 activeConversationId,
-                event.data.conversationState,
+                finalData.conversationState as ConversationState,
                 userId
               );
             }
-            if (event.data.conversationContext) {
-              const rawSource = event.data.memorySource as string | undefined;
+            if (finalData.conversationContext) {
+              const rawSource = finalData.memorySource as string | undefined;
               const allowedSources = new Set(["user_explicit", "policy_inference", "tool_verified"]);
               const memorySource = allowedSources.has(rawSource ?? "")
                 ? (rawSource as "user_explicit" | "policy_inference" | "tool_verified")
                 : "policy_inference";
-              const rawConfidence = event.data.memoryConfidence as number | undefined;
+              const rawConfidence = finalData.memoryConfidence as number | undefined;
               const memoryConfidence = Number.isFinite(rawConfidence)
                 ? Math.min(1, Math.max(0, rawConfidence as number))
                 : 0.7;
               await this.chatHistoryStore.setConversationContext(
                 activeConversationId,
-                event.data.conversationContext,
+                finalData.conversationContext,
                 memorySource,
                 memoryConfidence,
                 userId
@@ -1794,7 +1801,7 @@ export class PceApiServer {
 
       // Start agent execution in background (non-blocking)
       // Pass conversation history as context
-      runAgent(body.query, {
+      this.agentRunner(body.query, {
         userId,
         aclGroup,
         ragBaseUrl: `http://localhost:${this.options.port}`,

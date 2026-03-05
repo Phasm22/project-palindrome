@@ -3,9 +3,8 @@
  */
 
 import { createHash } from "node:crypto";
-import type { IntentClassification } from "../../reasoning/intent-classifier";
-import type { ConversationContext } from "../../types";
 import type { AgentEventBus } from "../event-bus";
+import type { AgentStateV1 } from "../state";
 import { emitFinalEvent } from "./emit-helpers";
 import { logger } from "../../utils/logger";
 import { pceLogger } from "../../pce/utils/logger";
@@ -43,19 +42,9 @@ function buildPendingActionRecord(
 }
 
 export interface HandleConfirmRequestInput {
-  /** User input that will be executed on confirm (pending action text). */
-  pendingActionExecute: string;
-  /** Human-readable summary for the prompt; defaults to pendingActionExecute. */
-  pendingSummary: string | undefined;
-  /** Intent type for record type label, e.g. "intent:action". */
-  intentType: string;
-  classification: IntentClassification;
-  contextUpdate: ConversationContext;
-  nextState: string;
+  state: AgentStateV1;
   conversationStateBefore?: string;
   eventBus: AgentEventBus;
-  sessionId: string;
-  startTime: number;
 }
 
 export interface HandleConfirmRequestResult {
@@ -67,21 +56,23 @@ export interface HandleConfirmRequestResult {
  */
 export function handleConfirmRequest(input: HandleConfirmRequestInput): HandleConfirmRequestResult {
   const {
-    pendingActionExecute,
-    pendingSummary,
-    intentType,
-    classification,
-    contextUpdate,
-    nextState,
+    state,
     conversationStateBefore,
     eventBus,
+  } = input;
+  const {
+    effectiveUserInput,
+    classification,
+    contextUpdate,
+    conversationPlan,
     sessionId,
     startTime,
-  } = input;
+  } = state;
+  const intentType = `intent:${classification.intent.toLowerCase()}`;
 
   const pendingRecord = buildPendingActionRecord(
-    pendingActionExecute,
-    pendingSummary ?? pendingActionExecute,
+    effectiveUserInput,
+    conversationPlan.pendingAction ?? effectiveUserInput,
     intentType
   );
   const confirmationPrompt =
@@ -102,7 +93,7 @@ export function handleConfirmRequest(input: HandleConfirmRequestInput): HandleCo
     confirmationPreview: pendingRecord.preview,
     confirmationExpiresAt: pendingRecord.expiresAt,
     classification,
-    conversationState: nextState,
+    conversationState: conversationPlan.nextState,
     pendingAction: pendingRecord.preview,
     conversationContext: {
       ...contextUpdate,

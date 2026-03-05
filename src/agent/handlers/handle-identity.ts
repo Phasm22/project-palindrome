@@ -3,25 +3,15 @@
  * Also handles subnet sizing fast-path. Returns { handled: true, response } or { handled: false }.
  */
 
-import type { IntentClassification } from "../../reasoning/intent-classifier";
-import type { ConversationContext } from "../../types";
-import type { ToolSession } from "../tool-policy";
 import type { AgentEventBus } from "../event-bus";
+import type { AgentStateV1 } from "../state";
 import { emitFinalEvent } from "./emit-helpers";
 import { extractUserNameUpdate, isUserNameQuery, isAssistantNameQuery } from "./identity-helpers";
 
 export interface HandleIdentityInput {
-  originalUserInput: string;
-  userInput: string;
-  confirmation: { confirmed: boolean };
-  classification: IntentClassification;
-  contextUpdate: ConversationContext;
+  state: AgentStateV1;
   memoryUserName: string | undefined;
-  session: ToolSession;
   eventBus: AgentEventBus;
-  sessionId: string;
-  startTime: number;
-  responseMode: string | undefined;
   assistantName: string;
   /** Record a trace for this identity/social response; returns traceId if recorded. */
   recordIdentityTrace: (params: {
@@ -36,20 +26,21 @@ export type HandleIdentityResult =
 
 export async function handleIdentityAndSocial(input: HandleIdentityInput): Promise<HandleIdentityResult> {
   const {
-    originalUserInput,
-    userInput,
-    confirmation,
-    classification,
-    contextUpdate,
+    state,
     memoryUserName,
-    session,
     eventBus,
-    sessionId,
-    startTime,
-    responseMode,
     assistantName,
     recordIdentityTrace,
   } = input;
+  const {
+    originalUserInput,
+    effectiveUserInput: userInput,
+    confirmation,
+    classification,
+    contextUpdate,
+    sessionId,
+    startTime,
+  } = state;
 
   const nameUpdate = extractUserNameUpdate(originalUserInput);
   if (!confirmation.confirmed && nameUpdate) {

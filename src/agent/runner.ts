@@ -81,6 +81,7 @@ import { resolveClarificationContinuationInput } from "./clarification-continuat
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-risk";
 import { pceLogger } from "../pce/utils/logger";
 import { TerraformRunner } from "../actions/helpers/terraform-runner";
+import { buildAgentState } from "./state";
 import {
   handleConfirmation,
   handleIdentityAndSocial,
@@ -886,7 +887,7 @@ export async function runAgent(
             metadata: { intent, mode: "twin_first" },
           }],
         }],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
         totalSteps: 1,
         totalToolCalls: toolCalls,
         maxStepsReached: false,
@@ -1176,22 +1177,40 @@ export async function runAgent(
     finalContextUpdate.pendingActionExecuteInput = "";
     finalContextUpdate.pendingActionExpiresAt = 0;
   }
+  const state = buildAgentState({
+    originalUserInput,
+    effectiveUserInput: userInput,
+    sessionId,
+    startTime,
+    session,
+    options,
+    classification,
+    routing,
+    conversationPlan,
+    confirmation,
+    clarificationContinuation,
+    tools,
+    contextUpdate,
+    finalContextUpdate,
+    postExecutionState,
+    responseMode,
+  });
   
   // Store original classification for confidence monotonicity
-  failureTracker.setOriginalClassification(userInput, classification);
+  failureTracker.setOriginalClassification(state.effectiveUserInput, state.classification);
   
   logger.info("Intent classification", {
-    input: userInput.slice(0, 100),
-    type: classification.type,
-    confidence: classification.confidence,
-    metadata: classification.metadata,
-    route: routing.route,
-    clarification_continuation: clarificationContinuation.usedContinuation,
-    clarification_anchor: clarificationContinuation.anchorUserInput,
+    input: state.effectiveUserInput.slice(0, 100),
+    type: state.classification.type,
+    confidence: state.classification.confidence,
+    metadata: state.classification.metadata,
+    route: state.routing.route,
+    clarification_continuation: state.clarificationContinuation.usedContinuation,
+    clarification_anchor: state.clarificationContinuation.anchorUserInput,
   });
   logger.info("Conversation transition", {
     conversation_state_before: options.conversationState ?? "IDLE",
-    decision: conversationPlan.decision,
+    decision: state.conversationPlan.decision,
     confirmation_id: pendingActionId ?? null,
     pending_action_source: usedPendingAction ? "pending_replay" : "user_input",
   });
@@ -1199,17 +1218,9 @@ export async function runAgent(
   const policyMode = options.userPreferences?.safeMode ? "safe" : "standard";
   const memoryUserName = options.conversationContext?.userName;
   const identityResult = await handleIdentityAndSocial({
-    originalUserInput,
-    userInput,
-    confirmation,
-    classification,
-    contextUpdate,
+    state,
     memoryUserName,
-    session,
     eventBus,
-    sessionId,
-    startTime,
-    responseMode,
     assistantName: ASSISTANT_NAME,
     recordIdentityTrace: async ({ finalResponse, reason }) => {
       const traceStore = getReasoningTraceStore();
@@ -1228,7 +1239,7 @@ export async function runAgent(
               metadata: { reason },
             }],
           }],
-          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
           totalSteps: 1,
           totalToolCalls: 0,
           maxStepsReached: false,
@@ -1244,18 +1255,11 @@ export async function runAgent(
   if (identityResult.handled) return identityResult.response;
 
   // Handle high-risk confirmation gate (bound to pending action)
-  if (conversationPlan.decision === "ASK_CONFIRM") {
+  if (state.conversationPlan.decision === "ASK_CONFIRM") {
     const confirmRequestResult = handleConfirmRequest({
-      pendingActionExecute: userInput,
-      pendingSummary: conversationPlan.pendingAction,
-      intentType: `intent:${classification.intent.toLowerCase()}`,
-      classification,
-      contextUpdate,
-      nextState: conversationPlan.nextState,
+      state,
       conversationStateBefore: options.conversationState ?? "IDLE",
       eventBus,
-      sessionId,
-      startTime,
     });
     await recordRouterTrace(originalUserInput, confirmRequestResult.text, "handleConfirmRequest", "ASK_CONFIRM", {
       userId: session.userId,
@@ -1265,7 +1269,7 @@ export async function runAgent(
   }
 
   // Handle clarification flow
-  if (conversationPlan.decision === "ASK_CLARIFY") {
+  if (state.conversationPlan.decision === "ASK_CLARIFY") {
     const canHandleDirectly =
       detectFirewallIntent(userInput) !== null ||
       detectNetworkIntent(userInput) !== null ||
@@ -1277,17 +1281,9 @@ export async function runAgent(
       // Fall through to domain-intent handlers below
     } else {
       const clarifyResult = await handleClarifyFromPlan({
-        originalUserInput,
-        userInput,
-        classification,
-        routing,
-        contextUpdate,
-        nextState: conversationPlan.nextState,
-        tools,
+        state,
         execContext: { userId: session.userId, aclGroup: session.aclGroup },
         eventBus,
-        sessionId,
-        startTime,
       });
       await recordRouterTrace(originalUserInput, clarifyResult.text, "handleClarifyFromPlan", "ASK_CLARIFY", {
         userId: session.userId,
@@ -1300,7 +1296,7 @@ export async function runAgent(
   // Handle clarification requests (low confidence or genuinely ambiguous)
   // BUT: If we have domain metadata, try RAG first - it might have the answer
   // EXCEPT: Skip RAG for real-time metric queries (uptime, memory, cpu, etc.) - these need tools
-  if (routing.route === "clarification") {
+  if (state.routing.route === "clarification") {
     // Short-circuit: if a domain-specific intent detector can handle this query directly,
     // skip clarification entirely and fall through to the direct-handler section below.
     // This catches queries like "can port 22 come into the lab from home" which score low
@@ -1318,9 +1314,9 @@ export async function runAgent(
     } else {
 
     logger.info("Input needs clarification", {
-      confidence: classification.confidence,
-      type: classification.type,
-      metadata: classification.metadata,
+      confidence: state.classification.confidence,
+      type: state.classification.type,
+      metadata: state.classification.metadata,
     });
     
     // Detect real-time metric queries that should use tools, not RAG
@@ -1344,11 +1340,11 @@ export async function runAgent(
 
     // If we have domain metadata, try RAG first - the data might answer the question
     // BUT: Skip RAG for real-time metric queries and for tool-first domains
-    const isToolFirstDomain = classification.metadata?.domain && (TOOL_FIRST_DOMAINS as readonly string[]).includes(classification.metadata.domain);
-    if (classification.metadata?.domain && classification.confidence >= 0.2 && !isRealTimeMetricQuery && !isToolFirstDomain) {
+    const isToolFirstDomain = state.classification.metadata?.domain && (TOOL_FIRST_DOMAINS as readonly string[]).includes(state.classification.metadata.domain);
+    if (state.classification.metadata?.domain && state.classification.confidence >= 0.2 && !isRealTimeMetricQuery && !isToolFirstDomain) {
       logger.info("Low confidence but domain detected - trying RAG before clarification", {
-        domain: classification.metadata.domain,
-        confidence: classification.confidence,
+        domain: state.classification.metadata.domain,
+        confidence: state.classification.confidence,
       });
       
       // Fetch RAG to see if we can answer from collected data
@@ -1359,7 +1355,7 @@ export async function runAgent(
       });
       if (ragPayload) {
         const ragScore = ragPayload.sTotalScore ?? null;
-        const domainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
+        const domainMatch = hasDomainMatch(state.classification.metadata?.domain, ragPayload);
         const hasSources = (ragPayload.sources?.length ?? 0) > 0;
         const injected =
           hasSources &&
@@ -1417,7 +1413,7 @@ export async function runAgent(
             cleanedAnswer = await formatResponseForBot(cleanedAnswer, {
               userQuery: userInput,
               intentType,
-              mode: responseMode,
+              mode: state.responseMode,
             });
           } catch (error: any) {
             logger.warn("Failed to format RAG answer", { error: error.message });
@@ -1442,12 +1438,12 @@ export async function runAgent(
                   ...clarificationRetrievalDecisions,
                   {
                     type: "rag_used",
-                    description: `Low confidence (${classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore?.toFixed(2)})`,
-                    metadata: { classification, routing, ragScore: ragPayload.sTotalScore },
+                    description: `Low confidence (${state.classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore?.toFixed(2)})`,
+                    metadata: { classification: state.classification, routing: state.routing, ragScore: ragPayload.sTotalScore },
                   },
                 ],
               }],
-              provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+              provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
               artifacts: clarificationRetrievalArtifacts,
               totalSteps: 1,
               totalToolCalls: clarificationRetrievalToolCalls.length,
@@ -1465,9 +1461,9 @@ export async function runAgent(
           emitFinalEvent(eventBus, sessionId, startTime, cleanedAnswer, {
             ragAnswer: true,
             ragScore: ragPayload.sTotalScore,
-            classification,
-            conversationState: postExecutionState,
-            conversationContext: finalContextUpdate,
+            classification: state.classification,
+            conversationState: state.postExecutionState,
+            conversationContext: state.finalContextUpdate,
             traceId,
           });
           return { text: cleanedAnswer };
@@ -1489,7 +1485,7 @@ export async function runAgent(
       // Real-time metric queries should use tools, not RAG
       logger.info("Skipping RAG for real-time metric query - will use tools instead", {
         query: userInput.slice(0, 100),
-        domain: classification.metadata?.domain,
+        domain: state.classification.metadata?.domain,
       });
       clarificationRetrievalDecisions.push({
         type: "retrieval_skipped",
@@ -1506,10 +1502,10 @@ export async function runAgent(
     
     // Generate clarification message based on classification
     let clarificationMessage: string;
-    if (classification.confidence < 0.2) {
+    if (state.classification.confidence < 0.2) {
       clarificationMessage = "I'm not sure what you're asking. Could you rephrase your question?";
-    } else if (classification.metadata?.domain) {
-      const domain = classification.metadata.domain;
+    } else if (state.classification.metadata?.domain) {
+      const domain = state.classification.metadata.domain;
       const suggestions: string[] = [];
       
       if (domain === "metrics") {
@@ -1542,8 +1538,8 @@ export async function runAgent(
           ...clarificationRetrievalDecisions,
           {
             type: "clarification_requested",
-            description: `Confidence ${classification.confidence.toFixed(2)} below threshold for ${classification.type} intent`,
-            metadata: { classification, routing },
+            description: `Confidence ${state.classification.confidence.toFixed(2)} below threshold for ${state.classification.type} intent`,
+            metadata: { classification: state.classification, routing: state.routing },
           },
         ],
       };
@@ -1557,7 +1553,7 @@ export async function runAgent(
         userInput,
         finalResponse: clarificationMessage,
         steps: [clarificationStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
         artifacts: clarificationRetrievalArtifacts,
         totalSteps: 1,
         totalToolCalls: clarificationRetrievalToolCalls.length,
@@ -1575,9 +1571,9 @@ export async function runAgent(
     emitFinalEvent(eventBus, sessionId, startTime, clarificationMessage, {
       clarification: true,
       needsResponse: true,
-      classification,
-      conversationState: conversationPlan.nextState,
-      conversationContext: contextUpdate,
+      classification: state.classification,
+      conversationState: state.conversationPlan.nextState,
+      conversationContext: state.contextUpdate,
       traceId: clarificationTraceId,
     });
     return { text: clarificationMessage };
@@ -1676,7 +1672,7 @@ export async function runAgent(
               metadata: { intent: "create_vm", node },
             }],
           }],
-          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
           totalSteps: 1,
           totalToolCalls: 1,
           maxStepsReached: false,
@@ -1688,9 +1684,9 @@ export async function runAgent(
       }
 
       emitFinalEvent(eventBus, sessionId, startTime, text, {
-        classification,
-        conversationState: postExecutionState,
-        conversationContext: finalContextUpdate,
+        classification: state.classification,
+        conversationState: state.postExecutionState,
+        conversationContext: state.finalContextUpdate,
         traceId: createVmTraceId,
       });
       return { text };
@@ -1832,7 +1828,7 @@ export async function runAgent(
               metadata: { intent: "destroy_vm", vmName: vmName ?? "", vmId: vmId ?? null, node: vmNode ?? null },
             }],
           }],
-          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
           totalSteps: 1,
           totalToolCalls: 1,
           maxStepsReached: false,
@@ -1844,9 +1840,9 @@ export async function runAgent(
       }
 
       emitFinalEvent(eventBus, sessionId, startTime, text, {
-        classification,
-        conversationState: postExecutionState,
-        conversationContext: finalContextUpdate,
+        classification: state.classification,
+        conversationState: state.postExecutionState,
+        conversationContext: state.finalContextUpdate,
         traceId: destroyVmTraceId,
       });
       return { text };
@@ -1921,7 +1917,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "exposure_analysis",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: exposureIntent.type } }],
-            mode: responseMode,
+            mode: state.responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format exposure answer", { error: error.message });
@@ -1931,8 +1927,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: exposureIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
@@ -1969,7 +1965,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "compute_status",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: computeIntent.type } }],
-            mode: responseMode,
+            mode: state.responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format compute answer", { error: error.message });
@@ -1979,8 +1975,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: computeIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
@@ -2000,7 +1996,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         // the raw chain output into a clear answer with evidence. Fall back to user's
         // responseMode if one was explicitly chosen (e.g. TERSE_DATA or EXPLAINER).
         const firewallSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
-        const firewallMode: ResponseMode = responseMode ?? (firewallSummaryWords ? "EXPLAINER" : "ASSISTIVE");
+        const firewallMode: ResponseMode = state.responseMode ?? (firewallSummaryWords ? "EXPLAINER" : "ASSISTIVE");
         let formattedAnswer = firewallAnswer;
         try {
           formattedAnswer = await formatResponseForBot(firewallAnswer, {
@@ -2022,8 +2018,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: firewallIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
@@ -2054,7 +2050,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
                 ? [{ toolName: "ingestion_summary_store", parameters: { snapshot: "latest" } }]
                 : [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }];
           const networkSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
-          const networkMode: ResponseMode = responseMode ?? (networkSummaryWords ? "EXPLAINER" : "ASSISTIVE");
+          const networkMode: ResponseMode = state.responseMode ?? (networkSummaryWords ? "EXPLAINER" : "ASSISTIVE");
           formattedAnswer = await formatResponseForBot(networkAnswer, {
             userQuery: userInput,
             intentType: "network_info",
@@ -2069,8 +2065,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: networkIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
@@ -2112,8 +2108,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
   const isMetaQuery = isMetaIdentityQuery(userInput);
   const eligibility = getRetrievalEligibility({
-    intent: classification.intent,
-    domain: classification.metadata?.domain,
+    intent: state.classification.intent,
+    domain: state.classification.metadata?.domain,
     isTrivialQuery: isTrivialQuery(userInput),
     isActionIntent: !!actionIntent,
     isRealTimeMetricQuery,
@@ -2151,6 +2147,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       userId: session.userId,
       aclGroup: session.aclGroup,
     });
+    state.ragPayload = ragPayload;
     if (ragPayload) {
       retrievalDecisions.push({
         type: "retrieval_executed",
@@ -2161,7 +2158,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           sourcesCount: ragPayload.sources?.length ?? 0,
         },
       });
-      retrievalDomainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
+      retrievalDomainMatch = hasDomainMatch(state.classification.metadata?.domain, ragPayload);
       const score = ragPayload.sTotalScore ?? null;
       const hasSources = (ragPayload.sources?.length ?? 0) > 0;
       if (!hasSources) {
@@ -2284,12 +2281,10 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   for (let step = 0; step < MAX_STEPS; step++) {
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
     
-    // Emit agent step event
-    eventBus.emit({
-      type: "agent:step",
-      sessionId,
-      timestamp: Date.now(),
-      data: { step: step + 1, maxSteps: MAX_STEPS, userInput },
+    emitStepEvent(eventBus, sessionId, {
+      step: step + 1,
+      maxSteps: MAX_STEPS,
+      userInput: state.effectiveUserInput,
     });
 
     // Initialize reasoning step
@@ -2303,18 +2298,18 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     if (step === 0) {
       // Observability: record how we reached EXECUTE (direct vs after clarify/confirm).
       const pathParts: string[] = ["EXECUTE"];
-      if (clarificationContinuation.usedContinuation) pathParts.unshift("clarification_continuation");
+      if (state.clarificationContinuation.usedContinuation) pathParts.unshift("clarification_continuation");
       if (usedPendingAction) pathParts.unshift("user_confirmed");
       reasoningStep.decisions.push({
         type: "conversation_path",
         description: `Conversation path: ${pathParts.join(" → ")}. Router decision=EXECUTE. Trace reflects this run.`,
         metadata: {
           decision: "EXECUTE",
-          planDecision: conversationPlan.decision,
+          planDecision: state.conversationPlan.decision,
           handler: "execute",
           conversationStateBefore: options.conversationState ?? "IDLE",
-          usedClarificationContinuation: clarificationContinuation.usedContinuation,
-          clarificationAnchor: clarificationContinuation.anchorUserInput ?? undefined,
+          usedClarificationContinuation: state.clarificationContinuation.usedContinuation,
+          clarificationAnchor: state.clarificationContinuation.anchorUserInput ?? undefined,
           usedPendingAction,
           pendingActionId: pendingActionId ?? undefined,
           originalUserInput,
@@ -2346,7 +2341,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       ? [{ role: "system" as const, content: COMPOSITE_MULTI_STEP_INSTRUCTION }]
       : [];
     const messages = [
-      { role: "system", content: buildSystemPrompt(responseMode) },
+      { role: "system", content: buildSystemPrompt(state.responseMode) },
       ...compositeInstructionMessage,
     ...memoryContextMessage,
       ...ragMessage,
@@ -2451,7 +2446,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             type: "tool:start",
             sessionId,
             timestamp: Date.now(),
-            data: { toolName, parameters: parsedArgs, toolCallId: toolCall.id },
+            data: { type: "tool:start", toolName, parameters: parsedArgs, toolCallId: toolCall.id },
           });
           
           // Execute tool (SSH calls are read-only, no confirmation needed)
@@ -2467,6 +2462,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             sessionId,
             timestamp: Date.now(),
             data: {
+              type: "tool:complete",
               toolName,
               parameters: parsedArgs,
               toolCallId: toolCall.id,
@@ -2626,7 +2622,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           type: "tool:start",
           sessionId,
           timestamp: Date.now(),
-          data: { toolName, parameters: parsedArgs, toolCallId: toolCall.id },
+          data: { type: "tool:start", toolName, parameters: parsedArgs, toolCallId: toolCall.id },
         });
 
         // parsedArgs already parsed above for duplicate detection
@@ -2669,7 +2665,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
         const toolRisk = mapToolRiskToIntentRisk(getToolRisk(targetTool));
         const derivedRisk = deriveToolCallRisk(toolName, parsedArgs);
-        const effectiveRisk = maxRisk(classification.risk, toolRisk, derivedRisk ?? "READ");
+        const effectiveRisk = maxRisk(state.classification.risk, toolRisk, derivedRisk ?? "READ");
         const needsToolConfirmation = effectiveRisk === "WRITE_HIGH" || effectiveRisk === "DESTRUCTIVE";
         const requiresApproval = requiresConfirmation(targetTool) || needsToolConfirmation;
         const explicitConfirmationOk =
@@ -2825,6 +2821,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           sessionId,
           timestamp: Date.now(),
           data: {
+            type: "tool:complete",
             toolName,
             parameters: parsedArgs,
             toolCallId: toolCall.id,
@@ -3066,13 +3063,13 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
       if (clarificationAbort) {
         const mergedContext: ConversationContext = {
-          ...contextUpdate,
+          ...state.contextUpdate,
           ...clarificationAbort.context,
         };
         emitFinalEvent(eventBus, sessionId, startTime, clarificationAbort.prompt, {
           clarification: true,
           needsResponse: true,
-          classification,
+          classification: state.classification,
           conversationState: clarificationAbort.state,
           conversationContext: mergedContext,
         });
@@ -3081,7 +3078,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
       if (confirmationAbort) {
         const mergedContext: ConversationContext = {
-          ...contextUpdate,
+          ...state.contextUpdate,
           ...confirmationAbort.context,
         };
         emitFinalEvent(eventBus, sessionId, startTime, confirmationAbort.prompt, {
@@ -3089,7 +3086,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           confirmationId: mergedContext.pendingActionId,
           confirmationPreview: mergedContext.pendingActionPreview ?? mergedContext.pendingActionSummary,
           confirmationExpiresAt: mergedContext.pendingActionExpiresAt ?? 0,
-          classification,
+          classification: state.classification,
           conversationState: confirmationAbort.state,
           conversationContext: mergedContext,
         });
@@ -3110,7 +3107,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     let finalText = coerceTextContent(message?.content).trim();
     if (finalText) {
       const shouldPreserveClarificationQuestion =
-        classification.intent === "ACTION" &&
+        state.classification.intent === "ACTION" &&
         reasoningStep.toolCalls.length === 0 &&
         /\?\s*$/.test(finalText);
       const shouldPreserveConfirmationPrompt =
@@ -3143,8 +3140,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         // ResponseMode formatting instructions are in the system prompt (buildSystemPrompt),
         // so no second LLM call is needed here.
         try {
-          if (responseMode === "ASSISTIVE" || responseMode === "EXPLAINER") {
-            const movesContext = await buildBotMoveContext(finalText, classification.intent);
+          if (state.responseMode === "ASSISTIVE" || state.responseMode === "EXPLAINER") {
+            const movesContext = await buildBotMoveContext(finalText, state.classification.intent);
             if (movesContext) {
               finalText = `${movesContext}\n\n${finalText}`;
             }
@@ -3167,7 +3164,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           userInput,
           finalResponse: finalText,
           steps: reasoningSteps,
-          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
           artifacts: retrievalArtifacts,
           totalSteps: reasoningSteps.length,
           totalToolCalls,
@@ -3212,8 +3209,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           ? "NEED_CLARIFICATION"
           : shouldPreserveConfirmationPrompt
             ? "AWAITING_CONFIRMATION"
-            : postExecutionState,
-        conversationContext: finalContextUpdate,
+            : state.postExecutionState,
+        conversationContext: state.finalContextUpdate,
         clarification: shouldPreserveClarificationQuestion,
         needsResponse: shouldPreserveClarificationQuestion || shouldPreserveConfirmationPrompt,
       });
@@ -3233,7 +3230,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       userInput,
       finalResponse: "Max reasoning depth reached. Please try a simpler query.",
       steps: reasoningSteps,
-      provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+      provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
       artifacts: retrievalArtifacts,
       totalSteps: reasoningSteps.length,
       totalToolCalls,
@@ -3249,7 +3246,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     totalSteps: reasoningSteps.length,
     totalToolCalls,
     traceId,
-    conversationState: conversationPlan.nextState,
+    conversationState: state.conversationPlan.nextState,
     conversationContext: contextUpdate,
   });
 

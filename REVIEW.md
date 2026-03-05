@@ -1061,9 +1061,9 @@ try {
 
 The execute path (RAG → system prompt → LLM loop → tool dispatch → reclassification) is ~2,200 lines inline. Extracting to `handle-execute.ts` completes the handler decomposition; runner becomes ~200 lines. Requires P1.1 (AgentStateV1 wired) first.
 
-**P2.4: Wire `ChatHistoryStore` into `runAgent`**
+**P2.4: Formalize and test the server-owned conversation history contract**
 
-`ChatHistoryStore` exists but isn't wired. Add: `getHistory(conversationId)` at start of `runAgent`, `appendTurn(conversationId, { user, assistant })` at end. Fixes multi-turn coherence without changing the flat-array format.
+`ChatHistoryStore` is already wired in `src/pce/api/server.ts`: the server creates conversations, loads history/context, passes `conversationHistory`/`conversationState`/`conversationContext` into `runAgent`, and persists assistant output plus conversation updates from `agent:final`. The remaining gap is to document and test that ownership boundary explicitly so `runAgent` remains storage-agnostic.
 
 ---
 
@@ -1089,7 +1089,7 @@ The execute path (RAG → system prompt → LLM loop → tool dispatch → recla
 | `event-bus.data` still `Record<string,any>` | **Medium** | 1 line | Swap to `AgentEventData` union type |
 | `JSON.parse` without validation in hot path | **Medium** | Low | Add try/catch + `schema.parse` at tool dispatch |
 | Execute path still ~2,200 lines inline | **Medium** | High | Extract `handle-execute.ts` (needs P1.1 first) |
-| Server-side conversation history not wired | **Medium** | Medium | Wire `ChatHistoryStore` into `runAgent` |
+| Server-owned conversation history contract not tested/documented | **Medium** | Medium | Keep persistence in `PceApiServer`; add injected-runner tests + update review text |
 | `ActionTool` docstring manually maintained | **Medium** | Low | Auto-generate from Zod schemas via `zod-to-json-schema` |
 | `canonical-response-format.ts` still present | **Low** | Low | Remove once `AgentResponseV1Schema` is primary path |
 | Domain regex waterfall still runs pre-classification | **Low** | Medium | Reduce to post-classification validators after P1.2 |

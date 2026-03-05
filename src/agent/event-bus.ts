@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import type { AgentEventData, ToolProgressPayload } from "./event-payloads";
 
 /**
  * Agent Event Types
@@ -36,7 +37,7 @@ export interface AgentEvent {
   type: AgentEventType;
   sessionId?: string;
   timestamp: number;
-  data: Record<string, any>;
+  data: AgentEventData;
 }
 
 /**
@@ -94,11 +95,15 @@ export class AgentEventBus extends EventEmitter {
    * Helper for tools to report progress during long-running operations
    */
   emitProgress(progress: ToolProgressData, sessionId?: string): void {
+    const payload: ToolProgressPayload = {
+      type: "tool:progress",
+      ...progress,
+    };
     this.emit({
       type: "tool:progress",
       sessionId,
       timestamp: Date.now(),
-      data: progress,
+      data: payload,
     });
   }
 }
