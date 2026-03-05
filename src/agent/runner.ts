@@ -8,7 +8,7 @@ import { logger } from "../utils/logger";
 import { loadTools } from "./tool-loader";
 import { executeToolCall } from "./tool-executor";
 import { AgentContext } from "./context";
-import { SYSTEM_PROMPT } from "./system-prompt";
+import { SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
@@ -70,7 +70,7 @@ import {
   loadKnownEntitiesFromIngestionSummary,
   loadKnownEntitiesFromProxmox,
 } from "../reasoning/clarification";
-import { classifyAndRoute, classifyAndRouteWithLLM, classifyIntentWithLLM } from "../reasoning/intent-router";
+import { classifyAndRouteWithLLM, classifyIntentWithLLM } from "../reasoning/intent-router";
 import { isLikelyCompositeQuery } from "../reasoning/composite-query";
 import { getRetrievalEligibility, TOOL_FIRST_DOMAINS } from "./retrieval-eligibility";
 import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../reasoning/failure-reclassification";
@@ -86,6 +86,8 @@ import {
   handleIdentityAndSocial,
   handleConfirmRequest,
   handleClarifyFromPlan,
+  emitFinalEvent,
+  emitStepEvent,
 } from "./handlers";
 
 let openaiClient: OpenAI | null = null;
@@ -752,30 +754,6 @@ export async function runAgent(
       : (pendingActionCreatedAt ? (Date.now() - pendingActionCreatedAt) > (15 * 60 * 1000) : false);
   let usedPendingAction = false;
 
-  const emitStepEvent = (data: Record<string, any>) => {
-    eventBus.emit({
-      type: "agent:step",
-      sessionId,
-      timestamp: Date.now(),
-      data,
-    });
-  };
-
-  const emitFinalEvent = (text: string, extra: Record<string, any> = {}) => {
-    eventBus.emit({
-      type: "agent:final",
-      sessionId,
-      timestamp: Date.now(),
-      data: {
-        text,
-        totalSteps: extra.totalSteps ?? 0,
-        totalToolCalls: extra.totalToolCalls ?? 0,
-        durationMs: Date.now() - startTime,
-        ...extra,
-      },
-    });
-  };
-
   /** Record a minimal reasoning trace for router/handler early-returns so observability matches PCE logs. */
   const recordRouterTrace = async (
     userInput: string,
@@ -1162,11 +1140,8 @@ export async function runAgent(
     return tool.execute(params, { toolName, startedAt: Date.now() });
   });
   
-  // Classify intent: LLM (generateObject) when ENABLE_LLM_INTENT_CLASSIFIER=true, else regex classifier
-  const { classification, routing } =
-    process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true"
-      ? await classifyAndRouteWithLLM(userInput)
-      : classifyAndRoute(userInput);
+  // Classify intent using LLM (generateObject); falls back to regex classifier on API failure
+  const { classification, routing } = await classifyAndRouteWithLLM(userInput);
   const isCompositeQuery = isLikelyCompositeQuery(userInput, classification);
   const conversationPlan = planConversation({
     userInput: originalUserInput,
@@ -1487,7 +1462,7 @@ export async function runAgent(
           // Small delay to ensure SSE stream is subscribed before emitting
           await new Promise(resolve => setTimeout(resolve, 100));
           
-          emitFinalEvent(cleanedAnswer, { 
+          emitFinalEvent(eventBus, sessionId, startTime, cleanedAnswer, {
             ragAnswer: true,
             ragScore: ragPayload.sTotalScore,
             classification,
@@ -1597,7 +1572,7 @@ export async function runAgent(
     // Small delay to ensure SSE stream is subscribed before emitting
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    emitFinalEvent(clarificationMessage, {
+    emitFinalEvent(eventBus, sessionId, startTime, clarificationMessage, {
       clarification: true,
       needsResponse: true,
       classification,
@@ -1625,7 +1600,7 @@ export async function runAgent(
       if (!node) {
         // Shouldn't happen (detectActionIntent requires node), but keep a safe fallback.
         const prompt = "Which node should I create the VM on? (e.g., yin, YANG, proxBig)";
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -1634,7 +1609,7 @@ export async function runAgent(
         return { text: prompt };
       }
 
-      emitStepEvent({ step: 1, maxSteps: 1, userInput, intent: "create_vm", tool: "action" });
+      emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "create_vm", tool: "action" });
 
       const params: Record<string, any> = { node };
       if (name && name.trim().length > 0) params.name = name.trim();
@@ -1712,7 +1687,7 @@ export async function runAgent(
         logger.warn("Failed to record reasoning trace for create_vm", { error: error.message });
       }
 
-      emitFinalEvent(text, {
+      emitFinalEvent(eventBus, sessionId, startTime, text, {
         classification,
         conversationState: postExecutionState,
         conversationContext: finalContextUpdate,
@@ -1730,7 +1705,7 @@ export async function runAgent(
       let resolvedDestroyVm: ResolvedVmDetails | null = null;
       if (!lookup) {
         const prompt = "Which VM should I destroy? Provide a VM name or VMID.";
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -1745,7 +1720,7 @@ export async function runAgent(
           const prompt = requestedVmId
             ? `I couldn't find VMID ${requestedVmId}.`
             : `I couldn't find VM "${requestedName}".`;
-          emitFinalEvent(prompt, {
+          emitFinalEvent(eventBus, sessionId, startTime, prompt, {
             clarification: true,
             needsResponse: true,
             conversationState: "NEED_CLARIFICATION",
@@ -1756,7 +1731,7 @@ export async function runAgent(
         resolvedDestroyVm = resolved;
       } catch (error: any) {
         const prompt = `I couldn't resolve the VM details: ${error.message}`;
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -1773,7 +1748,7 @@ export async function runAgent(
         const prompt =
           `VM "${resolvedDestroyVm.name}" (VMID ${resolvedDestroyVm.vmid}) is on node "${resolvedDestroyVm.node}", not "${requestedNode}". ` +
           "Confirm the correct node or VM target.";
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -1782,7 +1757,7 @@ export async function runAgent(
         return { text: prompt };
       }
 
-      emitStepEvent({ step: 1, maxSteps: 1, userInput, intent: "destroy_vm", tool: "action" });
+      emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "destroy_vm", tool: "action" });
 
       const params: Record<string, any> = {};
       const resolvedName = resolvedDestroyVm?.name?.trim();
@@ -1868,7 +1843,7 @@ export async function runAgent(
         logger.warn("Failed to record reasoning trace for destroy_vm", { error: error.message });
       }
 
-      emitFinalEvent(text, {
+      emitFinalEvent(eventBus, sessionId, startTime, text, {
         classification,
         conversationState: postExecutionState,
         conversationContext: finalContextUpdate,
@@ -1876,7 +1851,7 @@ export async function runAgent(
       });
       return { text };
     }
-    
+
     // For VM-related actions, resolve VM details (node, vmid, type) before letting LLM proceed
     // This ensures the LLM has the correct parameters for write operations
     const vmActionsNeedingResolution = ["destroy_vm", "start_vm", "stop_vm", "restart_vm"];
@@ -1937,7 +1912,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const exposureAnswer = await executeExposureIntent(exposureIntent, tools, session);
       if (exposureAnswer) {
         logger.info("Responding via twin-first exposure reasoning chain.");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format exposure response for bot-like style
         let formattedAnswer = exposureAnswer;
@@ -1953,7 +1928,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, exposureIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: exposureIntent.type,
           traceId,
           conversationState: postExecutionState,
@@ -1985,7 +1960,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
       if (twinAnswer) {
         logger.info("Responding via twin-first reasoning chain (no LLM needed).");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format compute response for bot-like style
         let formattedAnswer = twinAnswer;
@@ -2001,7 +1976,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, computeIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: computeIntent.type,
           traceId,
           conversationState: postExecutionState,
@@ -2018,7 +1993,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
       if (firewallAnswer) {
         logger.info("Responding via twin-first firewall reasoning chain.");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
         const firewallToolCalls = buildFirewallToolCalls(firewallIntent);
         
         // Format firewall response — use ASSISTIVE by default so the LLM synthesizes
@@ -2044,7 +2019,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           firewallToolCalls.length,
           firewallToolCalls
         );
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: firewallIntent.type,
           traceId,
           conversationState: postExecutionState,
@@ -2059,7 +2034,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
       if (networkAnswer) {
         logger.info("Responding via twin-first network reasoning chain.");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format network response for bot-like style
         let formattedAnswer = networkAnswer;
@@ -2091,7 +2066,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, networkIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: networkIntent.type,
           traceId,
           conversationState: postExecutionState,
@@ -2371,7 +2346,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       ? [{ role: "system" as const, content: COMPOSITE_MULTI_STEP_INSTRUCTION }]
       : [];
     const messages = [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: buildSystemPrompt(responseMode) },
       ...compositeInstructionMessage,
     ...memoryContextMessage,
       ...ragMessage,
@@ -2917,7 +2892,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
               userInput,
               failureContext,
               originalClassification,
-              process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true" ? classifyIntentWithLLM : undefined
+              classifyIntentWithLLM
             );
             
             logger.info(`Reclassified intent after failure`, {
@@ -3094,7 +3069,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           ...contextUpdate,
           ...clarificationAbort.context,
         };
-        emitFinalEvent(clarificationAbort.prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, clarificationAbort.prompt, {
           clarification: true,
           needsResponse: true,
           classification,
@@ -3109,7 +3084,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           ...contextUpdate,
           ...confirmationAbort.context,
         };
-        emitFinalEvent(confirmationAbort.prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, confirmationAbort.prompt, {
           confirmationRequired: true,
           confirmationId: mergedContext.pendingActionId,
           confirmationPreview: mergedContext.pendingActionPreview ?? mergedContext.pendingActionSummary,
@@ -3164,33 +3139,19 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       }
       
       if (!shouldBypassFormatting) {
-        // Format response for bot-like style before returning
+        // Enrich response with bot-moves context for ASSISTIVE/EXPLAINER modes.
+        // ResponseMode formatting instructions are in the system prompt (buildSystemPrompt),
+        // so no second LLM call is needed here.
         try {
-          // Extract tool calls from reasoning steps for context
-          const allToolCalls = reasoningSteps.flatMap(step => 
-            step.toolCalls.map(tc => ({
-              toolName: tc.toolName,
-              parameters: tc.parameters,
-            }))
-          );
-          
-          const intentType = detectResponseIntent(userInput, allToolCalls);
-          let enrichedText = finalText;
           if (responseMode === "ASSISTIVE" || responseMode === "EXPLAINER") {
             const movesContext = await buildBotMoveContext(finalText, classification.intent);
             if (movesContext) {
-              enrichedText = `${movesContext}\n\n${finalText}`;
+              finalText = `${movesContext}\n\n${finalText}`;
             }
           }
-          finalText = await formatResponseForBot(enrichedText, {
-            userQuery: userInput,
-            intentType,
-            toolCalls: allToolCalls,
-            mode: responseMode,
-          });
         } catch (error: any) {
-          logger.warn("Failed to format final response", { error: error.message });
-          // Continue with unformatted response
+          logger.warn("Failed to enrich response with moves context", { error: error.message });
+          // Continue with unenriched response
         }
       }
       
@@ -3243,7 +3204,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
-      emitFinalEvent(finalText, { 
+      emitFinalEvent(eventBus, sessionId, startTime, finalText, {
         totalSteps: step + 1,
         totalToolCalls,
         traceId,
@@ -3284,8 +3245,8 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     logger.warn("Failed to record reasoning trace", { error: error.message });
   }
   
-  emitFinalEvent("Max reasoning depth reached. Please try a simpler query.", { 
-    totalSteps: reasoningSteps.length, 
+  emitFinalEvent(eventBus, sessionId, startTime, "Max reasoning depth reached. Please try a simpler query.", {
+    totalSteps: reasoningSteps.length,
     totalToolCalls,
     traceId,
     conversationState: conversationPlan.nextState,

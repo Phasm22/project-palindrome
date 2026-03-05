@@ -33,9 +33,6 @@ import { detectNetworkIntent } from "./detectNetworkIntent";
 import { detectExposureIntent } from "./detectExposureIntent";
 import { logger } from "../utils/logger";
 
-function isLLMIntentClassifierEnabled(): boolean {
-  return process.env.ENABLE_LLM_INTENT_CLASSIFIER === "true";
-}
 
 function getIntentClassifierModelId(): string {
   return process.env.INTENT_CLASSIFIER_MODEL || "gpt-4o-mini";
@@ -471,16 +468,13 @@ export async function classifyIntentWithLLM(userInput: string): Promise<IntentCl
 }
 
 /**
- * Classify and route using LLM when ENABLE_LLM_INTENT_CLASSIFIER=true; otherwise sync classifyAndRoute.
+ * Classify and route using LLM (generateObject); falls back to sync classifyAndRoute on API failure.
  * Applies same bypass-clarification logic for clear informational queries as classifyAndRoute.
  */
 export async function classifyAndRouteWithLLM(userInput: string): Promise<{
   classification: IntentClassification;
   routing: RoutingDecision;
 }> {
-  if (!isLLMIntentClassifierEnabled()) {
-    return classifyAndRoute(userInput);
-  }
   let classification = await classifyIntentWithLLM(userInput);
   let routing = routeIntent(userInput, classification);
 

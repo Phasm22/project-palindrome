@@ -919,36 +919,197 @@ The runner looks up the policy based on classified intent and sets `tool_choice`
 
 ---
 
-## 14. Implementation status (post–Phase 3, 2026-03-04)
+## 14. Implementation Status — realAgent branch, March 2026
 
-The following reflects the current codebase relative to this review.
-
-### §4 Thin router (Bottleneck 1 — monolith)
-
-- **Done.** `runAgent()` delegates to typed handlers instead of inlining all branches:
-  - **handleConfirmation** — cancellation, confirm/no-pending, confirm/wrong-id, expired, or pass-through with `effectiveInput`.
-  - **handleIdentityAndSocial** — name update, name query, assistant name, CHAT_SOCIAL, subnet sizing; returns `{ handled, response }` or `{ handled: false }`.
-  - **handleConfirmRequest** — ASK_CONFIRM: builds pending action record, emits confirmation prompt, returns prompt text.
-  - **handleClarifyFromPlan** — ASK_CLARIFY (when not bypassed by domain detectors): intent disambiguation, ask_missing, or generic clarification.
-  - **Execute path** — remains in `runner.ts` (RAG, LLM loop, tool execution, reclassification). No separate `handle-execute.ts` yet; the router calls the execute block inline.
-- Handler modules live under `src/agent/handlers/` (handle-confirmation, handle-identity, handle-confirm-request, handle-clarify, emit-helpers, index). Runner imports and calls them; line count of `runner.ts` is reduced from ~3,550 to ~3,2xx.
-
-### Observability aligned with router
-
-- **Reasoning traces** now record the router/handler path for every turn so trace DB and UI match PCE logs:
-  - **CONFIRM_HANDLED** — when `handleConfirmation` returns a response (cancel, no pending, wrong id, expired): one step with `conversation_path`, `metadata: { handler: "handleConfirmation", decision: "CONFIRM_HANDLED" }`.
-  - **ASK_CONFIRM** — when `handleConfirmRequest` returns: one step with `handler: "handleConfirmRequest", decision: "ASK_CONFIRM"`.
-  - **ASK_CLARIFY** — when `handleClarifyFromPlan` returns: one step with `handler: "handleClarifyFromPlan", decision: "ASK_CLARIFY"`.
-  - **EXECUTE** — first step in the main loop includes `conversation_path` with `metadata: { decision: "EXECUTE", planDecision, handler: "execute", usedPendingAction, usedClarificationContinuation, ... }`.
-- So for a flow like “create a vm” → ASK_CLARIFY → “YANG” → ASK_CONFIRM → “CONFIRM id” → EXECUTE, each turn has a trace row with the same handler/decision as in the `[info] Conversation transition` logs.
-
-### Not yet done (from this review)
-
-- **§5** — Intent routing still uses the existing classifier (no LLM-based `classifyAndRouteWithLLM` in production path).
-- **§6** — Response formatter and event payloads are not yet fully migrated to `generateObject` + Zod schemas.
-- **§7** — Action layer: `ActionTool` still exists; per-action tools (e.g. CreateVmTool, DestroyVmTool) are added in tool-loader but the single generic `action` tool is still used by the LLM.
-- **§8** — Conversation state remains a flat array; no typed `AgentStateV1` persisted across turns.
+*Snapshot: commit `79c1303` (initial); updated 2026-03-05 to reflect P0+P1.2+P1.4 changes.*
 
 ---
 
-*This document was generated through static analysis of the full source tree (≈180 TypeScript files), augmented by CLI diagnostic queries against the live codebase. All line numbers reference the state of the codebase as of 2026-03-03. Section 14 added 2026-03-04.*
+### §14.1 — What Changed vs. Previous Review
+
+| Issue (from §13) | Status | Notes |
+|---|---|---|
+| 3,550-line monolith `runner.ts` | **PARTIAL** | Handlers extracted to `src/agent/handlers/`; runner is ~3,296 lines (−254). Execute path still inline. |
+| Double LLM call (`formatResponseForBot`) | **DONE** | Removed from main LLM loop path. `buildSystemPrompt(responseMode)` injects mode instructions into system prompt. `formatResponseForBot` still used by twin-first chains + RAG path (single-call paths, not double). |
+| Jaccard/regex intent classifier | **DONE** | `classifyAndRouteWithLLM` is now always the primary path. `ENABLE_LLM_INTENT_CLASSIFIER` gate removed from code. Sync Jaccard path remains as the catch-block fallback on API failure. |
+| Client-side conversation history | **TODO** | Flat array still passed per-request. `AgentStateV1` type defined but not instantiated. |
+| Streaming / blank wait UX | **TODO** | `AgentEventBus` still used; no additional SSE wiring added. |
+| Action layer / IaC prison | **TODO** | `ActionTool` docstring still hardcoded. No auto-generation from registry. |
+| `event-bus` payload untyped | **DONE (execute path)** | Inline `emitFinalEvent`/`emitStepEvent` closures in `runner.ts` deleted. All 17 `emitFinalEvent` + 6 `emitStepEvent` call sites now use typed versions from `emit-helpers.ts`. `event-bus.ts` `AgentEvent.data` interface still `Record<string,any>` — that's a 1-line change remaining. |
+| `JSON.parse` without validation | **TODO** | Still endemic in runner hot path and tool argument parsing. |
+
+---
+
+### §14.2 — New Work Added
+
+#### 1. Handler Modules (`src/agent/handlers/`)
+
+The largest structural change: five concerns extracted from `runner.ts` into typed handler functions. The runner calls these at the top of `runAgent()` before the execute path.
+
+| File | Responsibility |
+|---|---|
+| `handle-confirmation.ts` | 5 confirmation paths: cancel, no-pending, wrong-id, expired, pass-through with `effectiveInput` |
+| `handle-identity.ts` | Name update, name query, assistant name, CHAT_SOCIAL, subnet sizing |
+| `handle-confirm-request.ts` | ASK_CONFIRM: builds pending action record, emits confirmation prompt |
+| `handle-clarify.ts` | ASK_CLARIFY when domain detectors don't bypass: disambiguation, ask_missing, generic |
+| `emit-helpers.ts` | Typed `emitStepEvent` / `emitFinalEvent` using `AgentFinalPayload` / `AgentStepPayload` schemas |
+| `identity-helpers.ts` | Pure helpers: `extractUserNameUpdate`, `isUserNameQuery`, `isAssistantNameQuery` |
+
+**Impact:** Early-return paths are testable in isolation. Typed I/O interfaces on each handler. Observability: traces record `handler + decision` for every router path.
+
+**Remaining gap:** `runner.ts` execute path (RAG, LLM loop, tool execution, reclassification) is still inline — no `handle-execute.ts` yet; that path is ~2,200 lines.
+
+#### 2. `AgentStateV1` — Typed State Interface (`src/agent/state.ts`)
+
+Defines a typed `AgentStateV1` interface carrying: `classification`, `routing`, `conversationPlan`, `confirmation`, `clarificationContinuation`, `tools`, `contextUpdate`, `ragPayload`.
+
+**Good:** The interface exists and mirrors what `runner.ts` locals already track.
+
+**Gap:** `AgentStateV1` is never instantiated in `runner.ts`. All those fields remain as separate local variables. The type exists as documentation, not enforcement.
+
+#### 3. Typed Event Payloads (`src/agent/event-payloads.ts`)
+
+Zod schemas for all `AgentEvent` payload types: `ToolStartPayload`, `ToolCompletePayload`, `ToolProgressPayload`, `LlmTokenPayload`, `AgentStepPayload`, `AgentFinalPayload` — and a discriminated union `AgentEventData`.
+
+**Good:** `emit-helpers.ts` uses these schemas. Schemas are precise and complete.
+
+**Fixed (2026-03-05):** Inline closures in `runner.ts` deleted. All emit call sites now use the typed versions from `emit-helpers.ts`. `event-bus.ts` `AgentEvent.data` interface still `Record<string,any>` — one-line change remaining (P2.1).
+
+#### 4. `AgentResponseV1Schema` (`src/agent/schemas/agent-response-v1.ts`)
+
+The unified response envelope from §12 is fully defined as a Zod schema: `conversation.state`, `answer.style + summary + sections[]`, `evidence.toolCalls[]`, `rawTextFallback`.
+
+**Good:** Schema exactly matches the v2 architecture proposal. `rawTextFallback` provides correct backward-compatibility path.
+
+**Critical gap:** `AgentResponseV1Schema` is never passed to `generateObject()` in runner or `response-formatter`. The dashboard's 480-line `formatAgentResponse` heuristic is still the rendering path.
+
+#### 5. LLM Intent Classifier (`classifyIntentWithLLM`)
+
+`IntentClassificationSchema` (Zod) defines the structured output contract. `classifyIntentWithLLM` calls `generateObject()` via the Vercel AI SDK. `mapLLMResultToIntentClassification` bridges back to the existing `IntentClassification` type. Falls back to sync `classifyIntent` on API/parse failure.
+
+**Good:** Uses `generateObject()`. Schema is well-designed: flat, clear descriptions, `missingSlots`, `composite` flag.
+
+**Fixed (2026-03-05):** Feature flag removed. `classifyAndRouteWithLLM` is now always the primary path. The 5-domain regex detector waterfall still runs before classification on every request — reducing these to post-classification validators is P3.2.
+
+#### 6. Composite Query Detection (`src/reasoning/composite-query.ts`)
+
+`isLikelyCompositeQuery()` identifies multi-dimensional queries (e.g. “VMs on yang and their exposure level”). Routes to EXECUTE path so the LLM can coordinate multiple tools instead of a single chain.
+
+**Good:** Correctly bypasses `tool_first_domain` skip for composite queries.
+
+**Note:** Pattern list is narrow (exposure + subnet/node combinations). Multi-step action composition (create VM + bootstrap + DNS) not yet detected as composite.
+
+#### 7. Retrieval Eligibility Module (`src/agent/retrieval-eligibility.ts`)
+
+`getRetrievalEligibility()` extracted from runner. Accepts `isCompositeQuery` parameter; correctly allows RAG for composite queries in tool-first domains. `TOOL_FIRST_DOMAINS` exported as shared constant.
+
+#### 8. Runner Structural Improvements
+
+- `classifyAndRoute` and `classifyAndRouteWithLLM` both imported; env var selects path at runtime
+- `isLikelyCompositeQuery` called at classification time, passed to `getRetrievalEligibility`
+- `recordRouterTrace()` closure records handler + decision for every early-return path
+- `normalizeUserName()` extracted (was inline string ops)
+- `runner.ts.bak` committed alongside `runner.ts` for diff visibility
+
+---
+
+### §14.3 — Remaining Issues (Priority Order)
+
+#### P0 — Build / Correctness
+
+**P0.1 ✅ DONE (2026-03-05):** Inline `emitFinalEvent` and `emitStepEvent` closures in `runner.ts` deleted. All 23 call sites updated to use typed versions from `emit-helpers.ts`. `agent:final` payload now enforces `AgentFinalPayload` schema end-to-end.
+
+---
+
+#### P1 — High Impact, Low Effort
+
+**P1.1: Wire `AgentStateV1` into `runner.ts`**
+
+Assemble the 35+ local variables into a typed `AgentStateV1` object immediately after classification. Pass state to handlers and the execute path instead of individual parameters.
+
+**P1.2 ✅ DONE (2026-03-05):** `ENABLE_LLM_INTENT_CLASSIFIER` gate removed. `classifyAndRouteWithLLM` is now always the primary path; sync Jaccard remains as the catch-block fallback. Unused import and helper function cleaned up.
+
+**P1.3: Wire `AgentResponseV1Schema` to `generateObject()` in the execute path**
+
+The schema exists. The Vercel AI SDK (`ai@5`) is already used in `intent-router.ts`. Connecting them eliminates free-form text output and removes the need for the 480-line dashboard heuristic parser. `rawTextFallback` preserves backward compat during migration.
+
+**P1.4 ✅ DONE (2026-03-05):** `formatResponseForBot` removed from the main LLM loop path. `buildSystemPrompt(responseMode?)` added to `system-prompt.ts` — appends TERSE_DATA/ASSISTIVE/EXPLAINER instructions to the system prompt so the LLM formats on the first call. `buildBotMoveContext` enrichment preserved. `formatResponseForBot` still used by twin-first chains + RAG path (those are single-call paths, not double).
+
+---
+
+#### P2 — Medium Effort, High Value
+
+**P2.1: Fully type the event bus**
+
+`event-bus.ts` `AgentEvent.data` is still `Record<string, any>`. With `AgentEventData` already defined in `event-payloads.ts`, this is a one-line interface change. All emit sites become type-checked.
+
+**P2.2: Fix `JSON.parse` without validation in the tool dispatch hot path**
+
+```typescript
+// Current
+parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
+// Fix
+try {
+  parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
+  if (tool.inputSchema) tool.inputSchema.parse(parsedArgs);
+} catch (err) {
+  return { error: 'Invalid tool arguments', raw: fnCall.arguments };
+}
+```
+
+**P2.3: Extract execute path into `handle-execute.ts`**
+
+The execute path (RAG → system prompt → LLM loop → tool dispatch → reclassification) is ~2,200 lines inline. Extracting to `handle-execute.ts` completes the handler decomposition; runner becomes ~200 lines. Requires P1.1 (AgentStateV1 wired) first.
+
+**P2.4: Wire `ChatHistoryStore` into `runAgent`**
+
+`ChatHistoryStore` exists but isn't wired. Add: `getHistory(conversationId)` at start of `runAgent`, `appendTurn(conversationId, { user, assistant })` at end. Fixes multi-turn coherence without changing the flat-array format.
+
+---
+
+#### P3 — Architectural (Longer Term)
+
+**P3.1:** Persist session-scoped entity resolution cache in `AgentStateV1` (resolves “yang” → “YANG”, “the web server” → “vm:103” across turns)
+
+**P3.2:** Auto-generate `ActionTool` documentation from registry Zod schemas via `zod-to-json-schema` — LLM always sees up-to-date action docs
+
+**P3.3:** Plan-before-execute node for multi-step action composition (create VM + bootstrap + DNS) with explicit `ActionStep[]` dependency ordering and rollback tracking
+
+---
+
+### §14.4 — Updated Severity Matrix
+
+| Issue | Severity | Effort | Status / Path |
+|---|---|---|---|
+| `runner.ts` inline `emitFinalEvent` shadows typed version | ~~P0~~ | — | ✅ **Fixed 2026-03-05** |
+| Double LLM call (`formatResponseForBot`) on main path | ~~High~~ | — | ✅ **Fixed 2026-03-05** — `buildSystemPrompt(mode)` |
+| `AgentStateV1` defined but never used | **High** | Medium | Instantiate post-classification; thread through handlers |
+| LLM classifier feature-flagged off | ~~High~~ | — | ✅ **Fixed 2026-03-05** — gate removed |
+| `AgentResponseV1Schema` not wired to `generateObject` | **High** | Medium | Use `generateObject(schema)` in execute path |
+| `event-bus.data` still `Record<string,any>` | **Medium** | 1 line | Swap to `AgentEventData` union type |
+| `JSON.parse` without validation in hot path | **Medium** | Low | Add try/catch + `schema.parse` at tool dispatch |
+| Execute path still ~2,200 lines inline | **Medium** | High | Extract `handle-execute.ts` (needs P1.1 first) |
+| Server-side conversation history not wired | **Medium** | Medium | Wire `ChatHistoryStore` into `runAgent` |
+| `ActionTool` docstring manually maintained | **Medium** | Low | Auto-generate from Zod schemas via `zod-to-json-schema` |
+| `canonical-response-format.ts` still present | **Low** | Low | Remove once `AgentResponseV1Schema` is primary path |
+| Domain regex waterfall still runs pre-classification | **Low** | Medium | Reduce to post-classification validators after P1.2 |
+
+---
+
+### §14.5 — What Is Working Well
+
+These are solid and should not be changed:
+
+- **Clean build:** `tsc --noEmit` passes with zero errors
+- **Handler extraction quality:** typed I/O interfaces, proper separation of concerns, observability traces aligned with handler paths
+- **`emit-helpers.ts` + `event-payloads.ts`:** the typed event payload system is well-designed and complete; just needs to replace the runner's inline closure
+- **`AgentResponseV1Schema`:** exactly the right shape — just needs to be wired to `generateObject()`
+- **`IntentClassificationSchema` + `mapLLMResultToIntentClassification`:** excellent Zod schema, correct mapping, clean fallback to sync classifier
+- **`isLikelyCompositeQuery`:** correct detection, correctly integrated with retrieval eligibility
+- **`AgentStateV1` interface:** right shape — just needs to be instantiated
+- **`runner.ts.bak`:** keeping the diff visible in-repo is a useful practice during refactors
+- **`REVIEW.md` as source of truth:** clear signal of intent, well-structured
+
+---
+
+*Original review generated 2026-03-03 against ~180 source files. §14 updated 2026-03-05 from realAgent branch snapshot (commit `79c1303`).*

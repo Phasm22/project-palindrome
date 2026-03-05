@@ -63,3 +63,21 @@ You are the Project Palindrome agent. Use Hybrid RAG context and approved tools.
 - Be direct and concise. Answer the question completely, then stop.
 - Do not add closing phrases or unnecessary pleasantries.
 `.trim();
+
+const MODE_INSTRUCTIONS: Record<string, string> = {
+  TERSE_DATA:
+    "Format all responses as structured, data-first output. Use pipe-delimited fields for entity lists (entity | key=value | ...). No narrative prose, no pleasantries.",
+  ASSISTIVE:
+    "Format: direct answer (1 sentence), then supporting evidence as 2–5 bullets. Add 1–3 next steps only if clearly useful.",
+  EXPLAINER:
+    "Format: direct answer (1–2 sentences), why it matters (1–2 sentences), then a numbered runbook (3–6 steps).",
+};
+
+/**
+ * Returns SYSTEM_PROMPT with optional ResponseMode formatting instructions appended.
+ * Eliminates the need for a second LLM call to reformat responses.
+ */
+export function buildSystemPrompt(responseMode?: string): string {
+  if (!responseMode || !MODE_INSTRUCTIONS[responseMode]) return SYSTEM_PROMPT;
+  return `${SYSTEM_PROMPT}\n\n**Response format for this query:** ${MODE_INSTRUCTIONS[responseMode]}`;
+}

@@ -87,26 +87,7 @@ describe("mapLLMResultToIntentClassification", () => {
 });
 
 describe("classifyAndRouteWithLLM", () => {
-  const envKey = "ENABLE_LLM_INTENT_CLASSIFIER";
-
-  beforeEach(() => {
-    delete process.env[envKey];
-  });
-
-  afterEach(() => {
-    delete process.env[envKey];
-  });
-
-  it("falls back to deterministic classifier when LLM routing is disabled", async () => {
-    process.env[envKey] = "false";
-    const input = "list all vms on yang";
-    const syncResult = classifyAndRoute(input);
-    const asyncResult = await classifyAndRouteWithLLM(input);
-    expect(asyncResult.classification.type).toBe(syncResult.classification.type);
-    expect(asyncResult.routing.route).toBe(syncResult.routing.route);
-  });
-
-  it("returns same shape as classifyAndRoute when env is unset", async () => {
+  it("returns same shape as classifyAndRoute on fallback (LLM API unavailable)", async () => {
     const input = "what is the temperature";
     const syncResult = classifyAndRoute(input);
     const asyncResult = await classifyAndRouteWithLLM(input);
