@@ -1,195 +1,126 @@
 #!/usr/bin/env bun
 /**
- * Diagnostic script to check what metrics are available from PCE API and Prometheus
+ * Diagnostic script to validate PCE metrics export and Prometheus scraping.
  */
 
 const PCE_API_URL = process.env.PCE_API_URL || "http://localhost:4000";
 const PROMETHEUS_URL = process.env.PROMETHEUS_URL || "http://localhost:9090";
+const SCRAPE_JOB = process.env.PROMETHEUS_SCRAPE_JOB || "pce-api";
 
-async function checkPceApiMetrics() {
-  console.log("🔍 Checking PCE API metrics endpoint...");
-  console.log(`   URL: ${PCE_API_URL}/metrics\n`);
-
-  try {
-    const response = await fetch(`${PCE_API_URL}/metrics`);
-    if (!response.ok) {
-      console.error(`❌ Failed to fetch metrics: ${response.status} ${response.statusText}`);
-      return;
-    }
-
-    const text = await response.text();
-    const lines = text.split("\n").filter((line) => line.trim() && !line.startsWith("#"));
-
-    console.log(`✅ PCE API metrics endpoint is accessible`);
-    console.log(`   Found ${lines.length} metric lines\n`);
-
-    // Extract unique metric names
-    const metricNames = new Set<string>();
-    for (const line of lines) {
-      const match = line.match(/^([a-z_][a-z0-9_]*)\s/);
-      if (match) {
-        metricNames.add(match[1]);
-      }
-    }
-
-    console.log(`📊 Available metrics (${metricNames.size}):`);
-    const sorted = Array.from(metricNames).sort();
-    for (const name of sorted) {
-      console.log(`   - ${name}`);
-    }
-    console.log("");
-
-    // Show sample of actual metric values
-    console.log("📈 Sample metric values (first 10):");
-    for (const line of lines.slice(0, 10)) {
-      console.log(`   ${line}`);
-    }
-    console.log("");
-
-    return { metricNames: Array.from(metricNames), rawText: text };
-  } catch (error: any) {
-    console.error(`❌ Error fetching PCE API metrics: ${error.message}`);
-    if (error.code === "ECONNREFUSED") {
-      console.error("   → Is the PCE API server running?");
-    }
-    return null;
+async function fetchJson(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText} (${url})`);
   }
+  return response.json();
 }
 
-async function checkPrometheusTargets() {
-  console.log("🔍 Checking Prometheus targets...");
-  console.log(`   URL: ${PROMETHEUS_URL}\n`);
+async function checkPrometheusEndpoint() {
+  console.log("1) Checking Prometheus target health...");
 
-  try {
-    const response = await fetch(`${PROMETHEUS_URL}/api/v1/targets`);
-    if (!response.ok) {
-      console.error(`❌ Failed to fetch targets: ${response.status} ${response.statusText}`);
-      return;
-    }
+  const data = await fetchJson(`${PROMETHEUS_URL}/api/v1/targets`);
+  const activeTargets = data?.data?.activeTargets || [];
+  const pceTarget = activeTargets.find((target: any) => target?.labels?.job === SCRAPE_JOB);
 
-    const data = await response.json();
-    console.log(`✅ Prometheus is accessible\n`);
-
-    if (data.data?.activeTargets) {
-      console.log("🎯 Active targets:");
-      for (const target of data.data.activeTargets) {
-        const health = target.health === "up" ? "✅" : "❌";
-        console.log(`   ${health} ${target.labels.job || "unknown"}: ${target.scrapeUrl}`);
-        console.log(`      Health: ${target.health}`);
-        console.log(`      Last scrape: ${target.lastScrape || "never"}`);
-        if (target.lastError) {
-          console.log(`      Error: ${target.lastError}`);
-        }
-      }
-      console.log("");
-    }
-  } catch (error: any) {
-    console.error(`❌ Error fetching Prometheus targets: ${error.message}`);
-    if (error.code === "ECONNREFUSED") {
-      console.error("   → Is Prometheus running?");
-    }
+  if (!pceTarget) {
+    throw new Error(`Prometheus has no active target for job='${SCRAPE_JOB}'`);
   }
+
+  const isUp = pceTarget.health === "up";
+  const scrapeUrl = pceTarget.scrapeUrl || "unknown";
+  console.log(`   Target: ${scrapeUrl}`);
+  console.log(`   Health: ${pceTarget.health}`);
+  console.log(`   Last scrape: ${pceTarget.lastScrape || "never"}`);
+
+  if (!isUp) {
+    throw new Error(`Prometheus target '${SCRAPE_JOB}' is down: ${pceTarget.lastError || "unknown error"}`);
+  }
+
+  return pceTarget;
 }
 
-async function checkPrometheusMetrics() {
-  console.log("🔍 Checking Prometheus for PCE metrics...");
-  console.log(`   URL: ${PROMETHEUS_URL}\n`);
+async function checkPcePrometheusExport() {
+  console.log("2) Checking PCE Prometheus exporter format...");
+  const response = await fetch(`${PCE_API_URL}/metrics?format=prometheus`);
+  if (!response.ok) {
+    throw new Error(`PCE metrics endpoint failed: ${response.status} ${response.statusText}`);
+  }
 
-  try {
-    // Query for all metrics that start with query_, ingestion_, pce_
-    const queries = [
-      "query_latency",
-      "query_result_count",
-      "query_slow_queries",
-      "query_complexity",
-      "ingestion_",
-      "pce_api_uptime",
-      "pce_log_",
-      "error_count",
-    ];
+  const text = await response.text();
+  const metricLines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
 
-    console.log("📊 Checking for metrics in Prometheus:\n");
+  if (metricLines.length === 0) {
+    throw new Error("PCE exporter returned no metric samples");
+  }
 
-    for (const prefix of queries) {
-      const response = await fetch(
-        `${PROMETHEUS_URL}/api/v1/label/__name__/values?match[]=${prefix}*`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data && data.data.length > 0) {
-          console.log(`   ✅ Found ${data.data.length} metrics matching '${prefix}*':`);
-          for (const name of data.data.slice(0, 5)) {
-            console.log(`      - ${name}`);
-          }
-          if (data.data.length > 5) {
-            console.log(`      ... and ${data.data.length - 5} more`);
-          }
-        } else {
-          console.log(`   ❌ No metrics found matching '${prefix}*'`);
-        }
-      }
+  const required = [
+    "pce_api_uptime_seconds",
+    "pce_metrics_export_timestamp_seconds",
+    "pce_process_resident_memory_bytes",
+  ];
+
+  for (const metricName of required) {
+    const present = metricLines.some((line) => line.startsWith(`${metricName} `));
+    if (!present) {
+      throw new Error(`Required exporter metric is missing: ${metricName}`);
     }
-    console.log("");
+  }
 
-    // Try a specific query to see if we get data
-    console.log("🔍 Testing specific metric queries:\n");
-    const testQueries = [
-      "pce_api_uptime_seconds",
-      "query_latency_vector_ms_avg",
-      "query_latency_graph_ms_avg",
-      "query_latency_hybrid_ms_avg",
-      "query_result_count_avg",
-    ];
+  console.log(`   Exported sample count: ${metricLines.length}`);
+}
 
-    for (const metric of testQueries) {
-      const response = await fetch(
-        `${PROMETHEUS_URL}/api/v1/query?query=${encodeURIComponent(metric)}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        if (data.data?.result && data.data.result.length > 0) {
-          const value = data.data.result[0].value[1];
-          console.log(`   ✅ ${metric} = ${value}`);
-        } else {
-          console.log(`   ❌ ${metric} - No data`);
-        }
-      }
+async function queryPrometheusInstant(expr: string) {
+  const data = await fetchJson(
+    `${PROMETHEUS_URL}/api/v1/query?query=${encodeURIComponent(expr)}`
+  );
+
+  if (data?.status !== "success") {
+    throw new Error(`Prometheus query failed: ${expr}`);
+  }
+
+  return data?.data?.result || [];
+}
+
+async function checkPrometheusDataAvailability() {
+  console.log("3) Checking Prometheus has current PCE data...");
+
+  const checks: Array<{ expr: string; expectNonEmpty: boolean }> = [
+    { expr: 'up{job="pce-api"}', expectNonEmpty: true },
+    { expr: "pce_api_uptime_seconds", expectNonEmpty: true },
+    { expr: "pce_metrics_export_timestamp_seconds", expectNonEmpty: true },
+    { expr: "pce_process_resident_memory_bytes", expectNonEmpty: true },
+    { expr: "sum(api_http_requests_total_count) or vector(0)", expectNonEmpty: true },
+  ];
+
+  for (const { expr, expectNonEmpty } of checks) {
+    const result = await queryPrometheusInstant(expr);
+    const ok = !expectNonEmpty || result.length > 0;
+    console.log(`   ${ok ? "OK" : "FAIL"} ${expr}`);
+    if (!ok) {
+      throw new Error(`No data for required query: ${expr}`);
     }
-    console.log("");
-  } catch (error: any) {
-    console.error(`❌ Error querying Prometheus: ${error.message}`);
   }
 }
 
 async function main() {
-  console.log("=".repeat(60));
   console.log("PCE Metrics Diagnostic Tool");
-  console.log("=".repeat(60));
+  console.log(`PCE API: ${PCE_API_URL}`);
+  console.log(`Prometheus: ${PROMETHEUS_URL}`);
   console.log("");
 
-  const apiMetrics = await checkPceApiMetrics();
-  await checkPrometheusTargets();
-  await checkPrometheusMetrics();
-
-  console.log("=".repeat(60));
-  console.log("Summary");
-  console.log("=".repeat(60));
-
-  if (apiMetrics) {
-    console.log(`✅ PCE API metrics endpoint is working`);
-    console.log(`   Found ${apiMetrics.metricNames.length} unique metrics`);
-  } else {
-    console.log(`❌ PCE API metrics endpoint is not accessible`);
-    console.log(`   → Check if PCE API is running on ${PCE_API_URL}`);
-  }
+  await checkPrometheusEndpoint();
+  await checkPcePrometheusExport();
+  await checkPrometheusDataAvailability();
 
   console.log("");
-  console.log("💡 Tips:");
-  console.log("   - If metrics are empty, try making some API queries first");
-  console.log("   - Check Prometheus targets to ensure scraping is working");
-  console.log("   - Verify Grafana datasource is configured correctly");
-  console.log("");
+  console.log("All checks passed.");
 }
 
-main().catch(console.error);
-
+main().catch((error: any) => {
+  console.error("");
+  console.error(`Check failed: ${error?.message || String(error)}`);
+  process.exit(1);
+});

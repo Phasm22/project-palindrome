@@ -1,128 +1,108 @@
 {
   "title": "Palindrome PCE - System Overview",
-  "tags": ["palindrome", "pce"],
+  "tags": ["palindrome", "pce", "observability"],
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 1,
-  "refresh": "30s",
+  "version": 2,
+  "refresh": "15s",
   "panels": [
     {
       "id": 1,
-      "title": "Query Latency by Type",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "targets": [
-        {
-          "expr": "query_latency_vector_ms_avg",
-          "legendFormat": "Vector",
-          "refId": "A"
-        },
-        {
-          "expr": "query_latency_graph_ms_avg",
-          "legendFormat": "Graph",
-          "refId": "B"
-        },
-        {
-          "expr": "query_latency_hybrid_ms_avg",
-          "legendFormat": "Hybrid",
-          "refId": "C"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "custom": {
-            "axisLabel": "Latency (ms)"
-          }
-        }
-      }
+      "title": "API Uptime",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "pce_api_uptime_seconds", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": { "graphMode": "area", "colorMode": "value" }
     },
     {
       "id": 2,
+      "title": "Exporter Series Count",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "pce_metrics_series_count", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "graphMode": "none", "colorMode": "value" }
+    },
+    {
+      "id": 3,
       "title": "Total Queries",
       "type": "stat",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
       "targets": [
         {
-          "expr": "sum(query_latency_vector_ms_count) + sum(query_latency_graph_ms_count) + sum(query_latency_hybrid_ms_count)",
+          "expr": "(sum(query_latency_vector_ms_count) or vector(0)) + (sum(query_latency_graph_ms_count) or vector(0)) + (sum(query_latency_hybrid_ms_count) or vector(0))",
           "refId": "A"
         }
       ],
-      "options": {
-        "graphMode": "none",
-        "colorMode": "value"
-      }
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "graphMode": "none", "colorMode": "value" }
     },
     {
-      "id": 3,
-      "title": "API Uptime",
+      "id": 4,
+      "title": "Request Rate (req/sec)",
       "type": "stat",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
       "targets": [
         {
-          "expr": "pce_api_uptime_seconds",
+          "expr": "sum(rate(api_http_requests_total_count[1m]))",
           "refId": "A"
         }
       ],
-      "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "unit": "s"
-      }
-    },
-    {
-      "id": 4,
-      "title": "Ingestion Throughput",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
-      "targets": [
-        {
-          "expr": "ingestion_throughput_documents_per_min_avg",
-          "legendFormat": "Documents/min",
-          "refId": "A"
-        },
-        {
-          "expr": "ingestion_throughput_chunks_per_min_avg",
-          "legendFormat": "Chunks/min",
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        }
-      }
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "graphMode": "area", "colorMode": "value" }
     },
     {
       "id": 5,
+      "title": "Query Latency by Type (avg)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "query_latency_vector_ms_avg", "legendFormat": "Vector", "refId": "A" },
+        { "expr": "query_latency_graph_ms_avg", "legendFormat": "Graph", "refId": "B" },
+        { "expr": "query_latency_hybrid_ms_avg", "legendFormat": "Hybrid", "refId": "C" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 6,
+      "title": "API Request Duration (avg/max)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        { "expr": "api_http_request_duration_ms_avg", "legendFormat": "avg", "refId": "A" },
+        { "expr": "api_http_request_duration_ms_max", "legendFormat": "max", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 7,
       "title": "Error Rate",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "targets": [
-        {
-          "expr": "rate(pce_log_error_total[5m])",
-          "legendFormat": "Errors/sec",
-          "refId": "A"
-        }
+        { "expr": "rate(pce_log_error_count_total[1m])", "legendFormat": "Log error rate", "refId": "A" },
+        { "expr": "sum(rate(error_count_count[1m]))", "legendFormat": "Runtime error rate", "refId": "B" }
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        }
-      }
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 8,
+      "title": "Process Memory",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "pce_process_resident_memory_bytes", "legendFormat": "RSS", "refId": "A" },
+        { "expr": "pce_process_heap_used_bytes", "legendFormat": "Heap used", "refId": "B" },
+        { "expr": "pce_process_heap_total_bytes", "legendFormat": "Heap total", "refId": "C" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
     }
   ],
-  "time": {
-    "from": "now-1h",
-    "to": "now"
-  },
+  "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
-  "templating": {
-    "list": []
-  },
-  "annotations": {
-    "list": []
-  },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,

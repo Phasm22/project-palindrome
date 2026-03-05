@@ -35,6 +35,13 @@ test("extracts quoted VM name in create prompt", () => {
   expect((actionIntent as any)?.node).toBe("YANG");
 });
 
+test("extracts create VM name when node appears before called-name clause", () => {
+  const actionIntent = detectActionIntent("create a vm on yin called miniPal");
+  expect(actionIntent?.type).toBe("create_vm");
+  expect((actionIntent as any)?.name).toBe("miniPal");
+  expect((actionIntent as any)?.node).toBe("yin");
+});
+
 test("keeps informational VM existence checks as QUERY", () => {
   const { classification } = classifyAndRoute("is there a vm called apple on yin");
   expect(classification.intent).toBe("QUERY");

@@ -17,6 +17,8 @@
     "pce:gold-path": "bun run scripts/run-gold-path.ts",
     "pce:provenance-audit": "bun run scripts/run-provenance-audit.ts",
     "pce:phase3-dod": "bun run scripts/run-phase3-dod.ts",
+    "metrics:check": "bun run scripts/check-metrics.ts",
+    "grafana:verify-dashboard": "bun run scripts/verify-grafana-dashboard.ts",
     "pce:ingest-proxmox": "bun run scripts/ingest-proxmox.ts",
     "pce:ingest-network": "bun run scripts/ingest-network.ts",
     "pce:ingest-firewall": "bun run scripts/ingest-firewall.ts",

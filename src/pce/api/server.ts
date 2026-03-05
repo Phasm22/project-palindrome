@@ -403,6 +403,12 @@ export class PceApiServer {
         rateResult.scope === "global" ? "api_rate_limit_global" : "api_rate_limit_ip"
       );
 
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "429",
+      });
+
       return this.jsonResponse(429, {
         success: false,
         error: "Rate limit exceeded",
@@ -420,6 +426,12 @@ export class PceApiServer {
       };
       payload = QueryRequestSchema.parse(body);
     } catch (error: any) {
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "400",
+      });
+
       return this.jsonResponse(400, {
         success: false,
         error: "Invalid request body",
@@ -470,6 +482,17 @@ export class PceApiServer {
         sTotalScore: apiResponse.sTotalScore,
       });
 
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "200",
+      });
+      this.metricsCollector.record("api_http_request_duration_ms", duration, {
+        route: "/query",
+        method: "POST",
+        status: "200",
+      });
+
       return this.jsonResponse(200, {
         success: true,
         data: safeResponse,
@@ -491,6 +514,18 @@ export class PceApiServer {
 
       pceLogger.error("Hybrid query failed", { error: error.message });
 
+      const errorDuration = Date.now() - start;
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "500",
+      });
+      this.metricsCollector.record("api_http_request_duration_ms", errorDuration, {
+        route: "/query",
+        method: "POST",
+        status: "500",
+      });
+
       return this.jsonResponse(500, {
         success: false,
         error: "Query execution failed",
@@ -500,12 +535,26 @@ export class PceApiServer {
   }
 
   private handleMetrics(): Response {
+    const requestStart = Date.now();
+    this.metricsCollector.record("api_http_requests_total", 1, {
+      route: "/metrics",
+      method: "GET",
+      format: "json",
+      status: "200",
+    });
+
     const snapshot = this.metricsCollector.getSnapshot(60_000);
     const payload: MetricsPayload = {
       snapshot: snapshot.metrics,
       counters: pceLogger.getAllCounters(),
       timestamp: snapshot.timestamp.toISOString(),
     };
+    this.metricsCollector.record("api_http_request_duration_ms", Date.now() - requestStart, {
+      route: "/metrics",
+      method: "GET",
+      format: "json",
+      status: "200",
+    });
 
     return this.jsonResponse(200, {
       success: true,
@@ -518,6 +567,14 @@ export class PceApiServer {
    * Returns metrics in Prometheus text format
    */
   private handlePrometheusMetrics(): Response {
+    const requestStart = Date.now();
+    this.metricsCollector.record("api_http_requests_total", 1, {
+      route: "/metrics",
+      method: "GET",
+      format: "prometheus",
+      status: "200",
+    });
+
     const snapshot = this.metricsCollector.getSnapshot();
     const lines: string[] = [];
     
@@ -571,14 +628,42 @@ export class PceApiServer {
     
     // Add system metrics
     const uptime = (Date.now() - this.startTime) / 1000;
+    const memoryUsage = process.memoryUsage();
+    const cpuUsage = process.cpuUsage();
+    const seriesCount = Object.keys(snapshot.metrics).length;
+    const exportTimestampSeconds = Math.floor(Date.now() / 1000);
     lines.push(`# HELP pce_api_uptime_seconds Uptime of PCE API server in seconds`);
     lines.push(`# TYPE pce_api_uptime_seconds gauge`);
     lines.push(`pce_api_uptime_seconds ${uptime}`);
+    lines.push(`# HELP pce_metrics_series_count Number of metric series currently present in the in-memory collector snapshot`);
+    lines.push(`# TYPE pce_metrics_series_count gauge`);
+    lines.push(`pce_metrics_series_count ${seriesCount}`);
+    lines.push(`# HELP pce_metrics_export_timestamp_seconds Unix timestamp when metrics were exported`);
+    lines.push(`# TYPE pce_metrics_export_timestamp_seconds gauge`);
+    lines.push(`pce_metrics_export_timestamp_seconds ${exportTimestampSeconds}`);
+    lines.push(`# HELP pce_process_resident_memory_bytes Resident set size of the PCE API process`);
+    lines.push(`# TYPE pce_process_resident_memory_bytes gauge`);
+    lines.push(`pce_process_resident_memory_bytes ${memoryUsage.rss}`);
+    lines.push(`# HELP pce_process_heap_total_bytes Total V8 heap size for the PCE API process`);
+    lines.push(`# TYPE pce_process_heap_total_bytes gauge`);
+    lines.push(`pce_process_heap_total_bytes ${memoryUsage.heapTotal}`);
+    lines.push(`# HELP pce_process_heap_used_bytes Used V8 heap size for the PCE API process`);
+    lines.push(`# TYPE pce_process_heap_used_bytes gauge`);
+    lines.push(`pce_process_heap_used_bytes ${memoryUsage.heapUsed}`);
+    lines.push(`# HELP pce_process_cpu_user_seconds_total Total user CPU time consumed by the PCE API process`);
+    lines.push(`# TYPE pce_process_cpu_user_seconds_total counter`);
+    lines.push(`pce_process_cpu_user_seconds_total ${cpuUsage.user / 1_000_000}`);
+    lines.push(`# HELP pce_process_cpu_system_seconds_total Total system CPU time consumed by the PCE API process`);
+    lines.push(`# TYPE pce_process_cpu_system_seconds_total counter`);
+    lines.push(`pce_process_cpu_system_seconds_total ${cpuUsage.system / 1_000_000}`);
     
     // Add log counters
     const counters = pceLogger.getAllCounters();
     for (const [counterName, value] of Object.entries(counters)) {
-      const promName = `pce_log_${counterName.toLowerCase().replace(/[^a-z0-9_]/g, "_")}_total`;
+      const sanitizedCounter = counterName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+      const promName = sanitizedCounter.endsWith("_total")
+        ? `pce_log_${sanitizedCounter}`
+        : `pce_log_${sanitizedCounter}_total`;
       if (!seenMetrics.has(promName)) {
         lines.push(`# HELP ${promName} Total count of ${counterName} log events`);
         lines.push(`# TYPE ${promName} counter`);
@@ -588,6 +673,12 @@ export class PceApiServer {
     }
     
     const prometheusText = lines.join("\n") + "\n";
+    this.metricsCollector.record("api_http_request_duration_ms", Date.now() - requestStart, {
+      route: "/metrics",
+      method: "GET",
+      format: "prometheus",
+      status: "200",
+    });
     
     return new Response(prometheusText, {
       status: 200,
@@ -598,6 +689,7 @@ export class PceApiServer {
   }
 
   private async handleHealth(): Promise<Response> {
+    const healthRequestStart = Date.now();
     const checks = await Promise.all(
       this.dependencyChecks.map(async (dep) => {
         try {
@@ -626,6 +718,17 @@ export class PceApiServer {
       dependencies: checks,
       proxmoxEndpoints: { count: configs.length, labels: configs.map((c) => c.label) },
     };
+
+    this.metricsCollector.record("api_http_requests_total", 1, {
+      route: "/health",
+      method: "GET",
+      status: overallHealthy ? "200" : "503",
+    });
+    this.metricsCollector.record("api_http_request_duration_ms", Date.now() - healthRequestStart, {
+      route: "/health",
+      method: "GET",
+      status: overallHealthy ? "200" : "503",
+    });
 
     return this.jsonResponse(overallHealthy ? 200 : 503, {
       success: overallHealthy,

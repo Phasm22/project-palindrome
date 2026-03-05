@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import {
   mergeVmConfigsWithExistingTfvars,
+  parseManagedVmNamesFromTerraformStateList,
   parseVmConfigsFromTfvars,
+  reconcileVmConfigsWithTerraformState,
 } from "../../src/actions/helpers/terraform-runner";
 
 test("parseVmConfigsFromTfvars reads generated vm_configs map", () => {
@@ -66,4 +68,59 @@ test("mergeVmConfigsWithExistingTfvars preserves existing VMs and upserts incomi
   expect(Object.keys(merged).sort()).toEqual(["aba", "bib"]);
   expect(merged.aba?.vm_id).toBe(9000);
   expect(merged.bib?.vm_id).toBe(9001);
+});
+
+test("parseManagedVmNamesFromTerraformStateList reads only VM resources", () => {
+  const stateList = `
+proxmox_virtual_environment_file.cloud_config["pleas"]
+proxmox_virtual_environment_vm.lab_vms["apple"]
+proxmox_virtual_environment_vm.lab_vms["aha"]
+null_resource.ansible_inventory
+`;
+
+  expect(Array.from(parseManagedVmNamesFromTerraformStateList(stateList)).sort()).toEqual(["aha", "apple"]);
+});
+
+test("reconcileVmConfigsWithTerraformState prunes stale tfvars entries absent from VM state", () => {
+  const existingTfvars = `vm_configs = {
+  "apple" = {
+    target_node = "yin"
+    cores       = 2
+    memory      = 4096
+    disk_size   = "20G"
+    vm_id       = 9004
+  }
+  "pleas" = {
+    target_node = "YANG"
+    cores       = 2
+    memory      = 4096
+    disk_size   = "20G"
+    vm_id       = 9005
+  }
+  "littlepally" = {
+    target_node = "YANG"
+    cores       = 2
+    memory      = 4096
+    disk_size   = "20G"
+    vm_id       = 9000
+  }
+}
+`;
+
+  const { reconciledVmConfigs, removedVmNames } = reconcileVmConfigsWithTerraformState(
+    existingTfvars,
+    ["apple"],
+    {
+      aha: {
+        target_node: "yin",
+        cores: 2,
+        memory: 4096,
+        disk_size: "20G",
+        vm_id: 9000,
+      },
+    }
+  );
+
+  expect(Object.keys(reconciledVmConfigs).sort()).toEqual(["apple"]);
+  expect(removedVmNames.sort()).toEqual(["littlepally", "pleas"]);
 });

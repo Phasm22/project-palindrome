@@ -43,14 +43,10 @@ docker run -d \
 
 The data source is **automatically provisioned** from `grafana/provisioning/datasources/prometheus.yml`.
 
-**When using Docker Compose:**
-- Grafana connects directly to PCE API via `http://host.docker.internal:4000`
-- The PCE API must be running on the host (not in Docker)
-- Metrics endpoint: `/metrics?format=prometheus`
-
-**Alternative (Prometheus as intermediate):**
-- If you prefer using Prometheus, it's configured as a second data source
-- URL: `http://prometheus:9090` (when running in Docker Compose)
+**Current default:**
+- Grafana uses Prometheus as the only datasource
+- Datasource URL: `http://localhost:9090` (host network mode)
+- Prometheus scrapes PCE API from `http://localhost:4000/metrics?format=prometheus`
 
 ### 4. Access Dashboards
 
@@ -96,9 +92,21 @@ The PCE API exposes the following metrics in Prometheus format:
 - `ingestion_throughput_*_per_min_avg` - Ingestion throughput
 - `ingestion_latency_*_ms_avg` - Ingestion latency
 - `pce_api_uptime_seconds` - API server uptime
+- `api_http_requests_total_count` - API request volume
+- `api_http_request_duration_ms_avg` - API request latency
+- `pce_metrics_series_count` - Number of exported series
+- `pce_process_*` - API process CPU and memory
 - `pce_log_*_total` - Log event counters
 
 ## Custom Dashboards
 
 Create custom dashboards in `grafana/dashboards/` and they will be automatically provisioned.
 
+## Verification
+
+Run both checks after services are up:
+
+```bash
+bun run metrics:check
+bun run grafana:verify-dashboard
+```

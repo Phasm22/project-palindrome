@@ -42,9 +42,14 @@ function extractRegexCandidate(match: RegExpMatchArray | null): string | null {
 
 function extractCreateVmName(text: string): string | null {
   const explicitNamePattern =
-    /\b(?:vm|virtual machine)\s+(?:named|called|with\s+name|name(?:\s+is|=|:)?|hostname(?:\s+is|=|:)?)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
+    /\b(?:vm|virtual machine)\b(?:[^\n]{0,80}?)\b(?:named|called|with\s+name|name(?:\s+is|=|:)?|hostname(?:\s+is|=|:)?)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
   const explicitName = extractRegexCandidate(text.match(explicitNamePattern));
   if (explicitName) return explicitName;
+
+  const trailingNamePattern =
+    /\b(?:create|make|provision|spin up)\b(?:[^\n]{0,120}?)\b(?:named|called|with\s+name|name(?:\s+is|=|:)?|hostname(?:\s+is|=|:)?)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
+  const trailingName = extractRegexCandidate(text.match(trailingNamePattern));
+  if (trailingName) return trailingName;
 
   const inlineNamePattern =
     /\b(?:create|make|provision|spin up)\s+(?:a|an|new)?\s*(?:vm|virtual machine)\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;

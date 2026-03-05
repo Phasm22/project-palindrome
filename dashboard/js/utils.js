@@ -1,8 +1,6 @@
 // Shared utilities
-// Use current hostname for API (supports remote access)
-// HTTPS dashboard (8443) -> HTTPS API (4443), HTTP dashboard (8080) -> HTTP API (4000)
-const apiPort = window.location.protocol === 'https:' ? 4443 : 4000;
-export const API_URL = `${window.location.protocol}//${window.location.hostname}:${apiPort}`;
+// Use same-origin API routing via dashboard server proxy.
+export const API_URL = `${window.location.protocol}//${window.location.host}`;
 
 export function escapeHtml(text) {
   const div = document.createElement('div');
@@ -62,4 +60,3 @@ export function renderResponsiveTable(headers, rows, rowRenderer) {
   `;
   return tableHtml;
 }
-

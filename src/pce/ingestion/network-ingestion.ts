@@ -139,9 +139,9 @@ export class NetworkIngestionOrchestrator {
           }
         }
         
-        // Fetch guest agent network interfaces if available
+        // Fetch guest agent network interfaces only for QEMU VMs (LXC has no guest agent endpoint)
         let guestInterfaces: any[] | undefined;
-        if ((vmType ?? "qemu") === "qemu" && vm.status === "running") {
+        if (vmType === "qemu" && vm.status === "running") {
           try {
             const agentRes = await this.proxmoxTool.execute(
               { action: "get_vm_guest_network", node: nodeName, vmid: vm.vmid, type: "qemu" },

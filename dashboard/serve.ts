@@ -7,6 +7,7 @@ const HTTP_PORT = 8080;
 const HTTPS_PORT = 8443;
 const DASHBOARD_DIR = import.meta.dir;
 const PROJECT_ROOT = `${DASHBOARD_DIR}/..`;
+const API_PROXY_BASE = process.env.PCE_API_URL || "http://127.0.0.1:4000";
 
 // Check if certs exist
 const certPath = `${PROJECT_ROOT}/certs/cert.pem`;
@@ -37,6 +38,41 @@ const watcher = watch(
 // Request handler
 async function handleRequest(req: Request, server: any) {
     const url = new URL(req.url);
+
+    const shouldProxyToApi =
+      url.pathname.startsWith("/api/") ||
+      url.pathname === "/query" ||
+      url.pathname === "/metrics" ||
+      url.pathname === "/health" ||
+      url.pathname.startsWith("/history/");
+
+    if (shouldProxyToApi) {
+      const upstreamPath =
+        url.pathname === "/api/health"
+          ? "/health"
+          : url.pathname === "/api/metrics"
+            ? "/metrics"
+            : url.pathname;
+      const upstreamUrl = `${API_PROXY_BASE}${upstreamPath}${url.search}`;
+      const headers = new Headers(req.headers);
+      headers.set("host", new URL(API_PROXY_BASE).host);
+
+      const upstreamResponse = await fetch(upstreamUrl, {
+        method: req.method,
+        headers,
+        body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+      });
+
+      const responseHeaders = new Headers(upstreamResponse.headers);
+      responseHeaders.set("Access-Control-Allow-Origin", "*");
+      responseHeaders.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+      responseHeaders.set("Access-Control-Allow-Headers", "Content-Type");
+
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        headers: responseHeaders,
+      });
+    }
     
     // Handle WebSocket upgrade for /_reload
     if (url.pathname === "/_reload" && server.upgrade(req)) {
@@ -163,6 +199,7 @@ const httpServer = serve({
 });
 
 console.log(`🚀 Dashboard server running at http://0.0.0.0:${HTTP_PORT}`);
+console.log(`🔀 API proxy target: ${API_PROXY_BASE}`);
 
 // HTTPS server (if certs exist)
 if (hasCerts) {
@@ -185,4 +222,3 @@ if (hasCerts) {
 console.log(`📁 Serving from: ${DASHBOARD_DIR}`);
 console.log(`🔄 Auto-reload enabled - changes will refresh automatically`);
 console.log(`\nPress Ctrl+C to stop\n`);
-

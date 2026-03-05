@@ -10,6 +10,9 @@ import { allocateVmId } from "../helpers/vm-id-allocator";
 import { ProxmoxClient } from "../../tools/proxmox/client";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { emitToolProgress } from "../../agent/event-bus";
+import { mkdtemp, rm } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
 
 /**
  * Create VM Action Schema
@@ -97,6 +100,14 @@ export function extractTerraformVmDestroyTargets(planOutput: string): string[] {
     if (target) targets.add(target);
   }
   return Array.from(targets);
+}
+
+export function buildCreateVmTerraformTargets(vmName: string): string[] {
+  return [
+    `proxmox_virtual_environment_file.cloud_config["${vmName}"]`,
+    `proxmox_virtual_environment_vm.lab_vms["${vmName}"]`,
+    "null_resource.ansible_inventory",
+  ];
 }
 
 export function parseTemplateCandidates(resources: unknown[]): Array<{ vmid: number; name: string }> {
@@ -614,247 +625,268 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   };
 
   // 3. Dry-run check
-  if (dryRun) {
-    const planResult = await terraformRunner.plan(tfConfig);
-    return {
-      success: planResult.success,
-      message: planResult.success
-        ? `Dry-run successful. Would create VM "${finalName}" on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""} using bridge "${finalVmBridge}" and datastore "${finalDatastore}".${selectionNoteText}`
-        : `Dry-run failed: ${planResult.stderr}`,
-    };
-  }
+  const terraformTargets = buildCreateVmTerraformTargets(finalName);
+  const tempTfvarsDir = await mkdtemp(join(tmpdir(), "palindrome-create-vm-"));
+  const tempTfvarsPath = join(tempTfvarsDir, `${finalName}.tfvars`);
 
-  // 4. Execute terraform
-  // Safety gate: create_vm should never include destroys in plan.
-  const preApplyPlan = await terraformRunner.plan(tfConfig);
-  if (!preApplyPlan.success) {
-    throw new Error(`Terraform plan failed before apply: ${preApplyPlan.stderr || "unknown error"}`);
-  }
-  const planSummary = parseTerraformPlanSummary(preApplyPlan.stdout || "");
-  const vmDestroyTargets = extractTerraformVmDestroyTargets(preApplyPlan.stdout || "");
-  if (vmDestroyTargets.length > 0) {
-    throw new Error(
-      `Safety check blocked VM creation: Terraform plan would destroy/replace existing VM resources (${vmDestroyTargets.join(", ")}). ` +
-      `This protects existing VMs from accidental deletion.`
-    );
-  }
-  if ((planSummary?.destroy ?? 0) > 0) {
-    logger.warn("Terraform plan includes destroy operations that do not target VM resources", {
-      destroyCount: planSummary?.destroy ?? 0,
-    });
-  }
-
-  logger.info("Executing terraform apply", { name: finalName, node: normalizedNode, vmId: allocatedVmId });
-  // Progress: entering terraform apply (midpoint)
-  emitToolProgress({
-    toolName: "action",
-    action: "compute.create_vm",
-    status: "running",
-    message: `Terraform apply for ${finalName} on ${normalizedNode}...`,
-    progress: 0.5,
-    details: { name: finalName, node: normalizedNode, vmId: allocatedVmId },
-  });
-  const applyResult = await terraformRunner.apply(tfConfig);
-
-  if (!applyResult.success) {
-    // Check for common errors and provide helpful messages
-    const stderr = applyResult.stderr || "";
-    let errorMessage = `Terraform apply failed: ${stderr}`;
-    
-    if (stderr.includes("403") || stderr.toLowerCase().includes("permission") || stderr.toLowerCase().includes("forbidden")) {
-      errorMessage = `Terraform/Proxmox permission denied (HTTP 403). The Terraform token likely lacks VM.Allocate / PVEVMAdmin on node "${normalizedNode}". Grant the token (e.g., llm@pve!llm-agent) role PVEVMAdmin on / and /vms for ${normalizedNode}. Original error: ${stderr}`;
-    } else
-    if (stderr.includes("401") || stderr.includes("invalid token")) {
-      errorMessage = `Terraform authentication failed. The token may not have permissions to write to the "snippets" datastore. ` +
-        `Check that your Terraform token (${process.env.CLUSTER_TF_TOKEN_ID || process.env.PROXBIG_TF_TOKEN_ID}) has: ` +
-        `Datastore.Allocate, Datastore.AllocateTemplate, and VM.Allocate permissions. ` +
-        `Original error: ${stderr}`;
-    } else if (stderr.includes("timeout") || stderr.includes("Still creating")) {
-      errorMessage = `Terraform operation timed out or is taking too long. This may indicate network issues or insufficient permissions. ` +
-        `Check the Proxmox API connectivity and token permissions. Original error: ${stderr}`;
-    } else if (
-      stderr.includes("storage 'snippets' does not exist") ||
-      stderr.toLowerCase().includes("datastore snippets")
-    ) {
-      errorMessage = `Cloud-init snippets datastore is not available on node "${normalizedNode}". ` +
-        `Set compute.create_vm cloudInitDatastore to a valid datastore for this node (for example "local"), or provision a snippets-capable datastore. ` +
-        `Original error: ${stderr}`;
-    } else if (
-      /unable to find configuration file for VM\s+\d+/i.test(stderr) ||
-      /template vm \d+ not found/i.test(stderr) ||
-      /vm \d+ does not exist/i.test(stderr)
-    ) {
-      const available = rankedTemplates.length > 0
-        ? rankedTemplates.map((t) => `${t.vmid}${t.name ? ` (${t.name})` : ""}`).join(", ")
-        : "none discovered";
-      errorMessage = `Template VM ${finalTemplateId} not found on node "${normalizedNode}". ` +
-        `Available templates on ${normalizedNode}: ${available}. ` +
-        `Specify templateId explicitly if needed. Original error: ${stderr}`;
+  try {
+    if (dryRun) {
+      const planResult = await terraformRunner.plan(tfConfig, {
+        skipLock: true,
+        targets: terraformTargets,
+        tfvarsPath: tempTfvarsPath,
+      });
+      return {
+        success: planResult.success,
+        message: planResult.success
+          ? `Dry-run successful. Would create VM "${finalName}" on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""} using bridge "${finalVmBridge}" and datastore "${finalDatastore}".${selectionNoteText}`
+          : `Dry-run failed: ${planResult.stderr}`,
+      };
     }
+
+    // 4. Execute terraform
+    // Safety gate: create_vm should never include destroys in plan.
+    const preApplyPlan = await terraformRunner.plan(tfConfig, {
+      skipLock: true,
+      targets: terraformTargets,
+      tfvarsPath: tempTfvarsPath,
+    });
+    if (!preApplyPlan.success) {
+      throw new Error(`Terraform plan failed before apply: ${preApplyPlan.stderr || "unknown error"}`);
+    }
+    const planSummary = parseTerraformPlanSummary(preApplyPlan.stdout || "");
+    const vmDestroyTargets = extractTerraformVmDestroyTargets(preApplyPlan.stdout || "");
+    if (vmDestroyTargets.length > 0) {
+      throw new Error(
+        `Safety check blocked VM creation: Terraform plan would destroy/replace existing VM resources (${vmDestroyTargets.join(", ")}). ` +
+        `This protects existing VMs from accidental deletion.`
+      );
+    }
+    if ((planSummary?.destroy ?? 0) > 0) {
+      logger.warn("Terraform plan includes destroy operations that do not target VM resources", {
+        destroyCount: planSummary?.destroy ?? 0,
+      });
+    }
+
+    logger.info("Executing terraform apply", { name: finalName, node: normalizedNode, vmId: allocatedVmId });
+    // Progress: entering terraform apply (midpoint)
+    emitToolProgress({
+      toolName: "action",
+      action: "compute.create_vm",
+      status: "running",
+      message: `Terraform apply for ${finalName} on ${normalizedNode}...`,
+      progress: 0.5,
+      details: { name: finalName, node: normalizedNode, vmId: allocatedVmId },
+    });
+    const applyResult = await terraformRunner.apply(tfConfig, {
+      targets: terraformTargets,
+      tfvarsPath: tempTfvarsPath,
+    });
+
+    if (!applyResult.success) {
+    // Check for common errors and provide helpful messages
+      const stderr = applyResult.stderr || "";
+      let errorMessage = `Terraform apply failed: ${stderr}`;
+      
+      if (stderr.includes("403") || stderr.toLowerCase().includes("permission") || stderr.toLowerCase().includes("forbidden")) {
+        errorMessage = `Terraform/Proxmox permission denied (HTTP 403). The Terraform token likely lacks VM.Allocate / PVEVMAdmin on node "${normalizedNode}". Grant the token (e.g., llm@pve!llm-agent) role PVEVMAdmin on / and /vms for ${normalizedNode}. Original error: ${stderr}`;
+      } else
+      if (stderr.includes("401") || stderr.includes("invalid token")) {
+        errorMessage = `Terraform authentication failed. The token may not have permissions to write to the "snippets" datastore. ` +
+          `Check that your Terraform token (${process.env.CLUSTER_TF_TOKEN_ID || process.env.PROXBIG_TF_TOKEN_ID}) has: ` +
+          `Datastore.Allocate, Datastore.AllocateTemplate, and VM.Allocate permissions. ` +
+          `Original error: ${stderr}`;
+      } else if (stderr.includes("timeout") || stderr.includes("Still creating")) {
+        errorMessage = `Terraform operation timed out or is taking too long. This may indicate network issues or insufficient permissions. ` +
+          `Check the Proxmox API connectivity and token permissions. Original error: ${stderr}`;
+      } else if (
+        stderr.includes("storage 'snippets' does not exist") ||
+        stderr.toLowerCase().includes("datastore snippets")
+      ) {
+        errorMessage = `Cloud-init snippets datastore is not available on node "${normalizedNode}". ` +
+          `Set compute.create_vm cloudInitDatastore to a valid datastore for this node (for example "local"), or provision a snippets-capable datastore. ` +
+          `Original error: ${stderr}`;
+      } else if (
+        /unable to find configuration file for VM\s+\d+/i.test(stderr) ||
+        /template vm \d+ not found/i.test(stderr) ||
+        /vm \d+ does not exist/i.test(stderr)
+      ) {
+        const available = rankedTemplates.length > 0
+          ? rankedTemplates.map((t) => `${t.vmid}${t.name ? ` (${t.name})` : ""}`).join(", ")
+          : "none discovered";
+        errorMessage = `Template VM ${finalTemplateId} not found on node "${normalizedNode}". ` +
+          `Available templates on ${normalizedNode}: ${available}. ` +
+          `Specify templateId explicitly if needed. Original error: ${stderr}`;
+      }
+      
+      // Propagate as failure so the caller stops the chain
+      throw new Error(errorMessage);
+    }
+
+    await terraformRunner.persistTfVars(tfConfig);
+
+    // Progress: terraform apply finished, moving to outputs
+    emitToolProgress({
+      toolName: "action",
+      action: "compute.create_vm",
+      status: "running",
+      message: `Terraform apply finished for ${finalName}, reading outputs...`,
+      progress: 0.9,
+      details: { name: finalName, node: normalizedNode, vmId: allocatedVmId },
+    });
+
+    // 5. Get VM info from terraform outputs
+    const outputs = await terraformRunner.getOutputs();
+    const vmInfo = outputs.vm_info?.[finalName];
+
+    if (!vmInfo) {
+      return {
+        success: false,
+        message: "VM created but could not retrieve VM info from terraform outputs",
+        terraformOutput: outputs,
+      };
+    }
+
+    // 6. Sync to twin (non-blocking - VM is created even if sync fails)
+    try {
+      const twinSync = new TwinSync();
+      const syncResult = await twinSync.syncTerraformVms(outputs);
+      logger.info("VM synced to twin", { 
+        name: finalName, 
+        entities: syncResult.entities, 
+        relationships: syncResult.relationships 
+      });
+    } catch (error: any) {
+      logger.warn("Failed to sync VM to twin (non-critical)", { 
+        error: error.message, 
+        name: finalName,
+        stack: error.stack 
+      });
+      // Don't fail VM creation if twin sync fails
+    }
+
+    // 7. Create DNS record if IP is available (non-blocking)
+    // Flatten nested arrays and filter out localhost/pending IPs
+    const ipAddresses = Array.isArray(vmInfo.ip_addresses) ? vmInfo.ip_addresses : [];
+    const flattenedIps = ipAddresses
+      .flat(2) // Flatten nested arrays (e.g., [["127.0.0.1"],["172.16.0.37"]] -> ["127.0.0.1", "172.16.0.37"])
+      .filter((ip): ip is string => {
+        if (typeof ip !== "string") return false;
+        if (ip === "IP pending...") return false;
+        if (ip.startsWith("127.")) return false; // Skip localhost
+        if (ip.startsWith("::1")) return false; // Skip IPv6 localhost
+        return true;
+      });
+    const firstIp = flattenedIps.length > 0 ? flattenedIps[0] : null;
     
-    // Propagate as failure so the caller stops the chain
-    throw new Error(errorMessage);
-  }
+    if (firstIp && (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY)) {
+      try {
+        const { createDnsRecord } = await import("../network/create-dns-record");
+        const dnsResult = await createDnsRecord({
+          hostname: finalName, // VM name (e.g., "test-vm")
+          ip: firstIp,
+          domain: ".prox", // Will create test-vm.prox → IP
+          dryRun: false,
+        });
+        
+        if (dnsResult.success) {
+          logger.info("DNS record created automatically", {
+            hostname: finalName,
+            ip: firstIp,
+            domain: dnsResult.record?.domain,
+          });
+        } else {
+          logger.warn("Failed to create DNS record automatically", {
+            hostname: finalName,
+            ip: firstIp,
+            error: dnsResult.message,
+          });
+        }
+      } catch (error: any) {
+        logger.warn("Failed to create DNS record (non-critical)", {
+          hostname: finalName,
+          ip: firstIp,
+          error: error.message,
+        });
+        // Don't fail VM creation if DNS record creation fails
+      }
+    } else if (!firstIp) {
+      logger.info("DNS record creation skipped - IP not yet available (guest agent may need time)", {
+        hostname: finalName,
+        ipAddresses,
+      });
+    } else if (!process.env.PIHOLE_API_KEY) {
+      logger.debug("DNS record creation skipped - PIHOLE_API_KEY not set");
+    }
 
-  // Progress: terraform apply finished, moving to outputs
-  emitToolProgress({
-    toolName: "action",
-    action: "compute.create_vm",
-    status: "running",
-    message: `Terraform apply finished for ${finalName}, reading outputs...`,
-    progress: 0.9,
-    details: { name: finalName, node: normalizedNode, vmId: allocatedVmId },
-  });
+    // 8. Run Ansible bootstrap if requested (non-blocking)
+    let bootstrapResult: any = null;
+    if (shouldBootstrap && !dryRun) {
+      try {
+        logger.info("Bootstrap requested, running Ansible bootstrap", { vmName: finalName });
+        const { bootstrap } = await import("../services/bootstrap");
+        bootstrapResult = await bootstrap({
+          vmName: finalName,
+          playbook: "common.yml",
+          waitForVm: true,
+          timeout: 300,
+          retryOnFailure: true,
+          maxRetries: 2,
+          dryRun: false,
+        });
 
-  // 5. Get VM info from terraform outputs
-  const outputs = await terraformRunner.getOutputs();
-  const vmInfo = outputs.vm_info?.[finalName];
+        if (bootstrapResult.success) {
+          logger.info("Bootstrap completed successfully", {
+            vmName: finalName,
+            tasksChanged: bootstrapResult.tasksChanged,
+            tasksFailed: bootstrapResult.tasksFailed,
+          });
+        } else {
+          logger.warn("Bootstrap failed (non-critical)", {
+            vmName: finalName,
+            errors: bootstrapResult.errors,
+          });
+        }
+      } catch (error: any) {
+        logger.warn("Failed to run bootstrap (non-critical)", {
+          vmName: finalName,
+          error: error.message,
+        });
+        // Don't fail VM creation if bootstrap fails
+      }
+    }
 
-  if (!vmInfo) {
+    const bootstrapMessage = bootstrapResult
+      ? bootstrapResult.success
+        ? ` Bootstrap completed: ${bootstrapResult.tasksChanged} task(s) changed.`
+        : ` Bootstrap failed: ${bootstrapResult.message}`
+      : "";
+
+    logger.info("VM created successfully", {
+      name: finalName,
+      node: normalizedNode,
+      vmId: vmInfo.id,
+      hostname: vmInfo.hostname,
+      ipAddresses,
+      bootstrap: shouldBootstrap,
+      datastore: finalDatastore,
+      vmBridge: finalVmBridge,
+      selectionWarnings,
+    });
+
+    const sshUsername = "ops";
+    const connectLine =
+      firstIp ? ` Connect with: ssh ${sshUsername}@${firstIp}.` : "";
+
     return {
-      success: false,
-      message: "VM created but could not retrieve VM info from terraform outputs",
+      success: true,
+      vmId: vmInfo.id.toString(),
+      hostname: vmInfo.hostname,
+      ipAddresses,
+      message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}. Bridge: ${finalVmBridge}. Datastore: ${finalDatastore}.${firstIp ? ` DNS record created: ${finalName}.prox → ${firstIp}.` : ""}${connectLine}${bootstrapMessage}${selectionNoteText}`,
       terraformOutput: outputs,
     };
+  } finally {
+    await rm(tempTfvarsDir, { recursive: true, force: true });
   }
-
-  // 6. Sync to twin (non-blocking - VM is created even if sync fails)
-  try {
-    const twinSync = new TwinSync();
-    const syncResult = await twinSync.syncTerraformVms(outputs);
-    logger.info("VM synced to twin", { 
-      name: finalName, 
-      entities: syncResult.entities, 
-      relationships: syncResult.relationships 
-    });
-  } catch (error: any) {
-    logger.warn("Failed to sync VM to twin (non-critical)", { 
-      error: error.message, 
-      name: finalName,
-      stack: error.stack 
-    });
-    // Don't fail VM creation if twin sync fails
-  }
-
-  // 7. Create DNS record if IP is available (non-blocking)
-  // Flatten nested arrays and filter out localhost/pending IPs
-  const ipAddresses = Array.isArray(vmInfo.ip_addresses) ? vmInfo.ip_addresses : [];
-  const flattenedIps = ipAddresses
-    .flat(2) // Flatten nested arrays (e.g., [["127.0.0.1"],["172.16.0.37"]] -> ["127.0.0.1", "172.16.0.37"])
-    .filter((ip): ip is string => {
-      if (typeof ip !== "string") return false;
-      if (ip === "IP pending...") return false;
-      if (ip.startsWith("127.")) return false; // Skip localhost
-      if (ip.startsWith("::1")) return false; // Skip IPv6 localhost
-      return true;
-    });
-  const firstIp = flattenedIps.length > 0 ? flattenedIps[0] : null;
-  
-  if (firstIp && (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY)) {
-    try {
-      const { createDnsRecord } = await import("../network/create-dns-record");
-      const dnsResult = await createDnsRecord({
-        hostname: finalName, // VM name (e.g., "test-vm")
-        ip: firstIp,
-        domain: ".prox", // Will create test-vm.prox → IP
-        dryRun: false,
-      });
-      
-      if (dnsResult.success) {
-        logger.info("DNS record created automatically", {
-          hostname: finalName,
-          ip: firstIp,
-          domain: dnsResult.record?.domain,
-        });
-      } else {
-        logger.warn("Failed to create DNS record automatically", {
-          hostname: finalName,
-          ip: firstIp,
-          error: dnsResult.message,
-        });
-      }
-    } catch (error: any) {
-      logger.warn("Failed to create DNS record (non-critical)", {
-        hostname: finalName,
-        ip: firstIp,
-        error: error.message,
-      });
-      // Don't fail VM creation if DNS record creation fails
-    }
-  } else if (!firstIp) {
-    logger.info("DNS record creation skipped - IP not yet available (guest agent may need time)", {
-      hostname: finalName,
-      ipAddresses,
-    });
-  } else if (!process.env.PIHOLE_API_KEY) {
-    logger.debug("DNS record creation skipped - PIHOLE_API_KEY not set");
-  }
-
-  // 8. Run Ansible bootstrap if requested (non-blocking)
-  let bootstrapResult: any = null;
-  if (shouldBootstrap && !dryRun) {
-    try {
-      logger.info("Bootstrap requested, running Ansible bootstrap", { vmName: finalName });
-      const { bootstrap } = await import("../services/bootstrap");
-      bootstrapResult = await bootstrap({
-        vmName: finalName,
-        playbook: "common.yml",
-        waitForVm: true,
-        timeout: 300,
-        retryOnFailure: true,
-        maxRetries: 2,
-        dryRun: false,
-      });
-
-      if (bootstrapResult.success) {
-        logger.info("Bootstrap completed successfully", {
-          vmName: finalName,
-          tasksChanged: bootstrapResult.tasksChanged,
-          tasksFailed: bootstrapResult.tasksFailed,
-        });
-      } else {
-        logger.warn("Bootstrap failed (non-critical)", {
-          vmName: finalName,
-          errors: bootstrapResult.errors,
-        });
-      }
-    } catch (error: any) {
-      logger.warn("Failed to run bootstrap (non-critical)", {
-        vmName: finalName,
-        error: error.message,
-      });
-      // Don't fail VM creation if bootstrap fails
-    }
-  }
-
-  const bootstrapMessage = bootstrapResult
-    ? bootstrapResult.success
-      ? ` Bootstrap completed: ${bootstrapResult.tasksChanged} task(s) changed.`
-      : ` Bootstrap failed: ${bootstrapResult.message}`
-    : "";
-
-  logger.info("VM created successfully", {
-    name: finalName,
-    node: normalizedNode,
-    vmId: vmInfo.id,
-    hostname: vmInfo.hostname,
-    ipAddresses,
-    bootstrap: shouldBootstrap,
-    datastore: finalDatastore,
-    vmBridge: finalVmBridge,
-    selectionWarnings,
-  });
-
-  const sshUsername = "ops";
-  const connectLine =
-    firstIp ? ` Connect with: ssh ${sshUsername}@${firstIp}.` : "";
-
-  return {
-    success: true,
-    vmId: vmInfo.id.toString(),
-    hostname: vmInfo.hostname,
-    ipAddresses,
-    message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}. Bridge: ${finalVmBridge}. Datastore: ${finalDatastore}.${firstIp ? ` DNS record created: ${finalName}.prox → ${firstIp}.` : ""}${connectLine}${bootstrapMessage}${selectionNoteText}`,
-    terraformOutput: outputs,
-  };
 }
