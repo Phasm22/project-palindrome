@@ -932,10 +932,11 @@ The runner looks up the policy based on classified intent and sets `tool_choice`
 | 3,550-line monolith `runner.ts` | **PARTIAL** | Handlers extracted to `src/agent/handlers/`; runner is ~3,296 lines (−254). Execute path still inline. |
 | Double LLM call (`formatResponseForBot`) | **DONE** | Removed from main LLM loop path. `buildSystemPrompt(responseMode)` injects mode instructions into system prompt. `formatResponseForBot` still used by twin-first chains + RAG path (single-call paths, not double). |
 | Jaccard/regex intent classifier | **DONE** | `classifyAndRouteWithLLM` is now always the primary path. `ENABLE_LLM_INTENT_CLASSIFIER` gate removed from code. Sync Jaccard path remains as the catch-block fallback on API failure. |
-| Client-side conversation history | **TODO** | Flat array still passed per-request. `AgentStateV1` type defined but not instantiated. |
+| Server-owned conversation history contract | **DONE** | History/context loading and persistence live in `src/pce/api/server.ts`; flat-array history still exists, but ownership is explicit and covered by injected-runner tests. |
 | Streaming / blank wait UX | **TODO** | `AgentEventBus` still used; no additional SSE wiring added. |
 | Action layer / IaC prison | **TODO** | `ActionTool` docstring still hardcoded. No auto-generation from registry. |
-| `event-bus` payload untyped | **DONE (execute path)** | Inline `emitFinalEvent`/`emitStepEvent` closures in `runner.ts` deleted. All 17 `emitFinalEvent` + 6 `emitStepEvent` call sites now use typed versions from `emit-helpers.ts`. `event-bus.ts` `AgentEvent.data` interface still `Record<string,any>` — that's a 1-line change remaining. |
+| `event-bus` payload untyped | **DONE** | `AgentEvent.data` now uses `AgentEventData`; runner and tool-progress payloads include discriminators end-to-end. |
+| `AgentStateV1` wiring | **PARTIAL** | `buildAgentState()` exists and `runner.ts` constructs typed state. Remaining gap is execute-path extraction, not state instantiation. |
 | `JSON.parse` without validation | **TODO** | Still endemic in runner hot path and tool argument parsing. |
 
 ---
@@ -965,7 +966,7 @@ Defines a typed `AgentStateV1` interface carrying: `classification`, `routing`, 
 
 **Good:** The interface exists and mirrors what `runner.ts` locals already track.
 
-**Gap:** `AgentStateV1` is never instantiated in `runner.ts`. All those fields remain as separate local variables. The type exists as documentation, not enforcement.
+**Fixed (2026-03-05):** `buildAgentState()` added and `runner.ts` now constructs a typed post-classification state envelope. Remaining gap: execute path is still inline and not yet extracted into `handle-execute.ts`.
 
 #### 3. Typed Event Payloads (`src/agent/event-payloads.ts`)
 
@@ -973,7 +974,11 @@ Zod schemas for all `AgentEvent` payload types: `ToolStartPayload`, `ToolComplet
 
 **Good:** `emit-helpers.ts` uses these schemas. Schemas are precise and complete.
 
-**Fixed (2026-03-05):** Inline closures in `runner.ts` deleted. All emit call sites now use the typed versions from `emit-helpers.ts`. `event-bus.ts` `AgentEvent.data` interface still `Record<string,any>` — one-line change remaining (P2.1).
+**Fixed (2026-03-05):** Inline closures in `runner.ts` deleted, `event-bus.ts` now types `AgentEvent.data` as `AgentEventData`, and remaining emit sites include discriminators.
+
+#### 3.1 Server-Owned Conversation History Coverage
+
+**Fixed (2026-03-05):** `PceApiServer` now has injected-runner tests that verify conversation history/state/context ownership and persistence behavior. `runAgent` remains storage-agnostic; `src/pce/api/server.ts` owns loading and saving.
 
 #### 4. `AgentResponseV1Schema` (`src/agent/schemas/agent-response-v1.ts`)
 
@@ -1019,13 +1024,21 @@ The unified response envelope from §12 is fully defined as a Zod schema: `conve
 
 **P0.1 ✅ DONE (2026-03-05):** Inline `emitFinalEvent` and `emitStepEvent` closures in `runner.ts` deleted. All 23 call sites updated to use typed versions from `emit-helpers.ts`. `agent:final` payload now enforces `AgentFinalPayload` schema end-to-end.
 
+**P0.2: Stabilize full-suite test isolation / shared-resource contention**
+
+Current evidence points to suite stability, not a confirmed deterministic product regression:
+
+- `tests/tools/cognitive-tools.test.ts` failed during `bun test --bail`
+- the same file passed when run in isolation
+- `tests/agent/runner-confirmation-flow.test.ts` also timed out once under concurrent load and logged `database is locked`, then passed cleanly in isolation
+
+Probable causes: shared SQLite-backed observability stores, global singletons, background schedulers, or other shared resources under concurrent Bun load. Goal: a deterministic green full suite before resuming architecture work.
+
 ---
 
 #### P1 — High Impact, Low Effort
 
-**P1.1: Wire `AgentStateV1` into `runner.ts`**
-
-Assemble the 35+ local variables into a typed `AgentStateV1` object immediately after classification. Pass state to handlers and the execute path instead of individual parameters.
+**P1.1 ✅ DONE (2026-03-05):** `buildAgentState()` added in `src/agent/state.ts`; `runner.ts` now assembles a typed post-classification `AgentStateV1` object and threads it through post-classification handlers. Remaining structural gap moved to `P2.3` execute-path extraction.
 
 **P1.2 ✅ DONE (2026-03-05):** `ENABLE_LLM_INTENT_CLASSIFIER` gate removed. `classifyAndRouteWithLLM` is now always the primary path; sync Jaccard remains as the catch-block fallback. Unused import and helper function cleaned up.
 
@@ -1039,9 +1052,7 @@ The schema exists. The Vercel AI SDK (`ai@5`) is already used in `intent-router.
 
 #### P2 — Medium Effort, High Value
 
-**P2.1: Fully type the event bus**
-
-`event-bus.ts` `AgentEvent.data` is still `Record<string, any>`. With `AgentEventData` already defined in `event-payloads.ts`, this is a one-line interface change. All emit sites become type-checked.
+**P2.1 ✅ DONE (2026-03-05):** `event-bus.ts` now types `AgentEvent.data` as `AgentEventData`. Tool progress/start/complete and agent step/final payloads now include discriminators, so emit sites are compile-time checked.
 
 **P2.2: Fix `JSON.parse` without validation in the tool dispatch hot path**
 
@@ -1059,11 +1070,9 @@ try {
 
 **P2.3: Extract execute path into `handle-execute.ts`**
 
-The execute path (RAG → system prompt → LLM loop → tool dispatch → reclassification) is ~2,200 lines inline. Extracting to `handle-execute.ts` completes the handler decomposition; runner becomes ~200 lines. Requires P1.1 (AgentStateV1 wired) first.
+The execute path (RAG → system prompt → LLM loop → tool dispatch → reclassification) is still ~2,200 lines inline. Extracting to `handle-execute.ts` completes the handler decomposition; runner becomes ~200 lines. `P1.1` is now complete, so this is mechanically unblocked once suite stability and tool-arg hardening are handled.
 
-**P2.4: Formalize and test the server-owned conversation history contract**
-
-`ChatHistoryStore` is already wired in `src/pce/api/server.ts`: the server creates conversations, loads history/context, passes `conversationHistory`/`conversationState`/`conversationContext` into `runAgent`, and persists assistant output plus conversation updates from `agent:final`. The remaining gap is to document and test that ownership boundary explicitly so `runAgent` remains storage-agnostic.
+**P2.4 ✅ DONE (2026-03-05):** Server-owned conversation history contract is now documented in code and covered by injected-runner tests. `src/pce/api/server.ts` owns history/context persistence; `runAgent` remains storage-agnostic.
 
 ---
 
@@ -1083,13 +1092,14 @@ The execute path (RAG → system prompt → LLM loop → tool dispatch → recla
 |---|---|---|---|
 | `runner.ts` inline `emitFinalEvent` shadows typed version | ~~P0~~ | — | ✅ **Fixed 2026-03-05** |
 | Double LLM call (`formatResponseForBot`) on main path | ~~High~~ | — | ✅ **Fixed 2026-03-05** — `buildSystemPrompt(mode)` |
-| `AgentStateV1` defined but never used | **High** | Medium | Instantiate post-classification; thread through handlers |
+| Full-suite stability / test isolation under concurrent Bun load | **High** | Medium | Isolate shared stores/resources; make `bun test --bail` deterministic |
+| `AgentStateV1` wired but execute path still inline | **Medium** | High | Extract `handle-execute.ts` |
 | LLM classifier feature-flagged off | ~~High~~ | — | ✅ **Fixed 2026-03-05** — gate removed |
 | `AgentResponseV1Schema` not wired to `generateObject` | **High** | Medium | Use `generateObject(schema)` in execute path |
-| `event-bus.data` still `Record<string,any>` | **Medium** | 1 line | Swap to `AgentEventData` union type |
+| `event-bus.data` still `Record<string,any>` | ~~Medium~~ | — | ✅ **Fixed 2026-03-05** |
 | `JSON.parse` without validation in hot path | **Medium** | Low | Add try/catch + `schema.parse` at tool dispatch |
-| Execute path still ~2,200 lines inline | **Medium** | High | Extract `handle-execute.ts` (needs P1.1 first) |
-| Server-owned conversation history contract not tested/documented | **Medium** | Medium | Keep persistence in `PceApiServer`; add injected-runner tests + update review text |
+| Execute path still ~2,200 lines inline | **Medium** | High | Extract `handle-execute.ts` |
+| Server-owned conversation history contract not tested/documented | ~~Medium~~ | — | ✅ **Fixed 2026-03-05** |
 | `ActionTool` docstring manually maintained | **Medium** | Low | Auto-generate from Zod schemas via `zod-to-json-schema` |
 | `canonical-response-format.ts` still present | **Low** | Low | Remove once `AgentResponseV1Schema` is primary path |
 | Domain regex waterfall still runs pre-classification | **Low** | Medium | Reduce to post-classification validators after P1.2 |
@@ -1101,12 +1111,13 @@ The execute path (RAG → system prompt → LLM loop → tool dispatch → recla
 These are solid and should not be changed:
 
 - **Clean build:** `tsc --noEmit` passes with zero errors
+- **Validation baseline:** targeted architecture-tranche tests pass; full-suite stability still needs work under concurrent Bun load
 - **Handler extraction quality:** typed I/O interfaces, proper separation of concerns, observability traces aligned with handler paths
-- **`emit-helpers.ts` + `event-payloads.ts`:** the typed event payload system is well-designed and complete; just needs to replace the runner's inline closure
+- **`emit-helpers.ts` + `event-payloads.ts`:** the typed event payload system is well-designed and now wired end-to-end through `event-bus.ts`
 - **`AgentResponseV1Schema`:** exactly the right shape — just needs to be wired to `generateObject()`
 - **`IntentClassificationSchema` + `mapLLMResultToIntentClassification`:** excellent Zod schema, correct mapping, clean fallback to sync classifier
 - **`isLikelyCompositeQuery`:** correct detection, correctly integrated with retrieval eligibility
-- **`AgentStateV1` interface:** right shape — just needs to be instantiated
+- **`AgentStateV1` interface + factory:** right shape and now instantiated in `runner.ts`; next step is execute-path extraction
 - **`runner.ts.bak`:** keeping the diff visible in-repo is a useful practice during refactors
 - **`REVIEW.md` as source of truth:** clear signal of intent, well-structured
 

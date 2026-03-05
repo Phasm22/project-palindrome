@@ -19,6 +19,9 @@ try {
   // .env file doesn't exist or can't be read, that's okay
 }
 
+const liveHybridTestsEnabled = process.env.PCE_LIVE_TESTS === "true";
+const runLiveTest = liveHybridTestsEnabled ? test : test.skip;
+
 /**
  * TL-2A.7: Hybrid Reasoning Gold Path Validation
  * 
@@ -76,13 +79,7 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     expect(actions).toContain("list_vms");
   });
 
-  test("should execute hybrid reasoning gold path query", async () => {
-    // Set a longer timeout for LLM calls (30 seconds)
-    // This test makes real OpenAI API calls and may take time
-    if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "test-key") {
-      console.log("Skipping test: OPENAI_API_KEY not set or is test key");
-      return;
-    }
+  runLiveTest("should execute hybrid reasoning gold path query", async () => {
 
     // Gold Path Scenario:
     // Query: "Is VM-101 running at high CPU? Should we reboot it based on Infrastructure team policies?"
@@ -175,72 +172,34 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     // Execute the gold path query
     const query = "Is VM-101 running at high CPU? Should we reboot it based on Infrastructure team policies?";
     
-    const response = await runAgent(query, {
-      userId: "test-user",
-      aclGroup: "viewer",
-      ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
-    });
+    let proxmoxExecuteCount = 0;
+    const originalProxmoxExecute = ProxmoxReadOnlyTool.prototype.execute;
+    ProxmoxReadOnlyTool.prototype.execute = async function (params: any, context: any) {
+      proxmoxExecuteCount++;
+      return originalProxmoxExecute.call(this, params, context);
+    };
+
+    let response;
+    try {
+      response = await runAgent(query, {
+        userId: "test-user",
+        aclGroup: "viewer",
+        ragBaseUrl: process.env.PCE_API_URL || "http://localhost:4000",
+      });
+    } finally {
+      global.fetch = originalFetch;
+      ProxmoxReadOnlyTool.prototype.execute = originalProxmoxExecute;
+    }
 
     // Validate response structure
     expect(response).toBeDefined();
     expect(response.text).toBeDefined();
     expect(typeof response.text).toBe("string");
     expect(response.text.length).toBeGreaterThan(0);
-
-    // Validate that the response mentions key elements from all three sources:
-    // 1. Live tool data: VM status, CPU usage
-    // 2. Vector RAG: Infrastructure team, reboot policy
-    // 3. Graph RAG: Node information, storage information
-    
-    const messageLower = response.text.toLowerCase();
-    
-    // Check for live tool data indicators (VM status, CPU)
-    const hasVmInfo = 
-      messageLower.includes("vm-101") || 
-      messageLower.includes("vm 101") ||
-      messageLower.includes("cpu") ||
-      messageLower.includes("running");
-    
-    // Check for Vector RAG indicators (Infrastructure team, reboot policy)
-    const hasVectorRagInfo =
-      messageLower.includes("infrastructure") ||
-      messageLower.includes("reboot") ||
-      messageLower.includes("policy") ||
-      messageLower.includes("90%");
-    
-    // Check for Graph RAG indicators (node, storage, structure)
-    const hasGraphRagInfo =
-      messageLower.includes("node") ||
-      messageLower.includes("pve3") ||
-      messageLower.includes("storage") ||
-      messageLower.includes("runs on");
-
-    // At least one source should be evident in the response
-    // (Tool calls may fail, but Vector/Graph RAG should still provide context)
-    const sourceCount = [hasVmInfo, hasVectorRagInfo, hasGraphRagInfo].filter(Boolean).length;
-    expect(sourceCount).toBeGreaterThanOrEqual(1);
-
-    // Note: Tool calls are tracked in the context, not directly in the response
-    // The important validation is that the agent attempted to use the tool
-    // and synthesized a response (even if tool calls failed)
-    
-    // The response should indicate that the agent tried to use Proxmox tools
-    // This is validated by the fact that we got a response (even if it mentions errors)
-
-    // Restore original fetch
-    global.fetch = originalFetch;
-    
-    // Note: In a real test, we would validate that fetch was called
-    // For now, we just verify the response was generated
+    expect(proxmoxExecuteCount).toBeGreaterThan(0);
   }, 30000); // 30 second timeout for LLM calls
 
-  test("should handle query requiring all three data sources", async () => {
-    // Set a longer timeout for LLM calls (30 seconds)
-    // This test makes real OpenAI API calls and may take time
-    if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "test-key") {
-      console.log("Skipping test: OPENAI_API_KEY not set or is test key");
-      return;
-    }
+  runLiveTest("should handle query requiring all three data sources", async () => {
 
     // Complex query that requires:
     // 1. Live tool: Current VM status and resource usage
@@ -311,13 +270,7 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     global.fetch = originalFetch;
   }, 30000); // 30 second timeout for LLM calls
 
-  test("should validate provenance chain across all data sources", async () => {
-    // Set a longer timeout for LLM calls (30 seconds)
-    // This test makes real OpenAI API calls and may take time
-    if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === "test-key") {
-      console.log("Skipping test: OPENAI_API_KEY not set or is test key");
-      return;
-    }
+  runLiveTest("should validate provenance chain across all data sources", async () => {
 
     const query = "What is the status of VM-101 and which node is it running on?";
 
@@ -380,4 +333,3 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     global.fetch = originalFetch;
   }, 30000); // 30 second timeout for LLM calls
 });
-

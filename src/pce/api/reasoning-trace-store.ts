@@ -335,3 +335,16 @@ export function getReasoningTraceStore(): ReasoningTraceStore {
   return storeInstance;
 }
 
+export function setReasoningTraceStoreForTests(store: ReasoningTraceStore | null): void {
+  if (storeInstance && storeInstance !== store) {
+    storeInstance.close();
+  }
+  storeInstance = store;
+}
+
+export function resetReasoningTraceStoreForTests(): void {
+  if (storeInstance) {
+    storeInstance.close();
+    storeInstance = null;
+  }
+}

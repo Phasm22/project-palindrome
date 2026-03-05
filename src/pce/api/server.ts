@@ -46,6 +46,7 @@ export interface PceApiServerOptions {
   historyLimit?: number;
   globalRateLimit?: RateLimitConfig;
   perIpRateLimit?: RateLimitConfig;
+  enableIngestionScheduler?: boolean;
 }
 
 export interface PceApiServerDependencies {
@@ -92,6 +93,7 @@ export class PceApiServer {
       historyLimit: options.historyLimit ?? DEFAULT_OPTIONS.historyLimit,
       globalRateLimit: options.globalRateLimit ?? DEFAULT_OPTIONS.globalRateLimit,
       perIpRateLimit: options.perIpRateLimit ?? DEFAULT_OPTIONS.perIpRateLimit,
+      enableIngestionScheduler: options.enableIngestionScheduler ?? true,
     };
 
     this.orchestrator = deps.orchestrator;
@@ -120,7 +122,7 @@ export class PceApiServer {
     }
 
     // Start ingestion scheduler (runs every 5 minutes)
-    if (!this.ingestionScheduler) {
+    if (this.options.enableIngestionScheduler !== false && !this.ingestionScheduler) {
       this.ingestionScheduler = new IngestionScheduler(5, this.metricsCollector); // 5 minutes, pass metrics collector
       this.ingestionScheduler.start();
       pceLogger.info("Ingestion scheduler started (every 5 minutes)");

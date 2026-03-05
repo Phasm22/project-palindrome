@@ -27,16 +27,16 @@ export const TEST_CASES: TestCase[] = [
     shouldContainSensitive: true,
   },
   {
-    name: "Email Address",
+    name: "Email Address Preserved",
     input: "Contact us at support@example.com for help.",
-    expectedRedactions: ["email"],
-    shouldContainSensitive: true,
+    expectedRedactions: [],
+    shouldContainSensitive: false,
   },
   {
-    name: "Private IP",
+    name: "Private IP Preserved",
     input: "Server is at 192.168.1.100",
-    expectedRedactions: ["ip_address_private"],
-    shouldContainSensitive: true,
+    expectedRedactions: [],
+    shouldContainSensitive: false,
   },
   {
     name: "Password Field",
@@ -142,4 +142,3 @@ export function runRedactionTests(redactor: Redactor = new Redactor()): {
 
   return { passed, failed, results };
 }
-

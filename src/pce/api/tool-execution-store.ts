@@ -271,3 +271,16 @@ export function getToolExecutionStore(): ToolExecutionStore {
   return storeInstance;
 }
 
+export function setToolExecutionStoreForTests(store: ToolExecutionStore | null): void {
+  if (storeInstance && storeInstance !== store) {
+    storeInstance.close();
+  }
+  storeInstance = store;
+}
+
+export function resetToolExecutionStoreForTests(): void {
+  if (storeInstance) {
+    storeInstance.close();
+    storeInstance = null;
+  }
+}

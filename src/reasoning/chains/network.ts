@@ -326,7 +326,10 @@ export async function vmIpByNameChain(
   if (findResult.error) {
     return `Could not find VM "${vmNameOrId}": ${findResult.error}`;
   }
-  const payload = findResult.data as { kind?: string; data?: Array<{ id: string; name?: string; nodeName?: string }> };
+  const payload = findResult.data as {
+    kind?: string;
+    data?: Array<{ id: string; name?: string; nodeName?: string; vmKind?: string }>;
+  };
   const vms = payload?.data ?? [];
   if (!vms.length) {
     return `No VM found with name "${vmNameOrId}".`;
@@ -338,13 +341,15 @@ export async function vmIpByNameChain(
   const nodeName = first.nodeName;
   const vmidStr = first.id?.split(":").pop();
   const vmid = vmidStr ? parseInt(vmidStr, 10) : NaN;
+  const vmKind = (first as any).vmKind as string | undefined;
+  const vmType = vmKind === "lxc" ? "lxc" : "qemu";
   if (!nodeName || Number.isNaN(vmid)) {
     return `Could not resolve node/vmid for "${vmNameOrId}" (id: ${first.id}).`;
   }
   const ipResult = await executeToolCall(
     {
       toolName: "proxmox_readonly",
-      parameters: { action: "get_vm_ip", node: nodeName, vmid },
+      parameters: { action: "get_vm_ip", node: nodeName, vmid, type: vmType },
     },
     tools,
     session

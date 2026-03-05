@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ instance: null as any, create: null as any }));
+const mocks: any = {};
+const loggerCounters = new Map<string, number>();
 
 vi.mock("axios", () => {
   const instance = {
@@ -35,6 +36,17 @@ vi.mock("../../../src/pce/utils/logger", () => ({
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+    incrementCounter: vi.fn((counterName: string, amount: number = 1) => {
+      loggerCounters.set(counterName, (loggerCounters.get(counterName) ?? 0) + amount);
+    }),
+    getCounter: vi.fn((counterName: string) => loggerCounters.get(counterName) ?? 0),
+    getAllCounters: vi.fn(() => Object.fromEntries(loggerCounters.entries())),
+    resetCounters: vi.fn(() => {
+      loggerCounters.clear();
+    }),
+    logCounters: vi.fn(),
+    logHashComparison: vi.fn(),
+    logDocumentStatusChange: vi.fn(),
   },
 }));
 
@@ -51,6 +63,7 @@ describe("PiholeClient DNS record operations", () => {
   };
 
   beforeEach(() => {
+    loggerCounters.clear();
     mockAxiosInstance.get.mockClear();
     mockAxiosInstance.post.mockClear();
     mockAxiosInstance.delete.mockClear();

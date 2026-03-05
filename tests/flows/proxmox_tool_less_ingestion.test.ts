@@ -20,7 +20,6 @@ import {
   Redactor,
   EmbeddingService,
   QdrantVectorStore,
-  TEST_COLLECTION,
   IngestionPipeline,
   GraphIngestionPipeline,
   Neo4jGraphStore,
@@ -31,6 +30,7 @@ import { ProxmoxReadOnlyTool } from "../../src/tools/proxmox/readonly";
 import { runAgent } from "../../src/agent/runner";
 import { promises as fs } from "fs";
 import { join } from "path";
+import { buildIsolatedQdrantCollectionName } from "../helpers/qdrant-test-collection";
 
 // Track tool calls made during agent execution
 let toolCallCount = 0;
@@ -39,6 +39,7 @@ const originalToolExecute = ProxmoxReadOnlyTool.prototype.execute;
 
 const liveTestsEnabled = process.env.PCE_LIVE_TESTS === "true";
 const runDescribe = liveTestsEnabled ? describe : describe.skip;
+const TOOL_LESS_INGESTION_COLLECTION = buildIsolatedQdrantCollectionName("proxmox_tool_less_ingestion");
 
 runDescribe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
   let orchestrator: ProxmoxIngestionOrchestrator;
@@ -72,8 +73,9 @@ runDescribe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
 
     const redactor = new Redactor();
     const embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
+    vectorStore = new QdrantVectorStore(undefined, undefined, TOOL_LESS_INGESTION_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
+    await vectorStore.clearCollection();
 
     graphStore = new Neo4jGraphStore();
     await graphStore.connect();
@@ -426,4 +428,3 @@ runDescribe("TL-2A.6.8: Tool-less Hybrid Reasoning Validation", () => {
     });
   }, 90000);
 });
-

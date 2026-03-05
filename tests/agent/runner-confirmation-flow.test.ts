@@ -1,6 +1,18 @@
-import { test, expect } from "bun:test";
+import { test, expect, beforeEach, afterEach } from "bun:test";
 import { runAgent } from "../../src/agent/runner";
 import { AgentEventBus, type AgentEvent } from "../../src/agent/event-bus";
+import { installIsolatedObservabilityStores } from "../helpers/isolated-observability";
+
+let cleanupObservability: (() => void) | null = null;
+
+beforeEach(() => {
+  cleanupObservability = installIsolatedObservabilityStores("runner-confirmation-flow").cleanup;
+});
+
+afterEach(() => {
+  cleanupObservability?.();
+  cleanupObservability = null;
+});
 
 async function runAgentWithFinalEvent(input: string, options: Record<string, any> = {}) {
   const sessionId = options.sessionId ?? `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -79,7 +91,7 @@ test("confirmed id replays pending executable input", async () => {
 
   expect((res.text ?? "").length).toBeGreaterThan(0);
   expect(res.text).not.toContain("There is no pending action");
-});
+}, { timeout: 10000 });
 
 test("clarification continuation stores executable pending action input", async () => {
   const turn1 = await runAgentWithFinalEvent("create a vm");

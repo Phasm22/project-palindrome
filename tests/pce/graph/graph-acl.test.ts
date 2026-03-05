@@ -41,9 +41,14 @@ const sampleGraph: GraphQueryResult = {
 
 const queryInterface = {
   getEntitiesByType: async () => sampleGraph,
+  findEntitiesByIdOrName: async () => sampleGraph,
   findAlertsAffectingHost: async () => sampleGraph,
   findHostsConnectedToService: async () => sampleGraph,
   findPath: async () => sampleGraph,
+  findDependencies: async () => sampleGraph,
+  findDependents: async () => sampleGraph,
+  findDependencyChain: async () => sampleGraph,
+  executeQuery: async () => sampleGraph,
   getEntitiesWithProvenance: async () => [],
 } as unknown as GraphQueryInterface;
 

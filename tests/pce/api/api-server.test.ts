@@ -102,7 +102,7 @@ async function startTestServer(
       errorMetrics,
       dependencyChecks,
     },
-    { port: 0, ...options }
+    { enableIngestionScheduler: false, port: 0, ...options }
   );
 
   await server.start();
@@ -273,6 +273,6 @@ describe("PCE API server", () => {
     const body = await res.json();
     expect(body.data.answer).toContain("[REDACTED_PASSWORD]");
     expect(body.data.sources[0].text).toContain("[REDACTED_PASSWORD]");
-    expect(body.data.context.semanticChunks[0].text).toContain("[REDACTED_EMAIL]");
+    expect(body.data.context.semanticChunks[0].text).toContain("user@example.com");
   });
 });

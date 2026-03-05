@@ -603,7 +603,9 @@ export class TwinQueryService {
     vmName: string,
     options: { vmKind?: VmKind; verifyAgainstProxmox?: boolean } = {}
   ): Promise<ClusterVmSummary[]> {
-    const vmKind = options.vmKind === undefined ? "qemu" : options.vmKind;
+    // Default to searching ALL VM kinds (QEMU + LXC) when vmKind is not specified.
+    // Callers that want to restrict to a specific kind should pass vmKind explicitly.
+    const vmKind = options.vmKind === undefined ? null : options.vmKind;
     const verifyAgainstProxmox = options.verifyAgainstProxmox !== false; // Default to true
     
     const result = await this.runQuery(
