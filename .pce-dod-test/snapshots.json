@@ -1,0 +1,10 @@
+[
+  {
+    "filePath": ".pce-dod-test/dod6-test.txt",
+    "sha256Hash": "9d9595c5d94fb65b824f56e9999527dba9542481580d69feb89056aabaa0aa87",
+    "timestamp": "2026-03-05T22:02:24.161Z",
+    "aclGroup": "admin",
+    "documentType": "generic_text",
+    "size": 12
+  }
+]
