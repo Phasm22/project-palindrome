@@ -10,10 +10,10 @@ import type { DnsRecord } from "../../tools/pihole/client";
  * Destroy VM Action Schema
  */
 export const DestroyVmSchema = z.object({
-  name: z.string().optional(), // Optional: can use vmId instead
-  vmId: z.number().int().positive().optional(), // Optional: can use name instead
-  node: z.string().min(1, "Node name is required").optional(), // Optional: helps with validation
-  dryRun: z.boolean().default(false),
+  name: z.string().optional().describe("VM name to destroy (optional if vmId is provided)"),
+  vmId: z.number().int().positive().optional().describe("VM ID to destroy (optional if name is provided); resolved to name via digital twin"),
+  node: z.string().optional().describe("Proxmox node name (optional; used for validation and Terraform token selection)"),
+  dryRun: z.boolean().default(false).describe("Preview destruction without executing (default: false)"),
 }).refine(
   (data) => data.name || data.vmId,
   {

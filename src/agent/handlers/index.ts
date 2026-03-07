@@ -1,7 +1,9 @@
 /**
- * Agent handlers: confirmation, identity/social, confirm-request, clarify.
- * handle-execute remains in runner (EXECUTE path).
+ * Agent handlers: confirmation, identity/social, confirm-request, clarify, execute.
  */
+
+export { handleExecute } from "./handle-execute";
+export type { HandleExecuteInput } from "./handle-execute";
 
 export { handleConfirmation } from "./handle-confirmation";
 export type { HandleConfirmationInput, HandleConfirmationResult } from "./handle-confirmation";
@@ -34,3 +36,10 @@ export {
   isAssistantNameQuery,
   isMetaIdentityQuery,
 } from "./identity-helpers";
+
+export {
+  buildPendingActionRecord,
+  summarizeToolCall,
+  inferMissingToolSlots,
+  cleanupAfterProxmoxDestroy,
+} from "./tool-helpers";

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { BaseTool } from "./BaseTool";
 import { actionRegistry } from "../actions/registry";
+import { generateActionParamsDoc } from "../actions/action-docs-generator";
 import { pceLogger as logger } from "../pce/utils/logger";
 import type { ExecutionContext, ExecutionResult } from "../types/execution";
 import type { ToolSchema } from "./tool-schema";
@@ -44,6 +45,20 @@ export class ActionTool extends BaseTool {
     });
   }
 
+  /**
+   * Builds the Zod schema for the action tool with a dynamically generated
+   * description for the `params` field, derived from the action registry's
+   * Zod schemas and field annotations.
+   */
+  private buildDynamicSchema() {
+    const availableActions = actionRegistry.list();
+    const dynamicParamsDesc = generateActionParamsDoc(availableActions);
+    return z.object({
+      action: z.string().describe("Action name (e.g., 'compute.create_vm')"),
+      params: z.any().describe(dynamicParamsDesc),
+    });
+  }
+
   override getSchema(): ToolSchema {
     const availableActions = actionRegistry.list();
     const actionExamples = availableActions.map(a => ({
@@ -54,7 +69,9 @@ export class ActionTool extends BaseTool {
       }
     }));
 
-    return createToolSchema(this, ActionParams, {
+    const dynamicSchema = this.buildDynamicSchema();
+
+    return createToolSchema(this, dynamicSchema, {
       examples: [
         {
           description: "Create a new VM on a Proxmox node",
@@ -209,7 +226,10 @@ export class ActionTool extends BaseTool {
   }
 
   override getParameterSchema() {
-    return ActionParams;
+    // Return the dynamically described schema; ActionParams (the static const
+    // above) is still used in execute() for validation where the description
+    // string is irrelevant.
+    return this.buildDynamicSchema();
   }
 
   async execute(

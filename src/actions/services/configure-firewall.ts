@@ -12,18 +12,18 @@ import {
  * Configure Firewall Action Schema
  */
 export const ConfigureFirewallSchema = z.object({
-  vmName: z.string().min(1, "VM name is required"),
+  vmName: z.string().min(1, "VM name is required").describe("VM name to configure UFW firewall on (resolved via digital twin to obtain the SSH hostname)"),
   rules: z.array(z.object({
-    port: z.number().int().positive(),
-    protocol: z.enum(["tcp", "udp", "both"]).default("tcp"),
-    action: z.enum(["allow", "deny"]).default("allow"),
-  })).optional(),
-  defaultPolicy: z.enum(["allow", "deny"]).default("deny"),
-  waitForVm: z.boolean().default(true),
-  timeout: z.number().int().positive().default(300),
-  retryOnFailure: z.boolean().default(false),
-  maxRetries: z.number().int().positive().default(1),
-  dryRun: z.boolean().default(false),
+    port: z.number().int().positive().describe("Port number to allow or deny"),
+    protocol: z.enum(["tcp", "udp", "both"]).default("tcp").describe("Protocol: 'tcp', 'udp', or 'both' (default: 'tcp')"),
+    action: z.enum(["allow", "deny"]).default("allow").describe("Firewall action: 'allow' or 'deny' (default: 'allow')"),
+  })).optional().describe("UFW rules to apply (optional; each rule specifies port, protocol, and action)"),
+  defaultPolicy: z.enum(["allow", "deny"]).default("deny").describe("Default UFW policy for unmatched traffic (default: 'deny')"),
+  waitForVm: z.boolean().default(true).describe("Wait for SSH to become accessible before running ansible commands (default: true)"),
+  timeout: z.number().int().positive().default(300).describe("SSH wait timeout in seconds (default: 300)"),
+  retryOnFailure: z.boolean().default(false).describe("Retry on failure (default: false)"),
+  maxRetries: z.number().int().positive().default(1).describe("Maximum number of retry attempts when retryOnFailure is true (default: 1)"),
+  dryRun: z.boolean().default(false).describe("Preview without executing firewall changes (default: false)"),
 });
 
 export type ConfigureFirewallParams = z.infer<typeof ConfigureFirewallSchema>;

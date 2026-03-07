@@ -18,21 +18,21 @@ import { tmpdir } from "os";
  * Create VM Action Schema
  */
 export const CreateVmSchema = z.object({
-  name: z.string().optional(), // Optional: will generate palindrome name if not provided
-  node: z.string().min(1, "Node name is required"),
-  cores: z.number().int().positive().default(2),
-  memory: z.number().int().positive().default(4096), // MB
-  diskSize: z.string().default("20G"),
-  sshPublicKey: z.string().optional(),
-  sshUsername: z.string().min(1).optional(),
-  vmBridge: z.string().default("vmbr0"),
-  vlanId: z.number().int().min(1).max(4094).optional(), // Optional: VLAN ID to assign (for vmbr0 tagging, or validation for pre-configured bridges)
-  datastore: z.string().default("local-lvm"),
-  cloudInitDatastore: z.string().optional(), // Optional: defaults to "local" in Terraform
-  templateId: z.number().int().positive().optional(), // Optional: VM template ID to clone from (auto-discovered when omitted)
-  vmId: z.number().int().positive().optional(), // Optional: Preferred VM ID (will check availability)
-  bootstrap: z.boolean().default(false), // Optional: Run Ansible bootstrap (common.yml) after VM creation
-  dryRun: z.boolean().default(false),
+  name: z.string().optional().describe("VM hostname (optional); a palindrome name is auto-generated if omitted"),
+  node: z.string().min(1, "Node name is required").describe("Proxmox node name (e.g. YANG, yin, proxBig); canonicalized to live cluster names"),
+  cores: z.number().int().positive().default(2).describe("vCPU count (default: 2)"),
+  memory: z.number().int().positive().default(4096).describe("RAM in MB (default: 4096)"),
+  diskSize: z.string().default("20G").describe("Root disk size in Terraform format, e.g. '20G' (default: '20G')"),
+  sshPublicKey: z.string().optional().describe("SSH public key to inject via cloud-init (falls back to SSH_PUBLIC_KEY env var)"),
+  sshUsername: z.string().min(1).optional().describe("SSH username for cloud-init (default: 'ops')"),
+  vmBridge: z.string().default("vmbr0").describe("Network bridge (default: 'vmbr0'); use 'vmbr2' for pre-configured VLAN bridges"),
+  vlanId: z.number().int().min(1).max(4094).optional().describe("VLAN ID 1–4094 (optional); used for vmbr0 tagging or validation on pre-configured bridges"),
+  datastore: z.string().default("local-lvm").describe("Storage datastore for the VM disk (default: 'local-lvm'); auto-selected if unavailable"),
+  cloudInitDatastore: z.string().optional().describe("Datastore for cloud-init snippets (optional; defaults to 'local' on yin/YANG, 'snippets' elsewhere)"),
+  templateId: z.number().int().positive().optional().describe("VM template ID to clone from (optional; auto-discovered on the target node when omitted)"),
+  vmId: z.number().int().positive().optional().describe("Preferred VM ID in range 9000–9999 (optional; auto-allocated when omitted)"),
+  bootstrap: z.boolean().default(false).describe("Run Ansible common.yml bootstrap playbook after VM creation (default: false)"),
+  dryRun: z.boolean().default(false).describe("Preview changes without applying them (default: false)"),
 });
 
 export type CreateVmParams = z.infer<typeof CreateVmSchema>;
