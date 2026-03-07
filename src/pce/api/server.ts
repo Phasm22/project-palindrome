@@ -1766,6 +1766,7 @@ export class PceApiServer {
       const body = await req.json() as {
         query?: string;
         userId?: string;
+        profileUserId?: string;
         aclGroup?: string;
         sessionId?: string;
         conversationId?: string;
@@ -1776,6 +1777,7 @@ export class PceApiServer {
       }
 
       const userId = body.userId || "dashboard-user";
+      const profileUserId = body.profileUserId || userId;
       const aclGroup = (body.aclGroup || "admin") as ACLGroup;
       const sessionId = body.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const conversationId = body.conversationId || null;
@@ -1916,7 +1918,8 @@ export class PceApiServer {
         conversationContext,
         userPreferences,
         conversationHistory, // Pass history to agent
-        getProfilePublicKey: (uid: string) => this.profileStore.get(uid)?.publicKey ?? null,
+        getProfilePublicKey: (_uid: string) => this.profileStore.get(profileUserId)?.publicKey ?? null,
+        getProfileSshUsername: (_uid: string) => this.profileStore.get(profileUserId)?.sshUsername ?? null,
       }).catch((error: any) => {
         pceLogger.error("Agent execution error", { error: error.message, sessionId });
         unsubscribe();

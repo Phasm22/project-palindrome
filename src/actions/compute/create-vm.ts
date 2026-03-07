@@ -24,6 +24,7 @@ export const CreateVmSchema = z.object({
   memory: z.number().int().positive().default(4096), // MB
   diskSize: z.string().default("20G"),
   sshPublicKey: z.string().optional(),
+  sshUsername: z.string().min(1).optional(),
   vmBridge: z.string().default("vmbr0"),
   vlanId: z.number().int().min(1).max(4094).optional(), // Optional: VLAN ID to assign (for vmbr0 tagging, or validation for pre-configured bridges)
   datastore: z.string().default("local-lvm"),
@@ -285,7 +286,7 @@ function getProxmoxClientConfig(node: string): { url: string; tokenId: string; t
 }
 
 export async function createVm(params: CreateVmParams): Promise<CreateVmResult> {
-  const { name, node, cores, memory, diskSize, sshPublicKey, vmBridge, vlanId, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, bootstrap: shouldBootstrap, dryRun } = params;
+  const { name, node, cores, memory, diskSize, sshPublicKey, sshUsername, vmBridge, vlanId, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, bootstrap: shouldBootstrap, dryRun } = params;
 
   // Normalize node name: Proxmox node names are case-sensitive (YANG, yin, etc.)
   // Convert common lowercase inputs to correct case
@@ -617,6 +618,7 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       },
     },
     sshPublicKey: sshKey,
+    sshUsername: (sshUsername && sshUsername.trim().length > 0) ? sshUsername.trim() : "ops",
     vmBridge: finalVmBridge,
     vlanId, // Optional VLAN ID for network tagging
     datastore: finalDatastore,
@@ -874,9 +876,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       selectionWarnings,
     });
 
-    const sshUsername = "ops";
+    const connectUsername = (sshUsername && sshUsername.trim().length > 0) ? sshUsername.trim() : "ops";
     const connectLine =
-      firstIp ? ` Connect with: ssh ${sshUsername}@${firstIp}.` : "";
+      firstIp ? ` Connect with: ssh ${connectUsername}@${firstIp}.` : "";
 
     return {
       success: true,

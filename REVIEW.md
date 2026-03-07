@@ -921,7 +921,7 @@ The runner looks up the policy based on classified intent and sets `tool_choice`
 
 ## 14. Implementation Status — realAgent branch, March 2026
 
-*Snapshot: commit `79c1303` (initial); updated 2026-03-05 to reflect P0+P1.2+P1.4 changes.*
+*Snapshot: commit `79c1303` (initial); updated 2026-03-07 to reflect P0/P1/P2 implementation progress (P2.2 + P1.3 completed same date).*
 
 ---
 
@@ -937,7 +937,7 @@ The runner looks up the policy based on classified intent and sets `tool_choice`
 | Action layer / IaC prison | **TODO** | `ActionTool` docstring still hardcoded. No auto-generation from registry. |
 | `event-bus` payload untyped | **DONE** | `AgentEvent.data` now uses `AgentEventData`; runner and tool-progress payloads include discriminators end-to-end. |
 | `AgentStateV1` wiring | **PARTIAL** | `buildAgentState()` exists and `runner.ts` constructs typed state. Remaining gap is execute-path extraction, not state instantiation. |
-| `JSON.parse` without validation | **TODO** | Still endemic in runner hot path and tool argument parsing. |
+| `JSON.parse` without validation | **DONE** | `parseToolArgs()` in `src/agent/handlers/parse-tool-args.ts`; sequential hot path emits tool error + `continue`; parallel path logs + returns null. 2026-03-07. |
 
 ---
 
@@ -1024,15 +1024,17 @@ The unified response envelope from §12 is fully defined as a Zod schema: `conve
 
 **P0.1 ✅ DONE (2026-03-05):** Inline `emitFinalEvent` and `emitStepEvent` closures in `runner.ts` deleted. All 23 call sites updated to use typed versions from `emit-helpers.ts`. `agent:final` payload now enforces `AgentFinalPayload` schema end-to-end.
 
-**P0.2: Stabilize full-suite test isolation / shared-resource contention**
+**P0.2 🟡 PARTIAL (updated 2026-03-07): Stabilize full-suite test isolation / shared-resource contention**
 
-Current evidence points to suite stability, not a confirmed deterministic product regression:
+Current evidence still points to suite stability, not a confirmed deterministic product regression, and significant isolation work has now landed:
 
-- `tests/tools/cognitive-tools.test.ts` failed during `bun test --bail`
-- the same file passed when run in isolation
-- `tests/agent/runner-confirmation-flow.test.ts` also timed out once under concurrent load and logged `database is locked`, then passed cleanly in isolation
+- test-only singleton/reset seams added for SQLite-backed observability stores
+- API test servers now disable ingestion scheduler by default unless explicitly needed
+- agent/tool/PCE tests now use isolated observability helpers and per-test resource isolation
+- stale mock/test-surface drift fixed across suite blockers (logger counters, graph query mock surface, fetch leak)
+- targeted reruns for prior failing areas pass consistently; full-suite determinism remains the final acceptance check
 
-Probable causes: shared SQLite-backed observability stores, global singletons, background schedulers, or other shared resources under concurrent Bun load. Goal: a deterministic green full suite before resuming architecture work.
+Probable causes were shared SQLite-backed observability stores, global singletons, background schedulers, and stale shared test surfaces under concurrent Bun load. Goal remains a deterministic green full suite before resuming architecture work.
 
 ---
 
@@ -1042,9 +1044,7 @@ Probable causes: shared SQLite-backed observability stores, global singletons, b
 
 **P1.2 ✅ DONE (2026-03-05):** `ENABLE_LLM_INTENT_CLASSIFIER` gate removed. `classifyAndRouteWithLLM` is now always the primary path; sync Jaccard remains as the catch-block fallback. Unused import and helper function cleaned up.
 
-**P1.3: Wire `AgentResponseV1Schema` to `generateObject()` in the execute path**
-
-The schema exists. The Vercel AI SDK (`ai@5`) is already used in `intent-router.ts`. Connecting them eliminates free-form text output and removes the need for the 480-line dashboard heuristic parser. `rawTextFallback` preserves backward compat during migration.
+**P1.3 ✅ DONE (2026-03-07):** After `finalText` is produced in the execute path, `runner.ts` calls `generateObject(AgentResponseV1Schema, gpt-4o-mini)` as a cheap structuring pass. `buildStructuredResponsePrompt(mode?)` added to `system-prompt.ts`. `structuredResponse: AgentResponseV1Schema.optional()` added to `AgentFinalPayloadSchema` in `event-payloads.ts`. Failure is non-fatal — falls back to raw text. `rawTextFallback` always populated; dashboard unchanged during migration. Uses `aiSdkOpenai` alias to avoid name collision with native `OpenAI` client.
 
 **P1.4 ✅ DONE (2026-03-05):** `formatResponseForBot` removed from the main LLM loop path. `buildSystemPrompt(responseMode?)` added to `system-prompt.ts` — appends TERSE_DATA/ASSISTIVE/EXPLAINER instructions to the system prompt so the LLM formats on the first call. `buildBotMoveContext` enrichment preserved. `formatResponseForBot` still used by twin-first chains + RAG path (those are single-call paths, not double).
 
@@ -1054,19 +1054,7 @@ The schema exists. The Vercel AI SDK (`ai@5`) is already used in `intent-router.
 
 **P2.1 ✅ DONE (2026-03-05):** `event-bus.ts` now types `AgentEvent.data` as `AgentEventData`. Tool progress/start/complete and agent step/final payloads now include discriminators, so emit sites are compile-time checked.
 
-**P2.2: Fix `JSON.parse` without validation in the tool dispatch hot path**
-
-```typescript
-// Current
-parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-// Fix
-try {
-  parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-  if (tool.inputSchema) tool.inputSchema.parse(parsedArgs);
-} catch (err) {
-  return { error: 'Invalid tool arguments', raw: fnCall.arguments };
-}
-```
+**P2.2 ✅ DONE (2026-03-07):** `src/agent/handlers/parse-tool-args.ts` — `parseToolArgs(raw, schema?)` returns `{ ok: true, args } | { ok: false, error }`. Sequential hot path: on failure, calls `context.addToolResult` with error payload so the LLM sees why the tool wasn't called, then `continue`s. Parallel path: logs and returns `null`. Both paths optionally validate against `tool.getParameterSchema?.()` (defense-in-depth; tools still validate internally). Exported from `handlers/index.ts`.
 
 **P2.3: Extract execute path into `handle-execute.ts`**
 
@@ -1092,16 +1080,16 @@ The execute path (RAG → system prompt → LLM loop → tool dispatch → recla
 |---|---|---|---|
 | `runner.ts` inline `emitFinalEvent` shadows typed version | ~~P0~~ | — | ✅ **Fixed 2026-03-05** |
 | Double LLM call (`formatResponseForBot`) on main path | ~~High~~ | — | ✅ **Fixed 2026-03-05** — `buildSystemPrompt(mode)` |
-| Full-suite stability / test isolation under concurrent Bun load | **High** | Medium | Isolate shared stores/resources; make `bun test --bail` deterministic |
+| Full-suite stability / test isolation under concurrent Bun load | **High** | Medium | 🟡 Isolation seams and targeted blocker fixes landed; finish with deterministic `bun test --bail` |
 | `AgentStateV1` wired but execute path still inline | **Medium** | High | Extract `handle-execute.ts` |
 | LLM classifier feature-flagged off | ~~High~~ | — | ✅ **Fixed 2026-03-05** — gate removed |
-| `AgentResponseV1Schema` not wired to `generateObject` | **High** | Medium | Use `generateObject(schema)` in execute path |
+| `AgentResponseV1Schema` not wired to `generateObject` | ~~High~~ | — | ✅ **Fixed 2026-03-07** — `generateObject` in execute path; `structuredResponse` on `AgentFinalPayload` |
 | `event-bus.data` still `Record<string,any>` | ~~Medium~~ | — | ✅ **Fixed 2026-03-05** |
-| `JSON.parse` without validation in hot path | **Medium** | Low | Add try/catch + `schema.parse` at tool dispatch |
+| `JSON.parse` without validation in hot path | ~~Medium~~ | — | ✅ **Fixed 2026-03-07** — `parseToolArgs()` helper; sequential + parallel paths |
 | Execute path still ~2,200 lines inline | **Medium** | High | Extract `handle-execute.ts` |
 | Server-owned conversation history contract not tested/documented | ~~Medium~~ | — | ✅ **Fixed 2026-03-05** |
 | `ActionTool` docstring manually maintained | **Medium** | Low | Auto-generate from Zod schemas via `zod-to-json-schema` |
-| `canonical-response-format.ts` still present | **Low** | Low | Remove once `AgentResponseV1Schema` is primary path |
+| `canonical-response-format.ts` still present | **Low** | Low | P1.3 wired `AgentResponseV1Schema`; remove this file once dashboard migrates off heuristic parser |
 | Domain regex waterfall still runs pre-classification | **Low** | Medium | Reduce to post-classification validators after P1.2 |
 
 ---
@@ -1114,7 +1102,7 @@ These are solid and should not be changed:
 - **Validation baseline:** targeted architecture-tranche tests pass; full-suite stability still needs work under concurrent Bun load
 - **Handler extraction quality:** typed I/O interfaces, proper separation of concerns, observability traces aligned with handler paths
 - **`emit-helpers.ts` + `event-payloads.ts`:** the typed event payload system is well-designed and now wired end-to-end through `event-bus.ts`
-- **`AgentResponseV1Schema`:** exactly the right shape — just needs to be wired to `generateObject()`
+- **`AgentResponseV1Schema`:** exactly the right shape — now wired to `generateObject()` in the execute path (P1.3 done); `rawTextFallback` preserved for dashboard backward-compat
 - **`IntentClassificationSchema` + `mapLLMResultToIntentClassification`:** excellent Zod schema, correct mapping, clean fallback to sync classifier
 - **`isLikelyCompositeQuery`:** correct detection, correctly integrated with retrieval eligibility
 - **`AgentStateV1` interface + factory:** right shape and now instantiated in `runner.ts`; next step is execute-path extraction
@@ -1123,4 +1111,4 @@ These are solid and should not be changed:
 
 ---
 
-*Original review generated 2026-03-03 against ~180 source files. §14 updated 2026-03-05 from realAgent branch snapshot (commit `79c1303`).*
+*Original review generated 2026-03-03 against ~180 source files. §14 updated 2026-03-05 (commit `79c1303`); P2.2 + P1.3 completed 2026-03-07.*

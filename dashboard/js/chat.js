@@ -80,7 +80,7 @@ let currentSessionId = null;
 let currentResponseId = null;
 let finalEventTimeout = null;
 let currentConversationId = null;
-let isNewConversationMode = false; // True when user clicked "New" but hasn't sent a message yet
+let isNewConversationMode = true; // Keep composer visible even before first conversation exists
 let isCreatingConversation = false; // Prevent spamming New Chat button
 let promptSuggestionCache = null;
 let promptSuggestionCacheAt = 0;
@@ -420,6 +420,7 @@ async function saveLastActiveConversation(conversationId) {
 }
 
 const USER_ID = 'dashboard-user';
+const PROFILE_SELECTION_STORAGE_KEY = 'activeProfileUserId';
 
 function isValidPublicKeyInput(value) {
   if (!value || typeof value !== 'string') return false;
@@ -429,6 +430,71 @@ function isValidPublicKeyInput(value) {
     trimmed.startsWith('ssh-rsa ') ||
     trimmed.startsWith('ecdsa-sha2-')
   );
+}
+
+function getStoredProfileSelection() {
+  try {
+    return localStorage.getItem(PROFILE_SELECTION_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function persistProfileSelection(userId) {
+  try {
+    localStorage.setItem(PROFILE_SELECTION_STORAGE_KEY, userId || '');
+  } catch {
+    // Non-fatal
+  }
+}
+
+function getSelectedProfileUserId() {
+  const selectEl = document.getElementById('profile-select');
+  if (selectEl && typeof selectEl.value === 'string' && selectEl.value.trim()) {
+    return selectEl.value.trim();
+  }
+  const stored = getStoredProfileSelection();
+  return stored || USER_ID;
+}
+
+function populateProfileSelector(profiles) {
+  const selectEl = document.getElementById('profile-select');
+  if (!selectEl) return;
+
+  selectEl.innerHTML = '';
+  if (!Array.isArray(profiles) || profiles.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = USER_ID;
+    opt.textContent = 'Default (dashboard-user)';
+    selectEl.appendChild(opt);
+    selectEl.value = USER_ID;
+    persistProfileSelection(USER_ID);
+    return;
+  }
+
+  const stored = getStoredProfileSelection();
+  const hasStored = stored && profiles.some((p) => p.userId === stored);
+  const hasDefault = profiles.some((p) => p.userId === USER_ID);
+  const selected = hasStored ? stored : (hasDefault ? USER_ID : profiles[0].userId);
+
+  for (const p of profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.userId;
+    const label = p.displayName || p.sshUsername || p.userId;
+    const keyState = p.hasPublicKey ? 'key set' : 'no key';
+    opt.textContent = `${label} (${keyState})`;
+    selectEl.appendChild(opt);
+  }
+
+  selectEl.value = selected;
+  persistProfileSelection(selected);
+
+  if (!selectEl.dataset.bound) {
+    selectEl.dataset.bound = '1';
+    selectEl.addEventListener('change', () => {
+      persistProfileSelection(selectEl.value || USER_ID);
+    });
+  }
 }
 
 function renderProfileItem(profile) {
@@ -481,6 +547,7 @@ async function loadAllProfiles() {
     }
     const result = await response.json();
     const profiles = result.data || [];
+    populateProfileSelector(profiles);
     if (profiles.length === 0) {
       listEl.innerHTML = '<div style="color:#475569;font-size:0.72rem;padding:4px 4px;">No profiles — add one above</div>';
       return;
@@ -530,7 +597,13 @@ async function _deleteProfile(userId) {
     const response = await fetch(`${API_URL}/api/user/profile?userId=${encodeURIComponent(userId)}`, {
       method: 'DELETE',
     });
-    if (response.ok) await loadAllProfiles();
+    if (response.ok) {
+      const selected = getSelectedProfileUserId();
+      if (selected === userId) {
+        persistProfileSelection(USER_ID);
+      }
+      await loadAllProfiles();
+    }
   } catch (error) {
     console.error('Failed to delete profile', error);
   }
@@ -631,8 +704,8 @@ export async function restoreConversation() {
     const response = await fetch(`${API_URL}/api/user/preferences?userId=${userId}`);
     
     if (!response.ok) {
-      // No saved conversation - hide input
-      updateInputVisibility(false);
+      // No saved conversation - keep input visible for first message
+      updateInputVisibility(true);
       return null;
     }
 
@@ -649,13 +722,13 @@ export async function restoreConversation() {
       await selectConversation(conversationId);
       return conversationId;
     } else {
-      // No saved conversation - hide input
-      updateInputVisibility(false);
+      // No saved conversation - keep input visible for first message
+      updateInputVisibility(true);
     }
   } catch (error) {
     console.error('Failed to restore conversation:', error);
-    // On error, hide input
-    updateInputVisibility(false);
+    // On error, keep input visible so Safari/network glitches don't block chat
+    updateInputVisibility(true);
   }
   
   return null;
@@ -2214,7 +2287,8 @@ export async function sendChatMessage(messageOverride = null) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         query: message, 
-        userId: 'dashboard-user', 
+        userId: USER_ID,
+        profileUserId: getSelectedProfileUserId(),
         aclGroup: 'admin',
         conversationId: currentConversationId,
         sessionId: currentSessionId

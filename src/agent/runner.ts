@@ -8,7 +8,10 @@ import { logger } from "../utils/logger";
 import { loadTools } from "./tool-loader";
 import { executeToolCall } from "./tool-executor";
 import { AgentContext } from "./context";
-import { SYSTEM_PROMPT, buildSystemPrompt } from "./system-prompt";
+import { SYSTEM_PROMPT, buildSystemPrompt, buildStructuredResponsePrompt } from "./system-prompt";
+import { AgentResponseV1Schema } from "./schemas/agent-response-v1";
+import { generateObject } from "ai";
+import { openai as aiSdkOpenai } from "@ai-sdk/openai";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
@@ -89,6 +92,7 @@ import {
   handleClarifyFromPlan,
   emitFinalEvent,
   emitStepEvent,
+  parseToolArgs,
 } from "./handlers";
 
 let openaiClient: OpenAI | null = null;
@@ -703,6 +707,8 @@ export type AgentRunOptions = {
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>; // Previous messages in conversation
   /** When set (e.g. by PCE API), used to inject profile public key into create_vm params for dashboard users */
   getProfilePublicKey?: (userId: string) => string | null;
+  /** When set (e.g. by PCE API), used to inject profile SSH username into create_vm params for dashboard users */
+  getProfileSshUsername?: (userId: string) => string | null;
 };
 
 function coerceTextContent(content: any): string {
@@ -1616,6 +1622,10 @@ export async function runAgent(
         const profileKey = options.getProfilePublicKey(session.userId);
         if (profileKey && profileKey.trim().length > 0) params.sshPublicKey = profileKey.trim();
       }
+      if (options.getProfileSshUsername && session.userId) {
+        const profileUser = options.getProfileSshUsername(session.userId);
+        if (profileUser && profileUser.trim().length > 0) params.sshUsername = profileUser.trim();
+      }
 
       const result = await executeToolCall(
         {
@@ -2413,13 +2423,17 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           const toolName = fnCall.name as string | undefined;
           if (!toolName) return null;
           
-          let parsedArgs: Record<string, any> = {};
-          try {
-            parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-          } catch {
+          const targetToolForParse = tools.find((t) => t.metadata.name === toolName);
+          const parseResult = parseToolArgs(
+            fnCall.arguments,
+            targetToolForParse?.getParameterSchema?.()
+          );
+          if (!parseResult.ok) {
+            logger.warn("Tool argument parse/validate failed (parallel path)", { toolName, error: parseResult.error });
             return null;
           }
-          
+          const parsedArgs = parseResult.args;
+
           // Check duplicates
           const callSignature = `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
           if (seenToolCalls.has(callSignature)) {
@@ -2559,13 +2573,22 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         const toolName = fnCall.name as string | undefined;
         if (!toolName) continue;
         
-        let parsedArgs: Record<string, any> = {};
-        try {
-          parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-        } catch {
-          // Continue even if parsing fails
+        const targetToolForParse = tools.find((t) => t.metadata.name === toolName);
+        const parseResult = parseToolArgs(
+          fnCall.arguments,
+          targetToolForParse?.getParameterSchema?.()
+        );
+        if (!parseResult.ok) {
+          logger.warn("Tool argument parse/validate failed", { toolName, error: parseResult.error });
+          context.addToolResult(toolCall.id, toolName, {
+            provenanceId: `tool://${toolName}/parse-error-${Date.now()}`,
+            success: false,
+            error: parseResult.error,
+          });
+          continue;
         }
-        
+        const parsedArgs = parseResult.args;
+
         // Create a signature: toolName + sorted stringified args
         // For twin_query with node_temperature, allow different nodeName params (not duplicates)
         const isTemperatureQuery = toolName === "twin_query" && parsedArgs.operation === "node_temperature";
@@ -3199,12 +3222,44 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
       }
 
+      // Structure the final response via AgentResponseV1Schema (cheap gpt-4o-mini formatting pass)
+      let structuredResponse: import("./schemas/agent-response-v1").AgentResponseV1 | undefined;
+      try {
+        const toolCallSummary = reasoningSteps.flatMap((s) =>
+          s.toolCalls.map((tc) => ({
+            tool: tc.toolName,
+            ok: !tc.result?.error,
+            durationMs: tc.durationMs,
+          }))
+        );
+        const convState = shouldPreserveConfirmationPrompt
+          ? "AWAITING_CONFIRMATION"
+          : shouldPreserveClarificationQuestion
+            ? "NEED_CLARIFICATION"
+            : "IDLE";
+        const { object } = await generateObject({
+          model: aiSdkOpenai("gpt-4o-mini") as unknown as Parameters<typeof generateObject>[0]["model"],
+          schema: AgentResponseV1Schema,
+          system: buildStructuredResponsePrompt(state.responseMode),
+          prompt: [
+            `User query: ${userInput}`,
+            `Raw answer: ${finalText}`,
+            `Tool calls made: ${JSON.stringify(toolCallSummary)}`,
+            `Conversation state: ${convState}`,
+          ].join("\n"),
+        });
+        structuredResponse = { ...object, rawTextFallback: finalText };
+      } catch (err: any) {
+        logger.warn("AgentResponseV1 structuring failed — falling back to raw text", { err: err?.message });
+      }
+
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
       emitFinalEvent(eventBus, sessionId, startTime, finalText, {
         totalSteps: step + 1,
         totalToolCalls,
         traceId,
+        structuredResponse,
         conversationState: shouldPreserveClarificationQuestion
           ? "NEED_CLARIFICATION"
           : shouldPreserveConfirmationPrompt

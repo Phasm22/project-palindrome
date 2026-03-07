@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { AgentResponseV1Schema } from "./schemas/agent-response-v1";
 
 // ---------------------------------------------------------------------------
 // Tool events
@@ -102,6 +103,7 @@ export const AgentFinalPayloadSchema = z
       })
     )
     .optional(),
+  structuredResponse: AgentResponseV1Schema.optional(),
 })
   .passthrough();
 

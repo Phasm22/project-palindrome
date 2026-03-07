@@ -81,3 +81,18 @@ export function buildSystemPrompt(responseMode?: string): string {
   if (!responseMode || !MODE_INSTRUCTIONS[responseMode]) return SYSTEM_PROMPT;
   return `${SYSTEM_PROMPT}\n\n**Response format for this query:** ${MODE_INSTRUCTIONS[responseMode]}`;
 }
+
+/**
+ * System prompt for the AgentResponseV1 structuring call.
+ * This is a cheap gpt-4o-mini formatting pass — not the main reasoning call.
+ */
+export function buildStructuredResponsePrompt(mode?: string): string {
+  return [
+    "You are structuring an infrastructure assistant's answer into a typed JSON envelope.",
+    "Fill every required field. Use answer.summary for a one-sentence answer.",
+    "Use answer.sections for detail: type=facts for lists, type=table for tabular data.",
+    `answer.style should be ${mode ?? "TERSE_DATA"}.`,
+    "Set conversation.state to IDLE unless the raw answer explicitly asks a question or awaits confirmation.",
+    "rawTextFallback is NOT needed — it will be populated by the caller.",
+  ].join(" ");
+}

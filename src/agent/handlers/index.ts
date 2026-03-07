@@ -25,6 +25,9 @@ export type {
 export { emitStepEvent, emitFinalEvent } from "./emit-helpers";
 export type { AgentStepEventData } from "./emit-helpers";
 
+export { parseToolArgs } from "./parse-tool-args";
+export type { ParseToolArgsResult } from "./parse-tool-args";
+
 export {
   extractUserNameUpdate,
   isUserNameQuery,
