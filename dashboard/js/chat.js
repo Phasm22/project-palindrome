@@ -1466,6 +1466,85 @@ function formatAgentResponse(text) {
   return html;
 }
 
+// --- Structured response rendering (AgentResponseV1) ---
+
+function renderAgentMessage(eventData) {
+  // Try structured response first
+  if (eventData.structuredResponse) {
+    const html = renderStructuredResponse(eventData.structuredResponse);
+    if (html) return html;
+  }
+  // Fallback to existing heuristic
+  return formatAgentResponse(eventData.rawTextFallback || eventData.text || "");
+}
+
+function renderStructuredResponse(sr) {
+  if (!sr || sr.version !== "1") return null;
+  const parts = [];
+  if (sr.answer?.summary) parts.push(`<p class="summary">${escapeHtml(sr.answer.summary)}</p>`);
+  for (const section of sr.answer?.sections ?? []) {
+    parts.push(renderSection(section));
+  }
+  return parts.join("") || null;
+}
+
+function renderSection(section) {
+  switch (section.type) {
+    case "facts":        return renderFactsSection(section);
+    case "table":        return renderTableSection(section);
+    case "plan":         return renderPlanSection(section);
+    case "risk":         return renderRiskSection(section);
+    case "next_steps":   return renderNextStepsSection(section);
+    case "clarification": return renderClarificationSection(section);
+    case "confirmation":  return renderConfirmationSection(section);
+    default: return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
+  }
+}
+
+function renderFactsSection(section) {
+  const title = section.title ? `<h4>${escapeHtml(section.title)}</h4>` : "";
+  const items = (section.data || []).map(item =>
+    `<li><strong>${escapeHtml(item.key || item.label || "")}</strong>: ${escapeHtml(String(item.value ?? ""))}</li>`
+  ).join("");
+  return `${title}<ul class="facts-list">${items}</ul>`;
+}
+
+function renderTableSection(section) {
+  const title = section.title ? `<h4>${escapeHtml(section.title)}</h4>` : "";
+  if (!section.data?.headers || !section.data?.rows) return title;
+  const headers = section.data.headers.map(h => `<th>${escapeHtml(h)}</th>`).join("");
+  const rows = section.data.rows.map(row =>
+    `<tr>${row.map(cell => `<td>${escapeHtml(String(cell ?? ""))}</td>`).join("")}</tr>`
+  ).join("");
+  return `${title}<table class="response-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderPlanSection(section) {
+  const title = section.title ? `<h4>${escapeHtml(section.title)}</h4>` : "";
+  const steps = (section.data?.steps || []).map((step, i) =>
+    `<li><strong>Step ${step.stepNumber || i + 1}</strong>: ${escapeHtml(step.action || "")}${step.rationale ? ` — <em>${escapeHtml(step.rationale)}</em>` : ""}</li>`
+  ).join("");
+  return `${title}<ol class="plan-steps">${steps}</ol>`;
+}
+
+function renderRiskSection(section) {
+  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
+}
+
+function renderNextStepsSection(section) {
+  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
+}
+
+function renderClarificationSection(section) {
+  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
+}
+
+function renderConfirmationSection(section) {
+  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
+}
+
+// --- End structured response rendering ---
+
 function updateChatMessage(messageId, newContent) {
   // Update in all containers (mobile + desktop)
   const containersToScroll = new Set();
@@ -1911,7 +1990,7 @@ function handleAgentEvent(event, toolExecutions) {
       
     case 'agent:final':
       console.log('Handling agent:final event', event.data);
-      const formattedText = formatAgentResponse(event.data.text || 'No response');
+      const formattedText = renderAgentMessage(event.data);
       const durationSeconds = (event.data.durationMs || 0) / 1000;
       const traceId = event.data.traceId;
       const confirmId = escapeHtml(event.data.confirmationId || '');

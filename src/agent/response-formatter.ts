@@ -10,13 +10,79 @@
 
 import OpenAI from "openai";
 import { logger } from "../utils/logger";
-import {
-  buildEntityListSection,
-  formatCountAnswer,
-  parseEntityLine,
-  parseEntityListSection,
-  type EntityListEntry,
-} from "./canonical-response-format";
+
+// Inlined from canonical-response-format (kept in sync manually)
+interface EntityListEntry {
+  label: string;
+  attributes: Record<string, string>;
+}
+
+function buildEntityLine(label: string, attributes: Record<string, string>): string {
+  const pairs = Object.entries(attributes)
+    .filter(([, v]) => v != null && String(v).trim() !== "")
+    .map(([k, v]) => `${k}=${String(v).trim()}`);
+  if (pairs.length === 0) return `- ${label}`;
+  return `- ${label} | ${pairs.join(" | ")}`;
+}
+
+function buildEntityListSection(title: string, entries: EntityListEntry[]): string {
+  const lines = [title.trim().replace(/:$/, "")];
+  for (const e of entries) {
+    lines.push(buildEntityLine(e.label, e.attributes));
+  }
+  return lines.join("\n");
+}
+
+function parseEntityLine(line: string): EntityListEntry | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("- ") || !trimmed.includes("|")) return null;
+  const rest = trimmed.slice(2).trim();
+  const segments = rest.split("|").map((s) => s.trim()).filter(Boolean);
+  if (segments.length < 2) return null;
+  const label = segments[0] ?? "";
+  const attributes: Record<string, string> = {};
+  for (const segment of segments.slice(1)) {
+    const eqIdx = segment.indexOf("=");
+    const colonIdx = segment.indexOf(":");
+    if (eqIdx > 0) {
+      const key = segment.slice(0, eqIdx).trim();
+      let value = segment.slice(eqIdx + 1).trim();
+      value = value.replace(/^"(.*)"$/, "$1").replace(/\\"/g, '"');
+      if (key) attributes[key] = value;
+    } else if (colonIdx > 0) {
+      const key = segment.slice(0, colonIdx).trim();
+      const value = segment.slice(colonIdx + 1).trim();
+      if (key) attributes[key] = value;
+    }
+  }
+  return { label, attributes };
+}
+
+function parseEntityListSection(text: string): { title: string; entries: EntityListEntry[] } | null {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+  let title = "";
+  const entries: EntityListEntry[] = [];
+  let firstEntityIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const entry = parseEntityLine(lines[i]!);
+    if (entry) {
+      if (firstEntityIndex < 0) firstEntityIndex = i;
+      entries.push(entry);
+    } else if (firstEntityIndex < 0 && !lines[i]!.startsWith("- ")) {
+      title = lines[i]!.replace(/:$/, "").trim();
+    }
+  }
+  if (entries.length === 0) return null;
+  if (!title && firstEntityIndex > 0) title = lines[0]!.replace(/:$/, "").trim();
+  if (!title) title = "Results";
+  return { title, entries };
+}
+
+function formatCountAnswer(count: number, unit: string, qualifier?: string): string {
+  const q = qualifier?.trim() ? ` ${qualifier}` : "";
+  return `Count: ${count} ${unit}${q}`.trim();
+}
 
 let openaiClient: OpenAI | null = null;
 

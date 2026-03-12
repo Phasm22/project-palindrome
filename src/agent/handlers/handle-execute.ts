@@ -53,6 +53,7 @@ import {
   cleanupAfterProxmoxDestroy,
 } from "./tool-helpers";
 import { isMetaIdentityQuery } from "./identity-helpers";
+import { generateActionPlan } from "./plan-generator";
 
 export interface HandleExecuteInput {
   state: AgentStateV1;
@@ -80,11 +81,12 @@ export interface HandleExecuteInput {
   pendingActionExecuteInput: string | undefined;
   pendingAction: string | undefined;
   usedPendingAction: boolean;
+  entityCache?: Record<string, string>;
 }
 
 export async function handleExecute(
   input: HandleExecuteInput
-): Promise<{ text: string }> {
+): Promise<{ text: string; entityCacheUpdate?: Record<string, string> }> {
   const {
     state,
     userInput,
@@ -111,6 +113,7 @@ export async function handleExecute(
     pendingActionExecuteInput,
     pendingAction,
     usedPendingAction,
+    entityCache,
   } = input;
 
   const buildBotMoveContext = async (observations: string, intentLabel: string): Promise<string> => {
@@ -368,6 +371,56 @@ export async function handleExecute(
   let confirmationAbort: { prompt: string; context: ConversationContext; state: ConversationContext } | null = null;
   let clarificationAbort: { prompt: string; context: ConversationContext; state: ConversationContext } | null = null;
 
+  // Session-scoped entity resolution cache: inject known entities so the LLM can resolve pronouns.
+  // Built as a prepended system message (same pattern as ragMessage / vmContextMessage).
+  const entityCacheUpdate: Record<string, string> = {};
+  const entityCacheMessage: { role: "system"; content: string }[] =
+    entityCache && Object.keys(entityCache).length > 0
+      ? [
+          {
+            role: "system" as const,
+            content:
+              `Resolved entities from this session:\n` +
+              Object.entries(entityCache)
+                .map(([k, v]) => `  "${k}" → ${v}`)
+                .join("\n") +
+              `\nUse these to resolve pronouns and references.`,
+          },
+        ]
+      : [];
+
+  // P3.3: Plan-before-execute for multi-step ACTION intents.
+  // When the classifier identifies an ACTION intent and actionIntent has keys (meaning
+  // specific action-layer actions are involved), generate a structured plan first.
+  // If the plan has 2+ steps, stream it to the UI and enter AWAITING_CONFIRMATION
+  // before any tool executes. Single-step plans fall through to the normal loop.
+  if (state.classification.intent === "ACTION" && actionIntent != null && Object.keys(actionIntent).length > 0) {
+    const plan = await generateActionPlan({ userInput, sessionId });
+    if (plan !== null && plan.steps.length > 1) {
+      // Persist plan on state so callers (runner.ts) can inspect it later
+      state.executionPlan = plan;
+
+      // Emit plan event so the UI can render it before confirmation
+      eventBus.emit({
+        type: "agent:plan",
+        sessionId,
+        timestamp: Date.now(),
+        data: {
+          type: "agent:plan",
+          plan,
+          pendingConfirmationId: sessionId,
+        },
+      });
+
+      // Return early — the runner will set conversationState to AWAITING_CONFIRMATION
+      // using the existing confirmation flow. No tools have executed yet.
+      return {
+        text: `I've prepared a ${plan.steps.length}-step plan: ${plan.summary}\n\nPlease confirm to proceed.`,
+        entityCacheUpdate: {},
+      };
+    }
+  }
+
   for (let step = 0; step < MAX_STEPS; step++) {
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
 
@@ -434,6 +487,7 @@ export async function handleExecute(
       { role: "system", content: buildSystemPrompt(state.responseMode) },
       ...compositeInstructionMessage,
     ...memoryContextMessage,
+      ...entityCacheMessage,
       ...ragMessage,
       ...realTimeMetricInstruction,
       ...vmContextMessage,
@@ -949,6 +1003,28 @@ export async function handleExecute(
           durationMs: result.durationMs ?? 0,
         });
 
+        // Extract entity info for session-scoped resolution cache.
+        // Only cache from tools that return infrastructure entities; skip large lists.
+        if (
+          !result.error &&
+          result.data &&
+          (toolName === "twin_query" || toolName === "proxmox_readonly" || toolName === "action")
+        ) {
+          const data = result.data as Record<string, unknown>;
+          const isLargeList =
+            Array.isArray(data) && (data as unknown[]).length > 5;
+          if (!isLargeList) {
+            const name = typeof data.name === "string" ? data.name : undefined;
+            const vmid = data.vmid ?? data.vmId;
+            const node = typeof data.node === "string" ? data.node : undefined;
+            if (name && vmid !== undefined && vmid !== null) {
+              entityCacheUpdate[name.toLowerCase()] = `vm:${vmid}`;
+            } else if (name && node) {
+              entityCacheUpdate[name.toLowerCase()] = node;
+            }
+          }
+        }
+
         if (result.error) {
           logger.error(`Tool execution failed: ${toolName}`, {
             error: result.error,
@@ -1176,7 +1252,7 @@ export async function handleExecute(
           conversationState: clarificationAbort.state,
           conversationContext: mergedContext,
         });
-        return { text: clarificationAbort.prompt };
+        return { text: clarificationAbort.prompt, entityCacheUpdate };
       }
 
       if (confirmationAbort) {
@@ -1193,7 +1269,7 @@ export async function handleExecute(
           conversationState: confirmationAbort.state,
           conversationContext: mergedContext,
         });
-        return { text: confirmationAbort.prompt };
+        return { text: confirmationAbort.prompt, entityCacheUpdate };
       }
 
       // Record this reasoning step
@@ -1350,7 +1426,7 @@ export async function handleExecute(
         needsResponse: shouldPreserveClarificationQuestion || shouldPreserveConfirmationPrompt,
       });
 
-      return { text: finalText };
+      return { text: finalText, entityCacheUpdate };
     }
   }
 
@@ -1385,5 +1461,5 @@ export async function handleExecute(
     conversationContext: state.contextUpdate,
   });
 
-  return { text: "Max reasoning depth reached. Please try a simpler query." };
+  return { text: "Max reasoning depth reached. Please try a simpler query.", entityCacheUpdate };
 }

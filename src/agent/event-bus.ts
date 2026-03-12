@@ -11,7 +11,8 @@ export type AgentEventType =
   | "llm:token"
   | "llm:thinking"
   | "agent:step"
-  | "agent:final";
+  | "agent:final"
+  | "agent:plan";
 
 /**
  * Tool Progress Status

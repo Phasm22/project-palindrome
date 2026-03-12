@@ -1748,7 +1748,11 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       });
     }
     if (!isCompositeQuery) {
-    // Check exposure intent first (most specific)
+    // Check exposure intent first (most specific).
+    // Exposure is cross-domain — fire when domain is "compute", "general", or absent.
+    // Suppressed for purely network/firewall/metrics queries to avoid false positives.
+    const exposureDomain = classification.metadata?.domain;
+    if (!exposureDomain || exposureDomain === "compute" || exposureDomain === "general") {
     const exposureIntent = detectExposureIntent(userInput);
     if (exposureIntent) {
       const exposureAnswer = await executeExposureIntent(exposureIntent, tools, session);
@@ -1779,10 +1783,12 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         return { text: formattedAnswer };
       }
     }
+    } // end exposure domain gate
 
     // Skip compute intent if this is a diagnostic/troubleshooting request
     // Diagnostic requests should go to the LLM to use infrastructure_diagnostic tool
-    const isDiagnosticRequest = 
+    if (!classification.metadata?.domain || classification.metadata.domain === "compute") {
+    const isDiagnosticRequest =
       userInput.toLowerCase().includes("diagnose") ||
       userInput.toLowerCase().includes("why isn't") ||
       userInput.toLowerCase().includes("why is") ||
@@ -1827,9 +1833,11 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         return { text: formattedAnswer };
       }
     }
+    } // end compute domain gate
 
     // Check firewall QUERY intent (only if no action intent detected)
     // Action intents like "configure firewall" are handled above
+    if (!classification.metadata?.domain || classification.metadata.domain === "firewall") {
     const firewallIntent = detectFirewallIntent(userInput);
     if (firewallIntent) {
       const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
@@ -1870,7 +1878,10 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         return { text: formattedAnswer };
       }
     }
+    } // end firewall domain gate
+
     // Only check network intent if no action, exposure, compute, or firewall intent was detected
+    if (!classification.metadata?.domain || classification.metadata.domain === "network") {
     const networkIntent = detectNetworkIntent(userInput);
     if (networkIntent) {
       const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
@@ -1917,11 +1928,12 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         return { text: formattedAnswer };
       }
     }
+    } // end network domain gate
     }
   }
 
   // Execute path: RAG → LLM loop → tool dispatch
-  return handleExecute({
+  const executeResult = await handleExecute({
     state,
     userInput,
     session,
@@ -1947,5 +1959,17 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     pendingActionExecuteInput,
     pendingAction,
     usedPendingAction,
+    entityCache: options.conversationContext?.resolvedEntities ?? {},
   });
+
+  // Merge any newly resolved entities back into the final context update so
+  // the caller can persist them for the next turn.
+  if (executeResult.entityCacheUpdate && Object.keys(executeResult.entityCacheUpdate).length > 0) {
+    state.finalContextUpdate.resolvedEntities = {
+      ...options.conversationContext?.resolvedEntities,
+      ...executeResult.entityCacheUpdate,
+    };
+  }
+
+  return executeResult;
 }

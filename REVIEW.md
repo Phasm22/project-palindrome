@@ -1066,11 +1066,15 @@ The execute path (RAG → system prompt → LLM loop → tool dispatch → recla
 
 #### P3 — Architectural (Longer Term)
 
-**P3.1:** Persist session-scoped entity resolution cache in `AgentStateV1` (resolves “yang” → “YANG”, “the web server” → “vm:103” across turns)
+**P3.1 ✅ DONE (2026-03-12):** Session-scoped entity resolution cache wired into `ConversationContext.resolvedEntities`. `HandleExecuteInput` accepts `entityCache`; tool results from `twin_query`, `proxmox_readonly`, `action` are parsed for `name+vmid` / `name+node` pairs and merged back into `finalContextUpdate.resolvedEntities`. System message injected before LLM loop when cache is non-empty.
 
-**P3.2:** Auto-generate `ActionTool` documentation from registry Zod schemas via `zod-to-json-schema` — LLM always sees up-to-date action docs
+**P3.2 ✅ DONE (2026-03-07):** Auto-generate `ActionTool` documentation from registry Zod schemas via `zod-to-json-schema` — `generateActionParamsDoc()` in `src/actions/action-docs-generator.ts`.
 
-**P3.3:** Plan-before-execute node for multi-step action composition (create VM + bootstrap + DNS) with explicit `ActionStep[]` dependency ordering and rollback tracking
+**P3.3 ✅ DONE (2026-03-12):** Plan-before-execute for multi-step ACTION intents. `ActionPlanSchema` / `ActionStepSchema` in `src/agent/schemas/action-step.ts`. `generateActionPlan()` in `src/agent/handlers/plan-generator.ts` calls `gpt-4o-mini` via `generateObject`. For 2+ step plans, emits `agent:plan` event and returns AWAITING_CONFIRMATION before any tool executes. Single-step plans fall through silently.
+
+**Cleanup A ✅ DONE (2026-03-12):** Domain waterfall gating — the 4 twin-first chain calls in `runner.ts` are now gated on `classification.metadata?.domain`, preventing false positive chain invocations for clearly off-domain queries. `|| !domain` fallback preserves graceful degradation.
+
+**Cleanup B ✅ DONE (2026-03-12):** Dashboard migrated to `AgentResponseV1` structured output — `renderAgentMessage()` in `dashboard/js/chat.js` tries `structuredResponse` first, falls back to `formatAgentResponse`. `response-formatter.ts` no longer imports `canonical-response-format.ts` (functions inlined). `canonical-response-format.ts` marked TODO for deletion.
 
 ---
 
@@ -1089,8 +1093,8 @@ The execute path (RAG → system prompt → LLM loop → tool dispatch → recla
 | Execute path still ~2,200 lines inline | **Medium** | High | Extract `handle-execute.ts` |
 | Server-owned conversation history contract not tested/documented | ~~Medium~~ | — | ✅ **Fixed 2026-03-05** |
 | `ActionTool` docstring manually maintained | **Medium** | Low | Auto-generate from Zod schemas via `zod-to-json-schema` |
-| `canonical-response-format.ts` still present | **Low** | Low | P1.3 wired `AgentResponseV1Schema`; remove this file once dashboard migrates off heuristic parser |
-| Domain regex waterfall still runs pre-classification | **Low** | Medium | Reduce to post-classification validators after P1.2 |
+| `canonical-response-format.ts` still present | ~~Low~~ | — | ✅ **Done 2026-03-12** — response-formatter inlined; file marked TODO for deletion |
+| Domain regex waterfall still runs pre-classification | ~~Low~~ | — | ✅ **Done 2026-03-12** — Cleanup A: gated on `classification.metadata?.domain` |
 
 ---
 

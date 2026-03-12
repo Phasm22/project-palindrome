@@ -1,10 +1,24 @@
 import { z } from "zod";
+import { ActionPlanSchema } from "./action-step";
 
-export const AgentResponseSectionSchema = z.object({
+// Generic section variant for all standard section types.
+const GenericSectionSchema = z.object({
   type: z.enum(["facts", "table", "diff", "risk", "next_steps", "clarification", "confirmation"]),
   title: z.string().optional(),
   data: z.unknown(),
 });
+
+// Typed plan section emitted by P3.3 plan-before-execute.
+const PlanSectionSchema = z.object({
+  type: z.literal("plan"),
+  title: z.string().optional(),
+  data: ActionPlanSchema,
+});
+
+export const AgentResponseSectionSchema = z.union([
+  GenericSectionSchema,
+  PlanSectionSchema,
+]);
 
 export const AgentResponseV1Schema = z.object({
   version: z.literal("1"),

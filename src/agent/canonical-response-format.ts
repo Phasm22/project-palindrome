@@ -1,3 +1,4 @@
+// TODO: remove once response-formatter no longer imports this
 /**
  * Canonical response formats shared by formatter and dashboard.
  *

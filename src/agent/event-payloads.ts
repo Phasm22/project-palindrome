@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import { AgentResponseV1Schema } from "./schemas/agent-response-v1";
+import { ActionPlanSchema } from "./schemas/action-step";
 
 // ---------------------------------------------------------------------------
 // Tool events
@@ -108,6 +109,16 @@ export const AgentFinalPayloadSchema = z
   .passthrough();
 
 // ---------------------------------------------------------------------------
+// Plan event (P3.3 — plan-before-execute)
+// ---------------------------------------------------------------------------
+
+export const AgentPlanPayloadSchema = z.object({
+  type: z.literal("agent:plan"),
+  plan: ActionPlanSchema,
+  pendingConfirmationId: z.string(),
+});
+
+// ---------------------------------------------------------------------------
 // Discriminated union
 // ---------------------------------------------------------------------------
 
@@ -119,6 +130,7 @@ export const AgentEventDataSchema = z.discriminatedUnion("type", [
   LlmThinkingPayloadSchema,
   AgentStepPayloadSchema,
   AgentFinalPayloadSchema,
+  AgentPlanPayloadSchema,
 ]);
 
 export type ToolStartPayload = z.infer<typeof ToolStartPayloadSchema>;
@@ -128,4 +140,5 @@ export type LlmTokenPayload = z.infer<typeof LlmTokenPayloadSchema>;
 export type LlmThinkingPayload = z.infer<typeof LlmThinkingPayloadSchema>;
 export type AgentStepPayload = z.infer<typeof AgentStepPayloadSchema>;
 export type AgentFinalPayload = z.infer<typeof AgentFinalPayloadSchema>;
+export type AgentPlanPayload = z.infer<typeof AgentPlanPayloadSchema>;
 export type AgentEventData = z.infer<typeof AgentEventDataSchema>;
