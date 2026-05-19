@@ -15,6 +15,18 @@ const keyPath = `${PROJECT_ROOT}/certs/key.pem`;
 const hasCerts = await Bun.file(certPath).exists() && await Bun.file(keyPath).exists();
 
 const connectedClients = new Set<WebSocket>();
+const bootTime = Date.now();
+
+function logEvent(event: string, fields: Record<string, unknown> = {}) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      event,
+      service: "dashboard",
+      ...fields,
+    })
+  );
+}
 
 // Watch for file changes
 const watcher = watch(
@@ -38,6 +50,33 @@ const watcher = watch(
 // Request handler
 async function handleRequest(req: Request, server: any) {
     const url = new URL(req.url);
+    const requestStart = Date.now();
+
+    const respond = (response: Response, extra: Record<string, unknown> = {}) => {
+      logEvent("http.request", {
+        method: req.method,
+        path: url.pathname,
+        status: response.status,
+        duration_ms: Date.now() - requestStart,
+        ...extra,
+      });
+      return response;
+    };
+
+    if (url.pathname === "/health" || url.pathname === "/api/health") {
+      const payload = {
+        status: "ok",
+        uptimeMs: Date.now() - bootTime,
+        apiProxyBase: API_PROXY_BASE,
+      };
+      return respond(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+        { route: "dashboard.health" }
+      );
+    }
 
     const shouldProxyToApi =
       url.pathname.startsWith("/api/") ||
@@ -57,21 +96,38 @@ async function handleRequest(req: Request, server: any) {
       const headers = new Headers(req.headers);
       headers.set("host", new URL(API_PROXY_BASE).host);
 
-      const upstreamResponse = await fetch(upstreamUrl, {
-        method: req.method,
-        headers,
-        body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
-      });
+      let upstreamResponse: Response;
+      try {
+        upstreamResponse = await fetch(upstreamUrl, {
+          method: req.method,
+          headers,
+          body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+        });
+      } catch (error: any) {
+        logEvent("service.unhealthy", {
+          dependency: "pce-api",
+          route: url.pathname,
+          upstream: upstreamUrl,
+          error: error?.message || String(error),
+        });
+        return respond(
+          new Response(
+            JSON.stringify({ error: "API upstream unavailable", detail: error?.message || String(error) }),
+            { status: 502, headers: { "Content-Type": "application/json" } }
+          ),
+          { route: "dashboard.proxy", upstream_status: 502 }
+        );
+      }
 
       const responseHeaders = new Headers(upstreamResponse.headers);
       responseHeaders.set("Access-Control-Allow-Origin", "*");
       responseHeaders.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
       responseHeaders.set("Access-Control-Allow-Headers", "Content-Type");
 
-      return new Response(upstreamResponse.body, {
+      return respond(new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         headers: responseHeaders,
-      });
+      }), { route: "dashboard.proxy", upstream_status: upstreamResponse.status });
     }
     
     // Handle WebSocket upgrade for /_reload
@@ -88,7 +144,7 @@ async function handleRequest(req: Request, server: any) {
     
     // Security: prevent directory traversal
     if (path.includes("..")) {
-      return new Response("Not found", { status: 404 });
+      return respond(new Response("Not found", { status: 404 }));
     }
     
     try {
@@ -104,7 +160,7 @@ async function handleRequest(req: Request, server: any) {
         
         // If it's a static asset that doesn't exist, return 404
         if (hasStaticExtension) {
-          return new Response("Not found", { status: 404 });
+          return respond(new Response("Not found", { status: 404 }));
         }
         
         // Otherwise, it's a client-side route - serve index.html for SPA routing
@@ -113,7 +169,7 @@ async function handleRequest(req: Request, server: any) {
         const indexExists = await indexFile.exists();
         
         if (!indexExists) {
-          return new Response("Not found", { status: 404 });
+          return respond(new Response("Not found", { status: 404 }));
         }
         
         // Serve index.html with reload script
@@ -138,9 +194,9 @@ async function handleRequest(req: Request, server: any) {
         } else {
           content += reloadScript;
         }
-        return new Response(content, {
+        return respond(new Response(content, {
           headers: { "Content-Type": "text/html" },
-        });
+        }));
       }
       
       // Inject auto-reload script for HTML files
@@ -167,14 +223,18 @@ async function handleRequest(req: Request, server: any) {
         } else {
           content += reloadScript;
         }
-        return new Response(content, {
+        return respond(new Response(content, {
           headers: { "Content-Type": "text/html" },
-        });
+        }));
       }
       
-      return new Response(file);
+      return respond(new Response(file));
     } catch (error) {
-      return new Response(`Error: ${error}`, { status: 500 });
+      logEvent("service.unhealthy", {
+        route: url.pathname,
+        error: String(error),
+      });
+      return respond(new Response(`Error: ${error}`, { status: 500 }));
     }
 }
 
@@ -182,11 +242,11 @@ const websocketHandlers = {
   message(ws: any, message: any) {},
   open(ws: any) {
     connectedClients.add(ws);
-    console.log(`✅ WebSocket client connected for auto-reload`);
+    logEvent("ws.connected", { clients: connectedClients.size });
   },
   close(ws: any) {
     connectedClients.delete(ws);
-    console.log(`❌ WebSocket client disconnected`);
+    logEvent("ws.disconnected", { clients: connectedClients.size });
   },
 };
 
@@ -198,8 +258,7 @@ const httpServer = serve({
   websocket: websocketHandlers,
 });
 
-console.log(`🚀 Dashboard server running at http://0.0.0.0:${HTTP_PORT}`);
-console.log(`🔀 API proxy target: ${API_PROXY_BASE}`);
+logEvent("service.starting", { http_port: HTTP_PORT, api_proxy_base: API_PROXY_BASE });
 
 // HTTPS server (if certs exist)
 if (hasCerts) {
@@ -213,12 +272,7 @@ if (hasCerts) {
       key: Bun.file(keyPath),
     },
   });
-  console.log(`🔒 HTTPS server running at https://0.0.0.0:${HTTPS_PORT}`);
+  logEvent("service.ready", { http_port: HTTP_PORT, https_port: HTTPS_PORT, tls: true });
 } else {
-  console.log(`⚠️  No certs found at ${certPath} - HTTPS disabled`);
-  console.log(`   Run: openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes`);
+  logEvent("service.ready", { http_port: HTTP_PORT, tls: false });
 }
-
-console.log(`📁 Serving from: ${DASHBOARD_DIR}`);
-console.log(`🔄 Auto-reload enabled - changes will refresh automatically`);
-console.log(`\nPress Ctrl+C to stop\n`);

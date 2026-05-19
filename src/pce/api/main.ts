@@ -8,8 +8,20 @@ import { bootstrapPceApiServer } from "./server";
 import { pceLogger } from "../utils/logger";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 
+function emitEvent(event: string, fields: Record<string, unknown> = {}) {
+  pceLogger.info(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      event,
+      service: "pce-api",
+      ...fields,
+    })
+  );
+}
+
 (async () => {
   try {
+    emitEvent("service.starting", { component: "pce-api-main" });
     const { server } = await bootstrapPceApiServer();
     await server.start();
 
@@ -28,8 +40,14 @@ import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
       }
     }
 
+    emitEvent("service.ready", { port: server.getPort() });
     pceLogger.info("PCE API server is running", { port: server.getPort() });
   } catch (error: any) {
+    emitEvent("service.exited", {
+      code: 1,
+      reason: "startup_failure",
+      error: error.message,
+    });
     pceLogger.error("Failed to start PCE API server", { error: error.message });
     process.exit(1);
   }

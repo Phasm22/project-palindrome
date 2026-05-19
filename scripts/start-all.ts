@@ -8,11 +8,22 @@
 
 import { spawn, ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, createWriteStream } from "node:fs";
-import { join } from "node:path";
 
 const PROJECT_ROOT = import.meta.dir + "/..";
 const LOG_DIR = `${PROJECT_ROOT}/logs`;
 const PID_FILE = `${PROJECT_ROOT}/.palindrome-service.pid`;
+const STARTUP_CHILD_GRACE_MS = 2000;
+let shuttingDown = false;
+
+function emitEvent(event: string, fields: Record<string, unknown> = {}) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      event,
+      ...fields,
+    })
+  );
+}
 
 // Ensure log directory exists
 if (!existsSync(LOG_DIR)) {
@@ -20,6 +31,16 @@ if (!existsSync(LOG_DIR)) {
 }
 
 const processes: Array<{ name: string; process: ChildProcess; pid?: number }> = [];
+
+function waitForEarlyExit(process: ChildProcess, timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(null), timeoutMs);
+    process.once("exit", (code) => {
+      clearTimeout(timeout);
+      resolve(code ?? 0);
+    });
+  });
+}
 
 // Helper to wait for a service to be ready
 async function waitForService(
@@ -161,6 +182,12 @@ function startPalindromeApi(): ChildProcess {
   
   apiProcess.on("exit", (code) => {
     logStream.end();
+    emitEvent("service.exited", {
+      service: "palindrome-api",
+      code: code ?? null,
+      signal: null,
+      expected: shuttingDown,
+    });
     if (code !== 0 && code !== null) {
       console.error(`❌ Palindrome API Server exited with code ${code}`);
     }
@@ -194,6 +221,12 @@ function startDashboard(): ChildProcess {
   
   dashboardProcess.on("exit", (code) => {
     logStream.end();
+    emitEvent("service.exited", {
+      service: "dashboard",
+      code: code ?? null,
+      signal: null,
+      expected: shuttingDown,
+    });
     if (code !== 0 && code !== null) {
       console.error(`❌ Dashboard Server exited with code ${code}`);
     }
@@ -204,6 +237,7 @@ function startDashboard(): ChildProcess {
 
 // Graceful shutdown handler
 async function shutdown() {
+  shuttingDown = true;
   console.log("\n🛑 Shutting down services...");
   
   // Stop processes in reverse order
@@ -293,11 +327,19 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const palindromeApi = startPalindromeApi();
     processes.push({ name: "palindrome-api", process: palindromeApi, pid: palindromeApi.pid });
+    const apiEarlyExit = await waitForEarlyExit(palindromeApi, STARTUP_CHILD_GRACE_MS);
+    if (apiEarlyExit !== null) {
+      throw new Error(`Palindrome API exited during startup (code=${apiEarlyExit})`);
+    }
     
     // 3. Start Dashboard
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const dashboard = startDashboard();
     processes.push({ name: "dashboard", process: dashboard, pid: dashboard.pid });
+    const dashboardEarlyExit = await waitForEarlyExit(dashboard, STARTUP_CHILD_GRACE_MS);
+    if (dashboardEarlyExit !== null) {
+      throw new Error(`Dashboard exited during startup (code=${dashboardEarlyExit})`);
+    }
     
     console.log("\n✅ All services started!");
     console.log("\n📊 Service URLs:");
@@ -315,7 +357,7 @@ async function main() {
       shutdown();
     });
     
-    // Monitor processes and restart if they crash
+    // Monitor processes for visibility; systemd handles parent restarts.
     for (const { name, process: proc } of processes) {
       if (proc.pid) {
         proc.on("exit", (code) => {
@@ -337,4 +379,3 @@ main().catch((error) => {
   console.error("Fatal error:", error);
   process.exit(1);
 });
-

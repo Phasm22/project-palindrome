@@ -4,6 +4,8 @@ import { pceLogger as logger } from "../utils/logger";
 import { MetricsCollector } from "../metrics/collector";
 import { StaleNodeCleaner } from "../../twin/cleanup/stale-node-cleaner";
 import { $ } from "bun";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 /**
  * Scheduled Ingestion Service
@@ -57,6 +59,7 @@ export class IngestionScheduler {
   private runCount = 0;
   private successCount = 0;
   private failureCount = 0;
+  private readonly runEventLogPath = `${process.cwd()}/.pce-dashboard/ingestion-runs.ndjson`;
 
   constructor(intervalMinutes: number = 5, metricsCollector?: MetricsCollector) {
     this.intervalMs = intervalMinutes * 60 * 1000;
@@ -144,6 +147,13 @@ export class IngestionScheduler {
     this.isRunning = true;
     const startTime = Date.now();
     this.runCount++;
+    const runId = `ing-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+    this.emitJobEvent("job.started", {
+      job: "ingestion_scheduler",
+      run_id: runId,
+      interval_minutes: this.intervalMs / 60000,
+    });
 
     let proxmoxSuccess = false;
     let networkSuccess = false;
@@ -334,6 +344,23 @@ export class IngestionScheduler {
         success: overallSuccess,
         lastRun: this.lastRun.toISOString(),
       });
+      this.emitJobEvent("job.completed", {
+        job: "ingestion_scheduler",
+        run_id: runId,
+        success: overallSuccess,
+        duration_ms: duration,
+        timestamp: this.lastRun.toISOString(),
+        proxmox: runDetails.proxmox,
+        network: runDetails.network,
+        firewall: runDetails.firewall,
+        cleanup: runDetails.cleanup,
+      });
+      this.appendRunEvent({
+        ts: new Date().toISOString(),
+        event: "job.completed",
+        run_id: runId,
+        details: runDetails,
+      });
     } catch (error: any) {
       this.failureCount++;
       this.metricsCollector.record("ingestion_scheduler_run_failure", 1);
@@ -341,9 +368,31 @@ export class IngestionScheduler {
         error: error.message,
         stack: error.stack,
       });
+      this.emitJobEvent("job.failed", {
+        job: "ingestion_scheduler",
+        run_id: runId,
+        error: error.message,
+      });
     } finally {
       this.isRunning = false;
     }
+  }
+
+  private emitJobEvent(event: string, fields: Record<string, unknown>) {
+    logger.info(JSON.stringify({
+      ts: new Date().toISOString(),
+      event,
+      service: "pce-api",
+      ...fields,
+    }));
+  }
+
+  private appendRunEvent(payload: Record<string, unknown>) {
+    const dir = dirname(this.runEventLogPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    appendFileSync(this.runEventLogPath, `${JSON.stringify(payload)}\n`, "utf8");
   }
 
   /**
@@ -357,4 +406,3 @@ export class IngestionScheduler {
     await this.runIngestion();
   }
 }
-
