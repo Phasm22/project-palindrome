@@ -9,6 +9,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Tests use **Vitest** but are run through Bun: `bun test`
 - To run a single test file: `bun test tests/reasoning/some-test.ts`
 
+## Host runtime (`pc-stacks`)
+
+On TJ's Linux desktop the full stack is **cold at login**. Before API/tools work:
+
+```bash
+pc-stacks up palindrome
+PCE_INGESTION_ENABLED=1 pc-stacks up palindrome   # enable 5-min ingestion
+pc-stacks status
+```
+
+See [README.md](README.md#local-runtime-on-demand--pc-stacks) and [`/home/tj/bin/README.md`](/home/tj/bin/README.md). Traceability: PC Idle Quietdown plan (Cursor plans, Jul 2025).
+
 ## Key Commands
 
 ```bash

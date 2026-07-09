@@ -19,6 +19,8 @@
 
 import { generateObject } from "ai";
 import { openai } from "@ai-sdk/openai";
+import type { HistoricalScore } from "../agent/historical-scorer";
+import type { HistoricalScorer } from "../agent/historical-scorer";
 import { classifyIntent, isDestructiveAction } from "./intent-classifier";
 import type { IntentType, IntentClassification } from "./intent-classifier";
 import {
@@ -67,39 +69,51 @@ export enum ConfidenceLevel {
  * - Destructive actions: 0.70 (strict, irreversible)
  * - CHAT_SOCIAL/CHAT_REASONING: 0.30 (conversational, flexible)
  */
-export function getConfidenceThreshold(classification: IntentClassification): number {
+export function getConfidenceThreshold(
+  classification: IntentClassification,
+  score?: HistoricalScore,
+  scorer?: HistoricalScorer,
+): number {
   const { type, metadata } = classification;
-  
+
   // Metrics queries are very safe - tolerate low confidence
   if (type === "QUERY" && (metadata?.domain === "metrics" || metadata?.queryType === "temperature" || metadata?.queryType === "status" || metadata?.queryType === "metrics")) {
     return 0.15;
   }
-  
+
   // Regular queries are safe - moderate threshold
   if (type === "QUERY") {
-    return 0.30;
+    const base = 0.30;
+    if (score && scorer && scorer.hasEnoughData(score) && score.recencyWeight > 0.7) {
+      return Math.max(base - 0.05, 0.25);
+    }
+    return base;
   }
-  
-  // Destructive actions need high confidence
+
+  // Destructive actions need high confidence — never lowered
   if (type === "ACTION" && isDestructiveAction(metadata?.actionType)) {
     return 0.70;
   }
-  
+
   // Regular actions need moderate confidence
   if (type === "ACTION") {
-    return 0.50;
+    const base = 0.50;
+    if (score && scorer && scorer.hasEnoughData(score) && score.recencyWeight > 0.7) {
+      return Math.max(base - 0.05, 0.25);
+    }
+    return base;
   }
-  
+
   // CHAT is flexible
   if (type === "CHAT_SOCIAL" || type === "CHAT_REASONING") {
     return 0.30;
   }
-  
+
   // CLARIFICATION always needs clarification
   if (type === "CLARIFICATION") {
     return 1.0; // Never confident
   }
-  
+
   // Default: moderate threshold
   return 0.50;
 }
@@ -117,8 +131,12 @@ export function getConfidenceLevel(confidence: number): ConfidenceLevel {
 /**
  * Check if classification meets the required threshold for its domain/action type
  */
-export function meetsConfidenceThreshold(classification: IntentClassification): boolean {
-  const threshold = getConfidenceThreshold(classification);
+export function meetsConfidenceThreshold(
+  classification: IntentClassification,
+  score?: HistoricalScore,
+  scorer?: HistoricalScorer,
+): boolean {
+  const threshold = getConfidenceThreshold(classification, score, scorer);
   return classification.confidence >= threshold;
 }
 

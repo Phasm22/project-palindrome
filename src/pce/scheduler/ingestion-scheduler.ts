@@ -70,6 +70,10 @@ export class IngestionScheduler {
    * Start the scheduler
    */
   start() {
+    if (process.env.PCE_INGESTION_ENABLED !== "1") {
+      logger.info("Ingestion scheduler disabled (set PCE_INGESTION_ENABLED=1 to enable)");
+      return;
+    }
     if (this.interval) {
       logger.warn("Ingestion scheduler already running");
       return;

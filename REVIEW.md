@@ -921,7 +921,7 @@ The runner looks up the policy based on classified intent and sets `tool_choice`
 
 ## 14. Implementation Status — realAgent branch, March 2026
 
-*Snapshot: commit `79c1303` (initial); updated 2026-03-07 to reflect P0/P1/P2 implementation progress (P2.2 + P1.3 completed same date).*
+*Snapshot: commit `79c1303` (initial); updated 2026-03-12 to reflect all P0–P3 work complete.*
 
 ---
 
@@ -929,14 +929,14 @@ The runner looks up the policy based on classified intent and sets `tool_choice`
 
 | Issue (from §13) | Status | Notes |
 |---|---|---|
-| 3,550-line monolith `runner.ts` | **PARTIAL** | Handlers extracted to `src/agent/handlers/`; runner is ~3,296 lines (−254). Execute path still inline. |
+| 3,550-line monolith `runner.ts` | **DONE** | Handlers extracted to `src/agent/handlers/`; P2.3 extracted execute path to `handle-execute.ts`; runner is ~1,951 LOC thin coordinator. |
 | Double LLM call (`formatResponseForBot`) | **DONE** | Removed from main LLM loop path. `buildSystemPrompt(responseMode)` injects mode instructions into system prompt. `formatResponseForBot` still used by twin-first chains + RAG path (single-call paths, not double). |
 | Jaccard/regex intent classifier | **DONE** | `classifyAndRouteWithLLM` is now always the primary path. `ENABLE_LLM_INTENT_CLASSIFIER` gate removed from code. Sync Jaccard path remains as the catch-block fallback on API failure. |
 | Server-owned conversation history contract | **DONE** | History/context loading and persistence live in `src/pce/api/server.ts`; flat-array history still exists, but ownership is explicit and covered by injected-runner tests. |
 | Streaming / blank wait UX | **TODO** | `AgentEventBus` still used; no additional SSE wiring added. |
-| Action layer / IaC prison | **TODO** | `ActionTool` docstring still hardcoded. No auto-generation from registry. |
+| Action layer / IaC prison | **DONE** | P3.2 `generateActionParamsDoc()` in `src/actions/action-docs-generator.ts` auto-generates from Zod schemas via `zod-to-json-schema`. |
 | `event-bus` payload untyped | **DONE** | `AgentEvent.data` now uses `AgentEventData`; runner and tool-progress payloads include discriminators end-to-end. |
-| `AgentStateV1` wiring | **PARTIAL** | `buildAgentState()` exists and `runner.ts` constructs typed state. Remaining gap is execute-path extraction, not state instantiation. |
+| `AgentStateV1` wiring | **DONE** | `buildAgentState()` in `src/agent/state.ts`; execute path extracted (P2.3); state fully wired end-to-end. |
 | `JSON.parse` without validation | **DONE** | `parseToolArgs()` in `src/agent/handlers/parse-tool-args.ts`; sequential hot path emits tool error + `continue`; parallel path logs + returns null. 2026-03-07. |
 
 ---
@@ -958,7 +958,7 @@ The largest structural change: five concerns extracted from `runner.ts` into typ
 
 **Impact:** Early-return paths are testable in isolation. Typed I/O interfaces on each handler. Observability: traces record `handler + decision` for every router path.
 
-**Remaining gap:** `runner.ts` execute path (RAG, LLM loop, tool execution, reclassification) is still inline — no `handle-execute.ts` yet; that path is ~2,200 lines.
+**Fixed 2026-03-07 (P2.3):** Execute path extracted to `handle-execute.ts` (~1,389 LOC); runner is now ~1,951 LOC thin coordinator.
 
 #### 2. `AgentStateV1` — Typed State Interface (`src/agent/state.ts`)
 
@@ -966,7 +966,7 @@ Defines a typed `AgentStateV1` interface carrying: `classification`, `routing`, 
 
 **Good:** The interface exists and mirrors what `runner.ts` locals already track.
 
-**Fixed (2026-03-05):** `buildAgentState()` added and `runner.ts` now constructs a typed post-classification state envelope. Remaining gap: execute path is still inline and not yet extracted into `handle-execute.ts`.
+**Fixed (2026-03-05):** `buildAgentState()` added and `runner.ts` now constructs a typed post-classification state envelope. **Fixed 2026-03-07 (P2.3):** Execute path fully extracted to `handle-execute.ts`.
 
 #### 3. Typed Event Payloads (`src/agent/event-payloads.ts`)
 
@@ -986,7 +986,7 @@ The unified response envelope from §12 is fully defined as a Zod schema: `conve
 
 **Good:** Schema exactly matches the v2 architecture proposal. `rawTextFallback` provides correct backward-compatibility path.
 
-**Critical gap:** `AgentResponseV1Schema` is never passed to `generateObject()` in runner or `response-formatter`. The dashboard's 480-line `formatAgentResponse` heuristic is still the rendering path.
+**Fixed 2026-03-07 (P1.3):** `generateObject(AgentResponseV1Schema)` called in execute path after `finalText` is set; `structuredResponse` field on `AgentFinalPayload`. **Fixed 2026-03-12 (Cleanup B):** Dashboard `renderAgentMessage()` tries `structuredResponse` first, falls back to `formatAgentResponse`.
 
 #### 5. LLM Intent Classifier (`classifyIntentWithLLM`)
 
@@ -994,7 +994,7 @@ The unified response envelope from §12 is fully defined as a Zod schema: `conve
 
 **Good:** Uses `generateObject()`. Schema is well-designed: flat, clear descriptions, `missingSlots`, `composite` flag.
 
-**Fixed (2026-03-05):** Feature flag removed. `classifyAndRouteWithLLM` is now always the primary path. The 5-domain regex detector waterfall still runs before classification on every request — reducing these to post-classification validators is P3.2.
+**Fixed (2026-03-05):** Feature flag removed. `classifyAndRouteWithLLM` is now always the primary path. **Fixed 2026-03-12 (Cleanup A):** The 4 twin-first chain calls in `runner.ts` are now gated on `classification.metadata?.domain`, preventing false-positive chain invocations for off-domain queries.
 
 #### 6. Composite Query Detection (`src/reasoning/composite-query.ts`)
 
@@ -1002,7 +1002,7 @@ The unified response envelope from §12 is fully defined as a Zod schema: `conve
 
 **Good:** Correctly bypasses `tool_first_domain` skip for composite queries.
 
-**Note:** Pattern list is narrow (exposure + subnet/node combinations). Multi-step action composition (create VM + bootstrap + DNS) not yet detected as composite.
+**Note:** Pattern list is narrow (exposure + subnet/node combinations). **Fixed 2026-03-12 (P3.3):** Multi-step ACTION intents now trigger plan-before-execute via `generateActionPlan()` — 2+ step plans emit `agent:plan` and await confirmation before any tool executes.
 
 #### 7. Retrieval Eligibility Module (`src/agent/retrieval-eligibility.ts`)
 
@@ -1056,9 +1056,7 @@ Probable causes were shared SQLite-backed observability stores, global singleton
 
 **P2.2 ✅ DONE (2026-03-07):** `src/agent/handlers/parse-tool-args.ts` — `parseToolArgs(raw, schema?)` returns `{ ok: true, args } | { ok: false, error }`. Sequential hot path: on failure, calls `context.addToolResult` with error payload so the LLM sees why the tool wasn't called, then `continue`s. Parallel path: logs and returns `null`. Both paths optionally validate against `tool.getParameterSchema?.()` (defense-in-depth; tools still validate internally). Exported from `handlers/index.ts`.
 
-**P2.3: Extract execute path into `handle-execute.ts`**
-
-The execute path (RAG → system prompt → LLM loop → tool dispatch → reclassification) is still ~2,200 lines inline. Extracting to `handle-execute.ts` completes the handler decomposition; runner becomes ~200 lines. `P1.1` is now complete, so this is mechanically unblocked once suite stability and tool-arg hardening are handled.
+**P2.3 ✅ DONE (2026-03-07):** Execute path (RAG → system prompt → LLM loop → tool dispatch → reclassification) extracted to `handle-execute.ts` (~1,389 LOC). Runner reduced to ~1,951 LOC thin coordinator. `HandleExecuteInput` interface: 24 typed fields. `buildBotMoveContext` moved inside `handleExecute`. 8 module-level helpers in `runner.ts` exported for use by `handle-execute.ts`.
 
 **P2.4 ✅ DONE (2026-03-05):** Server-owned conversation history contract is now documented in code and covered by injected-runner tests. `src/pce/api/server.ts` owns history/context persistence; `runAgent` remains storage-agnostic.
 
@@ -1085,14 +1083,14 @@ The execute path (RAG → system prompt → LLM loop → tool dispatch → recla
 | `runner.ts` inline `emitFinalEvent` shadows typed version | ~~P0~~ | — | ✅ **Fixed 2026-03-05** |
 | Double LLM call (`formatResponseForBot`) on main path | ~~High~~ | — | ✅ **Fixed 2026-03-05** — `buildSystemPrompt(mode)` |
 | Full-suite stability / test isolation under concurrent Bun load | **High** | Medium | 🟡 Isolation seams and targeted blocker fixes landed; finish with deterministic `bun test --bail` |
-| `AgentStateV1` wired but execute path still inline | **Medium** | High | Extract `handle-execute.ts` |
+| `AgentStateV1` wired but execute path still inline | ~~Medium~~ | — | ✅ **Fixed 2026-03-07** (P2.3) |
 | LLM classifier feature-flagged off | ~~High~~ | — | ✅ **Fixed 2026-03-05** — gate removed |
 | `AgentResponseV1Schema` not wired to `generateObject` | ~~High~~ | — | ✅ **Fixed 2026-03-07** — `generateObject` in execute path; `structuredResponse` on `AgentFinalPayload` |
 | `event-bus.data` still `Record<string,any>` | ~~Medium~~ | — | ✅ **Fixed 2026-03-05** |
 | `JSON.parse` without validation in hot path | ~~Medium~~ | — | ✅ **Fixed 2026-03-07** — `parseToolArgs()` helper; sequential + parallel paths |
-| Execute path still ~2,200 lines inline | **Medium** | High | Extract `handle-execute.ts` |
+| Execute path still ~2,200 lines inline | ~~Medium~~ | — | ✅ **Fixed 2026-03-07** (P2.3) |
 | Server-owned conversation history contract not tested/documented | ~~Medium~~ | — | ✅ **Fixed 2026-03-05** |
-| `ActionTool` docstring manually maintained | **Medium** | Low | Auto-generate from Zod schemas via `zod-to-json-schema` |
+| `ActionTool` docstring manually maintained | ~~Medium~~ | — | ✅ **Fixed 2026-03-07** (P3.2) |
 | `canonical-response-format.ts` still present | ~~Low~~ | — | ✅ **Done 2026-03-12** — response-formatter inlined; file marked TODO for deletion |
 | Domain regex waterfall still runs pre-classification | ~~Low~~ | — | ✅ **Done 2026-03-12** — Cleanup A: gated on `classification.metadata?.domain` |
 
@@ -1109,10 +1107,10 @@ These are solid and should not be changed:
 - **`AgentResponseV1Schema`:** exactly the right shape — now wired to `generateObject()` in the execute path (P1.3 done); `rawTextFallback` preserved for dashboard backward-compat
 - **`IntentClassificationSchema` + `mapLLMResultToIntentClassification`:** excellent Zod schema, correct mapping, clean fallback to sync classifier
 - **`isLikelyCompositeQuery`:** correct detection, correctly integrated with retrieval eligibility
-- **`AgentStateV1` interface + factory:** right shape and now instantiated in `runner.ts`; next step is execute-path extraction
+- **`AgentStateV1` interface + factory:** right shape, instantiated in `runner.ts`, and fully wired now that execute path is extracted (P2.3)
 - **`runner.ts.bak`:** keeping the diff visible in-repo is a useful practice during refactors
 - **`REVIEW.md` as source of truth:** clear signal of intent, well-structured
 
 ---
 
-*Original review generated 2026-03-03 against ~180 source files. §14 updated 2026-03-05 (commit `79c1303`); P2.2 + P1.3 completed 2026-03-07.*
+*Original review generated 2026-03-03 against ~180 source files. §14 updated 2026-03-05 (commit `79c1303`); P2.2 + P1.3 completed 2026-03-07; all P0–P3 items complete as of 2026-03-12.*

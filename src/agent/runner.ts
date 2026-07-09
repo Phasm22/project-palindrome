@@ -85,6 +85,9 @@ import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-ris
 import { pceLogger } from "../pce/utils/logger";
 import { TerraformRunner } from "../actions/helpers/terraform-runner";
 import { buildAgentState } from "./state";
+import { getOperatorMemoryStore } from "../pce/api/operator-memory-store";
+import { HistoricalScorer } from "./historical-scorer";
+import { registerFeedbackObserver } from "./feedback-observer";
 import {
   handleConfirmation,
   handleIdentityAndSocial,
@@ -374,10 +377,21 @@ export function buildRetrievalToolCalls(rag: HybridApiContext): ReasoningStep["t
 
 export function buildConversationMemoryPrompt(context?: ConversationContext): string | null {
   if (!context) return null;
-  const parts: string[] = [];
-  if (context.userName) parts.push(`user_name=${context.userName}`);
-  if (parts.length === 0) return null;
-  return `Conversation memory (chat scope only): ${parts.join(" | ")}`;
+  const lines: string[] = [];
+
+  // Session context
+  if (context.userName) lines.push(`user: ${context.userName}`);
+  if (context.activeHost) lines.push(`active_host: ${context.activeHost}`);
+  if (context.activeService) lines.push(`active_service: ${context.activeService}`);
+  if (context.lastIncidentSignature) lines.push(`last_incident: ${context.lastIncidentSignature}`);
+
+  // Pending action (human-readable fields only — skip id/digest/timestamps/raw payload)
+  if (context.pendingActionType) lines.push(`pending_action_type: ${context.pendingActionType}`);
+  if (context.pendingActionSummary) lines.push(`pending_action_summary: ${context.pendingActionSummary}`);
+  if (context.pendingActionPreview) lines.push(`pending_action_preview: ${context.pendingActionPreview}`);
+
+  if (lines.length === 0) return null;
+  return `Conversation memory (chat scope only):\n${lines.map(l => `  ${l}`).join("\n")}`;
 }
 
 export function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
@@ -841,6 +855,9 @@ export async function runAgent(
     aclGroup: options.aclGroup ?? "admin",
   };
 
+  const operatorMemoryStore = getOperatorMemoryStore();
+  const historicalScorer = new HistoricalScorer(operatorMemoryStore);
+
   const confirmHighRisk = options.confirmHighRisk ?? (async ({ toolName }) => defaultConfirmHighRisk(toolName));
 
   const context = new AgentContext();
@@ -986,6 +1003,9 @@ export async function runAgent(
   // Classify intent using LLM (generateObject); falls back to regex classifier on API failure
   const { classification, routing } = await classifyAndRouteWithLLM(userInput);
   const isCompositeQuery = isLikelyCompositeQuery(userInput, classification);
+  const actionName = classification.metadata?.actionType as string | undefined;
+  const historicalScore = historicalScorer.getScore(session.userId, classification.intent, actionName);
+  registerFeedbackObserver(eventBus, operatorMemoryStore, session.userId, session.aclGroup, classification.intent, actionName);
   const conversationPlan = planConversation({
     userInput: originalUserInput,
     intent: classification,
@@ -994,6 +1014,8 @@ export async function runAgent(
     conversationContext: options.conversationContext,
     userPreferences: options.userPreferences,
     confirmation,
+    score: historicalScore,
+    scorer: historicalScorer,
   });
   const responseMode: ResponseMode | undefined = conversationPlan.responseMode;
   const contextUpdate: ConversationContext = {};

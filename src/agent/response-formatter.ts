@@ -11,7 +11,6 @@
 import OpenAI from "openai";
 import { logger } from "../utils/logger";
 
-// Inlined from canonical-response-format (kept in sync manually)
 interface EntityListEntry {
   label: string;
   attributes: Record<string, string>;

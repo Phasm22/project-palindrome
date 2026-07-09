@@ -3,6 +3,8 @@ import type { ConversationContext, ConversationState, UserPreferences } from "..
 import type { RoutingDecision } from "../reasoning/intent-router";
 import type { ResponseMode } from "./response-formatter";
 import { evaluateDialogPolicy, parseConfirmationInput, type ConfirmationParseResult, type DialogPolicyDecision } from "./dialog-policy";
+import type { HistoricalScore } from "./historical-scorer";
+import type { HistoricalScorer } from "./historical-scorer";
 
 export interface OrchestratorInput {
   userInput: string;
@@ -12,12 +14,15 @@ export interface OrchestratorInput {
   conversationContext?: ConversationContext;
   userPreferences?: UserPreferences;
   confirmation?: ConfirmationParseResult;
+  score?: HistoricalScore;
+  scorer?: HistoricalScorer;
 }
 
 export interface OrchestratorDecision extends DialogPolicyDecision {
   responseMode?: ResponseMode;
   pendingAction?: string;
   confirmation?: ReturnType<typeof parseConfirmationInput>;
+  score?: HistoricalScore;
 }
 
 export function planConversation(input: OrchestratorInput): OrchestratorDecision {
@@ -30,6 +35,8 @@ export function planConversation(input: OrchestratorInput): OrchestratorDecision
     confirmation,
     pendingActionId: input.conversationContext?.pendingActionId,
     pendingActionCreatedAt: input.conversationContext?.pendingActionCreatedAt,
+    score: input.score,
+    scorer: input.scorer,
   });
 
   const pendingAction = policy.requiresConfirmation && !confirmation.confirmed
@@ -40,6 +47,7 @@ export function planConversation(input: OrchestratorInput): OrchestratorDecision
     ...policy,
     confirmation,
     pendingAction,
+    score: input.score,
   };
 }
 

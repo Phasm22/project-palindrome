@@ -121,8 +121,8 @@ export class PceApiServer {
       throw new Error("PCE API server is already running");
     }
 
-    // Start ingestion scheduler (runs every 5 minutes)
-    if (this.options.enableIngestionScheduler !== false && !this.ingestionScheduler) {
+    // Start ingestion scheduler only when explicitly enabled (off by default for on-demand stacks)
+    if (process.env.PCE_INGESTION_ENABLED === "1" && this.options.enableIngestionScheduler !== false && !this.ingestionScheduler) {
       this.ingestionScheduler = new IngestionScheduler(5, this.metricsCollector); // 5 minutes, pass metrics collector
       this.ingestionScheduler.start();
       pceLogger.info("Ingestion scheduler started (every 5 minutes)");
@@ -385,6 +385,14 @@ export class PceApiServer {
 
     if (req.method === "DELETE" && url.pathname === "/api/user/profile") {
       return await this.handleDeleteProfile(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/operator-memory/profile") {
+      return await this.handleOperatorMemoryProfile(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/operator-memory/outcomes") {
+      return await this.handleOperatorMemoryOutcomes(req);
     }
 
     return this.jsonResponse(404, { error: "Not Found" });
@@ -1717,6 +1725,43 @@ export class PceApiServer {
       return "graph";
     }
     return "hybrid";
+  }
+
+  private async handleOperatorMemoryProfile(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId");
+      const intentType = url.searchParams.get("intentType");
+      if (!userId || !intentType) {
+        return this.jsonResponse(400, { error: "userId and intentType are required" });
+      }
+      const actionName = url.searchParams.get("actionName") ?? undefined;
+      const { getOperatorMemoryStore } = await import("./operator-memory-store");
+      const store = getOperatorMemoryStore();
+      const profile = store.getUserProfile(userId, intentType, actionName);
+      return this.jsonResponse(200, { data: profile });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch operator memory profile", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleOperatorMemoryOutcomes(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId");
+      if (!userId) {
+        return this.jsonResponse(400, { error: "userId is required" });
+      }
+      const limit = parseInt(url.searchParams.get("limit") || "20", 10);
+      const { getOperatorMemoryStore } = await import("./operator-memory-store");
+      const store = getOperatorMemoryStore();
+      const outcomes = store.getRecentOutcomes(userId, limit);
+      return this.jsonResponse(200, { data: outcomes });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch operator memory outcomes", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
   }
 
   private jsonResponse(status: number, body: Record<string, any>): Response {

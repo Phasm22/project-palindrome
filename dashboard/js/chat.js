@@ -1,4 +1,4 @@
-import { API_URL, escapeHtml } from './utils.js';
+import { API_URL, escapeHtml, renderResponsiveTable } from './utils.js';
 import { createButton } from './components.js';
 import { showConfirm } from './modal.js';
 
@@ -1014,6 +1014,59 @@ function formatAgentResponse(text) {
   let nodeEntries = [];
   let vmList = [];
   let seenVmNames = new Set();
+
+  const parseMarkdownTable = (tableLines) => {
+    if (!Array.isArray(tableLines) || tableLines.length < 2) return null;
+    const trimmed = tableLines.map((l) => (l ?? '').trim());
+
+    const isHeaderLine = (line) => line.startsWith('|') && line.endsWith('|') && line.includes('|');
+    const isSeparatorLine = (line, expectedColumns) => {
+      if (!line.startsWith('|') || !line.includes('-')) return false;
+      const segments = line.split('|').slice(1, -1).map((s) => s.trim()).filter(Boolean);
+      if (!segments.length || (expectedColumns && segments.length !== expectedColumns)) return false;
+      return segments.every((seg) => /^:?-{3,}:?$/.test(seg));
+    };
+
+    for (let i = 0; i < trimmed.length - 1; i++) {
+      const headerLine = trimmed[i];
+      if (!isHeaderLine(headerLine)) continue;
+
+      const separatorLine = trimmed[i + 1];
+      if (!separatorLine) continue;
+
+      const headerCells = headerLine
+        .split('|')
+        .slice(1, -1)
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (!headerCells.length) continue;
+
+      if (!isSeparatorLine(separatorLine, headerCells.length)) continue;
+
+      const rows = [];
+      let j = i + 2;
+      for (; j < trimmed.length; j++) {
+        const rowLine = trimmed[j];
+        if (!rowLine || !rowLine.trim().startsWith('|')) break;
+        const cells = rowLine
+          .split('|')
+          .slice(1, -1)
+          .map((c) => c.trim());
+        if (cells.length !== headerCells.length) break;
+        rows.push(cells);
+      }
+
+      if (!rows.length) return null;
+      return {
+        headers: headerCells,
+        rows,
+        startIndex: i,
+        endIndex: j - 1,
+      };
+    }
+
+    return null;
+  };
   
   const tryParsePipeKv = (line) => {
     if (!line.includes('|') || !line.includes('=')) return null;
@@ -1161,6 +1214,23 @@ function formatAgentResponse(text) {
     currentVmTrace = '';
     currentVmSource = '';
   };
+
+  const markdownTable = parseMarkdownTable(lines);
+  if (markdownTable) {
+    const before = lines.slice(0, markdownTable.startIndex).join('\n').trim();
+    const after = lines.slice(markdownTable.endIndex + 1).join('\n').trim();
+
+    const tableHtml = renderResponsiveTable(
+      markdownTable.headers,
+      markdownTable.rows,
+      (row) => row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')
+    );
+
+    const beforeHtml = before ? `<div class="agent-response">${escapeHtml(before)}</div>` : '';
+    const afterHtml = after ? `<div class="agent-response" style="margin-top: 1rem;">${escapeHtml(after)}</div>` : '';
+
+    return `${beforeHtml}${tableHtml}${afterHtml}`;
+  }
 
   const kvBlock = parseKeyValueBlock(lines);
   if (kvBlock) {
