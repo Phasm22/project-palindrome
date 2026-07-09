@@ -200,8 +200,9 @@ services:
     container_name: grafana
     network_mode: host  # Use host network to access Prometheus at localhost:9090
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Rotated off the hardcoded admin/admin default — set in .env (gitignored)
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_INSTALL_PLUGINS=
       - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
       - GF_PATHS_DATA=/var/lib/grafana
@@ -214,6 +215,10 @@ services:
       # Performance tuning for NVMe storage
       - GF_DATABASE_CACHE_TTL=3600
       - GF_DATABASE_MAX_IDLE_CONN=10
+      # Allow the usage dashboard (argus/otto Usage tab) to iframe Grafana panels
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro

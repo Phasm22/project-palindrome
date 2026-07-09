@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ACLGroup, FusionConfig, HybridRAGResponse, QueryType } from "../types";
 import type { ConversationState } from "../../types";
 import { pceLogger } from "../utils/logger";
+import { emitUsageEvent } from "../utils/usage-events";
 import { Redactor } from "../redaction/redactor";
 import { AccessDeniedError } from "../errors";
 import { MetricsCollector, QueryMetrics, ErrorMetrics } from "../metrics";
@@ -2156,6 +2157,9 @@ export class PceApiServer {
 
       const conversationId = await this.chatHistoryStore.createConversation(userId, body.title);
 
+      emitUsageEvent("usage.palindrome.chat_created", { conversationId, userId });
+      this.metricsCollector.record("usage_chat_created", 1);
+
       return this.jsonResponse(200, {
         success: true,
         data: { id: conversationId },
@@ -2243,6 +2247,9 @@ export class PceApiServer {
         limit,
         offset,
       });
+
+      emitUsageEvent("usage.palindrome.chat_opened", { conversationId, userId });
+      this.metricsCollector.record("usage_chat_opened", 1);
 
       return this.jsonResponse(200, {
         success: true,

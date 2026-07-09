@@ -3,7 +3,7 @@
   "tags": ["palindrome", "pce", "observability"],
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 2,
+  "version": 3,
   "refresh": "15s",
   "panels": [
     {
@@ -97,6 +97,17 @@
         { "expr": "pce_process_heap_total_bytes", "legendFormat": "Heap total", "refId": "C" }
       ],
       "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 9,
+      "title": "Chat Usage (chats created/opened, 5m rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "sum(rate(usage_chat_created_count[5m]))", "legendFormat": "Chats created", "refId": "A" },
+        { "expr": "sum(rate(usage_chat_opened_count[5m]))", "legendFormat": "Chats opened", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
     }
   ],
   "time": { "from": "now-1h", "to": "now" },
