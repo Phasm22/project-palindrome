@@ -1,5 +1,4 @@
-import { API_URL } from './utils.js';
-import { addTooltip, createModal } from './ui-helpers.js';
+import { API_URL, escapeHtml } from './utils.js';
 import { createSkeletonLoader } from './skeletons.js';
 
 function formatDurationMs(ms) {
@@ -124,7 +123,7 @@ function formatToolResult(dataPreview, toolName) {
 function formatFinalResponse(text) {
   if (!text) return '';
   
-  let formatted = text;
+  let formatted = escapeHtml(text);
   
   // Format code blocks
   formatted = formatted.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
@@ -154,10 +153,15 @@ function formatFinalResponse(text) {
  * Copy full trace data to clipboard, formatted for debugging
  */
 export async function copyTraceData(traceId, buttonElement) {
+  const originalHtml = buttonElement.innerHTML;
+  const setButtonLabel = (label, className = '') => {
+    buttonElement.classList.remove('is-copying', 'is-copied', 'is-copy-failed');
+    if (className) buttonElement.classList.add(className);
+    buttonElement.innerHTML = label;
+  };
+
   try {
-    // Show loading state
-    const originalBg = buttonElement.style.background;
-    buttonElement.style.background = '#f59e0b';
+    setButtonLabel('Copying', 'is-copying');
     buttonElement.disabled = true;
     
     // Fetch full trace data
@@ -189,24 +193,42 @@ ${JSON.stringify(traceData.steps, null, 2)}
 ${JSON.stringify(traceData, null, 2)}
 `;
     
-    // Copy to clipboard
-    await navigator.clipboard.writeText(formattedTrace);
+    await writeClipboardText(formattedTrace);
     
-    // Show success state
-    buttonElement.style.background = '#10b981';
+    setButtonLabel('Copied', 'is-copied');
     setTimeout(() => {
-      buttonElement.style.background = originalBg;
+      buttonElement.innerHTML = originalHtml;
+      buttonElement.classList.remove('is-copying', 'is-copied', 'is-copy-failed');
       buttonElement.disabled = false;
     }, 1000);
   } catch (error) {
     console.error('Failed to copy trace data:', error);
-    // Show error state
-    buttonElement.style.background = '#ef4444';
+    setButtonLabel('Copy failed', 'is-copy-failed');
     setTimeout(() => {
-      buttonElement.style.background = originalBg;
+      buttonElement.innerHTML = originalHtml;
+      buttonElement.classList.remove('is-copying', 'is-copied', 'is-copy-failed');
       buttonElement.disabled = false;
-    }, 1000);
+    }, 1400);
   }
+}
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard API unavailable');
 }
 
 // Lazy loading state for reasoning traces
@@ -218,65 +240,54 @@ let reasoningTracesState = {
   traces: []
 };
 
+function formatMetric(count, singular) {
+  const value = Number(count || 0);
+  return `${value} ${singular}${value === 1 ? '' : 's'}`;
+}
+
+function formatTraceTime(timestamp) {
+  if (!timestamp) return 'Unknown time';
+  const date = new Date(timestamp);
+  if (isNaN(date.getTime())) return 'Invalid date';
+  return date.toLocaleString();
+}
+
 function formatTraceHtml(trace, isLast = false) {
   const traceStepsId = `trace-steps-${trace.id}`;
   const traceToggleId = `trace-toggle-${trace.id}`;
+  const steps = Array.isArray(trace.steps) ? trace.steps : [];
+  const statusLabel = trace.maxStepsReached ? 'Max Steps' : 'Completed';
+  const userInput = trace.userInput || '';
+  const inputPreview = userInput.length > 260 ? `${userInput.substring(0, 260)}...` : userInput;
   return `
-    <div class="panel" style="border-left: 3px solid ${trace.maxStepsReached ? '#ef4444' : '#10b981'}; padding: 20px; background: rgba(15, 23, 42, 0.6); border-radius: 8px; transition: all 0.2s; margin-bottom: ${isLast ? '0' : '24px'}; position: relative;" onmouseover="this.style.background='rgba(15, 23, 42, 0.8)'" onmouseout="this.style.background='rgba(15, 23, 42, 0.6)'">
-      ${!isLast ? `
-        <div style="position: absolute; bottom: -12px; left: 0; right: 0; height: 1px; background: linear-gradient(to right, transparent, rgba(51, 65, 85, 0.6), transparent);"></div>
-      ` : ''}
-      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(51, 65, 85, 0.5);">
-        <div style="flex: 1; min-width: 0;">
-          <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-            <h3 style="margin: 0; color: #f97316; font-size: 1rem; font-weight: 600;">
-              Trace ${trace.id.slice(0, 8)}
-            </h3>
-            <span class="status-badge ${trace.maxStepsReached ? 'status-error' : 'status-success'}" style="font-size: 0.7rem; padding: 3px 8px;">
-              ${trace.maxStepsReached ? 'Max Steps' : 'Completed'}
-            </span>
+    <div class="trace-row ${trace.maxStepsReached ? 'trace-row-error' : 'trace-row-success'}" style="margin-bottom: ${isLast ? '0' : '10px'};">
+      <div class="trace-row-main">
+        <div class="trace-row-title">
+          <span class="trace-id">Trace ${escapeHtml(String(trace.id || '').slice(0, 8))}</span>
+          <span class="trace-tag ${trace.maxStepsReached ? 'trace-tag-error' : 'trace-tag-success'}">${escapeHtml(statusLabel)}</span>
+        </div>
+        <div class="trace-preview">${escapeHtml(inputPreview)}</div>
+        <div class="trace-meta">
+          <span>${formatMetric(trace.totalSteps, 'step')}</span>
+          <span>${formatMetric(trace.totalToolCalls, 'tool')}</span>
+          <span>${escapeHtml(formatDurationMs(trace.durationMs))}</span>
+          <span title="${escapeHtml(new Date(trace.timestamp).toLocaleString())}">${escapeHtml(formatTraceTime(trace.timestamp))}</span>
+        </div>
+      </div>
+      <div class="trace-row-actions">
             <button 
               id="${traceToggleId}"
               onclick="toggleTraceSteps('${trace.id}')"
-              style="
-                background: rgba(51, 65, 85, 0.5);
-                border: 1px solid #334155;
-                color: #94a3b8;
-                padding: 4px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 0.75rem;
-                display: inline-flex;
-                align-items: center;
-                gap: 4px;
-                transition: all 0.2s;
-                margin-left: auto;
-              "
-              onmouseover="this.style.background='rgba(51, 65, 85, 0.7)'"
-              onmouseout="this.style.background='rgba(51, 65, 85, 0.5)'"
+          class="quiet-action table-action"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="transition: transform 0.2s;">
                 <path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/>
               </svg>
-              Show Details
+          Expand
             </button>
             <button 
               onclick="copyTraceData('${trace.id}', this)"
-              style="
-                background: transparent;
-                border: 1px solid #334155;
-                color: #94a3b8;
-                padding: 4px 8px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 0.75rem;
-                display: inline-flex;
-                align-items: center;
-                gap: 4px;
-                transition: all 0.2s;
-              "
-              onmouseover="this.style.background='rgba(51, 65, 85, 0.5)'"
-              onmouseout="this.style.background='transparent'"
+          class="quiet-action table-action trace-copy-button"
               title="Copy full trace data"
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -284,73 +295,68 @@ function formatTraceHtml(trace, isLast = false) {
               </svg>
               Copy
             </button>
-          </div>
-          <div style="font-size: 0.875rem; color: #cbd5e1; line-height: 1.5; margin-bottom: 8px;">
-            ${trace.userInput}
-          </div>
-          <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.75rem; color: #94a3b8;">
-            <span>${trace.totalSteps} step${trace.totalSteps !== 1 ? 's' : ''}</span>
-            <span>${trace.totalToolCalls} tool${trace.totalToolCalls !== 1 ? 's' : ''}</span>
-            <span>${formatDurationMs(trace.durationMs)}</span>
-            <span style="color: #64748b;">${new Date(trace.timestamp).toLocaleString()}</span>
-          </div>
-        </div>
       </div>
       
-      <div id="${traceStepsId}" style="display: none; margin-top: 16px;">
-        ${trace.steps.map((step, idx) => `
-          <div style="margin-bottom: 16px; padding: 12px; background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(51, 65, 85, 0.3); border-radius: 6px;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(51, 65, 85, 0.3);">
-              <span style="background: #f97316; color: white; padding: 4px 10px; border-radius: 4px; font-weight: 600; font-size: 0.8rem;">
-                Step ${step.step}
+      <div id="${traceStepsId}" class="trace-details" style="display: none;">
+        ${steps.map((step, idx) => {
+          const toolCalls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
+          return `
+          <div class="trace-step">
+            <div class="trace-step-heading">
+              <span class="trace-tag trace-tag-neutral">
+                Step ${escapeHtml(step.step ?? idx + 1)}
               </span>
               ${step.ragContext ? `
-                <span style="background: #8b5cf6; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem;">
-                  ${step.ragContext.queryType}
+                <span class="trace-tag trace-tag-neutral">
+                  ${escapeHtml(step.ragContext.queryType || 'RAG')}
                 </span>
               ` : ''}
-              ${step.toolCalls.length > 0 ? `
-                <span style="background: #10b981; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem;">
-                  ${step.toolCalls.length} tool${step.toolCalls.length > 1 ? 's' : ''}
+              ${toolCalls.length > 0 ? `
+                <span class="trace-tag trace-tag-success">
+                  ${formatMetric(toolCalls.length, 'tool')}
                 </span>
               ` : ''}
             </div>
             
-            ${step.toolCalls.length > 0 ? `
-              <div style="margin-bottom: 12px;">
-                ${step.toolCalls.map(tc => `
-                  <div style="margin-bottom: 8px; padding: 10px; background: rgba(30, 41, 59, 0.5); border-radius: 4px; border-left: 3px solid ${tc.result.success ? '#10b981' : '#ef4444'};">
-                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                      <span style="color: #f97316; font-weight: 600; font-size: 0.875rem;">${tc.toolName}</span>
-                      <span class="status-badge ${tc.result.success ? 'status-success' : 'status-error'}" style="font-size: 0.7rem; padding: 2px 6px;">
-                        ${tc.result.success ? 'Success' : 'Failed'}
+            ${toolCalls.length > 0 ? `
+              <div class="trace-tool-list">
+                ${toolCalls.map(tc => {
+                  const success = tc.result?.success !== false;
+                  return `
+                  <div class="trace-tool-row ${success ? 'trace-tool-success' : 'trace-tool-error'}">
+                    <div class="trace-tool-heading">
+                      <span class="trace-tool-name">${escapeHtml(tc.toolName || 'Unknown tool')}</span>
+                      <span class="trace-tag ${success ? 'trace-tag-success' : 'trace-tag-error'}">
+                        ${success ? 'Success' : 'Failed'}
                       </span>
-                      <span style="color: #94a3b8; font-size: 0.75rem;">${formatDurationMs(tc.durationMs)}</span>
-                      ${tc.result.error ? `
-                        <span style="color: #ef4444; font-size: 0.75rem; margin-left: auto;">Error</span>
+                      <span class="trace-tool-duration">${escapeHtml(formatDurationMs(tc.durationMs))}</span>
+                      ${tc.result?.error ? `
+                        <span class="trace-tool-error-label">Error</span>
                       ` : ''}
                     </div>
-                    ${tc.result.error ? `
-                      <div style="color: #ef4444; font-size: 0.8rem; padding: 6px; background: rgba(239, 68, 68, 0.1); border-radius: 4px; margin-top: 6px;">
-                        ${tc.result.error.length > 150 ? tc.result.error.substring(0, 150) + '...' : tc.result.error}
+                    ${tc.result?.error ? `
+                      <div class="trace-tool-error-message">
+                        ${escapeHtml(tc.result.error.length > 180 ? `${tc.result.error.substring(0, 180)}...` : tc.result.error)}
                       </div>
                     ` : ''}
                   </div>
-                `).join('')}
+                `;
+                }).join('')}
               </div>
             ` : ''}
             
             ${step.llmResponse ? `
-              <div style="margin-bottom: 12px; padding: 10px; background: rgba(30, 41, 59, 0.5); border-radius: 4px; border-left: 3px solid #f97316;">
-                <div style="color: #e2e8f0; line-height: 1.6; font-size: 0.875rem;">${formatFinalResponse(step.llmResponse)}</div>
+              <div class="trace-response">
+                ${formatFinalResponse(step.llmResponse)}
               </div>
             ` : ''}
           </div>
-        `).join('')}
+        `;
+        }).join('')}
         
         ${trace.finalResponse ? `
-          <div style="margin-top: 12px; padding: 12px; background: rgba(30, 41, 59, 0.5); border-radius: 6px; border-left: 3px solid #10b981;">
-            <div style="color: #e2e8f0; line-height: 1.6; font-size: 0.875rem;" class="formatted-response">${formatFinalResponse(trace.finalResponse)}</div>
+          <div class="trace-response trace-final-response">
+            ${formatFinalResponse(trace.finalResponse)}
           </div>
         ` : ''}
       </div>
@@ -411,7 +417,7 @@ async function loadMoreReasoningTraces() {
   } catch (error) {
     console.error('Failed to load more reasoning traces:', error);
     if (loader) {
-      loader.innerHTML = `<div class="error" style="padding: 20px; text-align: center;">Failed to load more traces: ${error.message}</div>`;
+      loader.innerHTML = `<div class="error" style="padding: 20px; text-align: center;">Failed to load more traces: ${escapeHtml(error.message)}</div>`;
     }
   } finally {
     reasoningTracesState.loading = false;
@@ -476,7 +482,7 @@ export async function loadReasoningTraces(reset = false) {
     }
   } catch (error) {
     element.innerHTML = 
-      `<div class="error">Failed to load reasoning traces: ${error.message}</div>`;
+      `<div class="error">Failed to load reasoning traces: ${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -507,6 +513,6 @@ window.toggleTraceSteps = function(traceId) {
   }
   
   toggleBtn.innerHTML = isHidden 
-    ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="transition: transform 0.2s; transform: rotate(180deg);"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg> Hide Details`
-    : `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="transition: transform 0.2s;"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg> Show Details`;
+    ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="transition: transform 0.2s; transform: rotate(180deg);"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg> Collapse`
+    : `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="transition: transform 0.2s;"><path d="M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z"/></svg> Expand`;
 };

@@ -1,4 +1,4 @@
-import { API_URL } from './utils.js';
+import { API_URL, escapeHtml } from './utils.js';
 
 // Color palette - burnt orange theme with soft, distinct colors
 const colorPalette = {
@@ -204,16 +204,16 @@ export async function loadGraph() {
         <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative min-h-[400px] md:h-[600px] lg:h-[800px] overflow-hidden" style="position: relative;">
           <!-- Zoom Controls -->
           <div class="absolute top-4 right-4 z-10 flex flex-col gap-2">
-            <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Zoom In">
+            <button id="zoom-in" class="quiet-icon-action" title="Zoom In">
               <span class="zoom-icon-in"></span>
             </button>
-            <button id="zoom-out" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Zoom Out">
+            <button id="zoom-out" class="quiet-icon-action" title="Zoom Out">
               <span class="zoom-icon-out"></span>
             </button>
-            <button id="zoom-fit" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Fit to Screen">
+            <button id="zoom-fit" class="quiet-icon-action" title="Fit to Screen">
               <span class="zoom-icon-fit"></span>
             </button>
-            <button id="zoom-reset" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Reset View">
+            <button id="zoom-reset" class="quiet-icon-action" title="Reset View">
               <span class="zoom-icon-reset"></span>
             </button>
           </div>
@@ -267,10 +267,10 @@ export async function loadGraph() {
                 // Format type for display (replace underscores, capitalize)
                 const displayType = type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
                 return `
-                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-type="${type}">
+                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-type="${escapeHtml(type)}">
                   <div class="w-4 h-4 rounded-full" style="background: ${color}; border: 2px solid #334155;"></div>
-                  <div class="flex-1 text-slate-200 text-sm">${displayType}</div>
-                  <div class="text-slate-400 text-xs font-semibold">${count}</div>
+                  <div class="flex-1 text-slate-200 text-sm">${escapeHtml(displayType)}</div>
+                  <div class="text-slate-400 text-xs font-semibold">${escapeHtml(String(count))}</div>
                 </div>
               `;
               }).join('')}
@@ -283,10 +283,10 @@ export async function loadGraph() {
             <summary class="cursor-pointer text-slate-200 font-semibold mb-3 text-base">Relationship Types</summary>
             <div class="flex flex-col gap-2">
               ${Object.entries(edgeTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => `
-                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-edge="${type}">
+                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-edge="${escapeHtml(type)}">
                   <div class="w-5 h-0.5" style="background: ${colorPalette.primary};"></div>
-                  <div class="flex-1 text-slate-200 text-sm">${type || 'unnamed'}</div>
-                  <div class="text-slate-400 text-xs font-semibold">${count}</div>
+                  <div class="flex-1 text-slate-200 text-sm">${escapeHtml(type || 'unnamed')}</div>
+                  <div class="text-slate-400 text-xs font-semibold">${escapeHtml(String(count))}</div>
                 </div>
               `).join('')}
             </div>
@@ -654,39 +654,40 @@ function initSigma() {
     // Build accessible tooltip content with meaningful data
     const label = nodeData.label || nodeData.displayName || node;
     const entityType = nodeData.entityType || nodeData.type || nodeData.nodeType || 'unknown';
+    const tooltipValue = (value) => escapeHtml(String(value));
     
-    let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${label}</strong><br>`;
+    let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${tooltipValue(label)}</strong><br>`;
     
     // Show meaningful data based on entity type
     if (entityType === 'compute_node') {
-      if (nodeData.status) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Status:</span> <span style="color: ${nodeData.status === 'online' ? colorPalette.success : colorPalette.error}">${nodeData.status}</span><br>`;
-      if (nodeData.data?.cpuTotalCores) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CPU Cores:</span> <span style="color: ${colorPalette.text}">${nodeData.data.cpuTotalCores}</span><br>`;
+      if (nodeData.status) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Status:</span> <span style="color: ${nodeData.status === 'online' ? colorPalette.success : colorPalette.error}">${tooltipValue(nodeData.status)}</span><br>`;
+      if (nodeData.data?.cpuTotalCores) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CPU Cores:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.data.cpuTotalCores)}</span><br>`;
       if (nodeData.data?.memoryTotalBytes) {
         const memGB = (nodeData.data.memoryTotalBytes / (1024 ** 3)).toFixed(1);
         tooltipContent += `<span style="color: ${colorPalette.textMuted}">Memory:</span> <span style="color: ${colorPalette.text}">${memGB} GB</span><br>`;
       }
     } else if (entityType === 'compute_vm') {
-      if (nodeData.state) tooltipContent += `<span style="color: ${colorPalette.textMuted}">State:</span> <span style="color: ${nodeData.state === 'running' ? colorPalette.success : colorPalette.error}">${nodeData.state}</span><br>`;
-      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
-      if (nodeData.vmKind) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Kind:</span> <span style="color: ${colorPalette.text}">${nodeData.vmKind.toUpperCase()}</span><br>`;
+      if (nodeData.state) tooltipContent += `<span style="color: ${colorPalette.textMuted}">State:</span> <span style="color: ${nodeData.state === 'running' ? colorPalette.success : colorPalette.error}">${tooltipValue(nodeData.state)}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.nodeName)}</span><br>`;
+      if (nodeData.vmKind) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Kind:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.vmKind.toUpperCase())}</span><br>`;
       if (nodeData.data?.agentAvailable !== undefined) {
         tooltipContent += `<span style="color: ${colorPalette.textMuted}">Agent:</span> <span style="color: ${nodeData.data.agentAvailable ? colorPalette.success : colorPalette.warning}">${nodeData.data.agentAvailable ? 'Available' : 'Missing'}</span><br>`;
       }
     } else if (entityType === 'network_interface') {
-      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
-      if (nodeData.primaryIp) tooltipContent += `<span style="color: ${colorPalette.textMuted}">IP:</span> <span style="color: ${colorPalette.text}">${nodeData.primaryIp}</span><br>`;
-      if (nodeData.data?.vlan) tooltipContent += `<span style="color: ${colorPalette.textMuted}">VLAN:</span> <span style="color: ${colorPalette.text}">${nodeData.data.vlan}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.nodeName)}</span><br>`;
+      if (nodeData.primaryIp) tooltipContent += `<span style="color: ${colorPalette.textMuted}">IP:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.primaryIp)}</span><br>`;
+      if (nodeData.data?.vlan) tooltipContent += `<span style="color: ${colorPalette.textMuted}">VLAN:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.data.vlan)}</span><br>`;
     } else if (entityType === 'network_subnet') {
-      if (nodeData.cidr) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CIDR:</span> <span style="color: ${colorPalette.text}">${nodeData.cidr}</span><br>`;
-      if (nodeData.gateway) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Gateway:</span> <span style="color: ${colorPalette.text}">${nodeData.gateway}</span><br>`;
+      if (nodeData.cidr) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CIDR:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.cidr)}</span><br>`;
+      if (nodeData.gateway) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Gateway:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.gateway)}</span><br>`;
     } else if (entityType === 'firewall_rule') {
-      if (nodeData.action) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Action:</span> <span style="color: ${nodeData.action === 'pass' ? colorPalette.success : colorPalette.error}">${nodeData.action}</span><br>`;
-      if (nodeData.source) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Source:</span> <span style="color: ${colorPalette.text}">${nodeData.source}</span><br>`;
-      if (nodeData.destination) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Destination:</span> <span style="color: ${colorPalette.text}">${nodeData.destination}</span><br>`;
-      if (nodeData.protocol) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Protocol:</span> <span style="color: ${colorPalette.text}">${nodeData.protocol.toUpperCase()}</span><br>`;
+      if (nodeData.action) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Action:</span> <span style="color: ${nodeData.action === 'pass' ? colorPalette.success : colorPalette.error}">${tooltipValue(nodeData.action)}</span><br>`;
+      if (nodeData.source) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Source:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.source)}</span><br>`;
+      if (nodeData.destination) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Destination:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.destination)}</span><br>`;
+      if (nodeData.protocol) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Protocol:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.protocol.toUpperCase())}</span><br>`;
     } else if (entityType === 'storage') {
-      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
-      if (nodeData.data?.storageType) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${nodeData.data.storageType}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.nodeName)}</span><br>`;
+      if (nodeData.data?.storageType) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.data.storageType)}</span><br>`;
       if (nodeData.data?.totalBytes) {
         const totalGB = (nodeData.data.totalBytes / (1024 ** 3)).toFixed(1);
         const usedGB = nodeData.data.usedBytes ? (nodeData.data.usedBytes / (1024 ** 3)).toFixed(1) : '0';
@@ -694,11 +695,11 @@ function initSigma() {
       }
     } else {
       // Fallback for other node types - show type but not degree
-      tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${entityType}</span><br>`;
+      tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${tooltipValue(entityType)}</span><br>`;
     }
     
     // Always show ID for reference
-    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}; font-size: 10px;">${nodeData.id}</span><br>`;
+    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}; font-size: 10px;">${tooltipValue(nodeData.id)}</span><br>`;
     
     tooltip.innerHTML = tooltipContent;
     document.body.appendChild(tooltip);

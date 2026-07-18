@@ -1,50 +1,41 @@
-import { API_URL, renderResponsiveTable } from './utils.js';
+import { API_URL, escapeHtml, renderResponsiveTable } from './utils.js';
 import { createSkeletonStatsGrid } from './skeletons.js';
 
-/**
- * Format duration in milliseconds to a human-readable string
- * Examples: 8810ms -> "8.81s", 150ms -> "150ms", 120000ms -> "2m"
- */
+let overviewRefreshPromise = null;
+let overviewLastUpdated = null;
+
 function formatDuration(ms) {
   if (!ms || ms === 0) return '0ms';
-  
+
   const seconds = ms / 1000;
   const minutes = seconds / 60;
   const hours = minutes / 60;
-  
+
   if (hours >= 1) {
     const h = Math.floor(hours);
     const m = Math.floor(minutes % 60);
     return m > 0 ? `${h}h ${m}m` : `${h}h`;
   }
-  
+
   if (minutes >= 1) {
     const m = Math.floor(minutes);
     const s = Math.floor(seconds % 60);
     return s > 0 ? `${m}m ${s}s` : `${m}m`;
   }
-  
+
   if (seconds >= 1) {
-    // Show 1-2 decimal places for seconds
-    if (seconds < 10) {
-      return `${seconds.toFixed(2)}s`;
-    }
-    return `${seconds.toFixed(1)}s`;
+    return seconds < 10 ? `${seconds.toFixed(2)}s` : `${seconds.toFixed(1)}s`;
   }
-  
-  // Less than 1 second, show milliseconds
+
   return `${Math.round(ms)}ms`;
 }
 
-/**
- * Format a date to relative time (e.g., "5 minutes ago", "2 hours ago", "3 days ago")
- */
 function formatRelativeTime(dateString) {
   if (!dateString) return 'Never';
-  
+
   const date = new Date(dateString);
   if (isNaN(date.getTime())) return 'Invalid date';
-  
+
   const now = new Date();
   const diffMs = now - date;
   const diffSeconds = Math.floor(diffMs / 1000);
@@ -54,54 +45,496 @@ function formatRelativeTime(dateString) {
   const diffWeeks = Math.floor(diffDays / 7);
   const diffMonths = Math.floor(diffDays / 30);
   const diffYears = Math.floor(diffDays / 365);
-  
-  if (diffSeconds < 60) {
-    return diffSeconds <= 0 ? 'just now' : `${diffSeconds} second${diffSeconds !== 1 ? 's' : ''} ago`;
-  }
-  
-  if (diffMinutes < 60) {
-    return `${diffMinutes} minute${diffMinutes !== 1 ? 's' : ''} ago`;
-  }
-  
-  if (diffHours < 24) {
-    return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
-  }
-  
-  if (diffDays < 7) {
-    return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
-  }
-  
-  if (diffWeeks < 4) {
-    return `${diffWeeks} week${diffWeeks !== 1 ? 's' : ''} ago`;
-  }
-  
-  if (diffMonths < 12) {
-    return `${diffMonths} month${diffMonths !== 1 ? 's' : ''} ago`;
-  }
-  
-  return `${diffYears} year${diffYears !== 1 ? 's' : ''} ago`;
+
+  if (diffSeconds < 60) return diffSeconds <= 0 ? 'just now' : `${diffSeconds}s ago`;
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffWeeks < 4) return `${diffWeeks}w ago`;
+  if (diffMonths < 12) return `${diffMonths}mo ago`;
+  return `${diffYears}y ago`;
 }
 
-function beginSoftRefresh(element, skeletonCount) {
+function formatAbsolute(dateString) {
+  if (!dateString) return 'Never';
+  const date = new Date(dateString);
+  return isNaN(date.getTime()) ? 'Invalid date' : date.toLocaleString();
+}
+
+function formatNumber(value) {
+  return Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '0';
+}
+
+function statusTone(ok, warning = false) {
+  if (ok) return 'status-success';
+  return warning ? 'status-warning' : 'status-error';
+}
+
+function chip(label, value, tone = 'status-neutral') {
+  return `
+    <span class="status-badge status-badge-dense ${tone}">
+      ${label ? `<span class="status-chip-label">${escapeHtml(label)}</span>` : ''}
+      ${escapeHtml(value)}
+    </span>
+  `;
+}
+
+function metric(label, value, detail = '') {
+  return `
+    <div class="metric-card">
+      <div class="metric-label">${escapeHtml(label)}</div>
+      <div class="metric-value">${escapeHtml(String(value))}</div>
+      ${detail ? `<div class="metric-detail">${escapeHtml(detail)}</div>` : ''}
+    </div>
+  `;
+}
+
+function sourceRunRow(name, source, entityLabel = 'entities') {
+  if (!source) return '';
+  const success = source.success !== false;
+  const count = source.entities ?? source.rules;
+  return `
+    <div class="source-row">
+      <div class="source-row-main">
+        ${chip(name, success ? 'OK' : 'Failed', success ? 'status-success' : 'status-error')}
+        ${count !== undefined ? `<span class="source-row-meta">${formatNumber(count)} ${escapeHtml(entityLabel)}</span>` : ''}
+      </div>
+      <span class="source-row-duration">${escapeHtml(formatDuration(source.duration || 0))}</span>
+    </div>
+    ${source.error ? `<div class="source-row-error">${escapeHtml(String(source.error))}</div>` : ''}
+  `;
+}
+
+async function fetchEndpoint(key, path) {
+  try {
+    const response = await fetch(`${API_URL}${path}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    return { key, ok: true, data: await response.json() };
+  } catch (error) {
+    return { key, ok: false, error };
+  }
+}
+
+function normalizeResults(results) {
+  return results.reduce((acc, result) => {
+    acc[result.key] = result;
+    return acc;
+  }, {});
+}
+
+function getUpstreamHealthDetails(health) {
+  if (!health?.upstream || typeof health.upstream !== 'object') return {};
+  if (health.upstream.data && typeof health.upstream.data === 'object') return health.upstream.data;
+  return health.upstream;
+}
+
+function getDependencyEntries(health) {
+  const dependencies = health?.dependencies || getUpstreamHealthDetails(health).dependencies || {};
+  if (Array.isArray(dependencies)) {
+    return dependencies.map((dependency, index) => [
+      dependency?.name || `dependency ${index + 1}`,
+      dependency,
+    ]);
+  }
+  return Object.entries(dependencies);
+}
+
+function buildIssues(data) {
+  const issues = [];
+  const stats = data.stats.ok ? data.stats.data : {};
+  const cluster = data.cluster.ok ? data.cluster.data : {};
+  const health = data.health.ok ? data.health.data : {};
+  const ingestion = data.ingestion.ok ? data.ingestion.data : {};
+
+  for (const [label, result] of Object.entries({
+    'Execution statistics': data.stats,
+    'Cluster status': data.cluster,
+    'PCE API health': data.health,
+    'Ingestion status': data.ingestion,
+  })) {
+    if (!result.ok) {
+      issues.push({
+        tone: 'error',
+        title: `${label} unavailable`,
+        detail: result.error?.message || 'Endpoint did not return data.',
+      });
+    }
+  }
+
+  if (data.health.ok && health.healthy === false) {
+    issues.push({
+      tone: 'error',
+      title: 'PCE API unavailable',
+      detail: health.error
+        || (health.upstreamStatus ? `Health check returned HTTP ${health.upstreamStatus}.` : 'Dashboard could not reach the PCE API health endpoint.'),
+    });
+  }
+
+  const dependencies = getDependencyEntries(health);
+  for (const [name, dependency] of dependencies) {
+    if (dependency && dependency.healthy === false) {
+      issues.push({
+        tone: 'error',
+        title: `${name} dependency unhealthy`,
+        detail: dependency.message || dependency.error || 'Health check reported unhealthy.',
+      });
+    }
+  }
+
+  const offlineNodes = cluster.nodes?.offline || 0;
+  if (offlineNodes > 0) {
+    issues.push({
+      tone: 'error',
+      title: `${offlineNodes} node${offlineNodes === 1 ? '' : 's'} offline`,
+      detail: 'Cluster inventory contains offline Proxmox nodes.',
+    });
+  }
+
+  if (data.ingestion.ok && ingestion.active === false) {
+    issues.push({
+      tone: 'warning',
+      title: 'Ingestion scheduler inactive',
+      detail: 'Inventory freshness may drift until the scheduler is started.',
+    });
+  }
+
+  const lastRun = ingestion.lastRunDetails;
+  if (lastRun && lastRun.success === false) {
+    issues.push({
+      tone: 'error',
+      title: 'Last ingestion run failed',
+      detail: formatAbsolute(lastRun.timestamp),
+    });
+  }
+
+  const recentErrors = stats.recentErrors || [];
+  if (recentErrors.length > 0) {
+    issues.push({
+      tone: 'warning',
+      title: `${recentErrors.length} recent tool failure${recentErrors.length === 1 ? '' : 's'}`,
+      detail: stats.window === '7d' ? 'Reported in the last 7 days.' : 'Reported by execution telemetry.',
+    });
+  }
+
+  return issues;
+}
+
+function buildVerdict(issues) {
+  if (issues.some((issue) => issue.tone === 'error')) return { label: 'Needs attention', tone: 'status-error' };
+  if (issues.some((issue) => issue.tone === 'warning')) return { label: 'Watch', tone: 'status-warning' };
+  return { label: 'Operational', tone: 'status-success' };
+}
+
+function renderSystemSummary(data, issues) {
+  const statsOk = data.stats.ok;
+  const clusterOk = data.cluster.ok;
+  const healthOk = data.health.ok && data.health.data?.healthy !== false;
+  const ingestionOk = data.ingestion.ok;
+  const health = data.health.ok ? data.health.data : {};
+  const cluster = clusterOk ? data.cluster.data : {};
+  const ingestion = ingestionOk ? data.ingestion.data : {};
+  const dependencies = getDependencyEntries(health);
+  const unhealthyDependencies = dependencies.filter(([_, status]) => status?.healthy === false).length;
+  const verdict = buildVerdict(issues);
+
+  const ingestionLabel = !ingestionOk
+    ? 'Unavailable'
+    : ingestion.isRunning
+      ? 'Running'
+      : ingestion.active
+        ? 'Active'
+        : 'Inactive';
+  const ingestionTone = !ingestionOk || ingestion.active === false
+    ? 'status-error'
+    : ingestion.isRunning
+      ? 'status-warning'
+      : 'status-success';
+
+  return `
+    <section id="overview-summary-section" class="operational-panel system-summary-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>System Summary</h2>
+          <p>Current operational state across API health, dependencies, ingestion, and inventory.</p>
+        </div>
+        <button class="refresh-button quiet-action" onclick="window.loadOverviewDashboard(true)">
+          <span id="refresh-icon-ingestion"></span>
+          Refresh
+        </button>
+      </div>
+      <div class="summary-verdict-row">
+        <span class="status-badge status-badge-verdict ${verdict.tone}">${verdict.label}</span>
+        <span class="last-updated">Last updated ${overviewLastUpdated ? overviewLastUpdated.toLocaleString() : 'Never'}</span>
+      </div>
+      <div class="status-chip-row">
+        ${chip('PCE API', healthOk ? 'Reachable' : 'Unavailable', healthOk ? 'status-success' : 'status-error')}
+        ${chip('Dependencies', dependencies.length === 0 ? 'None configured' : `${dependencies.length - unhealthyDependencies}/${dependencies.length} healthy`, unhealthyDependencies > 0 ? 'status-error' : 'status-success')}
+        ${chip('Ingestion', ingestionLabel, ingestionTone)}
+        ${chip('Cluster', clusterOk ? `${cluster.nodes?.online || 0}/${cluster.nodes?.total || 0} nodes online` : 'Unavailable', clusterOk && (cluster.nodes?.offline || 0) === 0 ? 'status-success' : 'status-error')}
+        ${chip('Executions', statsOk ? 'Telemetry ready' : 'Unavailable', statsOk ? 'status-success' : 'status-error')}
+      </div>
+    </section>
+  `;
+}
+
+function renderAttention(issues) {
+  return `
+    <section id="overview-attention-section" class="operational-panel">
+      <div class="panel-heading compact">
+        <h2>Attention</h2>
+      </div>
+      <div class="issue-list">
+        ${issues.length === 0 ? `
+          <div class="issue-row issue-row-success">
+            <span class="issue-severity">OK</span>
+            <div>
+              <div class="issue-title">No active issues</div>
+              <div class="issue-detail">All available dashboard signals are currently clean.</div>
+            </div>
+          </div>
+        ` : issues.map((issue) => `
+          <div class="issue-row issue-row-${issue.tone}">
+            <span class="issue-severity">${issue.tone === 'error' ? 'Action' : 'Watch'}</span>
+            <div>
+              <div class="issue-title">${escapeHtml(issue.title)}</div>
+              <div class="issue-detail">${escapeHtml(issue.detail)}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function renderOperatingMetrics(data) {
+  const stats = data.stats.ok ? data.stats.data : {};
+  const cluster = data.cluster.ok ? data.cluster.data : {};
+  const ingestion = data.ingestion.ok ? data.ingestion.data : {};
+  const statsWindow = stats.window === '7d' ? 'last 7 days' : 'all time';
+  const lastRun = ingestion.lastRunDetails;
+
+  return `
+    <section id="overview-metrics-section" class="operational-panel">
+      <div class="panel-heading compact">
+        <h2>Operating Metrics</h2>
+      </div>
+      <div class="metric-grid">
+        ${metric('Executions', formatNumber(stats.total || 0), statsWindow)}
+        ${metric('Error rate', `${(((stats.errorRate || 0) * 100)).toFixed(1)}%`, stats.recentErrors?.length ? `${stats.recentErrors.length} recent failures` : 'no recent failures')}
+        ${metric('Avg duration', formatDuration(stats.avgDurationMs || 0), 'tool execution')}
+        ${metric('Nodes', formatNumber(cluster.nodes?.total || 0), `${cluster.nodes?.online || 0} online, ${cluster.nodes?.offline || 0} offline`)}
+        ${metric('VMs', formatNumber(cluster.vms?.total || 0), `${cluster.vms?.running || 0} running, ${cluster.vms?.stopped || 0} stopped`)}
+        ${metric('LXCs', formatNumber(cluster.lxc?.total || 0), `${cluster.lxc?.running || 0} running, ${cluster.lxc?.stopped || 0} stopped`)}
+        ${metric('Ingestion freshness', lastRun ? formatRelativeTime(lastRun.timestamp) : 'Never', lastRun ? formatAbsolute(lastRun.timestamp) : 'no run recorded')}
+      </div>
+    </section>
+  `;
+}
+
+function renderFreshness(data) {
+  const ingestion = data.ingestion.ok ? data.ingestion.data : {};
+  const stats = ingestion.statistics || {};
+  const lastRun = ingestion.lastRunDetails;
+  const nextRunDate = ingestion.nextRun ? new Date(ingestion.nextRun) : null;
+  const timeUntilNext = nextRunDate && !isNaN(nextRunDate.getTime())
+    ? Math.max(0, Math.floor((nextRunDate - new Date()) / 1000 / 60))
+    : null;
+
+  return `
+    <section id="overview-ingestion-section" class="operational-panel">
+      <div class="panel-heading compact">
+        <div>
+          <h2>Freshness & Ingestion</h2>
+          <p>Scheduler state and source-level outcome from the latest inventory refresh.</p>
+        </div>
+      </div>
+      <div class="metric-grid metric-grid-compact">
+        ${metric('Scheduler', ingestion.active ? 'Active' : 'Inactive', ingestion.isRunning ? 'run in progress' : 'idle')}
+        ${metric('Current run', ingestion.isRunning ? 'Running' : 'Idle', '')}
+        ${metric('Last run', lastRun ? formatRelativeTime(lastRun.timestamp) : 'Never', lastRun ? (lastRun.success ? 'success' : 'failed') : 'no history')}
+        ${metric('Next run', timeUntilNext === null ? 'Not scheduled' : timeUntilNext > 0 ? `in ${timeUntilNext}m` : 'due now', nextRunDate ? nextRunDate.toLocaleString() : '')}
+        ${metric('Run success', stats.totalRuns > 0 ? `${(stats.successRate || 0).toFixed(1)}%` : 'N/A', `${stats.totalRuns || 0} total runs`)}
+      </div>
+      ${lastRun ? `
+        <div class="source-breakdown">
+          ${sourceRunRow('Proxmox', lastRun.proxmox)}
+          ${sourceRunRow('Network', lastRun.network)}
+          ${sourceRunRow('Firewall', lastRun.firewall, 'rules')}
+          ${lastRun.temperature ? `
+            <div class="source-row">
+              <div class="source-row-main">
+                ${chip('Temperature', 'Reported', 'status-neutral')}
+                <span class="source-row-meta">${formatNumber(lastRun.temperature.nodesWithTemp || 0)} with data, ${formatNumber(lastRun.temperature.nodesWithoutTemp || 0)} without</span>
+              </div>
+            </div>
+          ` : ''}
+          ${lastRun.cleanup?.deleted > 0 ? `
+            <div class="source-row">
+              <div class="source-row-main">
+                ${chip('Cleanup', 'Completed', 'status-neutral')}
+                <span class="source-row-meta">Deleted ${formatNumber(lastRun.cleanup.deleted)} stale entities</span>
+              </div>
+              <span class="source-row-duration">${escapeHtml(formatDuration(lastRun.cleanup.duration || 0))}</span>
+            </div>
+          ` : ''}
+        </div>
+      ` : `<div class="empty-row">No ingestion run details available.</div>`}
+    </section>
+  `;
+}
+
+function renderRecentFailures(data) {
+  const stats = data.stats.ok ? data.stats.data : {};
+  const recentErrors = stats.recentErrors || [];
+  const ingestion = data.ingestion.ok ? data.ingestion.data : {};
+  const sourceErrors = [];
+  const lastRun = ingestion.lastRunDetails;
+
+  if (lastRun) {
+    for (const [name, source] of Object.entries({
+      Proxmox: lastRun.proxmox,
+      Network: lastRun.network,
+      Firewall: lastRun.firewall,
+    })) {
+      if (source?.error) {
+        sourceErrors.push({
+          type: 'Ingestion',
+          source: name,
+          error: source.error,
+          timestamp: lastRun.timestamp,
+        });
+      }
+    }
+  }
+
+  if (recentErrors.length === 0 && sourceErrors.length === 0) return '';
+
+  const rows = [
+    ...sourceErrors,
+    ...recentErrors.map((error) => ({
+      type: 'Tool',
+      source: error.toolName || 'Unknown',
+      error: error.error || 'Unknown error',
+      timestamp: error.timestamp,
+      user: error.userId || 'Unknown',
+    })),
+  ];
+
+  return `
+    <section id="overview-failures-section" class="operational-panel">
+      <div class="panel-heading compact">
+        <h2>Recent Failures</h2>
+      </div>
+      ${renderResponsiveTable(
+        ['Type', 'Source', 'Error', 'Time'],
+        rows.slice(0, 12),
+        (row) => `
+          <td class="whitespace-nowrap">${escapeHtml(row.type)}</td>
+          <td class="whitespace-nowrap">${escapeHtml(String(row.source).split('\n')[0])}</td>
+          <td class="max-w-md truncate" title="${escapeHtml(String(row.error))}">${escapeHtml(String(row.error).split('\n')[0])}</td>
+          <td class="whitespace-nowrap" title="${escapeHtml(formatAbsolute(row.timestamp))}">${escapeHtml(formatRelativeTime(row.timestamp))}</td>
+        `
+      )}
+    </section>
+  `;
+}
+
+function renderInventory(data) {
+  const cluster = data.cluster.ok ? data.cluster.data : {};
+  const nodes = cluster.nodes?.list || [];
+  const resources = [
+    ...(cluster.vms?.resources || []).map((item) => ({ ...item, kind: 'VM' })),
+    ...(cluster.lxc?.resources || []).map((item) => ({ ...item, kind: 'LXC' })),
+  ].slice(0, 24);
+
+  if (nodes.length === 0 && resources.length === 0) return '';
+
+  return `
+    <section id="overview-inventory-section" class="operational-panel">
+      <div class="panel-heading compact">
+        <h2>Inventory Snapshot</h2>
+      </div>
+      ${nodes.length > 0 ? `
+        <details class="dashboard-details" open>
+          <summary>Nodes (${nodes.length})</summary>
+          ${renderResponsiveTable(
+            ['Node', 'Status', 'CPU', 'Memory', 'Uptime'],
+            nodes,
+            (node) => `
+              <td class="whitespace-nowrap">${escapeHtml(node.name || 'Unknown')}</td>
+              <td>${chip('', node.status || 'unknown', node.status === 'online' ? 'status-success' : 'status-error')}</td>
+              <td class="whitespace-nowrap">${node.cpu ? escapeHtml(`${(node.cpu * 100).toFixed(1)}%`) : 'N/A'}</td>
+              <td class="whitespace-nowrap">${node.memory ? escapeHtml(formatBytes(node.memory)) : 'N/A'}</td>
+              <td class="whitespace-nowrap">${node.uptime ? escapeHtml(formatUptime(node.uptime)) : 'N/A'}</td>
+            `
+          )}
+        </details>
+      ` : ''}
+      ${resources.length > 0 ? `
+        <details class="dashboard-details" ${nodes.length === 0 ? 'open' : ''}>
+          <summary>VMs & LXCs (${resources.length})</summary>
+          ${renderResponsiveTable(
+            ['Name', 'Node', 'Status', 'Kind'],
+            resources,
+            (resource) => `
+              <td class="whitespace-nowrap">${escapeHtml(String(resource.name || resource.id || 'Unknown').split('\n')[0])}</td>
+              <td class="whitespace-nowrap">${escapeHtml(String(resource.node || 'N/A').split('\n')[0])}</td>
+              <td>${chip('', resource.status || 'unknown', resource.status === 'running' ? 'status-success' : resource.status === 'stopped' ? 'status-neutral' : 'status-warning')}</td>
+              <td class="whitespace-nowrap">${escapeHtml(resource.kind || resource.type || 'N/A')}</td>
+            `
+          )}
+        </details>
+      ` : ''}
+    </section>
+  `;
+}
+
+function renderDiagnostics(data) {
+  const raw = {
+    executionStats: data.stats.ok ? data.stats.data : { error: data.stats.error?.message },
+    clusterStatus: data.cluster.ok ? data.cluster.data : { error: data.cluster.error?.message },
+    pceApiHealth: data.health.ok ? data.health.data : { error: data.health.error?.message },
+    ingestionStatus: data.ingestion.ok ? data.ingestion.data : { error: data.ingestion.error?.message },
+  };
+
+  return `
+    <details class="dashboard-details diagnostics-block">
+      <summary>Diagnostics JSON</summary>
+      <pre class="json-block">${escapeHtml(JSON.stringify(raw, null, 2))}</pre>
+    </details>
+  `;
+}
+
+function renderOverview(data) {
+  const issues = buildIssues(data);
+  return `
+    ${renderSystemSummary(data, issues)}
+    ${renderAttention(issues)}
+    ${renderOperatingMetrics(data)}
+    ${renderFreshness(data)}
+    ${renderRecentFailures(data)}
+    ${renderInventory(data)}
+    ${renderDiagnostics(data)}
+  `;
+}
+
+function beginOverviewRefresh(element) {
   const hadContent = element.dataset.loaded === 'true' && element.innerHTML.trim().length > 0;
   element.setAttribute('aria-busy', 'true');
 
   if (!hadContent) {
     element.innerHTML = '';
-    element.appendChild(createSkeletonStatsGrid(skeletonCount));
-    return { hadContent, prevHeight: 0 };
+    element.appendChild(createSkeletonStatsGrid(6));
+    return;
   }
 
   const prevHeight = element.offsetHeight || 0;
-  if (prevHeight > 0) {
-    element.style.minHeight = `${prevHeight}px`;
-  }
+  if (prevHeight > 0) element.style.minHeight = `${prevHeight}px`;
   element.style.transition = 'opacity 120ms ease';
   element.style.opacity = '0.75';
-  return { hadContent, prevHeight };
 }
 
-function endSoftRefresh(element) {
+function endOverviewRefresh(element) {
   element.dataset.loaded = 'true';
   element.removeAttribute('aria-busy');
   element.style.opacity = '';
@@ -109,634 +542,77 @@ function endSoftRefresh(element) {
   element.style.transition = '';
 }
 
-export async function loadExecutionStats() {
-  const element = document.getElementById('execution-stats');
+function getOverviewElement() {
+  return document.getElementById('overview-dashboard')
+    || document.getElementById('execution-stats')
+    || document.getElementById('cluster-status')
+    || document.getElementById('system-health')
+    || document.getElementById('ingestion-status');
+}
+
+export async function loadOverviewDashboard(force = false) {
+  const element = getOverviewElement();
   if (!element) return;
 
-  const refresh = beginSoftRefresh(element, 3);
-  
-  try {
-    const response = await fetch(`${API_URL}/api/dashboard/execution-stats`);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    const stats = await response.json();
-    
-    const ingestion = stats.ingestion || {};
-    const windowNote = stats.window === '7d' ? ' <span style="color: #64748b; font-weight: 400; font-size: 0.85em;">(last 7 days)</span>' : '';
-    const html = `
-      <div class="status-grid">
-        <div class="stat-card">
-          <div class="stat-label">Total Executions${windowNote}</div>
-          <div class="stat-value">${stats.total || 0}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Error Rate</div>
-          <div class="stat-value">${((stats.errorRate || 0) * 100).toFixed(1)}%</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Avg Duration</div>
-          <div class="stat-value">${formatDuration(stats.avgDurationMs || 0)}</div>
-        </div>
-      </div>
-      ${ingestion.active !== undefined ? `
-        <details class="overview-details">
-          <summary class="overview-summary">Ingestion Scheduler</summary>
-          <div class="overview-details-body">
-            <div class="status-grid">
-              <div class="stat-card">
-                <div class="stat-label">Status</div>
-                <div>
-                  <span class="status-badge ${ingestion.active ? 'status-success' : 'status-error'}">
-                    ${ingestion.active ? 'Active' : 'Inactive'}
-                  </span>
-                </div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-label">Runs</div>
-                <div class="stat-value">${ingestion.runCount || 0}</div>
-                <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
-                  ${ingestion.successCount || 0} success, ${ingestion.failureCount || 0} failed
-                </div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-label">Success Rate</div>
-                <div class="stat-value">${((ingestion.successRate || 0)).toFixed(1)}%</div>
-              </div>
-              <div class="stat-card">
-                <div class="stat-label">Avg Duration</div>
-                <div class="stat-value">${formatDuration(ingestion.avgDurationMs || 0)}</div>
-              </div>
-              ${ingestion.lastRun ? `
-                <div class="stat-card">
-                  <div class="stat-label">Last Run</div>
-                  <div class="stat-value" style="font-size: 0.9em;">${formatRelativeTime(ingestion.lastRun)}</div>
-                </div>
-              ` : ''}
-            </div>
-            ${ingestion.proxmoxAvgDurationMs || ingestion.networkAvgDurationMs || ingestion.firewallAvgDurationMs ? `
-              <details class="overview-subdetails">
-                <summary>Component Durations</summary>
-                <div class="overview-details-body">
-                  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; font-size: 0.85em;">
-                    ${ingestion.proxmoxAvgDurationMs ? `
-                      <div>
-                        <span style="color: #94a3b8;">Proxmox:</span>
-                        <span style="color: #e2e8f0; margin-left: 8px;">${formatDuration(ingestion.proxmoxAvgDurationMs)}</span>
-                      </div>
-                    ` : ''}
-                    ${ingestion.networkAvgDurationMs ? `
-                      <div>
-                        <span style="color: #94a3b8;">Network:</span>
-                        <span style="color: #e2e8f0; margin-left: 8px;">${formatDuration(ingestion.networkAvgDurationMs)}</span>
-                      </div>
-                    ` : ''}
-                    ${ingestion.firewallAvgDurationMs ? `
-                      <div>
-                        <span style="color: #94a3b8;">Firewall:</span>
-                        <span style="color: #e2e8f0; margin-left: 8px;">${formatDuration(ingestion.firewallAvgDurationMs)}</span>
-                      </div>
-                    ` : ''}
-                  </div>
-                </div>
-              </details>
-            ` : ''}
-          </div>
-        </details>
-      ` : ''}
-      ${stats.recentErrors && stats.recentErrors.length > 0 ? `
-        <details class="overview-details">
-          <summary class="overview-summary text-red-400">Recent Errors${stats.window === '7d' ? ' (last 7 days)' : ''}</summary>
-          <div class="overview-details-body">
-            <div class="flex justify-center">
-              ${renderResponsiveTable(
-                ['Tool', 'User', 'Error', 'Time'],
-                stats.recentErrors,
-                (e) => `
-                  <td class="whitespace-nowrap">${(e.toolName || 'Unknown').split('\n')[0]}</td>
-                  <td class="whitespace-nowrap">${(e.userId || 'Unknown').split('\n')[0]}</td>
-                  <td class="max-w-md truncate" title="${(e.error || 'Unknown').replace(/"/g, '&quot;')}">${(e.error || 'Unknown').split('\n')[0]}</td>
-                  <td class="whitespace-nowrap" title="${new Date(e.timestamp).toLocaleString()}">${formatRelativeTime(e.timestamp)}</td>
-                `
-              )}
-            </div>
-          </div>
-        </details>
-      ` : ''}
-    `;
-    
-    document.getElementById('execution-stats').innerHTML = html;
-    endSoftRefresh(element);
-  } catch (error) {
-    document.getElementById('execution-stats').innerHTML = 
-      `<div class="error">Failed to load execution stats: ${error.message}</div>`;
-    endSoftRefresh(element);
-  }
+  if (overviewRefreshPromise && !force) return overviewRefreshPromise;
+
+  beginOverviewRefresh(element);
+  overviewRefreshPromise = (async () => {
+    const results = await Promise.all([
+      fetchEndpoint('stats', '/api/dashboard/execution-stats'),
+      fetchEndpoint('cluster', '/api/dashboard/cluster-status'),
+      fetchEndpoint('health', '/api/pce-health'),
+      fetchEndpoint('ingestion', '/api/dashboard/ingestion-status'),
+    ]);
+    overviewLastUpdated = new Date();
+    element.innerHTML = renderOverview(normalizeResults(results));
+    endOverviewRefresh(element);
+  })().catch((error) => {
+    element.innerHTML = `<div class="error">Failed to load overview: ${escapeHtml(error.message)}</div>`;
+    endOverviewRefresh(element);
+  }).finally(() => {
+    overviewRefreshPromise = null;
+  });
+
+  return overviewRefreshPromise;
 }
 
-export async function loadClusterStatus() {
-  const element = document.getElementById('cluster-status');
-  if (!element) return;
-
-  const refresh = beginSoftRefresh(element, 3);
-  
-  try {
-    const response = await fetch(`${API_URL}/api/dashboard/cluster-status`);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    const data = await response.json();
-    
-    // Format cluster status nicely
-    const formatBytes = (bytes) => {
-      if (!bytes) return 'N/A';
-      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-      let size = bytes;
-      let unitIndex = 0;
-      while (size >= 1024 && unitIndex < units.length - 1) {
-        size /= 1024;
-        unitIndex++;
-      }
-      return `${size.toFixed(2)} ${units[unitIndex]}`;
-    };
-    
-    const formatUptime = (seconds) => {
-      if (!seconds) return 'N/A';
-      const days = Math.floor(seconds / 86400);
-      const hours = Math.floor((seconds % 86400) / 3600);
-      const minutes = Math.floor((seconds % 3600) / 60);
-      if (days > 0) return `${days}d ${hours}h`;
-      if (hours > 0) return `${hours}h ${minutes}m`;
-      return `${minutes}m`;
-    };
-    
-    const html = `
-      <div style="margin-bottom: 20px;">
-        <div class="status-grid">
-          <div class="stat-card">
-            <div class="stat-label">Nodes</div>
-            <div class="stat-value">${data.nodes?.total || 0}</div>
-            <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
-              ${data.nodes?.online || 0} online, ${data.nodes?.offline || 0} offline
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">VMs</div>
-            <div class="stat-value">${data.vms?.total || 0}</div>
-            <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
-              ${data.vms?.running || 0} running, ${data.vms?.stopped || 0} stopped
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">LXC</div>
-            <div class="stat-value">${data.lxc?.total || 0}</div>
-            <div style="font-size: 0.75em; color: #94a3b8; margin-top: 4px;">
-              ${data.lxc?.running || 0} running, ${data.lxc?.stopped || 0} stopped
-            </div>
-          </div>
-        </div>
-      </div>
-      
-      ${data.nodes?.list && data.nodes.list.length > 0 ? `
-        <details class="overview-details">
-          <summary class="overview-summary">Nodes (${data.nodes.list.length})</summary>
-          <div class="overview-details-body">
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
-              ${data.nodes.list.map(node => `
-                <div style="padding: 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; border-left: 2px solid ${node.status === 'online' ? '#10b981' : '#ef4444'};">
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <strong style="color: #e2e8f0; font-size: 1em; font-weight: 600;">${node.name || 'Unknown'}</strong>
-                    <span class="status-badge ${node.status === 'online' ? 'status-success' : 'status-error'}">
-                      ${node.status || 'unknown'}
-                    </span>
-                  </div>
-                  <div style="font-size: 0.85em; color: #94a3b8; line-height: 1.5;">
-                    ${node.cpu ? `<div><strong>CPU:</strong> ${(node.cpu * 100).toFixed(1)}%</div>` : ''}
-                    ${node.memory ? `<div><strong>Memory:</strong> ${formatBytes(node.memory)}</div>` : ''}
-                    ${node.uptime ? `<div><strong>Uptime:</strong> ${formatUptime(node.uptime)}</div>` : ''}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        </details>
-      ` : ''}
-      
-      ${data.vms?.resources && data.vms.resources.length > 0 ? `
-        <details class="overview-details">
-          <summary class="overview-summary">Recent VMs (${data.vms.resources.length})</summary>
-          <div class="overview-details-body">
-            <div style="max-height: 360px; overflow-y: auto; width: 100%;">
-              ${renderResponsiveTable(
-                ['Name', 'Node', 'Status', 'Type'],
-                data.vms.resources.slice(0, 20),
-                (vm) => {
-                  const name = (vm.name || vm.id || 'Unknown').split('\n')[0];
-                  const node = (vm.node || 'N/A').split('\n')[0];
-                  const type = (vm.type || 'N/A').split('\n')[0];
-                  return `
-                    <td class="whitespace-nowrap">${name}</td>
-                    <td class="whitespace-nowrap">${node}</td>
-                    <td>
-                      <span class="status-badge ${vm.status === 'running' ? 'status-success' : vm.status === 'stopped' ? 'status-error' : 'status-warning'}">
-                        ${vm.status || 'unknown'}
-                      </span>
-                    </td>
-                    <td class="whitespace-nowrap">${type}</td>
-                  `;
-                }
-              )}
-            </div>
-          </div>
-        </details>
-      ` : ''}
-
-      ${data.lxc?.resources && data.lxc.resources.length > 0 ? `
-        <details class="overview-details">
-          <summary class="overview-summary">Recent LXCs (${data.lxc.resources.length})</summary>
-          <div class="overview-details-body">
-            <div style="max-height: 360px; overflow-y: auto; width: 100%;">
-              ${renderResponsiveTable(
-                ['Name', 'Node', 'Status', 'Type'],
-                data.lxc.resources.slice(0, 20),
-                (ct) => {
-                  const name = (ct.name || ct.id || 'Unknown').split('\n')[0];
-                  const node = (ct.node || 'N/A').split('\n')[0];
-                  const type = (ct.type || 'N/A').split('\n')[0];
-                  return `
-                    <td class="whitespace-nowrap">${name}</td>
-                    <td class="whitespace-nowrap">${node}</td>
-                    <td>
-                      <span class="status-badge ${ct.status === 'running' ? 'status-success' : ct.status === 'stopped' ? 'status-error' : 'status-warning'}">
-                        ${ct.status || 'unknown'}
-                      </span>
-                    </td>
-                    <td class="whitespace-nowrap">${type}</td>
-                  `;
-                }
-              )}
-            </div>
-          </div>
-        </details>
-      ` : ''}
-      
-      <details style="margin-top: 20px; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 4px;">
-        <summary style="cursor: pointer; color: #94a3b8; font-size: 0.875em;">Show Raw JSON</summary>
-        <pre style="margin-top: 10px; padding: 10px; background: #1e293b; border-radius: 4px; overflow-x: auto; font-size: 0.75em;">${JSON.stringify(data, null, 2)}</pre>
-      </details>
-    `;
-    
-    document.getElementById('cluster-status').innerHTML = html;
-    endSoftRefresh(element);
-  } catch (error) {
-    // If this was a refresh (not first load), keep existing content and just remove loading state.
-    if (refresh.hadContent) {
-      console.error('Failed to load cluster status:', error);
-      endSoftRefresh(element);
-      return;
-    }
-    document.getElementById('cluster-status').innerHTML =
-      `<div class="error">Failed to load cluster status: ${error.message}</div>`;
-    endSoftRefresh(element);
+function formatBytes(bytes) {
+  if (!bytes) return 'N/A';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
   }
+  return `${size.toFixed(2)} ${units[unitIndex]}`;
 }
 
-export async function loadSystemHealth() {
-  const element = document.getElementById('system-health');
-  const section = document.getElementById('system-health-section');
-  if (!element || !section) return;
-
-  // Always keep section stable; avoid hide/show layout jumps.
-  section.style.display = '';
-  const refresh = beginSoftRefresh(element, 4);
-  
-  try {
-    const response = await fetch(`${API_URL}/health`);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    const data = await response.json();
-    
-    const dependencies = data.dependencies || {};
-    const entries = Object.entries(dependencies);
-    
-    // If no dependencies or all empty, show a stable message (no layout shift).
-    if (entries.length === 0 || entries.every(([_, status]) => !status)) {
-      element.innerHTML = `
-        <div class="text-slate-400 text-center py-2 text-sm">
-          No dependency health checks configured.
-        </div>
-      `;
-      endSoftRefresh(element);
-      return;
-    }
-    
-    const html = `
-      <div class="status-grid">
-        ${entries.map(([name, status]) => {
-          const s = status || {};
-          return `
-          <div class="stat-card">
-            <div class="stat-label">${name}</div>
-            <div class="stat-value">
-              <span class="status-badge ${s.healthy ? 'status-success' : 'status-error'}">
-                ${s.healthy ? 'Healthy' : 'Unhealthy'}
-              </span>
-            </div>
-          </div>
-        `;
-        }).join('')}
-      </div>
-    `;
-    
-    element.innerHTML = html;
-    endSoftRefresh(element);
-  } catch (error) {
-    if (refresh.hadContent) {
-      console.error('Failed to load system health:', error);
-      endSoftRefresh(element);
-      return;
-    }
-    element.innerHTML = `
-      <div class="text-slate-400 text-center py-2 text-sm">
-        System health unavailable.
-      </div>
-    `;
-    endSoftRefresh(element);
-  }
+function formatUptime(seconds) {
+  if (!seconds) return 'N/A';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
-export async function loadIngestionStatus(reset = false) {
-  const element = document.getElementById('ingestion-status');
-  const section = document.getElementById('ingestion-status-section');
-  if (!element || !section) return;
-  
-  // Show skeleton loader
-  if (reset) {
-    element.innerHTML = '';
-    element.appendChild(createSkeletonStatsGrid(3));
-  }
-  
-  try {
-    const response = await fetch(`${API_URL}/api/dashboard/ingestion-status`);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    const data = await response.json();
-    
-    if (!data.active) {
-      element.innerHTML = `
-        <div class="text-slate-400 text-center py-4">
-          <p>Ingestion scheduler is not active</p>
-        </div>
-      `;
-      return;
-    }
-
-    const lastRun = data.lastRunDetails;
-    const stats = data.statistics || {};
-    const nextRun = data.nextRun ? new Date(data.nextRun) : null;
-    const now = new Date();
-    const timeUntilNext = nextRun ? Math.max(0, Math.floor((nextRun - now) / 1000 / 60)) : null;
-
-    let html = '';
-
-    // Current Status (no heading — cards speak for themselves)
-    html += '<div class="mb-4">';
-    html += '<div class="status-grid">';
-    
-    html += `
-      <div class="stat-card">
-        <div class="stat-label">Scheduler</div>
-        <div style="margin-top: 4px;">
-          <span class="status-badge ${data.active ? 'status-success' : 'status-error'}">
-            ${data.active ? 'Active' : 'Inactive'}
-          </span>
-        </div>
-      </div>
-    `;
-
-    html += `
-      <div class="stat-card">
-        <div class="stat-label">Currently Running</div>
-        <div style="margin-top: 4px;">
-          <span class="status-badge ${data.isRunning ? 'status-warning' : 'status-success'}">
-            ${data.isRunning ? 'Running' : 'Idle'}
-          </span>
-        </div>
-      </div>
-    `;
-
-    if (lastRun) {
-      html += `
-        <div class="stat-card">
-          <div class="stat-label">Last Run</div>
-          <div class="stat-value text-sm">${formatRelativeTime(lastRun.timestamp)}</div>
-        </div>
-      `;
-    }
-
-    if (timeUntilNext !== null) {
-      html += `
-        <div class="stat-card">
-          <div class="stat-label">Next Run</div>
-          <div class="stat-value text-sm">${timeUntilNext > 0 ? `in ${timeUntilNext}m` : 'due now'}</div>
-        </div>
-      `;
-    }
-
-    html += '</div></div>';
-
-    // Last Run Details
-    if (lastRun) {
-      html += '<details class="overview-details">';
-      html += '<summary class="overview-summary">Last Run Details</summary>';
-      html += '<div class="overview-details-body">';
-      
-      html += `
-        <div class="status-grid mb-4">
-          <div class="stat-card">
-            <div class="stat-label">Status</div>
-            <div>
-              <span class="status-badge ${lastRun.success ? 'status-success' : 'status-error'}">
-                ${lastRun.success ? 'Success' : 'Failed'}
-              </span>
-            </div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Duration</div>
-            <div class="stat-value">${formatDuration(lastRun.duration)}</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Timestamp</div>
-            <div class="stat-value" style="font-size: 0.85em;">${new Date(lastRun.timestamp).toLocaleString()}</div>
-          </div>
-        </div>
-      `;
-
-      // Per-source breakdown
-      html += '<div class="space-y-3">';
-      
-      // Proxmox
-      html += `
-        <div class="flex items-center justify-between p-2 bg-slate-900 rounded">
-          <div class="flex items-center gap-2">
-            <span class="text-sm font-medium text-slate-300">Proxmox</span>
-            <span class="status-badge ${lastRun.proxmox.success ? 'status-success' : 'status-error'}" style="font-size: 0.7rem; padding: 2px 6px;">
-              ${lastRun.proxmox.success ? '✓' : '✗'}
-            </span>
-          </div>
-          <div class="text-xs text-slate-400">${formatDuration(lastRun.proxmox.duration)}</div>
-        </div>
-      `;
-      if (lastRun.proxmox.error) {
-        html += `<div class="text-xs text-red-400 ml-4 mb-2">${escapeHtml(lastRun.proxmox.error.substring(0, 100))}${lastRun.proxmox.error.length > 100 ? '...' : ''}</div>`;
-      }
-
-      // Network
-      html += `
-        <div class="flex items-center justify-between p-2 bg-slate-900 rounded">
-          <div class="flex items-center gap-2">
-            <span class="text-sm font-medium text-slate-300">Network</span>
-            <span class="status-badge ${lastRun.network.success ? 'status-success' : 'status-error'}" style="font-size: 0.7rem; padding: 2px 6px;">
-              ${lastRun.network.success ? '✓' : '✗'}
-            </span>
-            ${lastRun.network.entities !== undefined ? `<span class="text-xs text-slate-500">(${lastRun.network.entities} entities)</span>` : ''}
-          </div>
-          <div class="text-xs text-slate-400">${formatDuration(lastRun.network.duration)}</div>
-        </div>
-      `;
-      if (lastRun.network.error) {
-        html += `<div class="text-xs text-red-400 ml-4 mb-2">${escapeHtml(lastRun.network.error.substring(0, 100))}${lastRun.network.error.length > 100 ? '...' : ''}</div>`;
-      }
-
-      // Firewall
-      html += `
-        <div class="flex items-center justify-between p-2 bg-slate-900 rounded">
-          <div class="flex items-center gap-2">
-            <span class="text-sm font-medium text-slate-300">Firewall</span>
-            <span class="status-badge ${lastRun.firewall.success ? 'status-success' : 'status-error'}" style="font-size: 0.7rem; padding: 2px 6px;">
-              ${lastRun.firewall.success ? '✓' : '✗'}
-            </span>
-            ${lastRun.firewall.entities !== undefined ? `<span class="text-xs text-slate-500">(${lastRun.firewall.entities} rules)</span>` : ''}
-          </div>
-          <div class="text-xs text-slate-400">${formatDuration(lastRun.firewall.duration)}</div>
-        </div>
-      `;
-      if (lastRun.firewall.error) {
-        html += `<div class="text-xs text-red-400 ml-4 mb-2">${escapeHtml(lastRun.firewall.error.substring(0, 100))}${lastRun.firewall.error.length > 100 ? '...' : ''}</div>`;
-      }
-
-      // Temperature
-      if (lastRun.temperature) {
-        html += `
-          <div class="flex items-center justify-between p-2 bg-slate-900 rounded">
-            <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-slate-300">Temperature</span>
-              <span class="text-xs text-slate-500">
-                ${lastRun.temperature.nodesWithTemp} nodes with data, ${lastRun.temperature.nodesWithoutTemp} without
-              </span>
-            </div>
-          </div>
-        `;
-      }
-
-      // Cleanup
-      if (lastRun.cleanup.deleted > 0) {
-        html += `
-          <div class="flex items-center justify-between p-2 bg-slate-900 rounded">
-            <div class="flex items-center gap-2">
-              <span class="text-sm font-medium text-slate-300">Cleanup</span>
-              <span class="text-xs text-slate-500">Deleted ${lastRun.cleanup.deleted} stale entities</span>
-            </div>
-            <div class="text-xs text-slate-400">${formatDuration(lastRun.cleanup.duration)}</div>
-          </div>
-        `;
-      }
-
-      html += '</div></div></details>';
-    }
-
-    // Statistics
-    if (stats.totalRuns > 0) {
-      html += '<details class="overview-details">';
-      html += '<summary class="overview-summary">Statistics</summary>';
-      html += '<div class="overview-details-body">';
-      html += '<div class="status-grid">';
-      
-      html += `
-        <div class="stat-card">
-          <div class="stat-label">Total Runs</div>
-          <div class="stat-value">${stats.totalRuns}</div>
-        </div>
-      `;
-
-      html += `
-        <div class="stat-card">
-          <div class="stat-label">Success Rate</div>
-          <div class="stat-value">${stats.successRate.toFixed(1)}%</div>
-        </div>
-      `;
-
-      html += `
-        <div class="stat-card">
-          <div class="stat-label">Avg Duration</div>
-          <div class="stat-value text-sm">${formatDuration(stats.avgDurationMs)}</div>
-        </div>
-      `;
-
-      if (stats.totalCleanupDeleted > 0) {
-        html += `
-          <div class="stat-card">
-            <div class="stat-label">Total Cleaned</div>
-            <div class="stat-value">${stats.totalCleanupDeleted}</div>
-          </div>
-        `;
-      }
-
-      html += '</div></div></details>';
-    }
-
-    // Recent History
-    if (data.runHistory && data.runHistory.length > 0) {
-      html += '<details class="overview-details">';
-      html += '<summary class="overview-summary">Recent History</summary>';
-      html += '<div class="overview-details-body">';
-      html += '<div class="space-y-2">';
-      
-      // Show last 5 runs
-      const recentRuns = data.runHistory.slice(-5).reverse();
-      for (const run of recentRuns) {
-        const runDate = new Date(run.timestamp);
-        html += `
-          <div class="flex items-center justify-between p-2 bg-slate-900 rounded border-l-2 ${run.success ? 'border-green-500' : 'border-red-500'}">
-            <div class="flex items-center gap-3">
-              <span class="text-xs text-slate-500">${runDate.toLocaleTimeString()}</span>
-              <span class="status-badge ${run.success ? 'status-success' : 'status-error'}" style="font-size: 0.7rem; padding: 2px 6px;">
-                ${run.success ? 'Success' : 'Failed'}
-              </span>
-            </div>
-            <div class="text-xs text-slate-400">${formatDuration(run.duration)}</div>
-          </div>
-        `;
-      }
-      
-      html += '</div></div></details>';
-    }
-
-    element.innerHTML = html;
-  } catch (error) {
-    element.innerHTML = `
-      <div class="text-red-400 text-center py-4">
-        <p>Failed to load ingestion status: ${error.message}</p>
-      </div>
-    `;
-  }
+export function loadExecutionStats() {
+  return loadOverviewDashboard();
 }
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+export function loadClusterStatus() {
+  return loadOverviewDashboard();
 }
 
+export function loadSystemHealth() {
+  return loadOverviewDashboard();
+}
+
+export function loadIngestionStatus(reset = false) {
+  return loadOverviewDashboard(reset);
+}
+
+window.loadOverviewDashboard = loadOverviewDashboard;

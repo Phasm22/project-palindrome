@@ -3,28 +3,68 @@ import { loadToolExecutions } from './executions.js';
 import { loadReasoningTraces, copyTraceData } from './reasoning.js';
 import { loadGraph } from './graph.js';
 import { setupQueryInterface, executeQuery, executeGraphQuery, executeCypherQuery } from './query.js';
-import { loadExecutionStats, loadClusterStatus, loadSystemHealth, loadIngestionStatus } from './overview.js';
+import { loadOverviewDashboard, loadIngestionStatus } from './overview.js';
 import { testRagQuery } from './rag.js';
 import { createCustomDropdown, updateDropdown } from './dropdown.js';
-import { API_URL } from './utils.js';
+import { API_URL, escapeHtml } from './utils.js';
 import { navigateToTab, initRouting, getActiveTabFromURL } from './routing.js';
 import { layoutStore } from './layout-store.js';
 
+function applyPlatformClasses() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  const isMac = /mac/i.test(platform) && navigator.maxTouchPoints < 2;
+
+  if (isMac) {
+    document.documentElement.classList.add("platform-macos");
+  }
+}
+
+applyPlatformClasses();
+
+function triggerHeaderLogoRipple() {
+  const source = document.getElementById('header-logo-source');
+  if (!source) return;
+
+  source.classList.remove('logo-ripple-burst');
+  source.offsetWidth;
+  source.classList.add('logo-ripple-burst');
+  window.setTimeout(() => {
+    source.classList.remove('logo-ripple-burst');
+  }, 1300);
+}
+
 // Check API connection and show helpful message if it fails
 async function checkApiConnection() {
+  let health = null;
   try {
-    const response = await fetch(`${API_URL}/health`, { 
+    const response = await fetch(`${API_URL}/api/pce-health`, { 
       method: 'GET',
       mode: 'cors',
     });
-    if (response.ok) {
-      console.log('✅ API connection successful:', API_URL);
+    health = await response.json().catch(() => null);
+    if (response.ok && health?.healthy) {
+      console.log('PCE API connection successful:', health.apiProxyBase || API_URL);
+      removeApiErrorBanner();
       return true;
     }
   } catch (error) {
-    console.error('❌ API connection failed:', error);
+    console.error('PCE API connection failed:', error);
   }
   
+  showApiErrorBanner(health);
+  return false;
+}
+
+function removeApiErrorBanner() {
+  document.getElementById('api-error-banner')?.remove();
+}
+
+function showApiErrorBanner(health) {
+  removeApiErrorBanner();
+  const target = health?.apiProxyBase || 'configured PCE API';
+  const detail = health?.error
+    || (health?.upstreamStatus ? `Health check returned HTTP ${health.upstreamStatus}.` : 'Health check did not reach the PCE API.');
+
   // Show connection error banner
   const banner = document.createElement('div');
   banner.id = 'api-error-banner';
@@ -46,13 +86,11 @@ async function checkApiConnection() {
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     ">
       <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="font-size: 20px;">⚠️</span>
         <div>
-          <strong>Cannot connect to API</strong> at ${API_URL}
+          <strong>PCE API unavailable</strong>
+          <span style="opacity: 0.9;">${escapeHtml(target)}</span>
           <div style="font-size: 12px; opacity: 0.9; margin-top: 2px;">
-            ${window.location.protocol === 'https:' 
-              ? `Self-signed cert? <a href="${API_URL}/health" target="_blank" style="color: #fbbf24; text-decoration: underline;">Click here to accept it</a>, then refresh this page.`
-              : 'Make sure the PCE API server is running.'}
+            ${escapeHtml(detail)} Make sure the PCE API service is running and PCE_API_URL is correct.
           </div>
         </div>
       </div>
@@ -68,7 +106,6 @@ async function checkApiConnection() {
     </div>
   `;
   document.body.prepend(banner);
-  return false;
 }
 
 // Expose for retry button
@@ -88,6 +125,7 @@ window.executeQuery = executeQuery;
 window.executeGraphQuery = executeGraphQuery;
 window.executeCypherQuery = executeCypherQuery;
 window.testRagQuery = testRagQuery;
+window.loadOverviewDashboard = loadOverviewDashboard;
 window.loadIngestionStatus = loadIngestionStatus;
 
 /**
@@ -190,10 +228,7 @@ function updateTabUI(tabName, clickedElement = null) {
   
   // Load data for the tab
   if (tabName === 'overview') {
-    loadExecutionStats();
-    loadClusterStatus();
-    loadSystemHealth();
-    loadIngestionStatus();
+    loadOverviewDashboard();
   }
   if (tabName === 'executions') loadToolExecutions();
   if (tabName === 'reasoning') loadReasoningTraces();
@@ -360,29 +395,15 @@ window.addEventListener('DOMContentLoaded', async () => {
       const logo = createLogo({ 
         size: 42, 
         className: 'logo-refresh',
-        spinOnClick: true
+        spinOnClick: false
       });
       logo.style.display = 'block';
       logo.style.flexShrink = '0';
       el.appendChild(logo);
       
-      // Add click animation - find parent button and add spin on click
       const button = el.closest('button');
       if (button) {
-        const originalOnClick = button.onclick;
-        button.addEventListener('click', (e) => {
-          // Spin animation
-          logo.style.transition = 'transform 0.6s ease-in-out';
-          logo.style.transform = 'rotate(360deg)';
-          setTimeout(() => {
-            logo.style.transform = 'rotate(0deg)';
-          }, 600);
-          
-          // Call original onclick if it exists
-          if (originalOnClick) {
-            originalOnClick.call(button, e);
-          }
-        });
+        button.addEventListener('click', triggerHeaderLogoRipple);
       }
     }
   });
@@ -492,10 +513,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     loadConversations();
     updateChatNavOffset();
   } else if (activeTab === 'overview') {
-    loadExecutionStats();
-    loadClusterStatus();
-    loadSystemHealth();
-    loadIngestionStatus();
+    loadOverviewDashboard();
   }
   
   // Restore last active conversation from backend
@@ -504,10 +522,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   
   // Load overview data in background (if not already loaded)
   if (activeTab !== 'overview') {
-    loadExecutionStats();
-    loadClusterStatus();
-    loadSystemHealth();
-    loadIngestionStatus();
+    loadOverviewDashboard();
   }
 });
 
@@ -515,10 +530,6 @@ window.addEventListener('DOMContentLoaded', async () => {
 setInterval(() => {
   const activeTab = getActiveTabFromURL();
   if (activeTab === 'overview') {
-    loadIngestionStatus(); // Refresh ingestion status more frequently
-    loadExecutionStats();
-    loadClusterStatus();
-    loadSystemHealth();
+    loadOverviewDashboard();
   }
 }, 30000);
-

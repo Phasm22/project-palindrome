@@ -3,8 +3,8 @@
 import { serve } from "bun";
 import { watch } from "node:fs";
 
-const HTTP_PORT = 8080;
-const HTTPS_PORT = 8443;
+const HTTP_PORT = Number(process.env.DASHBOARD_HTTP_PORT || process.env.PORT || 8080);
+const HTTPS_PORT = Number(process.env.DASHBOARD_HTTPS_PORT || 8443);
 const DASHBOARD_DIR = import.meta.dir;
 const PROJECT_ROOT = `${DASHBOARD_DIR}/..`;
 const API_PROXY_BASE = process.env.PCE_API_URL || "http://127.0.0.1:4000";
@@ -78,9 +78,79 @@ async function handleRequest(req: Request, server: any) {
       );
     }
 
+    if (url.pathname === "/api/pce-health") {
+      const upstreamUrl = `${API_PROXY_BASE}/health`;
+      const responseHeaders = new Headers({
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      });
+
+      if (req.method === "OPTIONS") {
+        return respond(new Response(null, { status: 204, headers: responseHeaders }), {
+          route: "dashboard.pce_health",
+        });
+      }
+
+      try {
+        const upstreamResponse = await fetch(upstreamUrl, { method: "GET" });
+        const contentType = upstreamResponse.headers.get("Content-Type") || "";
+        const upstreamPayload = contentType.includes("application/json")
+          ? await upstreamResponse.json().catch(() => null)
+          : await upstreamResponse.text().catch(() => null);
+        const upstreamObject = upstreamPayload && typeof upstreamPayload === "object"
+          ? upstreamPayload as Record<string, unknown>
+          : null;
+        const upstreamHealthy =
+          upstreamResponse.ok &&
+          (!upstreamObject || upstreamObject.success !== false);
+        const payload = {
+          healthy: upstreamHealthy,
+          status: upstreamHealthy ? "ok" : "unhealthy",
+          upstreamStatus: upstreamResponse.status,
+          apiProxyBase: API_PROXY_BASE,
+          upstream: upstreamPayload,
+          checkedAt: new Date().toISOString(),
+        };
+
+        return respond(new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: responseHeaders,
+        }), {
+          route: "dashboard.pce_health",
+          upstream_status: upstreamResponse.status,
+        });
+      } catch (error: any) {
+        const payload = {
+          healthy: false,
+          status: "unreachable",
+          upstreamStatus: 0,
+          apiProxyBase: API_PROXY_BASE,
+          error: error?.message || String(error),
+          checkedAt: new Date().toISOString(),
+        };
+
+        logEvent("service.unhealthy", {
+          dependency: "pce-api",
+          route: url.pathname,
+          upstream: upstreamUrl,
+          error: payload.error,
+        });
+
+        return respond(new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: responseHeaders,
+        }), {
+          route: "dashboard.pce_health",
+          upstream_status: 0,
+        });
+      }
+    }
+
     const shouldProxyToApi =
       url.pathname.startsWith("/api/") ||
-      url.pathname === "/query" ||
+      (url.pathname === "/query" && req.method !== "GET") ||
       url.pathname === "/metrics" ||
       url.pathname === "/health" ||
       url.pathname.startsWith("/history/");
