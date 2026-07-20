@@ -1,6 +1,7 @@
-import { API_URL, escapeHtml, renderResponsiveTable } from './utils.js';
+import { API_URL, escapeHtml } from './utils.js';
 import { createButton } from './components.js';
 import { showConfirm } from './modal.js';
+import { renderAssistantResponse } from './response-renderer.js';
 
 /**
  * Copy trace ID to clipboard. Uses data-trace-id on the button to avoid
@@ -29,6 +30,33 @@ function copyTraceIdToClipboard(buttonEl) {
 }
 // Expose for inline onclick (trace buttons use data-trace-id + this to avoid quoting issues)
 window.copyTraceIdToClipboard = copyTraceIdToClipboard;
+
+function renderTraceFooter(traceId) {
+  if (!traceId) return "";
+  const safeTraceId = escapeHtml(traceId);
+  const shortTraceId = escapeHtml(traceId.substring(0, 8));
+  return `
+    <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(51,65,85,0.38);display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#64748b;font-size:0.72em;">
+      <button
+        data-trace-id="${safeTraceId}"
+        onclick="window.copyTraceIdToClipboard(this)"
+        style="background:transparent;border:none;color:#64748b;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:1em;"
+        title="Copy trace ID"
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+        </svg>
+        trace ${shortTraceId}
+      </button>
+      <span style="color:#334155;">/</span>
+      <button
+        onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
+        style="background:transparent;border:none;color:#94a3b8;padding:0;cursor:pointer;font-size:1em;text-decoration:underline;text-underline-offset:2px;"
+        title="View reasoning trace"
+      >view trace</button>
+    </div>
+  `;
+}
 
 /**
  * Copy text from a button's data-copyable attribute (e.g. SSH command in VM create message).
@@ -501,33 +529,31 @@ function renderProfileItem(profile) {
   const name = escapeHtml(profile.displayName || profile.sshUsername || profile.userId);
   const username = escapeHtml(profile.sshUsername || '');
   const keyBadge = profile.hasPublicKey
-    ? '<span style="color:#34d399;font-size:0.7rem;">Key set</span>'
-    : '<span style="color:#475569;font-size:0.7rem;">No key</span>';
+    ? '<span class="chat-profile-key-badge chat-profile-key-badge-set">Key set</span>'
+    : '<span class="chat-profile-key-badge">No key</span>';
   const userId = escapeHtml(profile.userId);
   return `
-    <div class="flex items-center gap-2 px-2.5 py-2 rounded-lg bg-slate-900/50 border border-slate-800/70" style="min-width:0;">
-      <div class="flex flex-col min-w-0 flex-1" style="gap:1px;">
-        <span style="color:#e2e8f0;font-size:0.78rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</span>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <span style="color:#64748b;font-size:0.7rem;">${username}</span>
-          <span style="color:#334155;font-size:0.7rem;">•</span>
+    <div class="chat-profile-item">
+      <div class="chat-profile-copy">
+        <span class="chat-profile-name">${name}</span>
+        <div class="chat-profile-meta">
+          <span>${username}</span>
+          <span aria-hidden="true">/</span>
           ${keyBadge}
         </div>
       </div>
-      <div style="display:flex;gap:4px;flex-shrink:0;">
+      <div class="chat-profile-actions">
         <button type="button" onclick="window._editProfile('${userId}')"
-          style="color:#475569;padding:4px;border-radius:4px;background:none;border:none;cursor:pointer;display:flex;align-items:center;"
-          title="Edit profile"
-          onmouseover="this.style.color='#fb923c'" onmouseout="this.style.color='#475569'">
+          class="chat-profile-icon-btn"
+          title="Edit profile">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
             <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
           </svg>
         </button>
         <button type="button" onclick="window._deleteProfile('${userId}')"
-          style="color:#475569;padding:4px;border-radius:4px;background:none;border:none;cursor:pointer;display:flex;align-items:center;"
-          title="Delete profile"
-          onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#475569'">
+          class="chat-profile-icon-btn chat-profile-icon-btn-danger"
+          title="Delete profile">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM5 4h14v2H5zM9 3h6v1H9z"/>
           </svg>
@@ -734,1036 +760,7 @@ export async function restoreConversation() {
   return null;
 }
 
-// Helper functions
-function formatClusterNodesSection(nodes) {
-  if (nodes.length === 0) {
-    return '<div style="margin: 8px 0; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No nodes discovered in twin.</div>';
-  }
-  
-  let html = `
-    <div style="margin: 8px 0;">
-      <div style="padding: 6px 10px; margin-bottom: 4px; background: #0b1220; border: 1px solid #334155; border-radius: 6px; color: #94a3b8; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em;">
-        <div style="display: grid; grid-template-columns: minmax(120px, 1.4fr) 80px 90px minmax(140px, 2fr); align-items: center; gap: 8px;">
-          <span>Node</span>
-          <span>VMs</span>
-          <span>Status</span>
-          <span>ID</span>
-        </div>
-      </div>
-  `;
-  for (const node of nodes) {
-    const statusColor = node.status === 'online' ? '#10b981' : node.status === 'offline' ? '#ef4444' : '#94a3b8';
-    html += `
-      <div style="margin-bottom: 4px; padding: 6px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
-        <div style="display: grid; grid-template-columns: minmax(120px, 1.4fr) 80px 90px minmax(140px, 2fr); align-items: center; gap: 8px; font-size: 0.9em;">
-          <strong style="color: #e2e8f0;">${escapeHtml(node.name)}</strong>
-          <span style="color: #f8fafc;">${node.vmCount} VM${node.vmCount !== 1 ? 's' : ''}</span>
-          <span style="display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1;">
-            <span style="width: 8px; height: 8px; border-radius: 999px; background: ${statusColor}; display: inline-block;"></span>
-            ${escapeHtml(node.status)}
-          </span>
-          <code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; color: #94a3b8; font-family: 'Courier New', monospace; font-size: 0.8em; justify-self: start;">${escapeHtml(node.id)}</code>
-        </div>
-      </div>
-    `;
-  }
-  html += '</div>';
-  return html;
-}
-
-function formatClusterVmsSection(vms) {
-  if (vms.length === 0) {
-    return '<div style="margin: 8px 0; padding: 8px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #94a3b8;">No VMs discovered in twin.</div>';
-  }
-  
-  return `
-    <div style="margin: 8px 0;">
-      <div style="padding: 6px 10px; margin-bottom: 4px; background: #0b1220; border: 1px solid #334155; border-radius: 6px; color: #94a3b8; font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.05em;">
-        <div style="display: grid; grid-template-columns: minmax(130px, 1.8fr) 70px 95px 100px; gap: 8px; align-items: center;">
-          <span>Name</span>
-          <span>Type</span>
-          <span>Status</span>
-          <span>Node</span>
-        </div>
-      </div>
-      ${vms.join('')}
-    </div>
-  `;
-}
-
-/**
- * Format clarification messages with clickable options
- */
-function formatClarificationMessage(text) {
-  const lines = text.split('\n');
-  const encodedText = encodeURIComponent(text);
-  let html = `<div class="clarification-message" data-clarification-text="${encodedText}" style="background: linear-gradient(135deg, #1e3a5f 0%, #1e293b 100%); border: 1px solid #3b82f6; border-radius: 8px; padding: 16px;">`;
-  
-  for (const line of lines) {
-    const trimmed = line.trim();
-    
-    // Typo detection line
-    if (trimmed.startsWith('🔍')) {
-      html += `<div style="color: #60a5fa; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"></circle>
-          <path d="m21 21-4.35-4.35"></path>
-        </svg>
-        <span>${escapeHtml(trimmed.substring(2))}</span>
-      </div>`;
-      continue;
-    }
-    
-    // "Did you mean" header
-    if (trimmed === 'Did you mean one of these?') {
-      html += `<div style="color: #e2e8f0; font-weight: 600; margin: 8px 0;">Did you mean one of these?</div>`;
-      continue;
-    }
-    
-    // Numbered options - make them clickable
-    const optionMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
-    if (optionMatch) {
-      const [, num, optionText] = optionMatch;
-      html += `<button type="button"
-        data-clarification-option-id="${num}"
-        data-clarification-option="${encodeURIComponent(optionText)}"
-        style="display: block; width: 100%; text-align: left; padding: 10px 12px; margin: 6px 0; 
-               background: #0f172a; border: 1px solid #334155; border-radius: 6px; 
-               color: #e2e8f0; cursor: pointer; transition: all 0.2s ease;
-               font-family: inherit; font-size: 0.95em;"
-        onmouseover="this.style.background='#1e293b'; this.style.borderColor='#3b82f6';"
-        onmouseout="this.style.background='#0f172a'; this.style.borderColor='#334155';">
-        <span style="color: #3b82f6; font-weight: 600; margin-right: 8px;">${num}.</span>
-        ${escapeHtml(optionText)}
-      </button>`;
-      continue;
-    }
-    
-    // Help text
-    if (trimmed.startsWith('Reply with')) {
-      html += `<div style="color: #64748b; font-size: 0.85em; margin-top: 12px; font-style: italic;">
-        ${escapeHtml(trimmed)}
-      </div>`;
-      continue;
-    }
-    
-    // Unknown entities
-    if (trimmed.startsWith('❓')) {
-      html += `<div style="color: #f59e0b; margin-top: 8px;">
-        ${escapeHtml(trimmed)}
-      </div>`;
-      continue;
-    }
-    
-    // Empty lines
-    if (!trimmed) {
-      continue;
-    }
-    
-    // Other text
-    html += `<div style="color: #94a3b8; margin: 4px 0;">${escapeHtml(trimmed)}</div>`;
-  }
-  
-  html += '</div>';
-  return html;
-}
-
-/**
- * Handle clicking a clarification option
- */
-function hashClarificationText(text) {
-  let hash = 5381;
-  for (let i = 0; i < text.length; i++) {
-    hash = ((hash << 5) + hash) + text.charCodeAt(i);
-    hash |= 0;
-  }
-  return `clar_${Math.abs(hash)}`;
-}
-
-async function saveClarificationResponse(payload) {
-  if (!currentConversationId) return;
-  try {
-    await fetch(`${API_URL}/api/chat/clarification-responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: 'dashboard-user',
-        conversationId: currentConversationId,
-        clarificationId: payload.clarificationId,
-        optionId: payload.optionId,
-        optionText: payload.optionText,
-        clarificationText: payload.clarificationText,
-      }),
-    });
-  } catch (error) {
-    console.warn('Failed to persist clarification response', error);
-  }
-}
-
-function attachClarificationHandlers(container) {
-  const buttons = container.querySelectorAll('[data-clarification-option]');
-  buttons.forEach((btn) => {
-    if (btn.dataset.bound === 'true') return;
-    btn.dataset.bound = 'true';
-    btn.addEventListener('click', async () => {
-      const optionText = decodeURIComponent(btn.dataset.clarificationOption || '');
-      if (!optionText) return;
-
-      const optionId = btn.dataset.clarificationOptionId || undefined;
-      const wrapper = btn.closest('.clarification-message');
-      const clarificationTextRaw = wrapper?.getAttribute('data-clarification-text') || '';
-      const clarificationText = clarificationTextRaw ? decodeURIComponent(clarificationTextRaw) : '';
-      const clarificationId = hashClarificationText(clarificationText || optionText);
-
-      await saveClarificationResponse({
-        clarificationId,
-        optionId,
-        optionText,
-        clarificationText,
-      });
-
-      sendChatMessage(optionText);
-    });
-  });
-}
-
-function formatAgentResponse(text) {
-  if (!text) return '';
-  
-  // Strip markdown bold (**...**) for cleaner output
-  const stripBold = (input) => input.replace(/\*\*(.*?)\*\*/g, '$1');
-  const stripAnsi = (input) => input.replace(/\u001b\[[0-9;]*m/g, '');
-  text = stripAnsi(stripBold(text));
-
-  const stripInlineCode = (input) => String(input ?? '').replace(/`([^`]+)`/g, '$1');
-
-  const parseAnswerEvidenceResponse = (raw) => {
-    const source = String(raw ?? '').trim();
-    const lines = source.split('\n');
-    const answerIndex = lines.findIndex((line) => /^Answer:\s*/i.test(line.trim()));
-    if (answerIndex === -1) return null;
-
-    const evidenceIndex = lines.findIndex((line, index) => index > answerIndex && /^Evidence:\s*$/i.test(line.trim()));
-    const detailsIndex = lines.findIndex((line, index) => index > answerIndex && /^Details:\s*$/i.test(line.trim()));
-    const answerEnd = [evidenceIndex, detailsIndex].filter((index) => index !== -1).sort((a, b) => a - b)[0] ?? lines.length;
-    const answerLines = lines.slice(answerIndex, answerEnd);
-    if (!answerLines.length) return null;
-
-    const answerMarkdown = answerLines
-      .join('\n')
-      .replace(/^Answer:\s*/i, '')
-      .trim();
-    if (!answerMarkdown) return null;
-
-    const evidenceEnd = detailsIndex !== -1 ? detailsIndex : lines.length;
-    const evidence = evidenceIndex === -1
-      ? []
-      : lines.slice(evidenceIndex + 1, evidenceEnd)
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .map((line) => line.replace(/^-+\s*/, ''))
-          .map((line) => {
-            const separatorIndex = line.indexOf(':');
-            if (separatorIndex <= 0) {
-              return { key: '', value: stripInlineCode(line) };
-            }
-            return {
-              key: stripInlineCode(line.slice(0, separatorIndex).trim()),
-              value: stripInlineCode(line.slice(separatorIndex + 1).trim()),
-            };
-          });
-
-    const details = detailsIndex === -1
-      ? ''
-      : lines.slice(detailsIndex + 1)
-          .join('\n')
-          .replace(/^```[a-zA-Z0-9_-]*\n?/, '')
-          .replace(/\n?```$/, '')
-          .trim();
-
-    const inlineCodeValues = [...answerMarkdown.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
-    const aliasMatch = answerMarkdown.match(/^Alias\s+`?([^`]+?)`?\s+contains\s+(\d+)\s+entries?:\s+(.+)\.?$/i);
-    const alias = aliasMatch
-      ? {
-          name: inlineCodeValues[0] || aliasMatch[1].trim(),
-          count: Number.parseInt(aliasMatch[2], 10) || 0,
-          entries: inlineCodeValues.length > 1
-            ? inlineCodeValues.slice(1)
-            : aliasMatch[3]
-                .replace(/\.$/, '')
-                .split(',')
-                .map((entry) => stripInlineCode(entry.trim()))
-                .filter(Boolean),
-        }
-      : null;
-
-    return {
-      answer: stripInlineCode(answerMarkdown),
-      evidence,
-      details,
-      alias,
-    };
-  };
-
-  const renderAnswerEvidenceResponse = (raw) => {
-    const parsed = parseAnswerEvidenceResponse(raw);
-    if (!parsed) return null;
-
-    const renderStatusValue = (key, value) => {
-      const normalizedKey = key.toLowerCase();
-      const normalizedValue = value.toLowerCase();
-      if (normalizedKey === 'enabled') {
-        const enabled = /^(yes|true|1|enabled)$/i.test(value);
-        const color = enabled ? '#10b981' : '#94a3b8';
-        const background = enabled ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.12)';
-        return `<span style="display:inline-flex;align-items:center;border:1px solid ${color};background:${background};color:${color};border-radius:999px;padding:2px 8px;font-size:0.82em;font-weight:700;">${escapeHtml(value)}</span>`;
-      }
-      if (/^(yes|no)$/i.test(value) && /(blocked|allowed|match|enabled|active|found)/i.test(normalizedKey)) {
-        const positive = normalizedValue === 'yes';
-        const color = positive ? '#10b981' : '#f87171';
-        const background = positive ? 'rgba(16, 185, 129, 0.12)' : 'rgba(248, 113, 113, 0.12)';
-        return `<span style="display:inline-flex;align-items:center;border:1px solid ${color};background:${background};color:${color};border-radius:999px;padding:2px 8px;font-size:0.82em;font-weight:700;">${escapeHtml(value)}</span>`;
-      }
-      return escapeHtml(value || '-');
-    };
-
-    const evidenceHtml = parsed.evidence.length
-      ? `
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-top:12px;">
-          ${parsed.evidence.map((item) => `
-            <div style="min-width:0;padding:8px 10px;background:rgba(15,23,42,0.64);border:1px solid rgba(51,65,85,0.72);border-radius:8px;">
-              ${item.key
-                ? `<div style="color:#94a3b8;font-size:0.75em;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px;">${escapeHtml(item.key)}</div>`
-                : ''}
-              <div style="color:#e2e8f0;font-size:0.92em;line-height:1.35;word-break:break-word;">${renderStatusValue(item.key, item.value)}</div>
-            </div>
-          `).join('')}
-        </div>
-      `
-      : '';
-
-    const detailsHtml = parsed.details
-      ? `
-        <details style="margin-top:12px;border-top:1px solid rgba(51,65,85,0.72);padding-top:10px;">
-          <summary style="cursor:pointer;color:#fdba74;font-size:0.84em;font-weight:700;">Details</summary>
-          <pre class="kv-pre" style="margin-top:8px;">${escapeHtml(parsed.details)}</pre>
-        </details>
-      `
-      : '';
-
-    if (parsed.alias) {
-      const entries = parsed.alias.entries.length
-        ? parsed.alias.entries
-        : [`No entries returned`];
-      return `
-        <div style="display:grid;gap:12px;">
-          <div>
-            <div style="color:#f8fafc;font-size:1.02em;font-weight:700;line-height:1.35;">${escapeHtml(parsed.alias.name)} contains ${escapeHtml(String(parsed.alias.count || entries.length))} ${entries.length === 1 ? 'entry' : 'entries'}</div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:7px;">
-            ${entries.map((entry) => `
-              <span style="display:inline-flex;align-items:center;min-height:26px;background:rgba(249,115,22,0.14);border:1px solid rgba(249,115,22,0.45);color:#fed7aa;border-radius:999px;padding:4px 9px;font-size:0.86em;font-weight:650;line-height:1.2;">${escapeHtml(entry)}</span>
-            `).join('')}
-          </div>
-          ${evidenceHtml}
-          ${detailsHtml}
-        </div>
-      `;
-    }
-
-    return `
-      <div style="display:grid;gap:10px;">
-        <div style="color:#f8fafc;font-size:1.02em;font-weight:700;line-height:1.4;">${escapeHtml(parsed.answer)}</div>
-        ${evidenceHtml}
-        ${detailsHtml}
-      </div>
-    `;
-  };
-
-  const semanticAnswerHtml = renderAnswerEvidenceResponse(text);
-  if (semanticAnswerHtml) {
-    return semanticAnswerHtml;
-  }
-  
-  // Check if this is a clarification message
-  if (text.includes('🔍') && text.includes('Did you mean')) {
-    return formatClarificationMessage(text);
-  }
-
-  // Canonical entity-list contract: "Section title" then "- name | key=value | key=value" lines (shared with formatter)
-  const parseCanonicalEntityList = (raw) => {
-    const lineList = raw.split('\n').map((l) => l.trim()).filter(Boolean);
-    if (lineList.length < 2) return null;
-    let title = '';
-    const entries = [];
-    for (let i = 0; i < lineList.length; i++) {
-      const line = lineList[i];
-      if (!line.startsWith('- ') || !line.includes('|')) {
-        if (entries.length === 0) title = line.replace(/:$/, '').trim();
-        continue;
-      }
-      const rest = line.slice(2).trim();
-      const segments = rest.split('|').map((s) => s.trim()).filter(Boolean);
-      if (segments.length < 2) continue;
-      const label = segments[0];
-      const fields = [];
-      for (const seg of segments.slice(1)) {
-        const eqIdx = seg.indexOf('=');
-        const colonIdx = seg.indexOf(':');
-        if (eqIdx > 0) {
-          const key = seg.slice(0, eqIdx).trim();
-          let value = seg.slice(eqIdx + 1).trim().replace(/^"(.*)"$/, '$1').replace(/\\"/g, '"');
-          if (key) fields.push({ key, value });
-        } else if (colonIdx > 0) {
-          const key = seg.slice(0, colonIdx).trim();
-          const value = seg.slice(colonIdx + 1).trim();
-          if (key) fields.push({ key, value });
-        }
-      }
-      if (fields.length) entries.push({ label, fields });
-    }
-    return entries.length >= 1 && title ? { title, entries } : null;
-  };
-  const canonicalSection = parseCanonicalEntityList(text);
-  if (canonicalSection) {
-    const sectionHtml = `
-      <h3 style="margin: 16px 0 8px 0; color: #f97316; font-size: 1.1em; font-weight: 600;">${escapeHtml(canonicalSection.title)}</h3>
-      ${canonicalSection.entries.map((e) => `
-        <div class="kv-card" style="margin-bottom: 8px;">
-          <div class="kv-card-header">
-            <span class="kv-pill">${escapeHtml(e.label)}</span>
-          </div>
-          <div class="kv-grid">
-            ${e.fields.map((f) => `
-              <div class="kv-row">
-                <div class="kv-key">${escapeHtml(f.key)}</div>
-                <div class="kv-value">${escapeHtml(f.value)}</div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `).join('')}
-    `;
-    return sectionHtml;
-  }
-  
-  const lines = text.split('\n');
-  let html = '';
-  let inVmEntry = false;
-  let currentVmName = '';
-  let currentVmType = '';
-  let currentVmSectionType = 'VM';
-  let currentVmState = '';
-  let currentVmNode = '';
-  let currentVmTrace = '';
-  let currentVmSource = '';
-  
-  let inClusterNodes = false;
-  let inClusterVms = false;
-  let pendingNodeField = '';
-  let nodeEntries = [];
-  let vmList = [];
-  let seenVmNames = new Set();
-
-  const parseMarkdownTable = (tableLines) => {
-    if (!Array.isArray(tableLines) || tableLines.length < 2) return null;
-    const trimmed = tableLines.map((l) => (l ?? '').trim());
-
-    const isHeaderLine = (line) => line.startsWith('|') && line.endsWith('|') && line.includes('|');
-    const isSeparatorLine = (line, expectedColumns) => {
-      if (!line.startsWith('|') || !line.includes('-')) return false;
-      const segments = line.split('|').slice(1, -1).map((s) => s.trim()).filter(Boolean);
-      if (!segments.length || (expectedColumns && segments.length !== expectedColumns)) return false;
-      return segments.every((seg) => /^:?-{3,}:?$/.test(seg));
-    };
-
-    for (let i = 0; i < trimmed.length - 1; i++) {
-      const headerLine = trimmed[i];
-      if (!isHeaderLine(headerLine)) continue;
-
-      const separatorLine = trimmed[i + 1];
-      if (!separatorLine) continue;
-
-      const headerCells = headerLine
-        .split('|')
-        .slice(1, -1)
-        .map((c) => c.trim())
-        .filter(Boolean);
-      if (!headerCells.length) continue;
-
-      if (!isSeparatorLine(separatorLine, headerCells.length)) continue;
-
-      const rows = [];
-      let j = i + 2;
-      for (; j < trimmed.length; j++) {
-        const rowLine = trimmed[j];
-        if (!rowLine || !rowLine.trim().startsWith('|')) break;
-        const cells = rowLine
-          .split('|')
-          .slice(1, -1)
-          .map((c) => c.trim());
-        if (cells.length !== headerCells.length) break;
-        rows.push(cells);
-      }
-
-      if (!rows.length) return null;
-      return {
-        headers: headerCells,
-        rows,
-        startIndex: i,
-        endIndex: j - 1,
-      };
-    }
-
-    return null;
-  };
-  
-  const tryParsePipeKv = (line) => {
-    if (!line.includes('|') || !line.includes('=')) return null;
-    const parts = line.split('|').map(p => p.trim()).filter(Boolean);
-    if (parts.length < 2) return null;
-    const label = parts[0];
-    const fields = [];
-    for (const part of parts.slice(1)) {
-      const eqIdx = part.indexOf('=');
-      if (eqIdx === -1) continue;
-      const key = part.slice(0, eqIdx).trim();
-      let value = part.slice(eqIdx + 1).trim();
-      // Strip surrounding quotes
-      value = value.replace(/^"(.*)"$/, '$1');
-      // Decode escaped quotes from historical trace payloads.
-      value = value.replace(/\\"/g, '"');
-      if (key) fields.push({ key, value });
-    }
-    if (!fields.length) return null;
-    return { label, fields };
-  };
-
-  const parseKeyValueBlock = (blockLines) => {
-    if (!blockLines.length) return null;
-    let idx = 0;
-    let title = null;
-    const first = blockLines[0]?.trim();
-    if (first && /^(error|warning|success|info)$/i.test(first)) {
-      title = first;
-      idx = 1;
-    }
-    const entries = [];
-    while (idx < blockLines.length) {
-      const key = blockLines[idx]?.trim();
-      const valueLine = blockLines[idx + 1];
-      if (!key || valueLine === undefined) break;
-      if (!/^[a-zA-Z][\w-]*$/.test(key)) break;
-      if (key.toLowerCase() === 'message') {
-        const value = blockLines.slice(idx + 1).join('\n').trim();
-        entries.push({ key, value });
-        idx = blockLines.length;
-        break;
-      }
-      entries.push({ key, value: valueLine.trim() });
-      idx += 2;
-    }
-    if (entries.length === 0) return null;
-    return { title, entries };
-  };
-
-  const parsePipeColonSummary = (line) => {
-    if (!line.includes("|") || !line.includes(":")) return null;
-    const fields = line
-      .split("|")
-      .map((segment) => segment.trim())
-      .filter(Boolean)
-      .map((segment) => {
-        const index = segment.indexOf(":");
-        if (index <= 0 || index === segment.length - 1) return null;
-        return {
-          key: segment.slice(0, index).trim(),
-          value: segment.slice(index + 1).trim(),
-        };
-      })
-      .filter(Boolean);
-    return fields.length >= 2 ? fields : null;
-  };
-
-  const buildOperationStatusCard = (title, fields) => {
-    const normalized = new Map(
-      fields.map((field) => [field.key.toLowerCase().replace(/\s+/g, "_"), field.value])
-    );
-    const status = normalized.get("status") || normalized.get("state") || "unknown";
-    const operation = normalized.get("operation") || normalized.get("action") || "";
-    const isDestructive = /\b(destroy|delete|remove|terminate|permanent)\b/i.test(
-      `${title} ${status} ${operation}`
-    );
-    const accent = isDestructive ? "#ef4444" : "#f97316";
-    const accentSoft = isDestructive ? "rgba(239, 68, 68, 0.12)" : "rgba(249, 115, 22, 0.12)";
-    const statusBadge = `<span style="display:inline-flex;align-items:center;gap:6px;background:${accent};color:#fff;padding:4px 10px;border-radius:999px;font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;">${escapeHtml(status)}</span>`;
-    const opBadge = operation
-      ? `<span style="display:inline-flex;align-items:center;gap:6px;background:${accentSoft};color:${accent};border:1px solid ${accent};padding:4px 10px;border-radius:999px;font-size:0.72em;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;">${escapeHtml(operation)}</span>`
-      : "";
-
-    const detailRows = fields
-      .filter((field) => !["status", "state", "operation", "action"].includes(field.key.toLowerCase()))
-      .map((field) => {
-        const valueHtml = formatMessageValue(field.key, field.value);
-        return `
-          <div style="display:flex;gap:8px;align-items:flex-start;min-width:0;">
-            <span style="color:#94a3b8;font-size:0.78em;font-weight:600;min-width:70px;">${escapeHtml(field.key)}</span>
-            <span style="color:#e2e8f0;font-size:0.88em;word-break:break-word;">${valueHtml}</span>
-          </div>
-        `;
-      })
-      .join("");
-
-    return `
-      <div style="margin: 4px 0; padding: 12px 14px; border-radius: 12px; border: 1px solid rgba(51, 65, 85, 0.7); background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.72) 100%); box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-          <div style="color:${accent};font-weight:700;letter-spacing:0.01em;font-size:0.95em;">${escapeHtml(title)}</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">${statusBadge}${opBadge}</div>
-        </div>
-        <div style="display:grid;gap:6px;">${detailRows || '<span style="color:#94a3b8;font-size:0.85em;">No additional details.</span>'}</div>
-      </div>
-    `;
-  };
-
-  const buildVmRow = (vm) => {
-    const stateColor = vm.state === 'running' ? '#10b981' : vm.state === 'stopped' ? '#ef4444' : '#94a3b8';
-    const typeColor = vm.type === 'VM' ? '#f97316' : '#ea580c';
-    return `
-      <div style="margin-bottom: 4px; padding: 7px 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px;">
-        <div style="display: grid; grid-template-columns: minmax(130px, 1.8fr) 70px 95px 100px; gap: 8px; align-items: center;">
-          <strong style="color: #e2e8f0; font-size: 0.92em; line-height: 1.2;">${escapeHtml(vm.name || '-')}</strong>
-          <span style="background: ${typeColor}; color: white; padding: 1px 6px; border-radius: 999px; font-size: 0.62em; font-weight: 600; width: fit-content;">${escapeHtml(vm.type || '-')}</span>
-          <span style="display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 0.84em;">
-            <span style="width: 8px; height: 8px; border-radius: 999px; background: ${stateColor}; display: inline-block;"></span>
-            ${escapeHtml(vm.state || 'unknown')}
-          </span>
-          <span style="color: #e2e8f0; font-size: 0.84em;">${escapeHtml(vm.node || '-')}</span>
-        </div>
-      </div>
-    `;
-  };
-
-  const flushCurrentVm = () => {
-    if (!inVmEntry || !currentVmName) return;
-    if (!seenVmNames.has(currentVmName)) {
-      vmList.push(buildVmRow({
-        name: currentVmName,
-        type: currentVmType || currentVmSectionType || 'VM',
-        state: currentVmState || 'unknown',
-        node: currentVmNode || '',
-        trace: currentVmTrace || '',
-        source: currentVmSource || '',
-      }));
-      seenVmNames.add(currentVmName);
-    }
-    inVmEntry = false;
-    currentVmName = '';
-    currentVmType = '';
-    currentVmState = '';
-    currentVmNode = '';
-    currentVmTrace = '';
-    currentVmSource = '';
-  };
-
-  const markdownTable = parseMarkdownTable(lines);
-  if (markdownTable) {
-    const before = lines.slice(0, markdownTable.startIndex).join('\n').trim();
-    const after = lines.slice(markdownTable.endIndex + 1).join('\n').trim();
-
-    const tableHtml = renderResponsiveTable(
-      markdownTable.headers,
-      markdownTable.rows,
-      (row) => row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')
-    );
-
-    const beforeHtml = before ? `<div class="agent-response">${escapeHtml(before)}</div>` : '';
-    const afterHtml = after ? `<div class="agent-response" style="margin-top: 1rem;">${escapeHtml(after)}</div>` : '';
-
-    return `${beforeHtml}${tableHtml}${afterHtml}`;
-  }
-
-  const kvBlock = parseKeyValueBlock(lines);
-  if (kvBlock) {
-    const title = kvBlock.title || 'Result';
-    html += `
-      <div class="kv-card">
-        <div class="kv-card-header">
-          <span class="kv-pill">${escapeHtml(title)}</span>
-        </div>
-        <div class="kv-grid">
-          ${kvBlock.entries.map(entry => {
-            const value = entry.value || '';
-            const isMultiline = value.includes('\n') || value.includes('│') || value.includes('╷');
-            return `
-              <div class="kv-row">
-                <div class="kv-key">${escapeHtml(entry.key)}</div>
-                <div class="kv-value">
-                  ${isMultiline
-                    ? `<pre class="kv-pre">${escapeHtml(value)}</pre>`
-                    : escapeHtml(value)}
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      </div>
-    `;
-    return html;
-  }
-
-  const nonEmptyLines = lines.map((line) => line.trim()).filter(Boolean);
-  if (nonEmptyLines.length >= 2) {
-    const summaryTitle = nonEmptyLines[0].replace(/:$/, "");
-    const summaryFields = parsePipeColonSummary(nonEmptyLines[1]);
-    if (summaryFields && /(status|result|operation|vm|task|action)/i.test(summaryTitle)) {
-      return buildOperationStatusCard(summaryTitle, summaryFields);
-    }
-  }
-  if (nonEmptyLines.length === 1) {
-    const summaryFields = parsePipeColonSummary(nonEmptyLines[0]);
-    if (summaryFields) {
-      return buildOperationStatusCard("Operation Summary", summaryFields);
-    }
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // Key/value pipe format cards (e.g., Definition | term=... | meaning="..." | context="...")
-    // Skip VM detail/source list lines so they stay attached to the VM row parser.
-    const isVmListDetailLine = inClusterVms && /^- (Details|Source):/i.test(trimmed);
-    if (!isVmListDetailLine) {
-      const kv = tryParsePipeKv(trimmed);
-      if (kv) {
-        html += `
-          <div class="kv-card">
-            <div class="kv-card-header">
-              <span class="kv-pill">${escapeHtml(kv.label)}</span>
-            </div>
-            <div class="kv-grid">
-              ${kv.fields.map(f => `
-                <div class="kv-row">
-                  <div class="kv-key">${escapeHtml(f.key)}</div>
-                  <div class="kv-value" style="word-break:break-word;">${formatMessageValue(f.key, f.value)}</div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        `;
-        continue;
-      }
-    }
-    
-    const isVmInventoryHeading = /^(Cluster VMs|LXC Containers|VMs on node .+|Running .+\b(?:VMs?|LXC|containers?)\b|All .+\b(?:VMs?|LXC|containers?)\b)$/i.test(trimmed.replace(/:$/, ''));
-    if ((trimmed.endsWith(':') || isVmInventoryHeading) && !trimmed.startsWith('-')) {
-      if (inClusterNodes && nodeEntries.length > 0) {
-        html += formatClusterNodesSection(nodeEntries);
-        nodeEntries = [];
-      }
-      if (inClusterVms && vmList.length > 0) {
-        html += formatClusterVmsSection(vmList);
-        vmList = [];
-      }
-      
-      const sectionName = trimmed.replace(/:$/, '');
-      if (sectionName === 'Cluster Nodes') {
-        inClusterNodes = true;
-        inClusterVms = false;
-        currentVmSectionType = 'VM';
-      } else if (
-        sectionName === 'Cluster VMs' ||
-        sectionName.includes('VMs') ||
-        /\b(lxc|container)\b/i.test(sectionName)
-      ) {
-        inClusterNodes = false;
-        inClusterVms = true;
-        currentVmSectionType = /\b(lxc|container)\b/i.test(sectionName) ? 'LXC' : 'VM';
-      } else {
-        inClusterNodes = false;
-        inClusterVms = false;
-        currentVmSectionType = 'VM';
-        html += `<h3 style="margin: 16px 0 8px 0; color: #f97316; font-size: 1.1em; font-weight: 600;">${escapeHtml(sectionName)}</h3>`;
-      }
-      continue;
-    }
-    
-    if (inClusterNodes && trimmed.startsWith('- ')) {
-      const nodeName = trimmed.replace(/^- /, '').trim();
-      if (nodeName) {
-        nodeEntries.push({
-          name: nodeName,
-          id: `compute-node:${nodeName.toLowerCase()}`,
-          vmCount: 0,
-          status: "unknown",
-        });
-      }
-      continue;
-    }
-    if (inClusterNodes) {
-      const normalized = trimmed.toLowerCase();
-      if (normalized === 'id' || normalized === 'vms' || normalized === 'status') {
-        pendingNodeField = normalized;
-        continue;
-      }
-      if (pendingNodeField && nodeEntries.length > 0) {
-        const node = nodeEntries[nodeEntries.length - 1];
-        if (pendingNodeField === 'id') node.id = trimmed;
-        if (pendingNodeField === 'vms') node.vmCount = Number.parseInt(trimmed, 10) || 0;
-        if (pendingNodeField === 'status') node.status = trimmed.toLowerCase();
-        pendingNodeField = '';
-        continue;
-      }
-      // Ignore any other cluster-node lines to prevent noisy paragraphs.
-      continue;
-    }
-    
-    if (inClusterVms && /^- /.test(trimmed) && !/^- (Details|Source):/i.test(trimmed)) {
-      flushCurrentVm();
-
-      const inlineSegments = trimmed
-        .replace(/^- /, '')
-        .split('|')
-        .map(part => part.trim())
-        .filter(Boolean);
-      if (inlineSegments.length > 1 && inlineSegments.some(part => /^status\s*:/i.test(part))) {
-        const vmName = inlineSegments[0] || '';
-        if (!seenVmNames.has(vmName)) {
-          let inlineState = 'unknown';
-          let inlineNode = '';
-          let inlineTrace = '';
-          let inlineSource = '';
-          let inlineDetails = '';
-
-          for (const segment of inlineSegments.slice(1)) {
-            if (/^status\s*:/i.test(segment)) {
-              inlineState = segment.replace(/^status\s*:/i, '').trim() || 'unknown';
-            } else if (/^node\s*[:=]/i.test(segment)) {
-              inlineNode = segment.replace(/^node\s*[:=]/i, '').trim();
-            } else if (/^details\s*:/i.test(segment)) {
-              inlineDetails = segment.replace(/^details\s*:/i, '').trim();
-            } else if (/^trace\s*[:=]/i.test(segment)) {
-              inlineTrace = segment.replace(/^trace\s*[:=]/i, '').trim();
-            } else if (/^source\s*:/i.test(segment)) {
-              inlineSource = segment.replace(/^source\s*:/i, '').trim();
-            }
-          }
-
-          if (!inlineNode && /node[:=]/i.test(inlineDetails)) {
-            const detailsNodeMatch = inlineDetails.match(/node\s*[:=]\s*([^|]+)/i);
-            if (detailsNodeMatch?.[1]) inlineNode = detailsNodeMatch[1].trim();
-          }
-          if (!inlineTrace && inlineDetails.includes('trace=')) {
-            const detailsTraceMatch = inlineDetails.match(/trace=([^|]+)/i);
-            if (detailsTraceMatch?.[1]) inlineTrace = detailsTraceMatch[1].trim();
-          }
-
-          vmList.push(buildVmRow({
-            name: vmName,
-            type: currentVmType || currentVmSectionType || 'VM',
-            state: inlineState,
-            node: inlineNode,
-            trace: inlineTrace,
-            source: inlineSource,
-          }));
-          seenVmNames.add(vmName);
-        }
-        inVmEntry = false;
-        continue;
-      }
-      
-      const vmMatch = trimmed.match(/^- (.+?) \((.+?),\s*(.+?)\)/);
-      if (vmMatch) {
-        const [, name, vmType, state] = vmMatch;
-        const vmName = name.trim();
-        
-        if (seenVmNames.has(vmName)) {
-          inVmEntry = false;
-          continue;
-        }
-        
-        inVmEntry = true;
-        currentVmName = vmName;
-        currentVmType = vmType.includes('QEMU') || vmType === 'QEMU VM' ? 'VM' :
-          (vmType.includes('LXC') || vmType === 'LXC container' ? 'LXC' : vmType.trim());
-        currentVmState = state.trim();
-      }
-      continue;
-    }
-    
-    if (inVmEntry && /^- Details:/i.test(trimmed)) {
-      const detailsText = trimmed.replace(/^- Details:/i, '').trim();
-      const parts = detailsText.split('|').map(p => p.trim());
-      for (const part of parts) {
-        if (/^trace\s*[:=]/i.test(part)) {
-          currentVmTrace = part.replace(/^trace\s*[:=]/i, '').trim();
-        } else if (/^node\s*[:=]/i.test(part)) {
-          currentVmNode = part.replace(/^node\s*[:=]/i, '').trim();
-        }
-      }
-      continue;
-    }
-    
-    if (inVmEntry && /^- Source:/i.test(trimmed)) {
-      currentVmSource = trimmed.replace(/^- Source:/i, '').trim();
-      continue;
-    }
-    
-    if (trimmed.startsWith('Tip:')) {
-      html += `<div style="margin-top: 16px; padding: 10px; background: #1e293b; border-left: 2px solid #f97316; border-radius: 4px; font-size: 0.875em; color: #cbd5e1;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 6px; color: #f97316;">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
-        </svg>
-        <strong style="color: #f97316;">Tip:</strong> ${escapeHtml(trimmed.replace('Tip:', '').trim())}
-      </div>`;
-      continue;
-    }
-    
-    if (trimmed.startsWith('## ')) {
-      flushCurrentVm();
-      const headerText = trimmed.replace(/^## /, '');
-      html += `<h2 style="margin: 20px 0 10px 0; color: #f97316; font-size: 1.2em; font-weight: 700; border-bottom: 1px solid #334155; padding-bottom: 4px;">${escapeHtml(headerText)}</h2>`;
-      continue;
-    }
-
-    if (trimmed.startsWith('# ')) {
-      flushCurrentVm();
-      const headerText = trimmed.replace(/^# /, '');
-      html += `<h1 style="margin: 20px 0 12px 0; color: #f97316; font-size: 1.35em; font-weight: 700; border-bottom: 1px solid #475569; padding-bottom: 6px;">${escapeHtml(headerText)}</h1>`;
-      continue;
-    }
-
-    if (trimmed.startsWith('### ')) {
-      flushCurrentVm();
-
-      const headerMatch = trimmed.match(/^### Node: (.+?) \(IP: (.+?)\)/);
-      if (headerMatch) {
-        html += `<h3 style="margin: 16px 0 8px 0; color: #f97316;">${escapeHtml(headerMatch[1])} <span style="color: #94a3b8; font-weight: normal; font-size: 0.85em;">(${escapeHtml(headerMatch[2])})</span></h3>`;
-      } else {
-        const headerText = trimmed.replace(/^### /, '');
-        html += `<h3 style="margin: 16px 0 8px 0; color: #f97316; font-size: 1.1em;">${escapeHtml(headerText)}</h3>`;
-      }
-      continue;
-    }
-
-    if (trimmed.startsWith('- ') && !inClusterNodes && !inClusterVms) {
-      const listMatch = trimmed.match(/^- \*\*(.+?)\*\*:\s*(.+)$/) || trimmed.match(/^- (.+?):\s*(.+)$/);
-      if (listMatch) {
-        const label = escapeHtml(listMatch[1]);
-        const value = escapeHtml(listMatch[2]);
-        html += `<div style="margin: 6px 0; padding-left: 16px;">
-          <span style="color: #94a3b8; font-weight: 500;">${label}:</span>
-          <span style="color: #e2e8f0;">${value}</span>
-        </div>`;
-      } else {
-        html += `<div style="margin: 6px 0; padding-left: 16px; color: #e2e8f0;">${escapeHtml(trimmed.replace(/^- /, ''))}</div>`;
-      }
-      continue;
-    }
-
-    if (trimmed && !trimmed.startsWith('  -')) {
-      flushCurrentVm();
-
-      let processedLine = escapeHtml(trimmed);
-      processedLine = processedLine.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0; font-weight: 600;">$1</strong>');
-      processedLine = processedLine.replace(/`([^`]+)`/g, '<code style="background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #fb923c; font-family: monospace; font-size: 0.85em; border: 1px solid #334155;">$1</code>');
-      html += `<p style="margin: 8px 0; color: #cbd5e1; line-height: 1.5;">${processedLine}</p>`;
-    } else if (!trimmed && !inVmEntry) {
-      html += '<br>';
-    }
-  }
-  
-  if (inClusterNodes && nodeEntries.length > 0) {
-    html += formatClusterNodesSection(nodeEntries);
-  }
-  if (inClusterVms) {
-    flushCurrentVm();
-    if (vmList.length > 0) {
-      html += formatClusterVmsSection(vmList);
-    }
-  }
-  
-  return html;
-}
-
-// --- Structured response rendering (AgentResponseV1) ---
-
-function renderAgentMessage(eventData) {
-  // Try structured response first
-  if (eventData.structuredResponse) {
-    const html = renderStructuredResponse(eventData.structuredResponse);
-    if (html) return html;
-  }
-  // Fallback to existing heuristic
-  return formatAgentResponse(eventData.rawTextFallback || eventData.text || "");
-}
-
-function renderStructuredResponse(sr) {
-  if (!sr || sr.version !== "1") return null;
-  const parts = [];
-  if (sr.answer?.summary) parts.push(`<p class="summary">${escapeHtml(sr.answer.summary)}</p>`);
-  for (const section of sr.answer?.sections ?? []) {
-    parts.push(renderSection(section));
-  }
-  return parts.join("") || null;
-}
-
-function renderSection(section) {
-  switch (section.type) {
-    case "facts":        return renderFactsSection(section);
-    case "table":        return renderTableSection(section);
-    case "plan":         return renderPlanSection(section);
-    case "risk":         return renderRiskSection(section);
-    case "next_steps":   return renderNextStepsSection(section);
-    case "clarification": return renderClarificationSection(section);
-    case "confirmation":  return renderConfirmationSection(section);
-    default: return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
-  }
-}
-
-function renderFactsSection(section) {
-  const title = section.title ? `<h4>${escapeHtml(section.title)}</h4>` : "";
-  const items = (section.data || []).map(item =>
-    `<li><strong>${escapeHtml(item.key || item.label || "")}</strong>: ${escapeHtml(String(item.value ?? ""))}</li>`
-  ).join("");
-  return `${title}<ul class="facts-list">${items}</ul>`;
-}
-
-function renderTableSection(section) {
-  const title = section.title ? `<h4>${escapeHtml(section.title)}</h4>` : "";
-  if (!section.data?.headers || !section.data?.rows) return title;
-  const headers = section.data.headers.map(h => `<th>${escapeHtml(h)}</th>`).join("");
-  const rows = section.data.rows.map(row =>
-    `<tr>${row.map(cell => `<td>${escapeHtml(String(cell ?? ""))}</td>`).join("")}</tr>`
-  ).join("");
-  return `${title}<table class="response-table"><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
-}
-
-function renderPlanSection(section) {
-  const title = section.title ? `<h4>${escapeHtml(section.title)}</h4>` : "";
-  const steps = (section.data?.steps || []).map((step, i) =>
-    `<li><strong>Step ${step.stepNumber || i + 1}</strong>: ${escapeHtml(step.action || "")}${step.rationale ? ` — <em>${escapeHtml(step.rationale)}</em>` : ""}</li>`
-  ).join("");
-  return `${title}<ol class="plan-steps">${steps}</ol>`;
-}
-
-function renderRiskSection(section) {
-  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
-}
-
-function renderNextStepsSection(section) {
-  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
-}
-
-function renderClarificationSection(section) {
-  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
-}
-
-function renderConfirmationSection(section) {
-  return `<pre>${escapeHtml(JSON.stringify(section.data, null, 2))}</pre>`;
-}
-
-// --- End structured response rendering ---
+// Assistant response rendering lives in response-renderer.js.
 
 function updateChatMessage(messageId, newContent) {
   // Update in all containers (mobile + desktop)
@@ -1812,7 +809,6 @@ function updateChatMessage(messageId, newContent) {
     const shouldLockScroll = isAsyncOperationActive && (wasNearBottom || shouldAutoScroll);
     
     messageDiv.innerHTML = newContent;
-    attachClarificationHandlers(messageDiv);
     
     if (shouldLockScroll || (wasNearBottom && shouldAutoScroll)) {
       if (scrollContainer) containersToScroll.add(scrollContainer);
@@ -1960,53 +956,7 @@ function addChatMessage(role, content, isLoading = false, messageId = null, dbId
     `;
   }
 
-  const traceLink = (role === 'assistant' && reasoningTraceId) ? `
-    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #334155; display: flex; align-items: center; gap: 8px; font-size: 0.75em;">
-      <button
-        data-trace-id="${escapeHtml(reasoningTraceId)}"
-        onclick="window.copyTraceIdToClipboard(this)"
-        style="
-          background: #1e293b;
-          border: 1px solid #334155;
-          color: #94a3b8;
-          padding: 4px 8px;
-          border-radius: 4px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          font-size: 0.9em;
-        "
-        title="Copy trace ID"
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
-        </svg>
-        Trace: ${escapeHtml(reasoningTraceId.substring(0, 8))}...
-      </button>
-      <button
-        onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
-        style="
-          background: #7c2d12;
-          border: 1px solid #f97316;
-          color: #e2e8f0;
-          padding: 4px 8px;
-          border-radius: 4px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          font-size: 0.9em;
-        "
-        title="View reasoning trace"
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
-        </svg>
-        View Trace
-      </button>
-    </div>
-  ` : '';
+  const traceLink = role === 'assistant' ? renderTraceFooter(reasoningTraceId) : '';
 
   if (role === 'user') {
     messageDiv.innerHTML = `<div style="white-space: pre-wrap; line-height: 1.4; font-size: 15px;">${escapeHtml(content)}</div>`;
@@ -2210,7 +1160,7 @@ function handleAgentEvent(event, toolExecutions) {
       
     case 'agent:final':
       console.log('Handling agent:final event', event.data);
-      const formattedText = renderAgentMessage(event.data);
+      const formattedText = renderAssistantResponse(event.data);
       const durationSeconds = (event.data.durationMs || 0) / 1000;
       const traceId = event.data.traceId;
       const confirmId = escapeHtml(event.data.confirmationId || '');
@@ -2267,59 +1217,7 @@ function handleAgentEvent(event, toolExecutions) {
         currentResponseId = addChatMessage('assistant', '', false);
       }
       
-      const traceLinkHtml = traceId ? `
-        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(51, 65, 85, 0.5); display: flex; align-items: center; gap: 8px; font-size: 0.8em;">
-          <button
-            data-trace-id="${escapeHtml(traceId)}"
-            onclick="window.copyTraceIdToClipboard(this)"
-            style="
-              background: rgba(30, 41, 59, 0.6);
-              border: 1px solid rgba(51, 65, 85, 0.5);
-              color: #94a3b8;
-              padding: 6px 10px;
-              border-radius: 12px;
-              cursor: pointer;
-              display: flex;
-              align-items: center;
-              gap: 4px;
-              font-size: 0.85em;
-              transition: all 0.2s;
-            "
-            onmouseover="this.style.background='rgba(30, 41, 59, 0.8)'"
-            onmouseout="this.style.background='rgba(30, 41, 59, 0.6)'"
-            title="Copy trace ID"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
-            </svg>
-            Trace: ${escapeHtml(traceId.substring(0, 8))}...
-          </button>
-          <button
-            onclick="window.switchTab('reasoning', null); setTimeout(() => { const traces = document.getElementById('reasoning-traces'); if (traces) traces.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 300);"
-            style="
-              background: rgba(124, 45, 18, 0.6);
-              border: 1px solid rgba(249, 115, 22, 0.5);
-              color: #e2e8f0;
-              padding: 6px 10px;
-              border-radius: 12px;
-              cursor: pointer;
-              display: flex;
-              align-items: center;
-              gap: 4px;
-              font-size: 0.85em;
-              transition: all 0.2s;
-            "
-            onmouseover="this.style.background='rgba(124, 45, 18, 0.8)'"
-            onmouseout="this.style.background='rgba(124, 45, 18, 0.6)'"
-            title="View reasoning trace"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
-            </svg>
-            View Trace
-          </button>
-        </div>
-      ` : '';
+      const traceLinkHtml = renderTraceFooter(traceId);
       
       const finalHtml = `
         <div class="agent-response" style="line-height: 1.6;">
@@ -2367,7 +1265,7 @@ function handleAgentEvent(event, toolExecutions) {
 }
 
 function bindAgentEventSourceHandlers(eventSource, toolExecutions) {
-  let finalText = "";
+  let finalResponse = null;
 
   eventSource.onmessage = (event) => {
     try {
@@ -2376,8 +1274,8 @@ function bindAgentEventSourceHandlers(eventSource, toolExecutions) {
       handleAgentEvent(agentEvent, toolExecutions);
 
       if (agentEvent.type === 'agent:final') {
-        finalText = agentEvent.data.text || '';
-        console.log('Final text received:', finalText);
+        finalResponse = agentEvent.data;
+        console.log('Final response received:', finalResponse);
       }
     } catch (error) {
       console.error('Error parsing SSE event:', error, event.data);
@@ -2393,10 +1291,10 @@ function bindAgentEventSourceHandlers(eventSource, toolExecutions) {
     }
 
     if (currentEventSource && currentEventSource.readyState === EventSource.CLOSED) {
-      if (finalText) {
+      if (finalResponse) {
         updateChatMessage(currentResponseId, `
           <div class="agent-response" style="line-height: 1.6;">
-            ${formatAgentResponse(finalText)}
+            ${renderAssistantResponse(finalResponse)}
           </div>
           ${toolExecutions.length > 0 ? `
             <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
@@ -2430,7 +1328,7 @@ function bindAgentEventSourceHandlers(eventSource, toolExecutions) {
     }
   };
 
-  return () => finalText;
+  return () => finalResponse;
 }
 
 // Main chat functions
@@ -2499,18 +1397,18 @@ export async function sendChatMessage(messageOverride = null) {
     // the UI can miss `agent:final` and get stuck in "Thinking..." until refresh.
     currentSessionId = `session-ui-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     let toolExecutions = [];
-    let finalText = '';
+    let finalResponse = null;
     const currentQuery = message;
 
     currentEventSource = new EventSource(`${API_URL}/api/agent/stream?sessionId=${currentSessionId}`);
-    const getFinalText = bindAgentEventSourceHandlers(currentEventSource, toolExecutions);
+    const getFinalResponse = bindAgentEventSourceHandlers(currentEventSource, toolExecutions);
 
     finalEventTimeout = setTimeout(() => {
-      finalText = getFinalText();
-      if (currentEventSource && finalText) {
+      finalResponse = getFinalResponse();
+      if (currentEventSource && finalResponse) {
         updateChatMessage(currentResponseId, `
           <div class="agent-response" style="line-height: 1.6;">
-            ${formatAgentResponse(finalText)}
+            ${renderAssistantResponse(finalResponse)}
           </div>
           ${toolExecutions.length > 0 ? `
             <div style="margin-top: 16px; padding: 10px; background: #0f172a; border-top: 1px solid #334155; border-radius: 0 0 6px 6px; color: #94a3b8; font-size: 0.85em;">
@@ -2532,7 +1430,7 @@ export async function sendChatMessage(messageOverride = null) {
         });
         const primaryInput = getPrimaryChatInput();
         if (primaryInput) primaryInput.focus();
-      } else if (currentEventSource && !finalText) {
+      } else if (currentEventSource && !finalResponse) {
         const isActionOperation = currentQuery && (
           currentQuery.toLowerCase().includes('create') ||
           currentQuery.toLowerCase().includes('destroy') ||
@@ -2986,7 +1884,7 @@ export async function loadChatHistory(conversationId = null) {
       if (msg.role === 'user') {
         addChatMessage('user', msg.content, false, null, msg.id, null);
       } else {
-        const formattedContent = formatAgentResponse(msg.content);
+        const formattedContent = renderAssistantResponse(msg);
         addChatMessage('assistant', formattedContent, false, null, msg.id, msg.reasoningTraceId || null);
       }
     });

@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import { AgentResponseV1Schema } from "./schemas/agent-response-v1";
+import { AgentResponseSchema } from "./schemas/agent-response";
 import { ActionPlanSchema } from "./schemas/action-step";
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ export const AgentFinalPayloadSchema = z
       })
     )
     .optional(),
-  structuredResponse: AgentResponseV1Schema.optional(),
+  structuredResponse: AgentResponseSchema,
 })
   .passthrough();
 

@@ -11,6 +11,7 @@ import type { ApiHistoryEntry, ApiQueryResponse } from "./types";
 import { pceLogger } from "../utils/logger";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
+import type { AgentResponse } from "../../agent/schemas/agent-response";
 
 export interface ChatMessage {
   id: string;
@@ -21,6 +22,7 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   response?: ApiQueryResponse; // For assistant messages
+  structuredResponse?: AgentResponse;
   reasoningTraceId?: string; // Link to reasoning trace for assistant messages
 }
 
@@ -125,6 +127,12 @@ export class ChatHistoryStore {
           ALTER TABLE chat_messages ADD COLUMN reasoning_trace_id TEXT;
           CREATE INDEX IF NOT EXISTS idx_reasoning_trace_id ON chat_messages(reasoning_trace_id);
         `);
+      }
+
+      const hasStructuredResponse = tableInfo.some(col => col.name === "structured_response");
+      if (!hasStructuredResponse) {
+        pceLogger.info("Migrating chat_messages table: adding structured_response column");
+        this.db.exec("ALTER TABLE chat_messages ADD COLUMN structured_response TEXT;");
       }
     } catch (error: any) {
       // If column already exists, that's fine
@@ -522,8 +530,8 @@ export class ChatHistoryStore {
     const id = crypto.randomUUID();
     const stmt = this.db.prepare(`
       INSERT INTO chat_messages 
-      (id, conversation_id, user_id, acl_group, role, content, response_data, timestamp, reasoning_trace_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, conversation_id, user_id, acl_group, role, content, response_data, structured_response, timestamp, reasoning_trace_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     try {
@@ -541,6 +549,7 @@ export class ChatHistoryStore {
         message.role,
         message.content,
         message.response ? JSON.stringify(message.response) : null,
+        message.structuredResponse ? JSON.stringify(message.structuredResponse) : null,
         message.timestamp.getTime(),
         message.reasoningTraceId || null
       );
@@ -596,6 +605,7 @@ export class ChatHistoryStore {
         content: row.content,
         timestamp: new Date(row.timestamp),
         response: row.response_data ? JSON.parse(row.response_data) : undefined,
+        structuredResponse: row.structured_response ? JSON.parse(row.structured_response) : undefined,
         reasoningTraceId: row.reasoning_trace_id || undefined,
       }));
     } catch (error: any) {

@@ -9,7 +9,6 @@ import { loadTools } from "./tool-loader";
 import { executeToolCall } from "./tool-executor";
 import { AgentContext } from "./context";
 import { SYSTEM_PROMPT, buildSystemPrompt, buildStructuredResponsePrompt } from "./system-prompt";
-import { AgentResponseV1Schema } from "./schemas/agent-response-v1";
 import { generateObject } from "ai";
 import { openai as aiSdkOpenai } from "@ai-sdk/openai";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";

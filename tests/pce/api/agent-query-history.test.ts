@@ -6,6 +6,7 @@ import { MetricsCollector, QueryMetrics, ErrorMetrics } from "../../../src/pce/m
 import type { DependencyHealthCheck } from "../../../src/pce/api/types";
 import { AgentEventBus } from "../../../src/agent/event-bus";
 import { runAgent } from "../../../src/agent/runner";
+import { createTextAgentResponse } from "../../../src/agent/schemas/agent-response";
 
 class MockOrchestrator implements PceApiServerDependencies["orchestrator"] {
   async query() {
@@ -108,6 +109,7 @@ describe("agent query history contract", () => {
           conversationContext: { activeHost: "yang" },
           memorySource: "policy_inference",
           memoryConfidence: 0.8,
+          structuredResponse: createTextAgentResponse("Agent completed", { traceId: "trace-1" }),
         },
       });
       return { text: "Agent completed" } as any;
@@ -176,6 +178,7 @@ describe("agent query history contract", () => {
       { role: "user", content: "confirm it" },
       { role: "assistant", content: "Agent completed" },
     ]);
+    expect(messages.at(-1)?.structuredResponse?.evidence.traceId).toBe("trace-1");
 
     const conversation = await chatHistoryStore.getConversation(conversationId, "user-1");
     expect(conversation?.state).toBe("FOLLOWUP");
@@ -196,6 +199,7 @@ describe("agent query history contract", () => {
           totalSteps: 1,
           totalToolCalls: 0,
           durationMs: 5,
+          structuredResponse: createTextAgentResponse("wrong session"),
         },
       });
       return { text: options.sessionId ?? "done" } as any;

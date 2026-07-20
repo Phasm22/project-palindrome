@@ -1899,6 +1899,7 @@ export class PceApiServer {
               aclGroup,
               role: "assistant",
               content: finalData.text,
+              structuredResponse: finalData.structuredResponse,
               timestamp: new Date(event.timestamp),
               reasoningTraceId: finalData.traceId,
             });

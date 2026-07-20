@@ -12,7 +12,7 @@ import { logger } from "../../utils/logger";
 import { executeToolCall } from "../tool-executor";
 import type { AgentContext } from "../context";
 import { buildSystemPrompt, buildStructuredResponsePrompt } from "../system-prompt";
-import { AgentResponseV1Schema } from "../schemas/agent-response-v1";
+import { AgentResponseSchema, type AgentResponse } from "../schemas/agent-response";
 import { fetchHybridContext, type HybridApiContext } from "../rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "../tool-policy";
 import { sanitizeToolPayload } from "../tool-sanitizer";
@@ -1523,8 +1523,8 @@ export async function handleExecute(
         }
       }
 
-      // Structure the final response via AgentResponseV1Schema (cheap gpt-4o-mini formatting pass)
-      let structuredResponse: import("../schemas/agent-response-v1").AgentResponseV1 | undefined;
+      // Structure the final response into reusable presentation primitives.
+      let structuredResponse: AgentResponse | undefined;
       try {
         const toolCallSummary = reasoningSteps.flatMap((s) =>
           s.toolCalls.map((tc) => ({
@@ -1540,7 +1540,7 @@ export async function handleExecute(
             : "IDLE";
         const { object } = await generateObject({
           model: aiSdkOpenai("gpt-4o-mini") as unknown as Parameters<typeof generateObject>[0]["model"],
-          schema: AgentResponseV1Schema,
+          schema: AgentResponseSchema,
           system: buildStructuredResponsePrompt(state.responseMode),
           prompt: [
             `User query: ${userInput}`,
@@ -1551,7 +1551,7 @@ export async function handleExecute(
         });
         structuredResponse = { ...object, rawTextFallback: finalText };
       } catch (err: any) {
-        logger.warn("AgentResponseV1 structuring failed — falling back to raw text", { err: err?.message });
+        logger.warn("Agent response structuring failed; using the text response", { err: err?.message });
       }
 
       // Emit agent:final event with trace ID

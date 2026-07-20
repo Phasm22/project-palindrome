@@ -83,14 +83,16 @@ export function buildSystemPrompt(responseMode?: string): string {
 }
 
 /**
- * System prompt for the AgentResponseV1 structuring call.
+ * System prompt for the structured presentation response call.
  * This is a cheap gpt-4o-mini formatting pass — not the main reasoning call.
  */
 export function buildStructuredResponsePrompt(mode?: string): string {
   return [
     "You are structuring an infrastructure assistant's answer into a typed JSON envelope.",
     "Fill every required field. Use answer.summary for a one-sentence answer.",
-    "Use answer.sections for detail: type=facts for lists, type=table for tabular data.",
+    "Use reusable presentation sections for detail: text, status, facts, table, collection, steps, alert, or details.",
+    "Section data may contain any JSON value. Prefer facts for labeled values, table for records with shared fields, collection for repeated values, and details for nested diagnostic data.",
+    "For facts and status use an object, for table and collection use an array of values or records, for steps use an array of step strings or records, and for text and alert use a string or object.",
     `answer.style should be ${mode ?? "TERSE_DATA"}.`,
     "Set conversation.state to IDLE unless the raw answer explicitly asks a question or awaits confirmation.",
     "rawTextFallback is NOT needed — it will be populated by the caller.",

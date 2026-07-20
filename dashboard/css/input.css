@@ -181,6 +181,203 @@
     color: rgba(226, 232, 240, 0.9);
   }
 
+  .structured-response {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    color: rgba(226, 232, 240, 0.94);
+  }
+
+  .response-summary {
+    color: #f8fafc;
+    font-weight: 600;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .response-inline-code {
+    display: inline;
+    padding: 1px 5px;
+    border: 1px solid rgba(249, 115, 22, 0.38);
+    border-radius: 4px;
+    background: rgba(249, 115, 22, 0.1);
+    color: #fed7aa;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.88em;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  .response-section {
+    min-width: 0;
+  }
+
+  .response-section-text .response-scalar {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .response-section-title {
+    margin-bottom: 7px;
+    color: #fdba74;
+    font-size: 0.82em;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .response-section-status,
+  .response-section-alert {
+    padding: 10px 12px;
+    border: 1px solid rgba(71, 85, 105, 0.72);
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.58);
+  }
+
+  .response-facts {
+    display: grid;
+    gap: 1px;
+    overflow: hidden;
+    border: 1px solid rgba(51, 65, 85, 0.7);
+    border-radius: 6px;
+    background: rgba(51, 65, 85, 0.7);
+  }
+
+  .response-fact {
+    display: grid;
+    grid-template-columns: minmax(110px, 0.38fr) minmax(0, 1fr);
+    gap: 10px;
+    padding: 8px 10px;
+    background: rgba(2, 6, 24, 0.82);
+  }
+
+  .response-fact dt {
+    color: #94a3b8;
+    font-size: 0.84em;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .response-fact dd {
+    min-width: 0;
+    color: #e2e8f0;
+    overflow-wrap: anywhere;
+  }
+
+  .response-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid rgba(51, 65, 85, 0.72);
+    border-radius: 6px;
+  }
+
+  .response-table {
+    width: 100%;
+    min-width: 420px;
+    border-collapse: collapse;
+    font-size: 0.88em;
+  }
+
+  .response-table th,
+  .response-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }
+
+  .response-table th {
+    color: #94a3b8;
+    background: rgba(2, 6, 24, 0.94);
+    font-size: 0.82em;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .response-table td {
+    color: #e2e8f0;
+    background: rgba(15, 23, 42, 0.62);
+  }
+
+  .response-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .response-list {
+    display: grid;
+    gap: 6px;
+    padding-left: 20px;
+    list-style: disc;
+  }
+
+  ol.response-list {
+    list-style: decimal;
+  }
+
+  .response-list li {
+    min-width: 0;
+    padding-left: 2px;
+    overflow-wrap: anywhere;
+  }
+
+  .response-inline-record {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 5px 12px;
+  }
+
+  .response-details {
+    padding-top: 8px;
+    border-top: 1px solid rgba(51, 65, 85, 0.62);
+  }
+
+  .response-details summary {
+    color: #fdba74;
+    cursor: pointer;
+    font-size: 0.84em;
+    font-weight: 700;
+  }
+
+  .response-details[open] summary {
+    margin-bottom: 8px;
+  }
+
+  .response-raw-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: #cbd5e1;
+    line-height: 1.55;
+  }
+
+  .response-null,
+  .response-empty {
+    color: #64748b;
+    font-style: italic;
+  }
+
+  .response-boolean {
+    display: inline-flex;
+    padding: 1px 6px;
+    border: 1px solid rgba(100, 116, 139, 0.55);
+    border-radius: 999px;
+    color: #cbd5e1;
+    font-size: 0.84em;
+  }
+
+  .response-boolean-true {
+    border-color: rgba(16, 185, 129, 0.5);
+    color: #6ee7b7;
+  }
+
+  @media (max-width: 640px) {
+    .response-fact {
+      grid-template-columns: 1fr;
+      gap: 3px;
+    }
+  }
+
   @media (max-width: 640px) {
     .kv-row {
       grid-template-columns: 1fr;
