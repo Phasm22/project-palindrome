@@ -556,5 +556,7 @@ setInterval(() => {
   const activeTab = getActiveTabFromURL();
   if (activeTab === 'overview') {
     loadOverviewDashboard();
+  } else if (activeTab === 'graph') {
+    loadGraph();
   }
 }, 30000);

@@ -54,6 +54,32 @@ function cleanupAllTooltips() {
   originalNodeColor = null;
 }
 
+async function renderEmptyGraphState(container) {
+  container.innerHTML = `
+    <div class="flex min-h-[400px] items-center justify-center px-6 py-12">
+      <div class="flex max-w-md flex-col items-center text-center">
+        <span id="graph-empty-icon" class="mb-5 text-primary-400" aria-hidden="true"></span>
+        <h3 class="mb-2 text-lg font-semibold text-slate-100">No graph entities found</h3>
+        <p class="mb-6 text-sm leading-6 text-slate-400">
+          Neo4j is connected, but the ontology query returned no nodes. This view will retry automatically.
+        </p>
+        <button id="graph-empty-retry" type="button" class="quiet-action">
+          <span id="graph-empty-retry-icon" aria-hidden="true"></span>
+          <span>Retry now</span>
+        </button>
+      </div>
+    </div>
+  `;
+
+  const { createIcon } = await import('./icons.js');
+  container.querySelector('#graph-empty-icon')
+    ?.appendChild(createIcon('Network', { size: 36, color: 'currentColor' }));
+  container.querySelector('#graph-empty-retry-icon')
+    ?.appendChild(createIcon('RefreshCw', { size: 16, color: 'currentColor' }));
+  container.querySelector('#graph-empty-retry')
+    ?.addEventListener('click', () => loadGraph());
+}
+
 export async function loadGraph() {
   const container = document.getElementById('graph-container');
   if (!container || graphLoading) return;
@@ -111,7 +137,7 @@ export async function loadGraph() {
     const data = await response.json();
     
     if (!data.nodes || data.nodes.length === 0) {
-      container.innerHTML = '<p class="text-slate-400 text-center py-10">No graph data available. The ontology graph may be empty.</p>';
+      await renderEmptyGraphState(container);
       endContentRefresh(container);
       graphLoading = false;
       return;
