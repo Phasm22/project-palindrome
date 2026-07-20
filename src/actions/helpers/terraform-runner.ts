@@ -15,6 +15,9 @@ export interface TerraformConfig {
       memory: number;
       disk_size: string;
       vm_id?: number; // Optional: Specific VM ID to use (if not provided, Terraform auto-assigns)
+      template_id?: number;
+      ssh_username?: string;
+      ssh_public_key?: string;
     }
   >;
   sshPublicKey?: string; // Optional - will be read from env or ~/.ssh/id_ed25519.pub if not provided
@@ -53,6 +56,9 @@ export type VmConfigEntry = {
   memory: number;
   disk_size: string;
   vm_id?: number;
+  template_id?: number;
+  ssh_username?: string;
+  ssh_public_key?: string;
 };
 
 export interface TerraformExecutionOptions {
@@ -60,6 +66,46 @@ export interface TerraformExecutionOptions {
   targets?: string[];
   tfvarsPath?: string;
   baseTfvarsPath?: string;
+}
+
+export interface TerraformProxmoxAuthConfig {
+  proxmoxUrl?: string;
+  tokenId?: string;
+  tokenSecret?: string;
+}
+
+const DEFAULT_CLUSTER_NODE_URLS: Record<string, string> = {
+  yin: "https://yin.prox:8006",
+  yang: "https://yang.prox:8006",
+};
+
+export function resolveTerraformProxmoxAuth(
+  targetNode?: string,
+  env: NodeJS.ProcessEnv = process.env
+): TerraformProxmoxAuthConfig {
+  const nodeLower = targetNode?.toLowerCase() || "";
+
+  if (nodeLower === "yin" || nodeLower === "yang") {
+    const nodeSpecificUrl = nodeLower === "yin" ? env.PROXMOX_YIN_URL : env.PROXMOX_YANG_URL;
+    const nodeSpecificTokenId = nodeLower === "yin" ? env.PROXMOX_YIN_TF_TOKEN_ID : env.PROXMOX_YANG_TF_TOKEN_ID;
+    const nodeSpecificTokenSecret = nodeLower === "yin" ? env.PROXMOX_YIN_TF_SECRET : env.PROXMOX_YANG_TF_SECRET;
+
+    return {
+      proxmoxUrl: nodeSpecificUrl || DEFAULT_CLUSTER_NODE_URLS[nodeLower],
+      tokenId: nodeSpecificTokenId || env.CLUSTER_TF_TOKEN_ID,
+      tokenSecret: nodeSpecificTokenSecret || env.PROXMOX_CLUSTER_TF_SECRET,
+    };
+  }
+
+  return {
+    proxmoxUrl: env.PROXMOX_URL,
+    tokenId: env.CLUSTER_TF_TOKEN_ID || env.PROXBIG_TF_TOKEN_ID,
+    tokenSecret:
+      env.PROXMOX_PROXBIG_TF_SECRET ||
+      env.PROXBIG_TF_SECRET ||
+      env.PROXBIG_TOKEN_SECRET ||
+      env.PROXMOX_CLUSTER_TF_SECRET,
+  };
 }
 
 function extractHclObjectBlock(content: string, key: string): string | null {
@@ -115,6 +161,9 @@ function parseVmConfigBlock(block: string): VmConfigEntry | null {
   const memoryRaw = block.match(/\bmemory\s*=\s*(\d+)/)?.[1];
   const diskSize = block.match(/\bdisk_size\s*=\s*"([^"\n]+)"/)?.[1];
   const vmIdRaw = block.match(/\bvm_id\s*=\s*(\d+)/)?.[1];
+  const templateIdRaw = block.match(/\btemplate_id\s*=\s*(\d+)/)?.[1];
+  const sshUsername = block.match(/\bssh_username\s*=\s*"([^"\n]+)"/)?.[1];
+  const sshPublicKey = block.match(/\bssh_public_key\s*=\s*"([^"\n]+)"/)?.[1];
 
   if (!targetNode || !coresRaw || !memoryRaw || !diskSize) {
     return null;
@@ -127,13 +176,18 @@ function parseVmConfigBlock(block: string): VmConfigEntry | null {
   }
 
   const vmId = vmIdRaw ? Number.parseInt(vmIdRaw, 10) : undefined;
-  return {
+  const templateId = templateIdRaw ? Number.parseInt(templateIdRaw, 10) : undefined;
+  const parsed: VmConfigEntry = {
     target_node: targetNode,
     cores,
     memory,
     disk_size: diskSize,
-    vm_id: Number.isFinite(vmId) ? vmId : undefined,
   };
+  if (Number.isFinite(vmId)) parsed.vm_id = vmId;
+  if (Number.isFinite(templateId)) parsed.template_id = templateId;
+  if (sshUsername) parsed.ssh_username = sshUsername;
+  if (sshPublicKey) parsed.ssh_public_key = sshPublicKey;
+  return parsed;
 }
 
 export function parseVmConfigsFromTfvars(content: string): Record<string, VmConfigEntry> {
@@ -222,6 +276,24 @@ export function reconcileVmConfigsWithTerraformState(
   }
 
   return { reconciledVmConfigs, removedVmNames };
+}
+
+function formatVmConfigEntry(name: string, cfg: VmConfigEntry): string {
+  const vmIdValue = cfg.vm_id !== undefined && cfg.vm_id > 0 ? cfg.vm_id : 0;
+  const optionalLines = [
+    cfg.template_id !== undefined && cfg.template_id > 0 ? `    template_id    = ${cfg.template_id}` : "",
+    cfg.ssh_username ? `    ssh_username   = "${cfg.ssh_username}"` : "",
+    cfg.ssh_public_key ? `    ssh_public_key = "${cfg.ssh_public_key}"` : "",
+  ].filter(Boolean);
+  const optionalBlock = optionalLines.length > 0 ? `\n${optionalLines.join("\n")}` : "";
+
+  return `  "${name}" = {
+    target_node = "${cfg.target_node}"
+    cores       = ${cfg.cores}
+    memory      = ${cfg.memory}
+    disk_size   = "${cfg.disk_size}"
+    vm_id       = ${vmIdValue}${optionalBlock}
+  }`;
 }
 
 function formatTerraformTargetArg(target: string): string {
@@ -353,16 +425,7 @@ export class TerraformRunner {
       }
 
       const reconciledVmConfigsBlock = Object.entries(reconciledVmConfigs)
-        .map(([name, cfg]) => {
-          const vmIdValue = cfg.vm_id !== undefined && cfg.vm_id > 0 ? cfg.vm_id : 0;
-          return `  "${name}" = {
-    target_node = "${cfg.target_node}"
-    cores       = ${cfg.cores}
-    memory      = ${cfg.memory}
-    disk_size   = "${cfg.disk_size}"
-    vm_id       = ${vmIdValue}
-  }`;
-        })
+        .map(([name, cfg]) => formatVmConfigEntry(name, cfg))
         .join(",\n");
 
       const reconciledVlanIdValue = extractHclAssignmentNumber(existingContent, "vm_vlan_id");
@@ -402,17 +465,7 @@ ${reconciledVmConfigsBlock}
 
     // Build vm_configs block
     const vmConfigsBlock = Object.entries(mergedVmConfigs)
-      .map(([name, cfg]) => {
-        // Use 0 as sentinel for auto-assign (Terraform will convert to null)
-        const vmIdValue = cfg.vm_id !== undefined && cfg.vm_id > 0 ? cfg.vm_id : 0;
-        return `  "${name}" = {
-    target_node = "${cfg.target_node}"
-    cores       = ${cfg.cores}
-    memory      = ${cfg.memory}
-    disk_size   = "${cfg.disk_size}"
-    vm_id       = ${vmIdValue}
-  }`;
-      })
+      .map(([name, cfg]) => formatVmConfigEntry(name, cfg))
       .join(",\n");
 
     // Generate new content
@@ -473,16 +526,7 @@ ${vmConfigsBlock}
       extractHclAssignmentNumber(existingContent, "vm_template_id") || 8001;
 
     const vmConfigsBlock = Object.entries(existingVmConfigs)
-      .map(([name, cfg]) => {
-        const vmIdValue = cfg.vm_id !== undefined && cfg.vm_id > 0 ? cfg.vm_id : 0;
-        return `  "${name}" = {
-    target_node = "${cfg.target_node}"
-    cores       = ${cfg.cores}
-    memory      = ${cfg.memory}
-    disk_size   = "${cfg.disk_size}"
-    vm_id       = ${vmIdValue}
-  }`;
-      })
+      .map(([name, cfg]) => formatVmConfigEntry(name, cfg))
       .join(",\n");
     const vlanIdLine = typeof vlanIdValue === "number" ? `vm_vlan_id = ${vlanIdValue}\n` : "";
     const updatedContent = `# Generated by Palindrome Action Layer
@@ -573,35 +617,7 @@ ${vmConfigsBlock}
       env.SSH_AGENT_PID = process.env.SSH_AGENT_PID;
     }
 
-    // Determine which node we're targeting and select appropriate URL/token
-    let proxmoxUrl: string | undefined;
-    let tokenId: string | undefined;
-    let tokenSecret: string | undefined;
-
-    // Normalize node name for matching
-    const nodeLower = targetNode?.toLowerCase() || "";
-
-    // Check for node-specific URLs and tokens
-    if (nodeLower === "yin" || nodeLower === "yang") {
-      // Cluster nodes - use cluster-specific config
-      proxmoxUrl = nodeLower === "yin" 
-        ? process.env.PROXMOX_YIN_URL || process.env.PROXMOX_URL
-        : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL;
-      
-      tokenId = process.env.CLUSTER_TF_TOKEN_ID;
-      // Try node-specific secret first, fallback to cluster secret
-      if (nodeLower === "yin") {
-        tokenSecret = process.env.PROXMOX_YIN_TF_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
-      } else {
-        tokenSecret = process.env.PROXMOX_YANG_TF_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
-      }
-    } else {
-      // proxBig or default - use proxBig config
-      proxmoxUrl = process.env.PROXMOX_URL;
-      tokenId = process.env.CLUSTER_TF_TOKEN_ID || process.env.PROXBIG_TF_TOKEN_ID;
-      // Try proxBig-specific secret (check multiple possible variable names), then fallback to cluster secret
-      tokenSecret = process.env.PROXMOX_PROXBIG_TF_SECRET || process.env.PROXBIG_TF_SECRET || process.env.PROXBIG_TOKEN_SECRET || process.env.PROXMOX_CLUSTER_TF_SECRET;
-    }
+    const { proxmoxUrl, tokenId, tokenSecret } = resolveTerraformProxmoxAuth(targetNode);
 
     // Validate required variables
     if (!proxmoxUrl) {

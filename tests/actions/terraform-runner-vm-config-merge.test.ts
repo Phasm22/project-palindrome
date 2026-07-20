@@ -4,6 +4,7 @@ import {
   parseManagedVmNamesFromTerraformStateList,
   parseVmConfigsFromTfvars,
   reconcileVmConfigsWithTerraformState,
+  resolveTerraformProxmoxAuth,
 } from "../../src/actions/helpers/terraform-runner";
 
 test("parseVmConfigsFromTfvars reads generated vm_configs map", () => {
@@ -28,6 +29,9 @@ vm_configs = {
     memory      = 2048
     disk_size   = "10G"
     vm_id       = 9001
+    template_id    = 8001
+    ssh_username   = "m4"
+    ssh_public_key = "ssh-ed25519 BBBB"
   }
 }
 `;
@@ -40,6 +44,16 @@ vm_configs = {
     memory: 4096,
     disk_size: "20G",
     vm_id: 9000,
+  });
+  expect(parsed.bib).toEqual({
+    target_node: "yin",
+    cores: 1,
+    memory: 2048,
+    disk_size: "10G",
+    vm_id: 9001,
+    template_id: 8001,
+    ssh_username: "m4",
+    ssh_public_key: "ssh-ed25519 BBBB",
   });
 });
 
@@ -62,12 +76,18 @@ test("mergeVmConfigsWithExistingTfvars preserves existing VMs and upserts incomi
       memory: 4096,
       disk_size: "20G",
       vm_id: 9001,
+      template_id: 8001,
+      ssh_username: "m4",
+      ssh_public_key: "ssh-ed25519 BBBB",
     },
   });
 
   expect(Object.keys(merged).sort()).toEqual(["aba", "bib"]);
   expect(merged.aba?.vm_id).toBe(9000);
   expect(merged.bib?.vm_id).toBe(9001);
+  expect(merged.bib?.template_id).toBe(8001);
+  expect(merged.bib?.ssh_username).toBe("m4");
+  expect(merged.bib?.ssh_public_key).toBe("ssh-ed25519 BBBB");
 });
 
 test("parseManagedVmNamesFromTerraformStateList reads only VM resources", () => {
@@ -123,4 +143,41 @@ test("reconcileVmConfigsWithTerraformState prunes stale tfvars entries absent fr
 
   expect(Object.keys(reconciledVmConfigs).sort()).toEqual(["apple"]);
   expect(removedVmNames.sort()).toEqual(["littlepally", "pleas"]);
+});
+
+test("resolveTerraformProxmoxAuth defaults yin to yin endpoint even when PROXMOX_URL points at yang", () => {
+  const resolved = resolveTerraformProxmoxAuth("yin", {
+    PROXMOX_URL: "https://yang.prox:8006",
+    CLUSTER_TF_TOKEN_ID: "llm@pve!llm-agent",
+    PROXMOX_CLUSTER_TF_SECRET: "cluster-secret",
+  });
+
+  expect(resolved.proxmoxUrl).toBe("https://yin.prox:8006");
+  expect(resolved.tokenId).toBe("llm@pve!llm-agent");
+  expect(resolved.tokenSecret).toBe("cluster-secret");
+});
+
+test("resolveTerraformProxmoxAuth prefers node-specific cluster endpoint and token pair", () => {
+  const resolved = resolveTerraformProxmoxAuth("YANG", {
+    PROXMOX_URL: "https://yin.prox:8006",
+    PROXMOX_YANG_URL: "https://yang-custom.prox:8006",
+    PROXMOX_YANG_TF_TOKEN_ID: "yang@pve!tf",
+    PROXMOX_YANG_TF_SECRET: "yang-secret",
+    CLUSTER_TF_TOKEN_ID: "llm@pve!llm-agent",
+    PROXMOX_CLUSTER_TF_SECRET: "cluster-secret",
+  });
+
+  expect(resolved.proxmoxUrl).toBe("https://yang-custom.prox:8006");
+  expect(resolved.tokenId).toBe("yang@pve!tf");
+  expect(resolved.tokenSecret).toBe("yang-secret");
+});
+
+test("resolveTerraformProxmoxAuth defaults yang to yang endpoint", () => {
+  const resolved = resolveTerraformProxmoxAuth("yang", {
+    PROXMOX_URL: "https://yin.prox:8006",
+    CLUSTER_TF_TOKEN_ID: "llm@pve!llm-agent",
+    PROXMOX_CLUSTER_TF_SECRET: "cluster-secret",
+  });
+
+  expect(resolved.proxmoxUrl).toBe("https://yang.prox:8006");
 });

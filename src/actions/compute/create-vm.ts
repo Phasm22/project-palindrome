@@ -261,8 +261,8 @@ function getProxmoxClientConfig(node: string): { url: string; tokenId: string; t
   
   if (nodeLower === "yin" || nodeLower === "yang") {
     url = (nodeLower === "yin"
-      ? process.env.PROXMOX_YIN_URL || process.env.PROXMOX_URL || DEFAULT_NODE_URLS.yin
-      : process.env.PROXMOX_YANG_URL || process.env.PROXMOX_URL || DEFAULT_NODE_URLS.yang) as string;
+      ? process.env.PROXMOX_YIN_URL || DEFAULT_NODE_URLS.yin
+      : process.env.PROXMOX_YANG_URL || DEFAULT_NODE_URLS.yang) as string;
     // Prefer node-specific TF token if provided; fall back to cluster token
     tokenId = nodeLower === "yin"
       ? process.env.PROXMOX_YIN_TF_TOKEN_ID || process.env.CLUSTER_TF_TOKEN_ID
@@ -615,6 +615,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
         memory,
         disk_size: diskSize,
         vm_id: allocatedVmId, // Use allocated VM ID, or undefined for auto-assign
+        template_id: finalTemplateId,
+        ssh_username: (sshUsername && sshUsername.trim().length > 0) ? sshUsername.trim() : "ops",
+        ssh_public_key: sshKey,
       },
     },
     sshPublicKey: sshKey,
@@ -698,6 +701,13 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
           `Check that your Terraform token (${process.env.CLUSTER_TF_TOKEN_ID || process.env.PROXBIG_TF_TOKEN_ID}) has: ` +
           `Datastore.Allocate, Datastore.AllocateTemplate, and VM.Allocate permissions. ` +
           `Original error: ${stderr}`;
+      } else if (/lookup\s+[\w.-]+/i.test(stderr) || /failed to perform HTTP GET request/i.test(stderr)) {
+        const endpointMatch = stderr.match(/Get "([^"]+)"/);
+        const endpoint = endpointMatch?.[1] || "the configured Proxmox endpoint";
+        errorMessage = `Terraform lost connectivity while polling the Proxmox task for node "${normalizedNode}". ` +
+          `It used endpoint ${endpoint}. ` +
+          `Set PROXMOX_${normalizedNode.toUpperCase()}_URL to the node endpoint (for example https://${normalizedNodeLower}.prox:8006) ` +
+          `and verify local DNS resolves it. Original error: ${stderr}`;
       } else if (stderr.includes("timeout") || stderr.includes("Still creating")) {
         errorMessage = `Terraform operation timed out or is taking too long. This may indicate network issues or insufficient permissions. ` +
           `Check the Proxmox API connectivity and token permissions. Original error: ${stderr}`;
