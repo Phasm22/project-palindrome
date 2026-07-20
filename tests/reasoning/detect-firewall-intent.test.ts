@@ -12,6 +12,17 @@ describe("detectFirewallIntent", () => {
     expect(intent).toEqual({ type: "rules_by_chain", chain: "chain:wireguard" });
   });
 
+  test("routes source IP access questions to source-aware chain analysis", () => {
+    const intent = detectFirewallIntent(
+      "What IPs of the WireGuard interface can access the lab network?"
+    );
+    expect(intent).toEqual({
+      type: "sources_accessing_network",
+      chain: "chain:wireguard",
+      target: "lab network",
+    });
+  });
+
   test("routes reachability over wg to chain reachability", () => {
     const intent = detectFirewallIntent("what is reachable from wg?");
     expect(intent).toEqual({ type: "reachability_from_chain", chain: "chain:wireguard" });

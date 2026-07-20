@@ -4,6 +4,7 @@ export type FirewallIntent =
   | { type: "alias_contents"; aliasName: string }
   | { type: "allowed_ports_between"; from: string; to: string }
   | { type: "rules_by_chain"; chain: string }
+  | { type: "sources_accessing_network"; chain: string; target: string }
   | { type: "rules_allowing_subnet"; subnet: string }
   | { type: "rules_blocking_subnet"; subnet: string }
   | { type: "exposure_map"; vmId?: string }
@@ -177,6 +178,17 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   // Reachability from interface/chain (e.g. WireGuard)
   const reachabilityKeywords = normalized.includes("reachable") || normalized.includes("reach") || normalized.includes("accessible");
   const chain = extractChain(userInput);
+  const asksForSources =
+    /\b(?:what|which)\b.*\b(?:ips?|addresses?|sources?|subnets?)\b/.test(normalized) &&
+    /\b(?:access|reach|connect|allowed|permit)\b/.test(normalized);
+  if (asksForSources && chain) {
+    const targetMatch = userInput.match(/\b(?:access|reach|connect\s+to)\s+(?:the\s+)?(.+?)(?:\?|$)/i);
+    return {
+      type: "sources_accessing_network",
+      chain,
+      target: targetMatch?.[1]?.trim() || "network",
+    };
+  }
   if (reachabilityKeywords && chain) {
     return { type: "reachability_from_chain", chain };
   }

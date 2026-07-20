@@ -436,6 +436,86 @@ export async function firewallRulesByChainChain(
   return formatRuleList(`Firewall Rules for ${chain}:`, rules, aliases);
 }
 
+export function formatSourcesAccessingNetwork(
+  chain: string,
+  target: string,
+  rules: FirewallRuleSummary[],
+  aliases: FirewallAliasDef[]
+): string {
+  const matchingRules = rules.filter((rule) => {
+    const action = rule.action.toLowerCase();
+    const direction = rule.direction?.toLowerCase();
+    const destination = rule.destination?.toLowerCase() ?? "";
+    return action === "pass" &&
+      direction === "in" &&
+      destination !== "any" &&
+      (destination.includes(":network") || destination.includes("network"));
+  });
+
+  const aliasByName = new Map(aliases.map((alias) => [alias.name.toLowerCase(), alias]));
+  const sources = new Map<string, { label: string; values: string[] }>();
+  const destinations = new Set<string>();
+
+  for (const rule of matchingRules) {
+    if (rule.destination) destinations.add(rule.destination);
+    const aliasTokens = extractAliasTokens(rule.source);
+    if (aliasTokens.length > 0) {
+      for (const token of aliasTokens) {
+        const alias = aliasByName.get(token.toLowerCase());
+        const values = alias?.cidrs.length
+          ? alias.cidrs
+          : alias?.entries.length
+            ? alias.entries
+            : [];
+        sources.set(token.toLowerCase(), { label: alias?.name ?? token, values });
+      }
+    } else if (rule.source) {
+      sources.set(rule.source.toLowerCase(), { label: rule.source, values: [rule.source] });
+    }
+  }
+
+  if (sources.size === 0) {
+    return `No inbound PASS rules from ${chain} to ${target} networks were found in the digital twin.`;
+  }
+
+  const sourceText = Array.from(sources.values()).map((source) => {
+    if (source.values.length === 0) return `\`${source.label}\` (alias unresolved)`;
+    return source.values.map((value) => `IPs in \`${value}\` (\`${source.label}\`)`).join(", ");
+  }).join(", ");
+  const destinationText = Array.from(destinations).map((destination) => `\`${destination}\``).join(", ");
+
+  return [
+    `${sourceText} can access ${target} through ${chain.replace(/^chain:/, "")}.`,
+    destinationText ? `Matched inbound destinations: ${destinationText}.` : "",
+  ].filter(Boolean).join("\n");
+}
+
+export async function sourcesAccessingNetworkChain(
+  chain: string,
+  target: string,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "twin_query",
+      parameters: { operation: "firewall_rules_by_chain", params: { chain } },
+    },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as { data?: unknown[]; aliases?: FirewallAliasDef[] };
+  return formatSourcesAccessingNetwork(
+    chain,
+    target,
+    toFirewallRules(payload?.data ?? []),
+    payload?.aliases ?? []
+  );
+}
+
 export async function rulesAllowingSubnetChain(
   subnet: string,
   tools: BaseTool[],

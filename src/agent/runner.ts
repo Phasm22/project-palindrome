@@ -54,6 +54,7 @@ import {
   aliasContentsChain,
   allowedPortsBetweenChain,
   firewallRulesByChainChain,
+  sourcesAccessingNetworkChain,
   rulesAllowingSubnetChain,
   rulesBlockingSubnetChain,
   exposureMapChain,
@@ -665,6 +666,8 @@ async function executeFirewallIntent(
         return await allowedPortsBetweenChain(intent.from, intent.to, tools, session);
       case "rules_by_chain":
         return await firewallRulesByChainChain(intent.chain, tools, session);
+      case "sources_accessing_network":
+        return await sourcesAccessingNetworkChain(intent.chain, intent.target, tools, session);
       case "rules_allowing_subnet":
         return await rulesAllowingSubnetChain(intent.subnet, tools, session);
       case "rules_blocking_subnet":
@@ -695,6 +698,8 @@ function buildFirewallToolCalls(intent: FirewallIntent): Array<{ toolName: strin
     case "allowed_ports_between":
       return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } }];
     case "rules_by_chain":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_by_chain", params: { chain: intent.chain } } }];
+    case "sources_accessing_network":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_by_chain", params: { chain: intent.chain } } }];
     case "rules_allowing_subnet":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_allowing_subnet", params: { subnet: intent.subnet } } }];
@@ -1884,15 +1889,17 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         const firewallSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
         const firewallMode: ResponseMode = state.responseMode ?? (firewallSummaryWords ? "EXPLAINER" : "ASSISTIVE");
         let formattedAnswer = firewallAnswer;
-        try {
-          formattedAnswer = await formatResponseForBot(firewallAnswer, {
-            userQuery: userInput,
-            intentType: "firewall_rules",
-            toolCalls: firewallToolCalls,
-            mode: firewallMode,
-          });
-        } catch (error: any) {
-          logger.warn("Failed to format firewall answer", { error: error.message });
+        if (firewallIntent.type !== "sources_accessing_network") {
+          try {
+            formattedAnswer = await formatResponseForBot(firewallAnswer, {
+              userQuery: userInput,
+              intentType: "firewall_rules",
+              toolCalls: firewallToolCalls,
+              mode: firewallMode,
+            });
+          } catch (error: any) {
+            logger.warn("Failed to format firewall answer", { error: error.message });
+          }
         }
         
         const traceId = await recordEarlyReturnTrace(
