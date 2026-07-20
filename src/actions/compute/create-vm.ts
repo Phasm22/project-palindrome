@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { TerraformRunner, type TerraformConfig } from "../helpers/terraform-runner";
+import {
+  TerraformRunner,
+  type TerraformConfig,
+  type TerraformExecutionOptions,
+} from "../helpers/terraform-runner";
 import { TwinSync } from "../helpers/twin-sync";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
 import { pceLogger as logger } from "../../pce/utils/logger";
@@ -44,6 +48,13 @@ export interface CreateVmResult {
   ipAddresses?: string[];
   message: string;
   terraformOutput?: any;
+}
+
+export interface CreateVmExecutionOptions {
+  terraform?: TerraformExecutionOptions;
+  persistSharedConfig?: boolean;
+  includeSharedInventory?: boolean;
+  manageDns?: boolean;
 }
 
 export function sanitizeVmName(input: string): string {
@@ -285,7 +296,10 @@ function getProxmoxClientConfig(node: string): { url: string; tokenId: string; t
   return { url, tokenId, tokenSecret };
 }
 
-export async function createVm(params: CreateVmParams): Promise<CreateVmResult> {
+export async function createVm(
+  params: CreateVmParams,
+  executionOptions: CreateVmExecutionOptions = {}
+): Promise<CreateVmResult> {
   const { name, node, cores, memory, diskSize, sshPublicKey, sshUsername, vmBridge, vlanId, datastore, cloudInitDatastore, templateId, vmId: preferredVmId, bootstrap: shouldBootstrap, dryRun } = params;
 
   // Normalize node name: Proxmox node names are case-sensitive (YANG, yin, etc.)
@@ -618,6 +632,12 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
         template_id: finalTemplateId,
         ssh_username: (sshUsername && sshUsername.trim().length > 0) ? sshUsername.trim() : "ops",
         ssh_public_key: sshKey,
+        datastore: finalDatastore,
+        cloud_init_datastore: cloudInitDatastore || defaultCloudInitDatastore,
+        vm_bridge: finalVmBridge,
+        vlan_id: vlanId,
+        bios: "seabios",
+        disk_interface: "virtio0",
       },
     },
     sshPublicKey: sshKey,
@@ -630,16 +650,23 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
   };
 
   // 3. Dry-run check
-  const terraformTargets = buildCreateVmTerraformTargets(finalName);
+  const terraformTargets = buildCreateVmTerraformTargets(finalName).filter(
+    (target) =>
+      executionOptions.includeSharedInventory !== false ||
+      target !== "null_resource.ansible_inventory"
+  );
   const tempTfvarsDir = await mkdtemp(join(tmpdir(), "palindrome-create-vm-"));
   const tempTfvarsPath = join(tempTfvarsDir, `${finalName}.tfvars`);
+  const terraformTfvarsPath =
+    executionOptions.terraform?.tfvarsPath || tempTfvarsPath;
 
   try {
     if (dryRun) {
       const planResult = await terraformRunner.plan(tfConfig, {
+        ...executionOptions.terraform,
         skipLock: true,
         targets: terraformTargets,
-        tfvarsPath: tempTfvarsPath,
+        tfvarsPath: terraformTfvarsPath,
       });
       return {
         success: planResult.success,
@@ -652,9 +679,10 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     // 4. Execute terraform
     // Safety gate: create_vm should never include destroys in plan.
     const preApplyPlan = await terraformRunner.plan(tfConfig, {
+      ...executionOptions.terraform,
       skipLock: true,
       targets: terraformTargets,
-      tfvarsPath: tempTfvarsPath,
+      tfvarsPath: terraformTfvarsPath,
     });
     if (!preApplyPlan.success) {
       throw new Error(`Terraform plan failed before apply: ${preApplyPlan.stderr || "unknown error"}`);
@@ -684,8 +712,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       details: { name: finalName, node: normalizedNode, vmId: allocatedVmId },
     });
     const applyResult = await terraformRunner.apply(tfConfig, {
+      ...executionOptions.terraform,
       targets: terraformTargets,
-      tfvarsPath: tempTfvarsPath,
+      tfvarsPath: terraformTfvarsPath,
     });
 
     if (!applyResult.success) {
@@ -735,7 +764,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       throw new Error(errorMessage);
     }
 
-    await terraformRunner.persistTfVars(tfConfig);
+    if (executionOptions.persistSharedConfig !== false) {
+      await terraformRunner.persistTfVars(tfConfig);
+    }
 
     // Progress: terraform apply finished, moving to outputs
     emitToolProgress({
@@ -748,7 +779,9 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
     });
 
     // 5. Get VM info from terraform outputs
-    const outputs = await terraformRunner.getOutputs();
+    const outputs = await terraformRunner.getOutputs(
+      executionOptions.terraform?.statePath
+    );
     const vmInfo = outputs.vm_info?.[finalName];
 
     if (!vmInfo) {
@@ -791,7 +824,11 @@ export async function createVm(params: CreateVmParams): Promise<CreateVmResult> 
       });
     const firstIp = flattenedIps.length > 0 ? flattenedIps[0] : null;
     
-    if (firstIp && (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY)) {
+    if (
+      executionOptions.manageDns !== false &&
+      firstIp &&
+      (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY)
+    ) {
       try {
         const { createDnsRecord } = await import("../network/create-dns-record");
         const dnsResult = await createDnsRecord({

@@ -33,6 +33,12 @@ export interface DestroyVmResult {
   terraformOutput?: any;
 }
 
+export interface DestroyVmExecutionOptions {
+  tfvarsPath?: string;
+  statePath?: string;
+  removeSharedConfig?: boolean;
+}
+
 export function normalizeDestroyVmIdentifiers(rawName: string): {
   infraName: string;
   dnsDomain: string;
@@ -141,7 +147,10 @@ export async function deleteDnsRecordForDestroyedVm(
  * 
  * Uses terraform destroy -target to remove a specific VM
  */
-export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResult> {
+export async function destroyVm(
+  params: DestroyVmParams,
+  executionOptions: DestroyVmExecutionOptions = {}
+): Promise<DestroyVmResult> {
   let { name, vmId, node, dryRun } = params;
 
   logger.info("Destroying VM", { name, vmId, node, dryRun });
@@ -394,7 +403,8 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
 
     // For destroy, we need to ensure the tfvars file has the vm_id field if it's missing
     // Read existing tfvars, patch it if needed, then use it
-    const tfvarsPath = terraformRunner.getTfvarsPath();
+    const tfvarsPath =
+      executionOptions.tfvarsPath || terraformRunner.getTfvarsPath();
     try {
       let tfvarsContent = await readFile(tfvarsPath, "utf-8");
       
@@ -443,7 +453,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       tmpdir(),
       `palindrome-destroy-${process.pid}-${randomUUID()}.tfplan`
     );
-    const planResult = await terraformRunner.executeTerraform("plan", [
+    const planArgs = [
       "-destroy",
       `-var-file="${tfvarsPath}"`,
       `-target='${targetResource}'`,
@@ -451,7 +461,12 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       "-refresh=false",
       "-input=false",
       `-out="${planPath}"`,
-    ]);
+    ];
+    if (executionOptions.statePath) {
+      planArgs.push(`-state="${executionOptions.statePath}"`);
+    }
+
+    const planResult = await terraformRunner.executeTerraform("plan", planArgs);
     if (!planResult.success) {
       await unlink(planPath).catch(() => undefined);
       return {
@@ -514,11 +529,16 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       };
     }
 
-    const destroyResult = await terraformRunner.executeTerraform("apply", [
+    const applyArgs = [
       "-auto-approve",
       "-input=false",
       `"${planPath}"`,
-    ]);
+    ];
+    if (executionOptions.statePath) {
+      applyArgs.splice(2, 0, `-state="${executionOptions.statePath}"`);
+      applyArgs.splice(3, 0, `-state-out="${executionOptions.statePath}"`);
+    }
+    const destroyResult = await terraformRunner.executeTerraform("apply", applyArgs);
     await unlink(planPath).catch(() => undefined);
 
     // Check if Terraform actually destroyed anything
@@ -579,30 +599,32 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       }
     }
 
-    try {
-      await terraformRunner.removeVmFromState(terraformVmName);
-    } catch (error: any) {
-      logger.warn("Failed to remove destroyed VM from terraform state", {
-        vmName: terraformVmName,
-        tfvarsPath,
-        error: error.message,
-      });
-    }
-
-    try {
-      const removed = await terraformRunner.removeVmFromTfvars(terraformVmName);
-      if (!removed) {
-        logger.warn("Destroyed VM was not present in tfvars vm_configs (nothing removed)", {
+    if (executionOptions.removeSharedConfig !== false) {
+      try {
+        await terraformRunner.removeVmFromState(terraformVmName);
+      } catch (error: any) {
+        logger.warn("Failed to remove destroyed VM from terraform state", {
           vmName: terraformVmName,
           tfvarsPath,
+          error: error.message,
         });
       }
-    } catch (error: any) {
-      logger.warn("Failed to remove destroyed VM from tfvars vm_configs", {
-        vmName: terraformVmName,
-        tfvarsPath,
-        error: error.message,
-      });
+
+      try {
+        const removed = await terraformRunner.removeVmFromTfvars(terraformVmName);
+        if (!removed) {
+          logger.warn("Destroyed VM was not present in tfvars vm_configs (nothing removed)", {
+            vmName: terraformVmName,
+            tfvarsPath,
+          });
+        }
+      } catch (error: any) {
+        logger.warn("Failed to remove destroyed VM from tfvars vm_configs", {
+          vmName: terraformVmName,
+          tfvarsPath,
+          error: error.message,
+        });
+      }
     }
 
     if (twinVmId) {

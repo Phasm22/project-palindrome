@@ -8,3 +8,4 @@ export { InstallDockerTool } from "./InstallDockerTool";
 export { InstallNginxTool } from "./InstallNginxTool";
 export { ConfigureFirewallTool } from "./ConfigureFirewallTool";
 export { SetStaticIpTool } from "./SetStaticIpTool";
+export { ApplicationLifecycleTool } from "./ApplicationLifecycleTool";

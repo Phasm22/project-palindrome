@@ -18,6 +18,12 @@ export interface TerraformConfig {
       template_id?: number;
       ssh_username?: string;
       ssh_public_key?: string;
+      datastore?: string;
+      cloud_init_datastore?: string;
+      vm_bridge?: string;
+      vlan_id?: number;
+      bios?: "seabios" | "ovmf";
+      disk_interface?: "virtio0" | "scsi0" | "sata0";
     }
   >;
   sshPublicKey?: string; // Optional - will be read from env or ~/.ssh/id_ed25519.pub if not provided
@@ -59,6 +65,12 @@ export type VmConfigEntry = {
   template_id?: number;
   ssh_username?: string;
   ssh_public_key?: string;
+  datastore?: string;
+  cloud_init_datastore?: string;
+  vm_bridge?: string;
+  vlan_id?: number;
+  bios?: "seabios" | "ovmf";
+  disk_interface?: "virtio0" | "scsi0" | "sata0";
 };
 
 export interface TerraformExecutionOptions {
@@ -66,6 +78,8 @@ export interface TerraformExecutionOptions {
   targets?: string[];
   tfvarsPath?: string;
   baseTfvarsPath?: string;
+  statePath?: string;
+  planPath?: string;
 }
 
 export interface TerraformProxmoxAuthConfig {
@@ -164,6 +178,16 @@ function parseVmConfigBlock(block: string): VmConfigEntry | null {
   const templateIdRaw = block.match(/\btemplate_id\s*=\s*(\d+)/)?.[1];
   const sshUsername = block.match(/\bssh_username\s*=\s*"([^"\n]+)"/)?.[1];
   const sshPublicKey = block.match(/\bssh_public_key\s*=\s*"([^"\n]+)"/)?.[1];
+  const datastore = block.match(/\bdatastore\s*=\s*"([^"\n]+)"/)?.[1];
+  const cloudInitDatastore = block.match(/\bcloud_init_datastore\s*=\s*"([^"\n]+)"/)?.[1];
+  const vmBridge = block.match(/\bvm_bridge\s*=\s*"([^"\n]+)"/)?.[1];
+  const vlanIdRaw = block.match(/\bvlan_id\s*=\s*(\d+)/)?.[1];
+  const bios = block.match(/\bbios\s*=\s*"(seabios|ovmf)"/)?.[1] as
+    | VmConfigEntry["bios"]
+    | undefined;
+  const diskInterface = block.match(/\bdisk_interface\s*=\s*"(virtio0|scsi0|sata0)"/)?.[1] as
+    | VmConfigEntry["disk_interface"]
+    | undefined;
 
   if (!targetNode || !coresRaw || !memoryRaw || !diskSize) {
     return null;
@@ -187,6 +211,12 @@ function parseVmConfigBlock(block: string): VmConfigEntry | null {
   if (Number.isFinite(templateId)) parsed.template_id = templateId;
   if (sshUsername) parsed.ssh_username = sshUsername;
   if (sshPublicKey) parsed.ssh_public_key = sshPublicKey;
+  if (datastore) parsed.datastore = datastore;
+  if (cloudInitDatastore) parsed.cloud_init_datastore = cloudInitDatastore;
+  if (vmBridge) parsed.vm_bridge = vmBridge;
+  if (vlanIdRaw) parsed.vlan_id = Number.parseInt(vlanIdRaw, 10);
+  if (bios) parsed.bios = bios;
+  if (diskInterface) parsed.disk_interface = diskInterface;
   return parsed;
 }
 
@@ -284,6 +314,16 @@ function formatVmConfigEntry(name: string, cfg: VmConfigEntry): string {
     cfg.template_id !== undefined && cfg.template_id > 0 ? `    template_id    = ${cfg.template_id}` : "",
     cfg.ssh_username ? `    ssh_username   = "${cfg.ssh_username}"` : "",
     cfg.ssh_public_key ? `    ssh_public_key = "${cfg.ssh_public_key}"` : "",
+    cfg.datastore ? `    datastore              = "${cfg.datastore}"` : "",
+    cfg.cloud_init_datastore
+      ? `    cloud_init_datastore   = "${cfg.cloud_init_datastore}"`
+      : "",
+    cfg.vm_bridge ? `    vm_bridge              = "${cfg.vm_bridge}"` : "",
+    cfg.vlan_id !== undefined ? `    vlan_id                = ${cfg.vlan_id}` : "",
+    cfg.bios ? `    bios                   = "${cfg.bios}"` : "",
+    cfg.disk_interface
+      ? `    disk_interface         = "${cfg.disk_interface}"`
+      : "",
   ].filter(Boolean);
   const optionalBlock = optionalLines.length > 0 ? `\n${optionalLines.join("\n")}` : "";
 
@@ -373,9 +413,12 @@ export class TerraformRunner {
     );
   }
 
-  private async getManagedVmNamesFromState(): Promise<Set<string> | null> {
+  private async getManagedVmNamesFromState(
+    statePath?: string
+  ): Promise<Set<string> | null> {
     try {
-      const { stdout } = await execAsync("terraform state list", {
+      const stateArgument = statePath ? ` -state="${statePath}"` : "";
+      const { stdout } = await execAsync(`terraform state list${stateArgument}`, {
         cwd: this.terraformDir,
         env: this.getTerraformEnv(),
         maxBuffer: 10 * 1024 * 1024,
@@ -395,7 +438,10 @@ export class TerraformRunner {
    */
   private async generateTfVars(
     config: TerraformConfig,
-    options: Pick<TerraformExecutionOptions, "tfvarsPath" | "baseTfvarsPath"> = {}
+    options: Pick<
+      TerraformExecutionOptions,
+      "tfvarsPath" | "baseTfvarsPath" | "statePath"
+    > = {}
   ): Promise<string> {
     const sharedTfvarsPath = this.getTfvarsPath();
     const baseTfvarsPath = options.baseTfvarsPath || sharedTfvarsPath;
@@ -410,7 +456,9 @@ export class TerraformRunner {
     // Get SSH public key
     const sshPublicKey = await this.getSshPublicKey(config);
     let baseTfvarsContent = existingContent;
-    const managedVmNames = await this.getManagedVmNamesFromState();
+    const managedVmNames = await this.getManagedVmNamesFromState(
+      options.statePath
+    );
     if (managedVmNames) {
       const { reconciledVmConfigs, removedVmNames } = reconcileVmConfigsWithTerraformState(
         existingContent,
@@ -663,7 +711,6 @@ ${vmConfigsBlock}
       targetNode,
       tokenId,
       tokenSecretLength: tokenSecret?.length || 0,
-      tokenSecretPrefix: tokenSecret?.substring(0, 8) || "missing",
       proxmoxUrl: terraformUrl,
       fullUrl: cleanUrl,
     });
@@ -755,9 +802,12 @@ ${vmConfigsBlock}
 
     const args = [
       `-var-file="${tfvarsPath}"`,
-      "-out=tfplan",
+      `-out="${options.planPath || "tfplan"}"`,
       "-input=false", // Non-interactive mode
     ];
+    if (options.statePath) {
+      args.push(`-state="${options.statePath}"`);
+    }
 
     // For dry-run (plan), skip lock since it's read-only
     if (skipLock) {
@@ -778,17 +828,21 @@ ${vmConfigsBlock}
     const targets = options.targets ?? [];
     const tfvarsPath = await this.generateTfVars(config, options);
 
-    const result = await this.executeTerraform("apply", [
+    const applyArgs = [
       `-var-file="${tfvarsPath}"`,
       "-auto-approve",
       "-input=false", // Non-interactive mode
       ...targets.map((target) => formatTerraformTargetArg(target)),
-    ]);
+    ];
+    if (options.statePath) {
+      applyArgs.push(`-state="${options.statePath}"`);
+    }
+    const result = await this.executeTerraform("apply", applyArgs);
 
     // Refresh state and get outputs
     if (result.success) {
       await this.refresh(config, options);
-      const outputs = await this.getOutputs();
+      const outputs = await this.getOutputs(options.statePath);
       result.outputs = outputs;
     }
 
@@ -817,22 +871,34 @@ ${vmConfigsBlock}
    * Run terraform refresh
    * Note: refresh needs var-file to avoid prompting for variables
    */
-  async refresh(config?: TerraformConfig, options: Pick<TerraformExecutionOptions, "tfvarsPath" | "baseTfvarsPath"> = {}): Promise<TerraformResult> {
+  async refresh(
+    config?: TerraformConfig,
+    options: Pick<
+      TerraformExecutionOptions,
+      "tfvarsPath" | "baseTfvarsPath" | "statePath"
+    > = {}
+  ): Promise<TerraformResult> {
     if (config) {
       await this.generateTfVars(config, options);
     }
     const tfvarsPath = options.tfvarsPath || this.getTfvarsPath();
-    return this.executeTerraform("refresh", [
+    const args = [
       `-var-file="${tfvarsPath}"`,
       "-input=false",
-    ]);
+    ];
+    if (options.statePath) {
+      args.push(`-state="${options.statePath}"`);
+    }
+    return this.executeTerraform("refresh", args);
   }
 
   /**
    * Get terraform outputs
    */
-  async getOutputs(): Promise<TerraformOutput> {
-    const result = await this.executeTerraform("output", ["-json"]);
+  async getOutputs(statePath?: string): Promise<TerraformOutput> {
+    const args = ["-json"];
+    if (statePath) args.push(`-state="${statePath}"`);
+    const result = await this.executeTerraform("output", args);
 
     if (!result.success) {
       logger.warn("Failed to get terraform outputs", { stderr: result.stderr });

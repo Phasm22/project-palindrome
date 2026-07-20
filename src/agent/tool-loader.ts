@@ -14,6 +14,7 @@ import { ActionTool } from "../tools/ActionTool";
 import { SummarizeObservationsTool } from "../tools/SummarizeObservationsTool";
 import { NextStepsTool } from "../tools/NextStepsTool";
 import { AskMissingTool } from "../tools/AskMissingTool";
+import { ApplicationLifecycleTool } from "../tools/actions/ApplicationLifecycleTool";
 
 export function loadTools(): BaseTool[] {
   return [
@@ -31,7 +32,7 @@ export function loadTools(): BaseTool[] {
     new SSHTool(),
     new MCPOpnsenseTool(),
     new TwinQueryTool(),
+    new ApplicationLifecycleTool(),
     new ActionTool(),
   ];
 }
-

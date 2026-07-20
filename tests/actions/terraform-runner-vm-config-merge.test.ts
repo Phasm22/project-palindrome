@@ -5,6 +5,7 @@ import {
   parseVmConfigsFromTfvars,
   reconcileVmConfigsWithTerraformState,
   resolveTerraformProxmoxAuth,
+  TerraformRunner,
 } from "../../src/actions/helpers/terraform-runner";
 
 test("parseVmConfigsFromTfvars reads generated vm_configs map", () => {
@@ -32,6 +33,12 @@ vm_configs = {
     template_id    = 8001
     ssh_username   = "m4"
     ssh_public_key = "ssh-ed25519 BBBB"
+    datastore            = "fast-lvm"
+    cloud_init_datastore = "local"
+    vm_bridge            = "vmbr2"
+    vlan_id              = 200
+    bios                 = "ovmf"
+    disk_interface       = "scsi0"
   }
 }
 `;
@@ -54,6 +61,12 @@ vm_configs = {
     template_id: 8001,
     ssh_username: "m4",
     ssh_public_key: "ssh-ed25519 BBBB",
+    datastore: "fast-lvm",
+    cloud_init_datastore: "local",
+    vm_bridge: "vmbr2",
+    vlan_id: 200,
+    bios: "ovmf",
+    disk_interface: "scsi0",
   });
 });
 
@@ -180,4 +193,22 @@ test("resolveTerraformProxmoxAuth defaults yang to yang endpoint", () => {
   });
 
   expect(resolved.proxmoxUrl).toBe("https://yang.prox:8006");
+});
+
+test("TerraformRunner plan reads an isolated state without using unsupported state-out", async () => {
+  const runner = new TerraformRunner();
+  let capturedArgs: string[] = [];
+  (runner as any).generateTfVars = async () => "/tmp/application.tfvars";
+  (runner as any).executeTerraform = async (_command: string, args: string[]) => {
+    capturedArgs = args;
+    return { success: true, stdout: "", stderr: "" };
+  };
+
+  await runner.plan(
+    { vmConfigs: {}, sshPublicKey: "ssh-ed25519 test" },
+    { statePath: "/tmp/application.tfstate" }
+  );
+
+  expect(capturedArgs).toContain('-state="/tmp/application.tfstate"');
+  expect(capturedArgs.some((arg) => arg.startsWith("-state-out="))).toBe(false);
 });
