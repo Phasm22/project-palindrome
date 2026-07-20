@@ -216,6 +216,40 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(result.data.count).toBe(1);
     });
 
+    it("should filter node tasks by VMID", async () => {
+      const mockResponse = {
+        data: {
+          data: [
+            { upid: "task-100", type: "vzdump", id: "100", status: "OK", node: "pve1" },
+            { upid: "task-101", type: "qmstart", id: "101", status: "OK", node: "pve1" },
+          ],
+        },
+        metadata: {
+          status: 200,
+          timestamp: Date.now(),
+          durationMs: 100,
+          provenanceId: "tool://proxmox/test/123",
+        },
+      };
+
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve(mockNodesResponse);
+        }
+        return Promise.resolve(mockResponse);
+      });
+
+      const result = await tool.execute(
+        { action: "node_tasks", node: "pve1", vmid: 100 },
+        mockContext
+      );
+
+      expect(result.data.node).toBe("pve1");
+      expect(result.data.vmid).toBe(100);
+      expect(result.data.count).toBe(1);
+      expect(result.data.tasks[0].id).toBe("100");
+    });
+
     it("should implement node_network_interfaces action", async () => {
       const mockResponse = {
         data: {

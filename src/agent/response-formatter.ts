@@ -1040,11 +1040,86 @@ function formatAllowedPortsPolicySummary(
   return lines.join("\n");
 }
 
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+
+  for (const char of trimmed) {
+    if (escaped) {
+      cell += char;
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+      cell += char;
+    } else if (char === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function normalizeWideSingleRecordTable(responseText: string): string | null {
+  const lines = responseText.split("\n");
+  for (let index = 0; index < lines.length - 2; index++) {
+    const headerLine = lines[index];
+    const separatorLine = lines[index + 1];
+    const valueLine = lines[index + 2];
+    if (headerLine === undefined || separatorLine === undefined || valueLine === undefined) {
+      continue;
+    }
+    const headers = splitMarkdownTableRow(headerLine);
+    const separators = splitMarkdownTableRow(separatorLine);
+    if (
+      headers.length < 8 ||
+      headers.length !== separators.length ||
+      !separators.every((cell) => /^:?-{3,}:?$/.test(cell))
+    ) {
+      continue;
+    }
+
+    const values = splitMarkdownTableRow(valueLine);
+    if (values.length !== headers.length) continue;
+
+    const nextLine = lines[index + 3]?.trim();
+    if (nextLine?.includes("|")) continue;
+
+    const nameIndex = headers.findIndex((header) => /^name$/i.test(header));
+    const title = nameIndex >= 0 && values[nameIndex]
+      ? `${values[nameIndex]} details`
+      : "Entity details";
+    const facts = headers
+      .map((header, cellIndex) => {
+        const label = header
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (char) => char.toUpperCase());
+        return `- ${label}: ${values[cellIndex] || "Not available"}`;
+      })
+      .join("\n");
+
+    const before = lines.slice(0, index).filter((line) => line.trim()).join("\n");
+    const after = lines.slice(index + 3).filter((line) => line.trim()).join("\n");
+    return [before, title, facts, after].filter(Boolean).join("\n");
+  }
+
+  return null;
+}
+
 export function applyAdaptivePackaging(
   responseText: string,
   context: FormatContext
 ): string | null {
   if (!responseText) return null;
+
+  const wideRecordPackaging = normalizeWideSingleRecordTable(responseText);
+  if (wideRecordPackaging) {
+    return wideRecordPackaging;
+  }
 
   // Count queries: canonical one-line count format only (never entity-list)
   const countPackaging = normalizeCountPackaging(responseText, context);

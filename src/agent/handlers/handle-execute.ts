@@ -57,6 +57,11 @@ import {
 } from "./tool-helpers";
 import { isMetaIdentityQuery } from "./identity-helpers";
 import { generateActionPlan } from "./plan-generator";
+import {
+  extractResolvedVmEntity,
+  hydrateProxmoxReadArgs,
+  type ResolvedVmEntity,
+} from "./tool-argument-hydration";
 
 export interface HandleExecuteInput {
   state: AgentStateV1;
@@ -175,6 +180,7 @@ export async function handleExecute(
   // Initialize reasoning trace
   const reasoningSteps: ReasoningStep[] = [];
   let totalToolCalls = 0;
+  let resolvedVmEntity: ResolvedVmEntity | null = null;
 
   // Determine retrieval eligibility before hitting RAG/graph/fusion.
   const isTrivialQuery = (query: string): boolean => {
@@ -866,7 +872,24 @@ export async function handleExecute(
           });
           continue;
         }
-        const parsedArgs = parseResult.args;
+        const hydratedArgs = hydrateProxmoxReadArgs(
+          toolName,
+          parseResult.args,
+          resolvedVmEntity
+        );
+        const parsedArgs = hydratedArgs.args;
+        if (hydratedArgs.hydrated.length > 0) {
+          reasoningStep.decisions.push({
+            type: "parameter_hydration",
+            description: `Reused resolved VM identity for ${toolName}`,
+            metadata: {
+              toolName,
+              hydrated: hydratedArgs.hydrated,
+              node: parsedArgs.node,
+              vmid: parsedArgs.vmid,
+            },
+          });
+        }
 
         // Create a signature: toolName + sorted stringified args
         // For twin_query with node_temperature, allow different nodeName params (not duplicates)
@@ -1147,6 +1170,10 @@ export async function handleExecute(
           error: result.error ?? null,
           durationMs: result.durationMs ?? 0,
         });
+        if (!result.error) {
+          resolvedVmEntity =
+            extractResolvedVmEntity(toolName, result.data) ?? resolvedVmEntity;
+        }
 
         // Extract entity info for session-scoped resolution cache.
         // Only cache from tools that return infrastructure entities; skip large lists.

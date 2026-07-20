@@ -28,6 +28,7 @@ export interface ReasoningStep {
       | "limit_reached"
       | "fallback"
       | "tool_choice"
+      | "parameter_hydration"
       | "rag_used"
       | "graph_used"
       | "fusion_used"

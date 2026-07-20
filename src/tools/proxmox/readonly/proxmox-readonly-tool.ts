@@ -51,7 +51,10 @@ export const ProxmoxReadOnlyParams = z.object({
 
   // Optional parameters for specific actions
   node: z.string().optional().describe("Node name (required for node-level and VM-level actions)"),
-  vmid: z.number().optional().describe("VM ID (required for VM-level actions)"),
+  vmid: z
+    .number()
+    .optional()
+    .describe("VM ID (required for VM-level actions; optional filter for node_tasks)"),
   type: z
     .enum(["qemu", "lxc"])
     .optional()
@@ -69,7 +72,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     super({
       name: "proxmox_readonly",
       description:
-        "Comprehensive read-only access to Proxmox cluster state (Nodes, VMs, Cluster). All operations return structured JSON data.",
+        "Comprehensive read-only access to Proxmox cluster state (Nodes, VMs, Cluster). All operations return structured JSON data. Reuse node, VMID, and type from prior tool results instead of rediscovering them. For VM provenance and recent-change questions, call get_vm_config and node_tasks with the same node and VMID; only report no recent changes when the filtered node_tasks call succeeds with count 0.",
       categories: ["proxmox", "virtualization", "infrastructure", "cluster"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
@@ -98,6 +101,10 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         {
           description: "List tasks on a node",
           parameters: { action: "node_tasks", node: "pve1" },
+        },
+        {
+          description: "Get recent Proxmox changes for one VM/container",
+          parameters: { action: "node_tasks", node: "YANG", vmid: 100 },
         },
         {
           description: "Get Proxmox version",
@@ -137,6 +144,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         "All responses are structured JSON objects with normalized data (memory in MB/GB, timestamps in ISO8601).",
         "get_vm_ip requires guest agent enabled in VM config and API token with VM.Monitor + VM.Audit permissions. Returns 403 if permissions insufficient or guest agent unavailable.",
         "node_temperature fetches temperature data via SSH sensors command. Requires SSH access to the node.",
+        "For provenance and recent-change questions, resolve the VM once, call get_vm_config with its node/VMID/type, and call node_tasks with the same node and VMID. Only report no recent changes when the filtered node_tasks result succeeds with count 0.",
         "Internal IP addresses, MAC addresses, and credentials are automatically sanitized from responses.",
       ],
     });
@@ -275,7 +283,11 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         const originalNodeTasks = params.node;
         const normalizedNodeTasks = await this.normalizeNodeName(client, params.node);
         const activeClientTasks = this.apiClient || client;
-        const tasksResult = await this.getNodeTasks(activeClientTasks, normalizedNodeTasks);
+        const tasksResult = await this.getNodeTasks(
+          activeClientTasks,
+          normalizedNodeTasks,
+          params.vmid
+        );
         if (originalNodeTasks !== normalizedNodeTasks) {
           tasksResult.data._hint = `Note: Node name "${originalNodeTasks}" was normalized to "${normalizedNodeTasks}". For future queries, use the exact node name "${normalizedNodeTasks}" or call "list_nodes" first to see available nodes.`;
         }
@@ -870,12 +882,16 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
    */
   private async getNodeTasks(
     client: ProxmoxClient,
-    node: string
+    node: string,
+    vmid?: number
   ): Promise<{ data: any; metadata: any }> {
     const result = await client.get(`/nodes/${node}/tasks`);
     const tasks = result.data.data || [];
+    const matchingTasks = vmid === undefined
+      ? tasks
+      : tasks.filter((task: any) => String(task.id) === String(vmid));
 
-    const normalized = tasks.map((t: any) =>
+    const normalized = matchingTasks.map((t: any) =>
       normalizeProxmoxResponse({
         upid: t.upid,
         type: t.type,
@@ -889,7 +905,12 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     );
 
     return {
-      data: { node, tasks: normalized, count: normalized.length },
+      data: {
+        node,
+        ...(vmid === undefined ? {} : { vmid }),
+        tasks: normalized,
+        count: normalized.length,
+      },
       metadata: result.metadata,
     };
   }

@@ -237,3 +237,20 @@ test("normalizes LXC inline inventory rows into renderer-friendly format", () =>
   expect(packaged).toContain("trace=compute-vm:yang:103");
   expect(packaged).toContain("trace=compute-vm:yang:100");
 });
+
+test("converts a wide single-record table into an entity fact list", () => {
+  const response = `vm_id | name | node | type | state | memory | cores | tags | provenanceId | recent_changes
+--- | --- | --- | --- | --- | --- | --- | --- | --- | ---
+100 | homebridge | YANG | lxc | running | 1024 MB | 1 | proxmox-helper-scripts | tool://proxmox/config/123 | No recent changes reported.`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "Show provenance and recent changes for homebridge.",
+    intentType: "compute_status",
+  });
+
+  expect(packaged).toContain("homebridge details");
+  expect(packaged).toContain("- Vm Id: 100");
+  expect(packaged).toContain("- ProvenanceId: tool://proxmox/config/123");
+  expect(packaged).toContain("- Recent Changes: No recent changes reported.");
+  expect(packaged).not.toContain("--- | ---");
+});
