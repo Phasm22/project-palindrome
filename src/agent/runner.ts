@@ -70,6 +70,7 @@ import {
   listInternetExposedVmsChain,
 } from "../reasoning/chains/exposure";
 import { detectActionIntent } from "../reasoning/action-intents";
+import { parseCompoundApplicationRequest } from "./application-request";
 import {
   loadKnownEntitiesFromIngestionSummary,
   loadKnownEntitiesFromProxmox,
@@ -1014,12 +1015,16 @@ export async function runAgent(
   
   // Classify intent using LLM (generateObject); falls back to regex classifier on API failure
   const { classification, routing } = await classifyAndRouteWithLLM(userInput);
+  const compoundApplicationRequest = parseCompoundApplicationRequest(userInput);
+  if (compoundApplicationRequest && !compoundApplicationRequest.node) {
+    classification.missing = Array.from(new Set([...classification.missing, "environment"]));
+  }
   const isCompositeQuery = isLikelyCompositeQuery(userInput, classification);
   const actionName = classification.metadata?.actionType as string | undefined;
   const historicalScore = historicalScorer.getScore(session.userId, classification.intent, actionName);
   registerFeedbackObserver(eventBus, operatorMemoryStore, session.userId, session.aclGroup, classification.intent, actionName);
   const conversationPlan = planConversation({
-    userInput: originalUserInput,
+    userInput,
     intent: classification,
     routing,
     conversationState: options.conversationState,
@@ -1458,10 +1463,18 @@ export async function runAgent(
 
   // Check action intent FIRST (before ALL query intents)
   // This prevents action requests from being treated as queries
-  const actionIntent = detectActionIntent(userInput);
+  // Compound application requests must stay intact for application_lifecycle;
+  // the legacy create_vm fast path only provisions the VM and would discard
+  // service, firewall, asset, DNS, and identity requirements.
+  const actionIntent = compoundApplicationRequest ? null : detectActionIntent(userInput);
   let resolvedVmContext: string | null = null;
   
-  if (actionIntent) {
+  if (compoundApplicationRequest) {
+    logger.info("Routing compound request to application lifecycle", {
+      vmName: compoundApplicationRequest.vmName,
+      node: compoundApplicationRequest.node,
+    });
+  } else if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
 
     // Deterministic fast-path: create VM requests must include a node; we already extracted it.
@@ -2007,6 +2020,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     pendingActionExecuteInput,
     pendingAction,
     usedPendingAction,
+    useApplicationLifecycle: compoundApplicationRequest !== null,
     entityCache: options.conversationContext?.resolvedEntities ?? {},
   });
 

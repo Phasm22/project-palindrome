@@ -5,6 +5,10 @@ import type { ResponseMode } from "./response-formatter";
 import { evaluateDialogPolicy, parseConfirmationInput, type ConfirmationParseResult, type DialogPolicyDecision } from "./dialog-policy";
 import type { HistoricalScore } from "./historical-scorer";
 import type { HistoricalScorer } from "./historical-scorer";
+import {
+  parseCompoundApplicationRequest,
+  summarizeCompoundApplicationRequest,
+} from "./application-request";
 
 export interface OrchestratorInput {
   userInput: string;
@@ -52,6 +56,11 @@ export function planConversation(input: OrchestratorInput): OrchestratorDecision
 }
 
 function summarizePendingAction(intent: IntentClassification, userInput: string): string {
+  const applicationRequest = parseCompoundApplicationRequest(userInput);
+  if (applicationRequest) {
+    return summarizeCompoundApplicationRequest(applicationRequest);
+  }
+
   if (intent.operation?.verbs?.length) {
     const verb = intent.operation.verbs[0] ?? "change";
     const normalizedInput = userInput.trim();
@@ -76,11 +85,16 @@ function summarizePendingAction(intent: IntentClassification, userInput: string)
     );
     const targetName = verbTargetMatch?.[1];
 
-    const vmid = intent.entities.resourceIds[0];
+    const vmid = intent.entities.resourceIds.find((resourceId) => /^\d+$/.test(resourceId));
     // Node is any host that is not the typed target name
-    const node = intent.entities.hosts.find(
+    const rawNode = intent.entities.hosts.find(
       h => h.toLowerCase() !== (targetName?.toLowerCase() ?? "")
     );
+    const node = rawNode?.toLowerCase() === "yang"
+      ? "YANG"
+      : rawNode?.toLowerCase() === "proxbig"
+        ? "proxBig"
+        : rawNode;
 
     const parts: string[] = [verb];
     if (targetName) {

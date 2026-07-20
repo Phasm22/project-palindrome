@@ -93,6 +93,7 @@ export interface HandleExecuteInput {
   pendingActionExecuteInput: string | undefined;
   pendingAction: string | undefined;
   usedPendingAction: boolean;
+  useApplicationLifecycle: boolean;
   entityCache?: Record<string, string>;
 }
 
@@ -125,6 +126,7 @@ export async function handleExecute(
     pendingActionExecuteInput,
     pendingAction,
     usedPendingAction,
+    useApplicationLifecycle,
     entityCache,
   } = input;
 
@@ -763,8 +765,16 @@ export async function handleExecute(
     const compositeInstructionMessage = isCompositeQuery
       ? [{ role: "system" as const, content: COMPOSITE_MULTI_STEP_INSTRUCTION }]
       : [];
+    const applicationLifecycleInstruction = useApplicationLifecycle
+      ? [{
+          role: "system" as const,
+          content:
+            "This is one complete application deployment. Call application_lifecycle exactly once with one manifest that preserves every VM, service, firewall port, generated asset, domain, and identity requirement. Do not call the legacy compute.create_vm action separately.",
+        }]
+      : [];
     const messages = [
       { role: "system", content: buildSystemPrompt(state.responseMode) },
+      ...applicationLifecycleInstruction,
       ...compositeInstructionMessage,
     ...memoryContextMessage,
       ...entityCacheMessage,
@@ -783,7 +793,9 @@ export async function handleExecute(
       request.tools = openaiTools;
       // For real-time metric queries, force tool usage ONLY if we haven't gotten the data yet
       // Once we have the data (hasRealTimeMetricData), allow text responses
-      request.tool_choice = (isRealTimeMetricQuery && !hasRealTimeMetricData) ? "required" : "auto";
+      request.tool_choice = useApplicationLifecycle && step === 0
+        ? { type: "function", function: { name: "application_lifecycle" } }
+        : (isRealTimeMetricQuery && !hasRealTimeMetricData) ? "required" : "auto";
     }
 
     const response = await client.chat.completions.create(request);

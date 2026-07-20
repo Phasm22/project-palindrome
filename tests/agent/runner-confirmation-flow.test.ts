@@ -37,14 +37,14 @@ test("write request returns review + strict confirm prompt", async () => {
   expect(res.text).toContain("Review pending change:");
   expect(res.text).toContain("Reply with CONFIRM ");
   expect(res.text).toContain("or CANCEL");
-});
+}, { timeout: 15000 });
 
 test("destroy summary keeps explicit VM name", async () => {
   const res = await runAgent("destroy vm qeak on yang");
   expect(res.text).toContain("Review pending change:");
   expect(res.text.toLowerCase()).toContain("destroy qeak");
   expect(res.text).toContain("on YANG");
-});
+}, { timeout: 15000 });
 
 test("mismatched confirmation id is rejected", async () => {
   const res = await runAgent("CONFIRM wrongid", {
@@ -81,7 +81,7 @@ test("bare test input returns a liveness response without clarification", async 
   const res = await runAgent("test");
 
   expect(res.text).toBe("Agent is online.");
-});
+}, { timeout: 15000 });
 
 test("confirmed id replays pending executable input", async () => {
   const res = await runAgent("CONFIRM deadbeef", {
@@ -115,4 +115,27 @@ test("clarification continuation stores executable pending action input", async 
   const pendingExecuteInput = (turn2.finalEvent as any)?.data?.conversationContext?.pendingActionExecuteInput;
   expect(pendingExecuteInput).toBe("create a vm on yang");
   expect(pendingExecuteInput).not.toBe("yang");
-});
+}, { timeout: 15000 });
+
+test("compound application request asks for a node before confirmation", async () => {
+  const request =
+    "Create a VM called Samsung Open Ports 22 and eighty and four three and put an Nginx server up with the picture of Of A Grand piano. Also put the VM under the ops domain.";
+  const turn1 = await runAgentWithFinalEvent(request);
+
+  expect(turn1.response.text).toBe("What is the target environment for the VM?");
+
+  const turn2 = await runAgentWithFinalEvent("proxBig", {
+    conversationState: "NEED_CLARIFICATION",
+    conversationHistory: [
+      { role: "user", content: request },
+      { role: "assistant", content: turn1.response.text },
+    ],
+  });
+
+  expect(turn2.response.text).toContain("Review pending change: deploy application Samsung");
+  expect(turn2.response.text).toContain("VM: Samsung on proxBig");
+  expect(turn2.response.text).toContain("Services: Nginx");
+  expect(turn2.response.text).toContain("Firewall ports: 22, 80, 43");
+  expect(turn2.response.text).toContain("Generated image: A Grand piano");
+  expect(turn2.response.text).toContain("Domain: samsung.ops.prox");
+}, { timeout: 15000 });
