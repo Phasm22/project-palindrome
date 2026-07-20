@@ -62,6 +62,10 @@ import {
   hydrateProxmoxReadArgs,
   type ResolvedVmEntity,
 } from "./tool-argument-hydration";
+import {
+  detectVmProvenanceIntent,
+  formatVmProvenanceAnswer,
+} from "../vm-provenance";
 
 export interface HandleExecuteInput {
   state: AgentStateV1;
@@ -278,6 +282,131 @@ export async function handleExecute(
     });
     totalToolCalls++;
   };
+
+  const vmProvenanceIntent = detectVmProvenanceIntent(userInput);
+  if (vmProvenanceIntent) {
+    const reasoningStep: ReasoningStep = {
+      step: 1,
+      toolCalls: [],
+      decisions: [
+        {
+          type: "tool_choice",
+          description: "Selected deterministic VM provenance and change-history path",
+          metadata: {
+            intent: "vm_provenance",
+            vmName: vmProvenanceIntent.vmName,
+          },
+        },
+      ],
+      llmResponse: "",
+    };
+
+    const resolveParams = {
+      operation: "find_vm_by_name",
+      params: { vmName: vmProvenanceIntent.vmName },
+    };
+    const resolveResult = await executeToolCall(
+      { toolName: "twin_query", parameters: resolveParams },
+      tools,
+      { userId: session.userId, aclGroup: session.aclGroup }
+    );
+    appendToolTrace(reasoningStep, "twin_query", resolveParams, resolveResult);
+    const resolution = resolveResult.error
+      ? null
+      : extractResolvedVmEntity("twin_query", resolveResult.data);
+
+    let finalText: string;
+    if (!resolution) {
+      finalText = resolveResult.error
+        ? `Unable to resolve ${vmProvenanceIntent.vmName}: ${resolveResult.error}`
+        : `No unique VM or container named ${vmProvenanceIntent.vmName} was found.`;
+    } else {
+      const configParams = {
+        action: "get_vm_config",
+        node: resolution.node,
+        vmid: resolution.vmid,
+        ...(resolution.type ? { type: resolution.type } : {}),
+      };
+      const taskParams = {
+        action: "node_tasks",
+        node: resolution.node,
+        vmid: resolution.vmid,
+      };
+      const [configResult, taskResult] = await Promise.all([
+        executeToolCall(
+          { toolName: "proxmox_readonly", parameters: configParams },
+          tools,
+          {
+            userId: session.userId,
+            aclGroup: session.aclGroup,
+            node: resolution.node,
+            vmid: resolution.vmid,
+          }
+        ),
+        executeToolCall(
+          { toolName: "proxmox_readonly", parameters: taskParams },
+          tools,
+          {
+            userId: session.userId,
+            aclGroup: session.aclGroup,
+            node: resolution.node,
+            vmid: resolution.vmid,
+          }
+        ),
+      ]);
+      appendToolTrace(reasoningStep, "proxmox_readonly", configParams, configResult);
+      appendToolTrace(reasoningStep, "proxmox_readonly", taskParams, taskResult);
+      finalText = formatVmProvenanceAnswer({
+        resolution,
+        configData: configResult.error
+          ? undefined
+          : configResult.data as Record<string, any>,
+        configError: configResult.error,
+        tasksData: taskResult.error
+          ? undefined
+          : taskResult.data as Record<string, any>,
+        tasksError: taskResult.error,
+      });
+    }
+
+    reasoningStep.llmResponse = finalText;
+    reasoningSteps.push(reasoningStep);
+    const durationMs = Date.now() - startTime;
+    let traceId: string | undefined;
+    try {
+      traceId = await getReasoningTraceStore().recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: finalText,
+        steps: reasoningSteps,
+        provenance: buildProvenance({
+          toolRegistryVersion,
+          policyMode,
+          selectedMode: state.responseMode,
+        }),
+        artifacts: [],
+        totalSteps: reasoningSteps.length,
+        totalToolCalls,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record VM provenance reasoning trace", {
+        error: error.message,
+      });
+    }
+
+    emitFinalEvent(eventBus, sessionId, startTime, finalText, {
+      totalSteps: reasoningSteps.length,
+      totalToolCalls,
+      traceId,
+      conversationState: state.postExecutionState,
+      conversationContext: state.finalContextUpdate,
+    });
+    return { text: finalText, entityCacheUpdate: {} };
+  }
 
   const aliasIntent = detectFirewallIntent(userInput);
   if (aliasIntent?.type === "alias_contents") {
