@@ -26,11 +26,14 @@ import type { BaseTool } from "../../tools/BaseTool";
 import { getRetrievalEligibility } from "../retrieval-eligibility";
 import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../../reasoning/failure-reclassification";
 import { classifyIntentWithLLM } from "../../reasoning/intent-router";
+import { detectFirewallIntent } from "../../reasoning/detectFirewallIntent";
+import { formatAliasContentsPayload } from "../../reasoning/chains/firewall";
 import type { ActionIntent } from "../../reasoning/action-intents";
 import { pceLogger } from "../../pce/utils/logger";
 import type { AgentStateV1, AgentRunOptions } from "../state";
 import type { ConfirmationParseResult } from "../dialog-policy";
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "../tool-risk";
+import { applyAdaptivePackaging } from "../response-formatter";
 import {
   buildToolDefinitions,
   buildProvenance,
@@ -226,6 +229,148 @@ export async function handleExecute(
   let retrievalToolCalls: ReasoningStep["toolCalls"] = [];
   let retrievalArtifacts: ReasoningTraceArtifactInput[] = [];
   const retrievalDecisions: ReasoningStep["decisions"] = [];
+
+  const normalizeAliasLookupName = (value: string): string =>
+    value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  const findAliasRow = (aliases: any[], aliasName: string): any | null => {
+    const requested = normalizeAliasLookupName(aliasName);
+    if (!requested) return null;
+    return aliases.find((alias) => {
+      const name = typeof alias?.name === "string" ? alias.name : "";
+      const uuid = typeof alias?.uuid === "string" ? alias.uuid : "";
+      return normalizeAliasLookupName(name) === requested || normalizeAliasLookupName(uuid) === requested;
+    }) ?? null;
+  };
+
+  const appendToolTrace = (
+    step: ReasoningStep,
+    toolName: string,
+    parameters: Record<string, any>,
+    result: ExecutionResult
+  ) => {
+    const dataPreview = result.data && typeof result.data === "object"
+      ? JSON.stringify(result.data).slice(0, 500)
+      : String(result.data || "").slice(0, 500);
+    const dataSize = result.data && typeof result.data === "object"
+      ? JSON.stringify(result.data).length
+      : String(result.data || "").length;
+    const resultType = result.data
+      ? (Array.isArray(result.data) ? "array" : typeof result.data)
+      : undefined;
+    step.toolCalls.push({
+      toolName,
+      parameters,
+      result: {
+        success: !result.error,
+        error: result.error,
+        dataPreview,
+        dataSize,
+        resultType,
+      },
+      durationMs: result.durationMs ?? 0,
+    });
+    totalToolCalls++;
+  };
+
+  const aliasIntent = detectFirewallIntent(userInput);
+  if (aliasIntent?.type === "alias_contents") {
+    const reasoningStep: ReasoningStep = {
+      step: 1,
+      toolCalls: [],
+      decisions: [
+        {
+          type: "tool_choice",
+          description: "Selected deterministic firewall alias content path",
+          metadata: { intent: aliasIntent.type, aliasName: aliasIntent.aliasName },
+        },
+      ],
+      llmResponse: "",
+    };
+
+    let aliasPayload: any | null = null;
+    const getParams = { action: "firewall_aliases_get", alias_name: aliasIntent.aliasName };
+    const getResult = await executeToolCall(
+      { toolName: "opnsense_readonly", parameters: getParams },
+      tools,
+      { userId: session.userId, aclGroup: session.aclGroup }
+    );
+    appendToolTrace(reasoningStep, "opnsense_readonly", getParams, getResult);
+
+    if (!getResult.error) {
+      aliasPayload = getResult.data;
+    } else {
+      reasoningStep.decisions.push({
+        type: "failure_reclassification",
+        description: `Alias get failed: ${getResult.error}. Falling back to firewall_aliases_list exact-name lookup.`,
+        metadata: { toolName: "opnsense_readonly", error: getResult.error, fallback: "firewall_aliases_list" },
+      });
+      const listParams = { action: "firewall_aliases_list" };
+      const listResult = await executeToolCall(
+        { toolName: "opnsense_readonly", parameters: listParams },
+        tools,
+        { userId: session.userId, aclGroup: session.aclGroup }
+      );
+      appendToolTrace(reasoningStep, "opnsense_readonly", listParams, listResult);
+      if (!listResult.error) {
+        const aliases = Array.isArray((listResult.data as any)?.aliases) ? (listResult.data as any).aliases : [];
+        const matchedAlias = findAliasRow(aliases, aliasIntent.aliasName);
+        if (matchedAlias) {
+          aliasPayload = {
+            action: "firewall_aliases_get",
+            alias_name: aliasIntent.aliasName,
+            resolved_alias_name: matchedAlias.name ?? aliasIntent.aliasName,
+            data: matchedAlias,
+            source: "firewall_aliases_list",
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    const rawAnswer = aliasPayload
+      ? formatAliasContentsPayload(aliasIntent.aliasName, aliasPayload)
+      : `Answer: No. No alias named \`${aliasIntent.aliasName}\` was found in the current firewall alias list.`;
+    const finalText = applyAdaptivePackaging(rawAnswer, {
+      userQuery: userInput,
+      intentType: "firewall_rules",
+      mode: state.responseMode,
+    }) ?? rawAnswer;
+    reasoningStep.llmResponse = finalText;
+    reasoningSteps.push(reasoningStep);
+
+    const durationMs = Date.now() - startTime;
+    let traceId: string | undefined;
+    try {
+      const traceStore = getReasoningTraceStore();
+      traceId = await traceStore.recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: finalText,
+        steps: reasoningSteps,
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
+        artifacts: retrievalArtifacts,
+        totalSteps: reasoningSteps.length,
+        totalToolCalls,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs,
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record alias reasoning trace", { error: error.message });
+    }
+
+    emitFinalEvent(eventBus, sessionId, startTime, finalText, {
+      totalSteps: reasoningSteps.length,
+      totalToolCalls,
+      traceId,
+      conversationState: state.postExecutionState,
+      conversationContext: state.finalContextUpdate,
+    });
+
+    return { text: finalText, entityCacheUpdate: {} };
+  }
 
   if (!eligibility.eligible) {
     retrievalDecisions.push({

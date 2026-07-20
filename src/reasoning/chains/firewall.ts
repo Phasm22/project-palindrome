@@ -220,6 +220,74 @@ function formatRuleList(
   return lines.join("\n");
 }
 
+function coerceAliasData(payload: any): any {
+  const data = payload?.data;
+  if (data?.alias && typeof data.alias === "object") return data.alias;
+  if (data?.item && typeof data.item === "object") return data.item;
+  if (data && typeof data === "object") return data;
+  return {};
+}
+
+function normalizeAliasEnabled(value: unknown): string {
+  if (value === "1" || value === 1 || value === true) return "Yes";
+  if (value === "0" || value === 0 || value === false) return "No";
+  return String(value ?? "Unknown");
+}
+
+function splitAliasContent(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+export function formatAliasContentsPayload(aliasName: string, payload: any): string {
+  const alias = coerceAliasData(payload);
+  const resolvedName = String(payload?.resolved_alias_name ?? alias?.name ?? aliasName);
+  const type = String(alias?.["%type"] ?? alias?.type ?? "Unknown");
+  const enabled = normalizeAliasEnabled(alias?.enabled);
+  const iface = String(alias?.interface || "None");
+  const entries = splitAliasContent(alias?.content ?? alias?.addresses ?? alias?.items ?? alias?.values);
+
+  const lines = [
+    `Alias "${resolvedName}" Contents`,
+    "",
+    `Alias Name: ${resolvedName}`,
+    "Content:",
+    ...(entries.length > 0 ? entries : ["(empty)"]),
+    `Type: ${type}`,
+    `Enabled: ${enabled}`,
+    `Interface: ${iface}`,
+  ];
+  return lines.join("\n");
+}
+
+export async function aliasContentsChain(
+  aliasName: string,
+  tools: BaseTool[],
+  session: ToolSession
+): Promise<string> {
+  const result = await executeToolCall(
+    {
+      toolName: "opnsense_readonly",
+      parameters: { action: "firewall_aliases_get", alias_name: aliasName },
+    },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  return formatAliasContentsPayload(aliasName, result.data as any);
+}
+
 export async function countFirewallRulesChain(
   direction: "in" | "out" | undefined,
   tools: BaseTool[],

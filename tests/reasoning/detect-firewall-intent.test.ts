@@ -26,4 +26,9 @@ describe("detectFirewallIntent", () => {
     const intent = detectFirewallIntent("what ports are allowed from home network to lab network?");
     expect(intent).toEqual({ type: "allowed_ports_between", from: "home network", to: "lab network" });
   });
+
+  test("routes alias content questions to dedicated firewall intent", () => {
+    const intent = detectFirewallIntent("what all is in the alias tjs computers");
+    expect(intent).toEqual({ type: "alias_contents", aliasName: "tjs computers" });
+  });
 });

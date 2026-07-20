@@ -186,11 +186,26 @@ interface FirewallRuleEntry {
   protocol?: string;
   iface?: string;
   hasPort: boolean;
+  rawLine: string;
 }
 
 interface PathScope {
   from?: string;
   to?: string;
+}
+
+interface FirewallAliasDefinition {
+  name: string;
+  values: string[];
+  rawLine: string;
+}
+
+interface AliasContentSummary {
+  name: string;
+  entries: string[];
+  type?: string;
+  enabled?: string;
+  iface?: string;
 }
 
 function isVmInventoryQuery(userQuery: string): boolean {
@@ -609,9 +624,306 @@ function parseFirewallRuleEntries(lines: string[]): FirewallRuleEntry[] {
       protocol: fieldMap.get("proto"),
       iface: fieldMap.get("if"),
       hasPort: fieldMap.has("port"),
+      rawLine: line,
     });
   }
   return entries;
+}
+
+function stripAliasWrapper(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim().replace(/^`|`$/g, "");
+  const wrapped = trimmed.match(/^<([^>]+)>$/);
+  return (wrapped?.[1] ?? trimmed).trim();
+}
+
+function parseFirewallAliasDefinitions(lines: string[]): FirewallAliasDefinition[] {
+  const aliases: FirewallAliasDefinition[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.includes("| dir=") || line.includes("| src=") || line.includes("| dst=")) {
+      continue;
+    }
+
+    const definitionMatch = line.match(/^Definition\s*\|\s*term=([^|]+)\|\s*meaning=([^|]+)(?:\||$)/i);
+    if (definitionMatch?.[1]) {
+      const name = definitionMatch[1].trim();
+      const values = (definitionMatch[2] ?? "")
+        .trim()
+        .replace(/^"(.*)"$/, "$1")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      aliases.push({ name, values, rawLine: line });
+      continue;
+    }
+
+    const kvMatch = line.match(/^-?\s*([a-z0-9_:-]+)\s*=\s*(.+)$/i);
+    if (!kvMatch?.[1]) {
+      continue;
+    }
+    const valueText = (kvMatch[2] ?? "").trim();
+    const values = /^(?:\(empty\)|empty)$/i.test(valueText)
+      ? []
+      : valueText.split(",").map((value) => value.trim()).filter(Boolean);
+    aliases.push({
+      name: kvMatch[1].trim(),
+      values,
+      rawLine: line,
+    });
+  }
+  return aliases;
+}
+
+function normalizePolicyTerm(value: string): string {
+  return stripAliasWrapper(value)?.toUpperCase() ?? value.toUpperCase();
+}
+
+function extractFirewallPolicyTargets(userQuery: string, aliases: FirewallAliasDefinition[]): string[] {
+  const query = userQuery.trim();
+  if (!query) return [];
+
+  const aliasValueTerms = new Set(
+    aliases.flatMap((alias) => alias.values.map((value) => normalizePolicyTerm(value)))
+  );
+  const targets = new Set<string>();
+  const commonTwoLetterWords = new Set([
+    "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "IF", "IN", "IS", "IT", "ME", "MY",
+    "NO", "OF", "ON", "OR", "SO", "TO", "UP", "WE",
+  ]);
+
+  for (const match of query.matchAll(/\b([A-Za-z]{2})\b/g)) {
+    const token = match[1] ?? "";
+    const normalized = token.toUpperCase();
+    const wasUppercase = token === normalized;
+    if (wasUppercase || aliasValueTerms.has(normalized) || !commonTwoLetterWords.has(normalized)) {
+      targets.add(normalized);
+    }
+  }
+
+  for (const alias of aliases) {
+    const aliasName = alias.name.toLowerCase();
+    if (new RegExp(`\\b${aliasName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(query)) {
+      targets.add(normalizePolicyTerm(alias.name));
+    }
+  }
+
+  return Array.from(targets);
+}
+
+function detectFirewallPolicyAction(userQuery: string): "block" | "allow" | null {
+  const query = userQuery.toLowerCase();
+  if (/\b(block|blocking|blocked|deny|denying|denied|reject|rejecting|rejected)\b/.test(query)) {
+    return "block";
+  }
+  if (/\b(allow|allowing|allowed|permit|permitting|permitted|pass|passing|open)\b/.test(query)) {
+    return "allow";
+  }
+  return null;
+}
+
+function isFirewallPolicyQuestion(userQuery: string): boolean {
+  const query = userQuery.toLowerCase();
+  const asksYesNo =
+    /^(?:is|are|does|do)\b/.test(query.trim()) ||
+    /\b(?:is|are)\s+there\b/.test(query) ||
+    /\bany\b.*\b(firewall|rules?|policy)\b/.test(query) ||
+    /\bwhether\b/.test(query);
+  return asksYesNo && /\b(firewall|rules?|policy|blocked|allowed|blocking|allowing)\b/.test(query);
+}
+
+function formatTargetList(targets: string[]): string {
+  if (targets.length === 0) return "the requested scope";
+  if (targets.length === 1) return targets[0]!;
+  if (targets.length === 2) return `${targets[0]} and ${targets[1]}`;
+  return `${targets.slice(0, -1).join(", ")}, and ${targets[targets.length - 1]}`;
+}
+
+function ruleMatchesPolicyAction(rule: FirewallRuleEntry, action: "block" | "allow"): boolean {
+  const blockActions = new Set(["BLOCK", "DENY", "REJECT"]);
+  const allowActions = new Set(["ALLOW", "PASS"]);
+  return action === "block" ? blockActions.has(rule.action) : allowActions.has(rule.action);
+}
+
+function matchRulePolicyTargets(
+  rule: FirewallRuleEntry,
+  targets: string[],
+  aliases: FirewallAliasDefinition[]
+): { matchedTargets: string[]; matchedAliases: FirewallAliasDefinition[] } {
+  const endpointNames = [rule.source, rule.destination].map(stripAliasWrapper).filter(Boolean) as string[];
+  const endpointTerms = new Set(endpointNames.map((value) => normalizePolicyTerm(value)));
+  const aliasesByName = new Map(aliases.map((alias) => [alias.name.toLowerCase(), alias]));
+  const endpointAliases = endpointNames
+    .map((name) => aliasesByName.get(name.toLowerCase()))
+    .filter(Boolean) as FirewallAliasDefinition[];
+  const expandedTerms = new Set([
+    ...Array.from(endpointTerms),
+    ...endpointAliases.flatMap((alias) => alias.values.map((value) => normalizePolicyTerm(value))),
+  ]);
+
+  const normalizedTargets = targets.map(normalizePolicyTerm);
+  const matchedTargets = normalizedTargets.length === 0
+    ? []
+    : normalizedTargets.filter((target) => expandedTerms.has(target));
+  const matchedAliases = endpointAliases.filter((alias) => {
+    const aliasName = normalizePolicyTerm(alias.name);
+    return matchedTargets.length > 0 || normalizedTargets.includes(aliasName);
+  });
+
+  return { matchedTargets, matchedAliases };
+}
+
+function formatFirewallPolicyQuestionAnswer(
+  rules: FirewallRuleEntry[],
+  aliases: FirewallAliasDefinition[],
+  context: FormatContext
+): string | null {
+  if (rules.length === 0 || !isFirewallPolicyQuestion(context.userQuery)) {
+    return null;
+  }
+  const action = detectFirewallPolicyAction(context.userQuery);
+  if (!action) {
+    return null;
+  }
+
+  const targets = extractFirewallPolicyTargets(context.userQuery, aliases);
+  const actionRules = rules.filter((rule) => ruleMatchesPolicyAction(rule, action));
+  const matches = actionRules
+    .map((rule) => ({ rule, ...matchRulePolicyTargets(rule, targets, aliases) }))
+    .filter((match) => targets.length === 0 || match.matchedTargets.length > 0 || match.matchedAliases.length > 0);
+  const targetText = formatTargetList(targets);
+
+  if (matches.length === 0) {
+    const lines = [
+      `Answer: No. No matching firewall rule was found for ${targetText} in the current firewall data.`,
+      "",
+      "Evidence:",
+      `- Checked ${rules.length} firewall rule(s).`,
+    ];
+    if (aliases.length > 0) {
+      lines.push(`- Alias definitions checked: ${aliases.map((alias) => alias.name).slice(0, 6).join(", ")}.`);
+    }
+    return lines.join("\n");
+  }
+
+  const bestMatch = matches[0]!;
+  const matchedTargets = bestMatch.matchedTargets.length > 0 ? bestMatch.matchedTargets : targets;
+  const matchedTargetText = formatTargetList(matchedTargets);
+  const primaryAlias = bestMatch.matchedAliases[0];
+  const direction = (bestMatch.rule.direction ?? "").toLowerCase() === "in" ? "Inbound " : "";
+  const actionVerb = action === "block" ? "blocked" : "allowed";
+  const aliasPhrase = primaryAlias ? ` by the \`${primaryAlias.name}\` alias` : "";
+  const lines = [
+    `Answer: Yes. ${direction}traffic from ${matchedTargetText} is ${actionVerb}${aliasPhrase}.`,
+    "",
+    "Evidence:",
+    `- Rule: ${bestMatch.rule.rawLine}`,
+  ];
+  if (primaryAlias) {
+    lines.push(`- Alias: ${primaryAlias.rawLine}`);
+  }
+  lines.push("", "Details:", "```text");
+  for (const match of matches.slice(0, 5)) {
+    lines.push(match.rule.rawLine);
+  }
+  lines.push("```");
+  return lines.join("\n");
+}
+
+function cleanAliasContentEntry(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+\(selected\)$/i, "")
+    .trim();
+}
+
+function parseAliasContentSummary(lines: string[]): AliasContentSummary | null {
+  let name = "";
+  const titleLine = lines.find((line) => /^Alias\s+".+"\s+Contents\b/i.test(line));
+  const titleMatch = titleLine?.match(/^Alias\s+"(.+)"\s+Contents\b/i);
+  if (titleMatch?.[1]) {
+    name = titleMatch[1].trim();
+  }
+
+  let contentIndex = -1;
+  const entries: string[] = [];
+  const metadata: Record<string, string> = {};
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const aliasNameMatch = line.match(/^Alias Name:\s*(.+)$/i);
+    if (aliasNameMatch?.[1]) {
+      name = aliasNameMatch[1].trim();
+      continue;
+    }
+    const inlineContentMatch = line.match(/^Content:\s*(.+)$/i);
+    if (inlineContentMatch?.[1]) {
+      const cleaned = cleanAliasContentEntry(inlineContentMatch[1]);
+      if (cleaned) entries.push(cleaned);
+      contentIndex = i;
+      continue;
+    }
+    if (/^Content:\s*$/i.test(line)) {
+      contentIndex = i;
+      continue;
+    }
+    const metadataMatch = line.match(/^(Type|Enabled|Interface):\s*(.+)$/i);
+    if (metadataMatch?.[1]) {
+      metadata[metadataMatch[1].toLowerCase()] = (metadataMatch[2] ?? "").trim();
+    }
+  }
+
+  if (contentIndex >= 0) {
+    for (const line of lines.slice(contentIndex + 1)) {
+      if (/^(Type|Enabled|Interface|Additional Details|GeoIP URL):/i.test(line)) {
+        break;
+      }
+      const cleaned = cleanAliasContentEntry(line);
+      if (cleaned) entries.push(cleaned);
+    }
+  }
+
+  if (!name || (contentIndex < 0 && entries.length === 0)) {
+    return null;
+  }
+  return {
+    name,
+    entries,
+    type: metadata.type,
+    enabled: metadata.enabled,
+    iface: metadata.interface,
+  };
+}
+
+function formatAliasContentAnswer(responseText: string, context: FormatContext): string | null {
+  const query = context.userQuery.toLowerCase();
+  if (!/\balias\b/.test(query) && !/^Alias\s+".+"\s+Contents\b/im.test(responseText)) {
+    return null;
+  }
+
+  const lines = responseText.split("\n").map((line) => line.trim()).filter(Boolean);
+  const summary = parseAliasContentSummary(lines);
+  if (!summary) {
+    return null;
+  }
+
+  const entryText = summary.entries.length === 0
+    ? "no entries"
+    : summary.entries.length === 1
+      ? `one entry: \`${summary.entries[0]}\``
+      : `${summary.entries.length} entries: ${summary.entries.map((entry) => `\`${entry}\``).join(", ")}`;
+  const linesOut = [
+    `Answer: Alias \`${summary.name}\` contains ${entryText}.`,
+  ];
+
+  const evidence: string[] = [];
+  if (summary.type) evidence.push(`- Type: ${summary.type}`);
+  if (summary.enabled) evidence.push(`- Enabled: ${summary.enabled}`);
+  if (summary.iface) evidence.push(`- Interface: ${summary.iface}`);
+  if (evidence.length > 0) {
+    linesOut.push("", "Evidence:", ...evidence);
+  }
+
+  return linesOut.join("\n");
 }
 
 function extractAnomaly(lines: string[]): string | null {
@@ -753,12 +1065,29 @@ export function applyAdaptivePackaging(
   const normalizedQuery = context.userQuery.toLowerCase();
   const wantsFullList =
     /\bshow\b.*\b(full|complete|entire)\b.*\b(list|ports?|rules?)\b/i.test(normalizedQuery) ||
-    /\blist\b.*\b(all|every)\b.*\bports?\b/i.test(normalizedQuery);
+    /\blist\b.*\b(all|every)\b.*\b(ports?|rules?)\b/i.test(normalizedQuery);
   if (wantsFullList) {
     return null;
   }
 
+  const aliasContentAnswer = formatAliasContentAnswer(responseText, context);
+  if (aliasContentAnswer) {
+    return aliasContentAnswer;
+  }
+
   const lines = responseText.split("\n").map((line) => line.trim()).filter(Boolean);
+  const firewallRules = parseFirewallRuleEntries(lines);
+  const hasFirewallRulesHeading = lines.some((line) => /^firewall rules\b/i.test(line));
+  const canPackageFirewallPolicy =
+    context.intentType === "firewall_rules" || hasFirewallRulesHeading || firewallRules.length > 0;
+  if (canPackageFirewallPolicy) {
+    const aliases = parseFirewallAliasDefinitions(lines);
+    const firewallPolicyAnswer = formatFirewallPolicyQuestionAnswer(firewallRules, aliases, context);
+    if (firewallPolicyAnswer) {
+      return firewallPolicyAnswer;
+    }
+  }
+
   const hasAllowedPortsHeading = lines.some((line) => /^allowed ports\b/i.test(line));
   const asksAboutAllowedPorts =
     normalizedQuery.includes("port") &&
@@ -789,7 +1118,6 @@ export function applyAdaptivePackaging(
     );
   }
 
-  const firewallRules = parseFirewallRuleEntries(lines);
   if (asksAboutAllowedPorts && firewallRules.length >= 2) {
     const anomaly = extractAnomaly(lines);
     return formatAllowedPortsPolicySummary(firewallRules, anomaly, queryScope);

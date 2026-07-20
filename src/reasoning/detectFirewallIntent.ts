@@ -1,6 +1,7 @@
 export type FirewallIntent =
   | { type: "list_rules" }
   | { type: "count_rules"; direction?: "in" | "out" }
+  | { type: "alias_contents"; aliasName: string }
   | { type: "allowed_ports_between"; from: string; to: string }
   | { type: "rules_by_chain"; chain: string }
   | { type: "rules_allowing_subnet"; subnet: string }
@@ -54,6 +55,35 @@ function extractAllowedPortsScope(text: string): { from: string; to: string } | 
   const fromToMatch = text.match(/\bfrom\s+(?:the\s+)?(.+?)\s+(?:to|into)\s+(?:the\s+)?(.+?)(?:\?|$)/i);
   if (fromToMatch?.[1] && fromToMatch?.[2]) {
     return { from: fromToMatch[1].trim(), to: fromToMatch[2].trim() };
+  }
+
+  return null;
+}
+
+function cleanAliasName(value: string | undefined): string | null {
+  if (!value) return null;
+  const cleaned = value
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/[.?!]+$/g, "")
+    .trim();
+  return cleaned || null;
+}
+
+function extractAliasName(text: string): string | null {
+  const aliasAfterMatch = text.match(/\balias\s+["'`]?(.+?)(?:["'`]?\s*(?:contents?|members?|entries?)\b|[.?!]|$)/i);
+  if (aliasAfterMatch?.[1]) {
+    return cleanAliasName(aliasAfterMatch[1]);
+  }
+
+  const aliasBeforeMatch = text.match(/\b(?:contents?|members?|entries?)\s+(?:of|in|for)\s+(?:the\s+)?alias\s+["'`]?(.+?)(?:["'`]?[.?!]|$)/i);
+  if (aliasBeforeMatch?.[1]) {
+    return cleanAliasName(aliasBeforeMatch[1]);
+  }
+
+  const quotedAliasMatch = text.match(/["'`]([^"'`]+)["'`]\s+alias\b/i);
+  if (quotedAliasMatch?.[1]) {
+    return cleanAliasName(quotedAliasMatch[1]);
   }
 
   return null;
@@ -122,11 +152,20 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     normalized.includes("exposure") ||
     normalized.includes("port") ||
     normalized.includes("nat") ||
+    normalized.includes("alias") ||
     normalized.includes("wireguard") ||
     /\bwg\b/i.test(normalized);
 
   if (!hasFirewallKeywords) {
     return null;
+  }
+
+  // Alias content queries, e.g. "what all is in the alias tjs computers".
+  if (normalized.includes("alias") && /\b(what|which|show|list|contents?|members?|entries?|in)\b/.test(normalized)) {
+    const aliasName = extractAliasName(userInput);
+    if (aliasName) {
+      return { type: "alias_contents", aliasName };
+    }
   }
 
   // Exposure map queries

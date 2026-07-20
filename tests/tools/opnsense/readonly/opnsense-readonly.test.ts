@@ -148,6 +148,51 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
       
       getApiClientSpy.mockRestore();
     });
+
+    test("should resolve firewall alias get from list data using normalized names", async () => {
+      let getCalled = false;
+      const mockClient = {
+        post: async (path: string) => {
+          expect(path).toBe("/api/firewall/alias/searchItem");
+          return Promise.resolve({
+            data: {
+              rows: [
+                {
+                  uuid: "alias-uuid",
+                  enabled: "0",
+                  name: "TJs_Computers",
+                  type: "network",
+                  "%type": "Network",
+                  interface: "",
+                  content: "10.107.193.0/24",
+                },
+              ],
+            },
+          });
+        },
+        get: async () => {
+          getCalled = true;
+          return Promise.resolve({ data: {} });
+        },
+      };
+
+      const getApiClientSpy = spyOn(tool as any, "getApiClient").mockReturnValue(mockClient);
+
+      const result = await tool.execute(
+        { action: "firewall_aliases_get", alias_name: "tjs computers" },
+        { toolName: "opnsense_readonly", startedAt: Date.now() }
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.data.action).toBe("firewall_aliases_get");
+      expect(result.data.alias_name).toBe("tjs computers");
+      expect(result.data.resolved_alias_name).toBe("TJs_Computers");
+      expect(result.data.source).toBe("firewall_aliases_list");
+      expect(result.data.data.content).toBe("10.107.193.0/24");
+      expect(getCalled).toBe(false);
+
+      getApiClientSpy.mockRestore();
+    });
   });
 
   describe("TL-1A.3: Full Test Coverage", () => {

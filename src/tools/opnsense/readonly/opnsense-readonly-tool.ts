@@ -349,12 +349,47 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     }
   }
 
+  private normalizeAliasLookupName(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  private findAliasInRows(aliases: any[], aliasName: string): any | null {
+    const requested = this.normalizeAliasLookupName(aliasName);
+    if (!requested) return null;
+    return aliases.find((alias) => {
+      const name = typeof alias?.name === "string" ? alias.name : "";
+      const uuid = typeof alias?.uuid === "string" ? alias.uuid : "";
+      return (
+        this.normalizeAliasLookupName(name) === requested ||
+        this.normalizeAliasLookupName(uuid) === requested
+      );
+    }) ?? null;
+  }
+
   private async getFirewallAlias(client: any, aliasName: string): Promise<any> {
-    const response = await client.get(`/api/firewall/alias/getItem/${aliasName}`);
+    try {
+      const aliasesResponse = await this.getFirewallAliases(client);
+      const matchedAlias = this.findAliasInRows(aliasesResponse.aliases ?? [], aliasName);
+      if (matchedAlias) {
+        return {
+          action: "firewall_aliases_get",
+          alias_name: aliasName,
+          resolved_alias_name: matchedAlias.name ?? aliasName,
+          data: matchedAlias,
+          source: "firewall_aliases_list",
+          timestamp: new Date().toISOString(),
+        };
+      }
+    } catch {
+      // Fall back to the item endpoint below; some OPNsense installs restrict searchItem.
+    }
+
+    const response = await client.get(`/api/firewall/alias/getItem/${encodeURIComponent(aliasName)}`);
     return {
       action: "firewall_aliases_get",
       alias_name: aliasName,
       data: response.data || {},
+      source: "firewall_aliases_get",
       timestamp: new Date().toISOString(),
     };
   }

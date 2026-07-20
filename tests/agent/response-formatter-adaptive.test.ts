@@ -91,6 +91,97 @@ Lack of explicit rules for home to lab network traffic.`;
   expect(packaged).toContain("from home network to lab network");
 });
 
+test("packages yes/no firewall block answers with alias expansion", () => {
+  const response = `Firewall Rules
+BLOCK | dir=in | src=<blocked_countries> | dst=any
+
+Alias definitions:
+WG_Friends = 10.16.0.8/29
+WG_VIP = 10.16.0.0/29
+blocked_countries = CN, RU
+sshlockout = (empty)
+virusprot = (empty)`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "is there a firewall rule blocking CN or RU?",
+    intentType: "firewall_rules",
+  });
+
+  expect(packaged).toBeTruthy();
+  expect(packaged).toContain("Answer: Yes.");
+  expect(packaged).toContain("CN and RU");
+  expect(packaged).toContain("`blocked_countries` alias");
+  expect(packaged).toContain("Evidence:");
+  expect(packaged).toContain("- Rule: BLOCK | dir=in | src=<blocked_countries> | dst=any");
+  expect(packaged).toContain("- Alias: blocked_countries = CN, RU");
+  expect(packaged).toContain("Details:");
+});
+
+test("does not package full firewall rule list queries", () => {
+  const response = `Firewall Rules
+BLOCK | dir=in | src=<blocked_countries> | dst=any
+
+Alias definitions:
+blocked_countries = CN, RU`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "show full firewall rules blocking CN or RU",
+    intentType: "firewall_rules",
+  });
+
+  expect(packaged).toBeNull();
+});
+
+test("returns direct negative answer when no matching firewall policy rule is found", () => {
+  const response = `Firewall Rules
+BLOCK | dir=in | src=<sshlockout> | dst=any
+ALLOW | dir=out | src=any | dst=any
+
+Alias definitions:
+sshlockout = 192.168.1.10
+blocked_countries = (empty)`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "is there a firewall rule blocking CN or RU?",
+    intentType: "firewall_rules",
+  });
+
+  expect(packaged).toBeTruthy();
+  expect(packaged).toContain("Answer: No. No matching firewall rule was found for CN and RU");
+  expect(packaged).toContain("Evidence:");
+  expect(packaged).toContain("Checked 2 firewall rule(s).");
+  expect(packaged).not.toContain("Answer: Yes.");
+});
+
+test("packages alias content answers directly", () => {
+  const response = `Alias "tjs computers" Contents
+
+Alias Name: tjs computers
+Content:
+10.107.193.0/24 (selected)
+Type: Network
+Enabled: No
+Interface: None
+
+Additional Details
+
+GeoIP URL: [Link](https://download.maxmind.com/app/geoip_download?edition_id=GeoLite2-Country-CSV&license_key=secret&suffix=zip)`;
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "what all is in the alias tjs computers",
+    intentType: "firewall_rules",
+  });
+
+  expect(packaged).toBeTruthy();
+  expect(packaged).toContain("Answer: Alias `tjs computers` contains one entry: `10.107.193.0/24`.");
+  expect(packaged).toContain("Evidence:");
+  expect(packaged).toContain("- Type: Network");
+  expect(packaged).toContain("- Enabled: No");
+  expect(packaged).toContain("- Interface: None");
+  expect(packaged).not.toContain("GeoIP URL");
+  expect(packaged).not.toContain("license_key");
+});
+
 test("preserves canonical VM inventory formatting for list queries", () => {
   const response = `VMs on node yin:
 - sentinelZero (VM, running)

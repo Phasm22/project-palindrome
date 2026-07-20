@@ -52,6 +52,7 @@ import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFi
 import {
   listFirewallRulesChain,
   countFirewallRulesChain,
+  aliasContentsChain,
   allowedPortsBetweenChain,
   firewallRulesByChainChain,
   rulesAllowingSubnetChain,
@@ -659,6 +660,8 @@ async function executeFirewallIntent(
         return await listFirewallRulesChain(tools, session);
       case "count_rules":
         return await countFirewallRulesChain(intent.direction, tools, session);
+      case "alias_contents":
+        return await aliasContentsChain(intent.aliasName, tools, session);
       case "allowed_ports_between":
         return await allowedPortsBetweenChain(intent.from, intent.to, tools, session);
       case "rules_by_chain":
@@ -688,6 +691,8 @@ function buildFirewallToolCalls(intent: FirewallIntent): Array<{ toolName: strin
       return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
     case "count_rules":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
+    case "alias_contents":
+      return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_aliases_get", alias_name: intent.aliasName } }];
     case "allowed_ports_between":
       return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } }];
     case "rules_by_chain":
@@ -1859,14 +1864,20 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
     // Check firewall QUERY intent (only if no action intent detected)
     // Action intents like "configure firewall" are handled above
-    if (!classification.metadata?.domain || classification.metadata.domain === "firewall") {
     const firewallIntent = detectFirewallIntent(userInput);
-    if (firewallIntent) {
+    const firewallDomain = classification.metadata?.domain;
+    if (firewallIntent && (!firewallDomain || firewallDomain === "firewall" || firewallDomain === "network")) {
       const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
       if (firewallAnswer) {
         logger.info("Responding via twin-first firewall reasoning chain.");
-        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
         const firewallToolCalls = buildFirewallToolCalls(firewallIntent);
+        emitStepEvent(eventBus, sessionId, {
+          step: 1,
+          maxSteps: 1,
+          intent: firewallIntent.type,
+          mode: "twin_first",
+          tool: firewallToolCalls[0]?.toolName ?? "unknown",
+        });
         
         // Format firewall response — use ASSISTIVE by default so the LLM synthesizes
         // the raw chain output into a clear answer with evidence. Fall back to user's
@@ -1900,7 +1911,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         return { text: formattedAnswer };
       }
     }
-    } // end firewall domain gate
+    // end firewall domain gate
 
     // Only check network intent if no action, exposure, compute, or firewall intent was detected
     if (!classification.metadata?.domain || classification.metadata.domain === "network") {
