@@ -655,15 +655,6 @@ export class TwinQueryService {
     if (verifyAgainstProxmox) {
       try {
         const verifiedVms = await this.verifyVmsAgainstProxmox(neo4jVms);
-        // If verification returns empty but we had Neo4j results, be lenient and return Neo4j results
-        // This handles cases where verification fails due to timing, API issues, or SSL problems
-        if (verifiedVms.length === 0 && neo4jVms.length > 0) {
-          logger.warn("Verification returned no VMs but Neo4j has results, returning Neo4j results (verification may have failed)", {
-            vmName,
-            neo4jCount: neo4jVms.length,
-          });
-          return neo4jVms;
-        }
         return verifiedVms;
       } catch (error: any) {
         // If verification fails, log warning but return Neo4j results
@@ -744,13 +735,6 @@ export class TwinQueryService {
     if (verifyAgainstProxmox) {
       try {
         const verifiedVms = await this.verifyVmsAgainstProxmox(deduplicatedVms);
-        if (verifiedVms.length === 0 && deduplicatedVms.length > 0) {
-          logger.warn("Verification returned no VMs but Neo4j has results, returning Neo4j results", {
-            vmId: numericId,
-            neo4jCount: deduplicatedVms.length,
-          });
-          return deduplicatedVms;
-        }
         return verifiedVms;
       } catch (error: any) {
         logger.warn("Failed to verify VMs against Proxmox, returning Neo4j results", {
@@ -781,6 +765,7 @@ export class TwinQueryService {
 
     try {
       const allProxmoxVms: Array<{ vmid: number; node?: string; type?: string; name?: string }> = [];
+      const successfulEndpoints = new Set<string>();
       for (const c of configs) {
         try {
           const client = new ProxmoxClient({
@@ -798,6 +783,7 @@ export class TwinQueryService {
             vmResources: vmsInCluster.length,
           });
           allProxmoxVms.push(...vmsInCluster);
+          successfulEndpoints.add(c.label.toLowerCase());
         } catch (err: unknown) {
           logger.debug(`Failed to query Proxmox ${c.label}`, {
             url: c.url,
@@ -828,11 +814,33 @@ export class TwinQueryService {
           continue;
         }
 
-        // Check if VM exists in Proxmox
-        // First, find all resources with matching VMID (only check VMs/containers)
-        const matchingResources = proxmoxVms.filter((r) => r.vmid === vmid);
-        
-        if (matchingResources.length === 0) {
+        const expectedEndpoint = neo4jVm.nodeName?.toLowerCase() === "proxbig"
+          ? "proxbig"
+          : neo4jVm.nodeName
+            ? "cluster"
+            : undefined;
+        const endpointWasChecked = expectedEndpoint
+          ? successfulEndpoints.has(expectedEndpoint)
+          : successfulEndpoints.size === configs.length;
+        if (!endpointWasChecked) {
+          logger.warn("Could not verify VM because its Proxmox endpoint was unavailable", {
+            id: neo4jVm.id,
+            name: neo4jVm.name,
+            nodeName: neo4jVm.nodeName,
+            expectedEndpoint,
+          });
+          verifiedVms.push(neo4jVm);
+          continue;
+        }
+
+        const vmExists = proxmoxVms.some((resource) => {
+          const matchesNode = !neo4jVm.nodeName ||
+            resource.node?.toLowerCase() === neo4jVm.nodeName.toLowerCase();
+          const matchesType = !neo4jVm.vmKind || resource.type === neo4jVm.vmKind;
+          return resource.vmid === vmid && matchesNode && matchesType;
+        });
+
+        if (!vmExists) {
           staleVmIds.push(neo4jVm.id);
           logger.debug("VM not found in Proxmox (stale Neo4j entry)", {
             id: neo4jVm.id,
@@ -846,29 +854,7 @@ export class TwinQueryService {
           });
           continue;
         }
-        
-        const vmExists = matchingResources.some((r) => {
-          const matchesType = !neo4jVm.vmKind || r.type === neo4jVm.vmKind;
-          // Node matching: be flexible - allow case-insensitive match and handle undefined nodeName
-          const matchesNode = !neo4jVm.nodeName || 
-            !r.node || 
-            r.node?.toLowerCase() === neo4jVm.nodeName.toLowerCase();
-          return matchesType && matchesNode;
-        });
-        
-        if (vmExists) {
-          // VM exists with matching node/type
-          verifiedVms.push(neo4jVm);
-        } else if (matchingResources.length > 0) {
-          logger.debug("VM found in Proxmox but node/type mismatch, including anyway", {
-            vmid,
-            neo4jNode: neo4jVm.nodeName,
-            proxmoxNodes: matchingResources.map((r) => r.node),
-            neo4jType: neo4jVm.vmKind,
-            proxmoxTypes: matchingResources.map((r) => r.type),
-          });
-          verifiedVms.push(neo4jVm);
-        }
+        verifiedVms.push(neo4jVm);
       }
 
       if (staleVmIds.length > 0) {
