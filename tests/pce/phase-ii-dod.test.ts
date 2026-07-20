@@ -91,7 +91,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
 
     // Initialize real-time components
     queue = new RealtimeIngestionQueue();
-    webhookListener = new WebhookListener(queue, { port: 3001 });
+    webhookListener = new WebhookListener(queue, { port: 0 });
     queueConsumer = new QueueConsumer(
       queue,
       ingestionPipeline,
@@ -147,10 +147,11 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
 
       const info = webhookListener.getInfo();
       expect(info.running).toBe(true);
-      expect(info.port).toBe(3001);
+      expect(info.hostname).toBe("127.0.0.1");
+      expect(info.port).toBeGreaterThan(0);
 
       // Test webhook endpoint
-      const response = await fetch(`http://localhost:${info.port}${info.path}`, {
+      const response = await fetch(`http://${info.hostname}:${info.port}${info.path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -171,9 +172,10 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
 
     it("should validate webhook payload", async () => {
       await webhookListener.start();
+      const info = webhookListener.getInfo();
 
       // Missing required fields
-      const response = await fetch(`http://localhost:3001/webhook`, {
+      const response = await fetch(`http://${info.hostname}:${info.port}${info.path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -483,6 +485,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
     it("should process 10 concurrent webhook events with latency < 15s", async () => {
       await webhookListener.start();
       await queueConsumer.start();
+      const info = webhookListener.getInfo();
 
       // Create test documents
       const testDocs: string[] = [];
@@ -495,7 +498,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
       // Send 10 concurrent webhooks
       const startTime = Date.now();
       const webhookPromises = testDocs.map((docPath) =>
-        fetch("http://localhost:3001/webhook", {
+        fetch(`http://${info.hostname}:${info.port}${info.path}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
