@@ -25,12 +25,26 @@ function triggerHeaderLogoRipple() {
   const source = document.getElementById('header-logo-source');
   if (!source) return;
 
-  source.classList.remove('logo-ripple-burst');
-  source.offsetWidth;
-  source.classList.add('logo-ripple-burst');
-  window.setTimeout(() => {
+  // Keep the current wave intact if another refresh is requested before it
+  // finishes. Restarting the pseudo-element mid-flight creates a visible flash.
+  if (source.classList.contains('logo-ripple-burst')) return;
+
+  const finishRipple = (event) => {
+    if (event?.animationName !== 'logo-illumination-ripple') return;
+
+    window.clearTimeout(cleanupTimer);
     source.classList.remove('logo-ripple-burst');
-  }, 1300);
+    source.removeEventListener('animationend', finishRipple);
+  };
+
+  source.addEventListener('animationend', finishRipple);
+  source.classList.add('logo-ripple-burst');
+
+  // Fallback for browsers that do not emit animationend for pseudo-elements.
+  const cleanupTimer = window.setTimeout(() => {
+    source.classList.remove('logo-ripple-burst');
+    source.removeEventListener('animationend', finishRipple);
+  }, 2800);
 }
 
 // Check API connection and show helpful message if it fails
@@ -400,11 +414,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       logo.style.display = 'block';
       logo.style.flexShrink = '0';
       el.appendChild(logo);
-      
-      const button = el.closest('button');
-      if (button) {
-        button.addEventListener('click', triggerHeaderLogoRipple);
-      }
+    }
+  });
+
+  // Some refresh buttons (including Overview) are rendered after startup.
+  // Delegation ensures every refresh action gets the same header ripple.
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('button.refresh-button')) {
+      triggerHeaderLogoRipple();
     }
   });
   
