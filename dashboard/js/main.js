@@ -146,7 +146,7 @@ window.loadIngestionStatus = loadIngestionStatus;
  * Update UI to show a specific tab (internal function - updates DOM only)
  * This is called by route change handlers, not directly
  */
-function updateTabUI(tabName, clickedElement = null) {
+function updateTabUI(tabName, clickedElement = null, animate = true) {
   // Get the target tab content first
   const targetTabContent = document.getElementById(tabName);
   
@@ -175,7 +175,7 @@ function updateTabUI(tabName, clickedElement = null) {
     if (c !== targetTabContent) {
       c.setAttribute('aria-hidden', 'true');
       // Only hide if it's currently visible
-      if (!c.classList.contains('hidden')) {
+      if (animate && !c.classList.contains('hidden')) {
         c.style.transition = 'opacity 0.2s ease-out, transform 0.2s ease-out';
         c.style.opacity = '0';
         c.style.transform = 'translateY(10px)';
@@ -188,9 +188,13 @@ function updateTabUI(tabName, clickedElement = null) {
           c.style.transition = '';
         }, 200);
       } else {
-        // Already hidden, just make sure it stays hidden
+        // Initial routing is applied synchronously so the default Chat panel
+        // cannot linger while a different URL-selected tab is shown.
         c.classList.add('hidden');
         c.classList.remove('flex', 'flex-col');
+        c.style.opacity = '';
+        c.style.transform = '';
+        c.style.transition = '';
       }
     }
   });
@@ -205,7 +209,7 @@ function updateTabUI(tabName, clickedElement = null) {
     targetTabContent.setAttribute('aria-hidden', 'false');
     
     // Only animate if it was previously hidden
-    if (wasHidden) {
+    if (wasHidden && animate) {
       // Set initial state for animation
       targetTabContent.style.opacity = '0';
       targetTabContent.style.transform = 'translateY(10px)';
@@ -339,7 +343,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Initialize routing - URL is source of truth
   initRouting(({ route, tabId, source }) => {
     // Update UI when route changes (from URL, browser back/forward, or programmatic)
-    updateTabUI(tabId);
+    updateTabUI(tabId, null, source !== 'init');
+    if (source === 'init') {
+      document.documentElement.classList.remove('dashboard-routing-pending');
+      delete document.documentElement.dataset.initialTab;
+    }
   });
 
   // Initialize sticky offsets and keep them in sync

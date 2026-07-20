@@ -1,4 +1,9 @@
-import { API_URL, escapeHtml } from './utils.js';
+import {
+  API_URL,
+  beginContentRefresh,
+  endContentRefresh,
+  escapeHtml,
+} from './utils.js';
 import { createSkeletonLoader } from './skeletons.js';
 
 function formatDurationMs(ms) {
@@ -426,35 +431,34 @@ async function loadMoreReasoningTraces() {
 
 export async function loadReasoningTraces(reset = false) {
   const element = document.getElementById('reasoning-traces');
-  if (!element) return;
-  
-  // Reset state if requested
-  if (reset) {
-    reasoningTracesState = {
-      offset: 0,
-      limit: 20,
-      loading: false,
-      hasMore: true,
-      traces: []
-    };
-  }
+  if (!element || reasoningTracesState.loading) return;
+
+  const requestOffset = reset ? 0 : reasoningTracesState.offset;
+  const hasContent = reset
+    && reasoningTracesState.traces.length > 0
+    && Boolean(element.querySelector('.trace-row'));
+
+  reasoningTracesState.loading = true;
+  beginContentRefresh(element, hasContent, 'Updating traces');
   
   // Show skeleton loader on initial load
-  if (reasoningTracesState.offset === 0) {
+  if (requestOffset === 0 && !hasContent) {
     element.innerHTML = '';
     element.appendChild(createSkeletonLoader('Loading reasoning traces...'));
   }
   
   try {
-    const response = await fetch(`${API_URL}/api/dashboard/reasoning-traces?limit=${reasoningTracesState.limit}&offset=${reasoningTracesState.offset}`);
+    const response = await fetch(`${API_URL}/api/dashboard/reasoning-traces?limit=${reasoningTracesState.limit}&offset=${requestOffset}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     const data = await response.json();
     
     if (!data.traces || data.traces.length === 0) {
-      if (reasoningTracesState.offset === 0) {
+      if (requestOffset === 0) {
         element.innerHTML = '<p>No reasoning traces found.</p>';
+        reasoningTracesState.traces = [];
+        reasoningTracesState.offset = 0;
       }
       reasoningTracesState.hasMore = false;
       return;
@@ -462,15 +466,20 @@ export async function loadReasoningTraces(reset = false) {
     
     const html = data.traces.map((trace, idx) => formatTraceHtml(trace, idx === data.traces.length - 1 && !reasoningTracesState.hasMore)).join('');
     
-    if (reasoningTracesState.offset === 0) {
+    if (requestOffset === 0) {
       element.innerHTML = html;
     } else {
       element.insertAdjacentHTML('beforeend', html);
     }
     
     // Update state
-    reasoningTracesState.traces.push(...data.traces);
-    reasoningTracesState.offset += data.traces.length;
+    if (requestOffset === 0) {
+      reasoningTracesState.traces = [...data.traces];
+      reasoningTracesState.offset = data.traces.length;
+    } else {
+      reasoningTracesState.traces.push(...data.traces);
+      reasoningTracesState.offset += data.traces.length;
+    }
     reasoningTracesState.hasMore = data.traces.length === reasoningTracesState.limit;
     
     // Setup infinite scroll
@@ -481,8 +490,15 @@ export async function loadReasoningTraces(reset = false) {
       element.addEventListener('scroll', handleReasoningTracesScroll);
     }
   } catch (error) {
-    element.innerHTML = 
-      `<div class="error">Failed to load reasoning traces: ${escapeHtml(error.message)}</div>`;
+    if (hasContent) {
+      console.error('Failed to refresh reasoning traces:', error);
+    } else {
+      element.innerHTML =
+        `<div class="error">Failed to load reasoning traces: ${escapeHtml(error.message)}</div>`;
+    }
+  } finally {
+    reasoningTracesState.loading = false;
+    endContentRefresh(element);
   }
 }
 

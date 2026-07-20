@@ -1,4 +1,9 @@
-import { API_URL, escapeHtml } from './utils.js';
+import {
+  API_URL,
+  beginContentRefresh,
+  endContentRefresh,
+  escapeHtml,
+} from './utils.js';
 
 // Color palette - burnt orange theme with soft, distinct colors
 const colorPalette = {
@@ -34,6 +39,7 @@ let currentTooltip = null;
 let tooltipUpdateHandler = null;
 let hoveredNode = null;
 let originalNodeColor = null;
+let graphLoading = false;
 
 // Cleanup function to remove all tooltips
 function cleanupAllTooltips() {
@@ -50,10 +56,11 @@ function cleanupAllTooltips() {
 
 export async function loadGraph() {
   const container = document.getElementById('graph-container');
-  if (!container) return;
-  
-  // Cleanup any existing tooltips before loading new graph
-  cleanupAllTooltips();
+  if (!container || graphLoading) return;
+
+  graphLoading = true;
+  const isRefresh = Boolean(sigma && container.querySelector('#sigma-container'));
+  beginContentRefresh(container, isRefresh, 'Updating graph');
   
   // Check if libraries are loaded - try multiple possible global names
   // Graphology is exposed as window.graphology (from our UMD build)
@@ -72,22 +79,29 @@ export async function loadGraph() {
       windowSigma: !!window.sigma,
       windowSigmaUpper: !!window.Sigma
     });
-    container.innerHTML = '<div class="error p-4 bg-red-900/20 border border-red-500 rounded text-red-300">Sigma.js or Graphology not loaded. Please refresh the page.<br>Graph: ' + (Graph ? 'loaded' : 'missing') + ', Sigma: ' + (Sigma ? 'loaded' : 'missing') + '</div>';
+    if (!isRefresh) {
+      container.innerHTML = '<div class="error p-4 bg-red-900/20 border border-red-500 rounded text-red-300">Sigma.js or Graphology not loaded. Please refresh the page.<br>Graph: ' + (Graph ? 'loaded' : 'missing') + ', Sigma: ' + (Sigma ? 'loaded' : 'missing') + '</div>';
+    }
+    endContentRefresh(container);
+    graphLoading = false;
     return;
   }
   
-  // Show skeleton loader
-  container.innerHTML = '';
-  const loader = document.createElement('div');
-  loader.className = 'flex flex-col items-center justify-center h-full gap-4';
-  loader.innerHTML = `
-    <div class="relative w-16 h-16">
-      <div class="absolute inset-0 border-2 border-slate-700 rounded-full"></div>
-      <div class="absolute inset-0 border-2 border-transparent border-t-primary-500 rounded-full"></div>
-    </div>
-    <div class="text-slate-400 text-sm">Loading graph...</div>
-  `;
-  container.appendChild(loader);
+  // Skeletons are useful on first load, but replacing a live canvas with one
+  // during refresh creates a conspicuous flash.
+  if (!isRefresh) {
+    container.innerHTML = '';
+    const loader = document.createElement('div');
+    loader.className = 'flex flex-col items-center justify-center h-full gap-4';
+    loader.innerHTML = `
+      <div class="relative w-16 h-16">
+        <div class="absolute inset-0 border-2 border-slate-700 rounded-full"></div>
+        <div class="absolute inset-0 border-2 border-transparent border-t-primary-500 rounded-full"></div>
+      </div>
+      <div class="text-slate-400 text-sm">Loading graph...</div>
+    `;
+    container.appendChild(loader);
+  }
   
   try {
     const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=200`);
@@ -98,8 +112,13 @@ export async function loadGraph() {
     
     if (!data.nodes || data.nodes.length === 0) {
       container.innerHTML = '<p class="text-slate-400 text-center py-10">No graph data available. The ontology graph may be empty.</p>';
+      endContentRefresh(container);
+      graphLoading = false;
       return;
     }
+
+    // Keep the old graph fully visible until replacement data is ready.
+    cleanupAllTooltips();
     
     // Calculate node degrees for sizing
     const nodeDegrees = {};
@@ -110,9 +129,15 @@ export async function loadGraph() {
     
     const maxDegree = Math.max(...Object.values(nodeDegrees), 1);
     
-    // Create Graphology graph
-    // Graph is the constructor class from the exports
-    graph = new Graph();
+    const previousGraph = isRefresh ? graph : null;
+    const previousPositions = new Map();
+    previousGraph?.forEachNode((node, attrs) => {
+      previousPositions.set(node, { x: attrs.x, y: attrs.y });
+    });
+
+    // Build the replacement data separately so the live Sigma canvas never
+    // observes a half-empty graph.
+    const nextGraph = new Graph();
     
     // Add nodes
     data.nodes.forEach(n => {
@@ -124,19 +149,20 @@ export async function loadGraph() {
       const size = Math.max(8, Math.min(30, 8 + (degree / maxDegree) * 22)); // Size by degree: 8-30px
       
       const color = nodeTypeColors[nodeType] || nodeTypeColors['unknown'];
+      const previousPosition = previousPositions.get(nodeId);
       
       // Use displayName or name for label
       const label = n.displayName || n.name || n.properties?.displayName || n.properties?.name || nodeId || 'Unknown';
       
-      graph.addNode(nodeId, {
+      nextGraph.addNode(nodeId, {
         label: label,
         size: size,
         color: color,
         nodeType: nodeType, // Normalized lowercase type for filtering
         entityType: nodeType, // Also store as entityType for consistency
         degree: degree,
-        x: Math.random() * 1000,
-        y: Math.random() * 1000,
+        x: previousPosition?.x ?? Math.random() * 1000,
+        y: previousPosition?.y ?? Math.random() * 1000,
         // Store all node data for tooltip
         ...n,
         ...n.properties,
@@ -161,11 +187,11 @@ export async function loadGraph() {
     data.relationships.forEach(r => {
       const from = r.from || r.start;
       const to = r.to || r.end;
-      if (graph.hasNode(from) && graph.hasNode(to)) {
+      if (nextGraph.hasNode(from) && nextGraph.hasNode(to)) {
         try {
           const edgeType = r.type || 'unknown';
           const edgeColor = edgeTypeColors[edgeType] || colorPalette.textMuted;
-          graph.addEdge(from, to, {
+          nextGraph.addEdge(from, to, {
             label: edgeType,
             type: edgeType,
             color: edgeColor,
@@ -180,20 +206,20 @@ export async function loadGraph() {
     // Calculate statistics
     const nodeTypes = {};
     const edgeTypes = {};
-    graph.forEachNode((node, attrs) => {
+    nextGraph.forEachNode((node, attrs) => {
       // Get the actual entity type (prioritize entityType, then nodeType, then type)
       const type = (attrs.entityType || attrs.nodeType || attrs.type || 'unknown').toLowerCase();
       nodeTypes[type] = (nodeTypes[type] || 0) + 1;
     });
-    graph.forEachEdge((edge, attrs) => {
+    nextGraph.forEachEdge((edge, attrs) => {
       const type = attrs.type || attrs.label || 'unknown';
       if (type && type !== 'unknown' && type !== '') {
         edgeTypes[type] = (edgeTypes[type] || 0) + 1;
       }
     });
     
-    const totalNodes = graph.order;
-    const totalEdges = graph.size;
+    const totalNodes = nextGraph.order;
+    const totalEdges = nextGraph.size;
     const uniqueNodeTypes = Object.keys(nodeTypes).length;
     const uniqueEdgeTypes = Object.keys(edgeTypes).length;
     
@@ -314,6 +340,40 @@ export async function loadGraph() {
       </div>
     `;
     
+    if (isRefresh && previousGraph && sigma) {
+      // Reconcile in one JavaScript task; the browser paints only after the
+      // complete graph is restored, so there is no empty-canvas frame.
+      previousGraph.clear();
+      nextGraph.forEachNode((node, attrs) => {
+        previousGraph.addNode(node, { ...attrs });
+      });
+      nextGraph.forEachEdge((_edge, attrs, source, target) => {
+        try {
+          previousGraph.addEdge(source, target, { ...attrs });
+        } catch (_error) {
+          // Duplicate relationships are already collapsed by the source graph.
+        }
+      });
+      graph = previousGraph;
+      sigma.refresh();
+
+      // Statistics and legends can swap independently without disturbing the
+      // canvas, camera, search field, or zoom controls.
+      const template = document.createElement('template');
+      template.innerHTML = html.trim();
+      const currentSidebar = container.firstElementChild?.children[1];
+      const nextSidebar = template.content.firstElementChild?.children[1];
+      if (currentSidebar && nextSidebar) {
+        currentSidebar.replaceWith(nextSidebar);
+        setupFilters();
+      }
+
+      graphLoading = false;
+      endContentRefresh(container);
+      return;
+    }
+
+    graph = nextGraph;
     container.innerHTML = html;
     
     // Initialize Sigma after DOM is ready and measured
@@ -387,8 +447,9 @@ export async function loadGraph() {
         }, 100);
       });
       
-      // Animate nodes in
-      if (graph) {
+      // Entrance animation is useful once, but replaying it on every refresh
+      // makes a populated graph appear to blink out and rebuild.
+      if (graph && !isRefresh) {
         graph.forEachNode((node, attrs) => {
           const originalSize = attrs.size || 8;
           graph.setNodeAttribute(node, 'size', 0);
@@ -404,11 +465,24 @@ export async function loadGraph() {
     
     // Use requestAnimationFrame for better timing
     requestAnimationFrame(() => {
-      initGraph();
+      initGraph()
+        .catch((error) => {
+          console.error('Failed to initialize graph:', error);
+        })
+        .finally(() => {
+          graphLoading = false;
+          endContentRefresh(container);
+        });
     });
   } catch (error) {
-    container.innerHTML = 
-      `<div class="error">Failed to load graph: ${error.message}</div>`;
+    if (isRefresh) {
+      console.error('Failed to refresh graph:', error);
+    } else {
+      container.innerHTML =
+        `<div class="error">Failed to load graph: ${escapeHtml(error.message)}</div>`;
+    }
+    endContentRefresh(container);
+    graphLoading = false;
   }
 }
 

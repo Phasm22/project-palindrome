@@ -2,10 +2,33 @@
 // Use same-origin API routing via dashboard server proxy.
 export const API_URL = `${window.location.protocol}//${window.location.host}`;
 
+const refreshIndicatorTimers = new WeakMap();
+
 export function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+export function beginContentRefresh(element, hasContent, label = 'Updating') {
+  element.setAttribute('aria-busy', 'true');
+  if (!hasContent) return;
+
+  element.dataset.refreshLabel = label;
+  const timer = window.setTimeout(() => {
+    element.classList.add('content-refreshing');
+    refreshIndicatorTimers.delete(element);
+  }, 180);
+  refreshIndicatorTimers.set(element, timer);
+}
+
+export function endContentRefresh(element) {
+  const timer = refreshIndicatorTimers.get(element);
+  if (timer) window.clearTimeout(timer);
+  refreshIndicatorTimers.delete(element);
+  element.classList.remove('content-refreshing');
+  element.removeAttribute('aria-busy');
+  delete element.dataset.refreshLabel;
 }
 
 // Render responsive table: cards on mobile, table on desktop

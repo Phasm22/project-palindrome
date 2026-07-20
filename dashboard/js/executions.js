@@ -1,4 +1,10 @@
-import { API_URL, escapeHtml, renderResponsiveTable } from './utils.js';
+import {
+  API_URL,
+  beginContentRefresh,
+  endContentRefresh,
+  escapeHtml,
+  renderResponsiveTable,
+} from './utils.js';
 import { addTooltip } from './ui-helpers.js';
 import { showModal } from './modal.js';
 import { createSkeletonLoader } from './skeletons.js';
@@ -123,35 +129,34 @@ async function loadMoreToolExecutions() {
 
 export async function loadToolExecutions(reset = false) {
   const element = document.getElementById('tool-executions');
-  if (!element) return;
-  
-  // Reset state if requested
-  if (reset) {
-    toolExecutionsState = {
-      offset: 0,
-      limit: 50,
-      loading: false,
-      hasMore: true,
-      executions: []
-    };
-  }
+  if (!element || toolExecutionsState.loading) return;
+
+  const requestOffset = reset ? 0 : toolExecutionsState.offset;
+  const hasContent = reset
+    && toolExecutionsState.executions.length > 0
+    && Boolean(element.querySelector('table, .mobile-card'));
+
+  toolExecutionsState.loading = true;
+  beginContentRefresh(element, hasContent, 'Updating executions');
   
   // Show skeleton loader on initial load
-  if (toolExecutionsState.offset === 0) {
+  if (requestOffset === 0 && !hasContent) {
     element.innerHTML = '';
     element.appendChild(createSkeletonLoader('Loading executions...'));
   }
   
   try {
-    const response = await fetch(`${API_URL}/api/dashboard/tool-executions?limit=${toolExecutionsState.limit}&offset=${toolExecutionsState.offset}`);
+    const response = await fetch(`${API_URL}/api/dashboard/tool-executions?limit=${toolExecutionsState.limit}&offset=${requestOffset}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     const data = await response.json();
     
     if (!data.executions || data.executions.length === 0) {
-      if (toolExecutionsState.offset === 0) {
+      if (requestOffset === 0) {
         element.innerHTML = '<p>No tool executions found.</p>';
+        toolExecutionsState.executions = [];
+        toolExecutionsState.offset = 0;
       }
       toolExecutionsState.hasMore = false;
       return;
@@ -163,7 +168,7 @@ export async function loadToolExecutions(reset = false) {
       (e, idx) => formatExecutionRow(e, idx)
     );
     
-    if (toolExecutionsState.offset === 0) {
+    if (requestOffset === 0) {
       element.innerHTML = html;
     } else {
       // Append to existing table
@@ -179,8 +184,13 @@ export async function loadToolExecutions(reset = false) {
     }
     
     // Update state
-    toolExecutionsState.executions.push(...data.executions);
-    toolExecutionsState.offset += data.executions.length;
+    if (requestOffset === 0) {
+      toolExecutionsState.executions = [...data.executions];
+      toolExecutionsState.offset = data.executions.length;
+    } else {
+      toolExecutionsState.executions.push(...data.executions);
+      toolExecutionsState.offset += data.executions.length;
+    }
     toolExecutionsState.hasMore = data.executions.length === toolExecutionsState.limit;
     
     // Store executions data globally for modal access
@@ -203,8 +213,15 @@ export async function loadToolExecutions(reset = false) {
       element.addEventListener('scroll', handleToolExecutionsScroll);
     }
   } catch (error) {
-    element.innerHTML = 
-      `<div class="error">Failed to load tool executions: ${escapeHtml(error.message)}</div>`;
+    if (hasContent) {
+      console.error('Failed to refresh tool executions:', error);
+    } else {
+      element.innerHTML =
+        `<div class="error">Failed to load tool executions: ${escapeHtml(error.message)}</div>`;
+    }
+  } finally {
+    toolExecutionsState.loading = false;
+    endContentRefresh(element);
   }
 }
 

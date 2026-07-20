@@ -1,4 +1,10 @@
-import { API_URL, escapeHtml, renderResponsiveTable } from './utils.js';
+import {
+  API_URL,
+  beginContentRefresh,
+  endContentRefresh,
+  escapeHtml,
+  renderResponsiveTable,
+} from './utils.js';
 import { createSkeletonStatsGrid } from './skeletons.js';
 
 let overviewRefreshPromise = null;
@@ -520,26 +526,19 @@ function renderOverview(data) {
 
 function beginOverviewRefresh(element) {
   const hadContent = element.dataset.loaded === 'true' && element.innerHTML.trim().length > 0;
-  element.setAttribute('aria-busy', 'true');
+  beginContentRefresh(element, hadContent, 'Updating overview');
 
   if (!hadContent) {
     element.innerHTML = '';
     element.appendChild(createSkeletonStatsGrid(6));
-    return;
   }
 
-  const prevHeight = element.offsetHeight || 0;
-  if (prevHeight > 0) element.style.minHeight = `${prevHeight}px`;
-  element.style.transition = 'opacity 120ms ease';
-  element.style.opacity = '0.75';
+  return hadContent;
 }
 
 function endOverviewRefresh(element) {
   element.dataset.loaded = 'true';
-  element.removeAttribute('aria-busy');
-  element.style.opacity = '';
-  element.style.minHeight = '';
-  element.style.transition = '';
+  endContentRefresh(element);
 }
 
 function getOverviewElement() {
@@ -554,9 +553,9 @@ export async function loadOverviewDashboard(force = false) {
   const element = getOverviewElement();
   if (!element) return;
 
-  if (overviewRefreshPromise && !force) return overviewRefreshPromise;
+  if (overviewRefreshPromise) return overviewRefreshPromise;
 
-  beginOverviewRefresh(element);
+  const hadContent = beginOverviewRefresh(element);
   overviewRefreshPromise = (async () => {
     const results = await Promise.all([
       fetchEndpoint('stats', '/api/dashboard/execution-stats'),
@@ -568,7 +567,11 @@ export async function loadOverviewDashboard(force = false) {
     element.innerHTML = renderOverview(normalizeResults(results));
     endOverviewRefresh(element);
   })().catch((error) => {
-    element.innerHTML = `<div class="error">Failed to load overview: ${escapeHtml(error.message)}</div>`;
+    if (hadContent) {
+      console.error('Failed to refresh overview:', error);
+    } else {
+      element.innerHTML = `<div class="error">Failed to load overview: ${escapeHtml(error.message)}</div>`;
+    }
     endOverviewRefresh(element);
   }).finally(() => {
     overviewRefreshPromise = null;

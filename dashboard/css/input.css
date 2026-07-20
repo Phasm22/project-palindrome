@@ -1706,6 +1706,55 @@
     background: rgba(30, 41, 59, 0.94) !important;
     color: #f8fafc !important;
   }
+
+  /* Preserve live content while a background refresh revalidates it. */
+  .content-refreshing {
+    position: relative;
+    cursor: progress;
+  }
+
+  .content-refreshing::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 34%;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, transparent, rgba(251, 146, 60, 0.92), transparent);
+    transform: translate3d(-120%, 0, 0);
+    animation: content-refresh-progress 1.6s ease-in-out infinite;
+    pointer-events: none;
+    z-index: var(--z-elevated);
+  }
+
+  .content-refreshing::after {
+    content: attr(data-refresh-label);
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    padding: 4px 9px;
+    border: 1px solid rgba(71, 85, 105, 0.72);
+    border-radius: 999px;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.9);
+    box-shadow: 0 4px 14px rgba(2, 6, 23, 0.2);
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+    z-index: var(--z-elevated);
+  }
+
+  @keyframes content-refresh-progress {
+    0% {
+      transform: translate3d(-120%, 0, 0);
+    }
+    55%, 100% {
+      transform: translate3d(390%, 0, 0);
+    }
+  }
   
   .animate-slide-up {
     animation: slide-up-fade 0.5s ease-out;
