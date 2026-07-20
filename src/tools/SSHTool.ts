@@ -535,12 +535,14 @@ export class SSHTool extends BaseTool {
           let shellReady = false;
           let promptDetected = false;
           let rawOutput = ""; // Collect ALL raw output for debugging
-          let lastDataTime = Date.now();
+          let completionMarker = "";
+          let commandExitCode = 0;
+          let commandCompleted = false;
+          let closeTimer: NodeJS.Timeout | null = null;
 
           stream.on("data", (data: Buffer) => {
             const text = data.toString();
             rawOutput += text; // Keep raw output for debugging
-            lastDataTime = Date.now();
             menuBuffer += text;
 
             // Check if we're at the OPNsense menu (look for menu indicators)
@@ -573,43 +575,17 @@ export class SSHTool extends BaseTool {
               if (promptDetected || text.match(/[~#\$]\s*$/m)) {
                 commandExecuted = true;
                 logger.info(`Executing command in shell: ${command}`);
-                // Execute command directly (no bash -c wrapper for cleaner output)
-                stream.write(`${command}\n`);
-                // Set a timeout to exit if no more output
-                // For commands that might take time (like guest agent), wait longer
-                const outputTimeout = command.includes("guest") || command.includes("pvesh") || command.includes("qm") ? 10000 : 5000;
-                
-                // Track if we've seen any useful output (not just errors)
-                let hasUsefulOutput = false;
-                const checkOutput = setInterval(() => {
-                  if (stdout.length > 0 && !stdout.match(/^ipcc_send_rec|^Unable to load/)) {
-                    hasUsefulOutput = true;
-                  }
-                }, 500);
-                
-                setTimeout(() => {
-                  clearInterval(checkOutput);
-                  // Check if we got output recently
-                  const timeSinceLastData = Date.now() - lastDataTime;
-                  // Wait longer if we haven't seen useful output yet
-                  const waitTime = hasUsefulOutput ? 1000 : 3000;
-                  
-                  if (timeSinceLastData > waitTime) {
-                    // No output for waitTime, safe to exit
-                    stream.write("exit\n");
-                    setTimeout(() => {
-                      stream.end();
-                    }, 500);
-                  } else {
-                    // Still getting output, wait a bit more
-                    setTimeout(() => {
-                      stream.write("exit\n");
-                      setTimeout(() => {
-                        stream.end();
-                      }, 500);
-                    }, waitTime);
-                  }
-                }, outputTimeout);
+                completionMarker =
+                  `__PALINDROME_COMMAND_DONE_${Date.now()}_${Math.random()
+                    .toString(16)
+                    .slice(2)}__`;
+                // The marker provides deterministic command completion and the
+                // real remote exit code. OPNsense's interactive menu otherwise
+                // offers no reliable channel-close event for individual commands.
+                // Its root shell is tcsh, where the last exit code is $status.
+                stream.write(
+                  `${command}; echo ${completionMarker}:$status\n`
+                );
                 return;
               }
             }
@@ -617,6 +593,19 @@ export class SSHTool extends BaseTool {
             // Collect command output - collect everything, filter later
             if (commandExecuted) {
               stdout += text; // Collect raw output first
+              if (!commandCompleted && completionMarker) {
+                const completionPattern = new RegExp(
+                  `${completionMarker}:(\\d+)`
+                );
+                const completion = stdout.match(completionPattern);
+                if (completion) {
+                  commandCompleted = true;
+                  commandExitCode = Number.parseInt(completion[1] ?? "1", 10);
+                  stdout = stdout.replace(completionPattern, "");
+                  stream.write("exit\n");
+                  closeTimer = setTimeout(() => stream.close(), 100);
+                }
+              }
             }
           });
 
@@ -626,23 +615,27 @@ export class SSHTool extends BaseTool {
 
           // Add timeout to prevent hanging
           const timeout = setTimeout(() => {
-            // If we have output, the command likely succeeded - just close cleanly
-            if (stdout.trim().length > 0) {
-              logger.info("SSH command completed (timeout reached but output received)");
-            } else {
-              logger.error("SSH command timeout - no output received");
-            }
-            stream.end();
-            sshPool.releaseConnection(targetHost, username);
-            resolve({ 
-              stdout: stdout || "Command executed but no output received", 
-              stderr, 
-              exitCode: 0 
+            commandExitCode = 124;
+            stderr +=
+              `${stderr.endsWith("\n") || stderr.length === 0 ? "" : "\n"}` +
+              "SSH command timed out before receiving its completion marker";
+            logger.error("SSH command timeout before completion marker", {
+              command,
+              host: targetHost,
+              outputLength: stdout.length,
             });
-          }, 10000); // 10 second timeout
+            stream.close();
+          }, 15000);
 
           stream.on("close", () => {
             clearTimeout(timeout);
+            if (closeTimer) clearTimeout(closeTimer);
+            if (commandExecuted && !commandCompleted && commandExitCode === 0) {
+              commandExitCode = 1;
+              stderr +=
+                `${stderr.endsWith("\n") || stderr.length === 0 ? "" : "\n"}` +
+                "SSH channel closed before receiving its completion marker";
+            }
             // Don't close connection, release it back to pool
             sshPool.releaseConnection(targetHost, username);
             
@@ -684,6 +677,12 @@ export class SSHTool extends BaseTool {
               if (cleanLine === command.trim() || 
                   cleanLine === `$ ${command.trim()}` ||
                   cleanLine === `# ${command.trim()}`) {
+                continue;
+              }
+
+              // Skip the decorated command echo and completion marker used to
+              // detect the end of an interactive OPNsense command.
+              if (cleanLine.includes("__PALINDROME_COMMAND_DONE_")) {
                 continue;
               }
               
@@ -733,7 +732,7 @@ export class SSHTool extends BaseTool {
             resolve({ 
               stdout: commandOutput || stdout, 
               stderr, 
-              exitCode: 0 
+              exitCode: commandExitCode
             });
           });
         });

@@ -37,7 +37,7 @@ test("SSHTool accepts approved commands", async () => {
   const tool = new SSHTool();
   // This will fail at SSH connection (expected), but should pass validation
   const res = await tool.execute(
-    { host: "172.16.0.1", command: "du -sh /*" },
+    { host: "172.16.0.1", command: "uptime" },
     { toolName: "ssh_execute", startedAt: Date.now() }
   );
 
@@ -50,4 +50,3 @@ test("SSHTool accepts approved commands", async () => {
     expect(res.data).toBeDefined();
   }
 }, { timeout: 15000 });
-

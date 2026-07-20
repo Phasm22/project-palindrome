@@ -697,15 +697,23 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       { command: "pfctl -sa", key: "summary" },
     ];
 
-    // Execute all SSH commands in parallel for better performance
-    const results = await Promise.all(
-      commands.map(({ command, key }) =>
-        sshTool.execute({ host, command }, context).then(
-          (result) => ({ key, result }),
-          (error) => ({ key, result: { error: error.message || String(error) } })
-        )
-      )
-    );
+    // OPNsense exposes a forced interactive menu. Reuse one pooled SSH
+    // connection sequentially instead of opening competing shell channels for
+    // the same host key.
+    const results = [];
+    for (const { command, key } of commands) {
+      try {
+        const result = await sshTool.execute({ host, command }, context);
+        results.push({ key, result });
+      } catch (error: unknown) {
+        results.push({
+          key,
+          result: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    }
 
     const sections: Record<string, any> = {};
     for (const { key, result } of results) {

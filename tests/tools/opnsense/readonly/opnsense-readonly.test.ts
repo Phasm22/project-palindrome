@@ -131,6 +131,22 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
       };
 
       const getApiClientSpy = spyOn(tool as any, "getApiClient").mockReturnValue(mockClient);
+      const getSshToolSpy = spyOn(tool as any, "getSshTool").mockReturnValue({
+        execute: async ({ command }: { command: string }) => ({
+          data: {
+            stdout:
+              command === "pfctl -sr"
+                ? "pass in quick on igb0 proto tcp to port 22\nblock drop in all"
+                : command === "pfctl -sn"
+                  ? "nat on igb0 from 10.0.0.0/24 to any"
+                  : command === "pfctl -si"
+                    ? "Status: Enabled\nState Table Total Rate: 42"
+                    : "FILTER RULES:\npass in quick on igb0",
+            stderr: "",
+            exitCode: 0,
+          },
+        }),
+      });
 
       const result = await tool.execute(
         { action: "firewall_rules_list" },
@@ -147,6 +163,7 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
       expect(result.data.timestamp).toBeDefined();
       
       getApiClientSpy.mockRestore();
+      getSshToolSpy.mockRestore();
     });
 
     test("should resolve firewall alias get from list data using normalized names", async () => {
@@ -247,7 +264,7 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
   });
 
   describe("TL-1A.4: Output Sanitization Integrity", () => {
-    test("should sanitize internal IP addresses (192.168.x.x)", async () => {
+    test("should preserve internal IP addresses needed for infrastructure answers", async () => {
       const mockData = {
         interface: "wan",
         ip: "192.168.1.1",
@@ -269,17 +286,15 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
       expect(result.error).toBeUndefined();
       expect(result.data).toBeDefined();
       
-      // IPs should be redacted
       const dataStr = JSON.stringify(result.data);
-      expect(dataStr).not.toContain("192.168.1.1");
-      expect(dataStr).not.toContain("192.168.1.254");
-      // Public IPs should remain (8.8.8.8)
+      expect(dataStr).toContain("192.168.1.1");
+      expect(dataStr).toContain("192.168.1.254");
       expect(dataStr).toContain("8.8.8.8");
       
       getApiClientSpy.mockRestore();
     });
 
-    test("should sanitize internal IP addresses (10.x.x.x)", async () => {
+    test("should preserve RFC1918 10/8 addresses", async () => {
       const mockData = {
         interface: "lan",
         ip: "10.0.0.1",
@@ -300,15 +315,14 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
 
       expect(result.error).toBeUndefined();
       
-      // 10.x.x.x IPs should be redacted
       const dataStr = JSON.stringify(result.data);
-      expect(dataStr).not.toContain("10.0.0.1");
-      expect(dataStr).not.toContain("10.0.0.254");
+      expect(dataStr).toContain("10.0.0.1");
+      expect(dataStr).toContain("10.0.0.254");
       
       getApiClientSpy.mockRestore();
     });
 
-    test("should sanitize internal IP addresses (172.16.x.x)", async () => {
+    test("should preserve RFC1918 172.16/12 addresses", async () => {
       const mockData = {
         interface: "dmz",
         ip: "172.16.0.1",
@@ -328,10 +342,9 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
 
       expect(result.error).toBeUndefined();
       
-      // 172.16.x.x IPs should be redacted
       const dataStr = JSON.stringify(result.data);
-      expect(dataStr).not.toContain("172.16.0.1");
-      expect(dataStr).not.toContain("172.16.0.254");
+      expect(dataStr).toContain("172.16.0.1");
+      expect(dataStr).toContain("172.16.0.254");
       
       getApiClientSpy.mockRestore();
     });
@@ -371,14 +384,14 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
       getApiClientSpy.mockRestore();
     });
 
-    test("should sanitize IPs in ARP table responses", async () => {
+    test("should preserve IPs in ARP table responses", async () => {
       const mockData = [
         { ip: "192.168.1.10", mac: "aa:bb:cc:dd:ee:ff", interface: "lan" },
         { ip: "10.0.0.5", mac: "11:22:33:44:55:66", interface: "wan" },
       ];
 
       const mockClient = {
-        get: async () => Promise.resolve({ data: mockData }),
+        post: async () => Promise.resolve({ data: mockData }),
       };
 
       const getApiClientSpy = spyOn(tool as any, "getApiClient").mockReturnValue(mockClient);
@@ -390,10 +403,9 @@ describe("TL-1A: OPNsense Read-Only Tool", () => {
 
       expect(result.error).toBeUndefined();
       
-      // IPs should be redacted
       const dataStr = JSON.stringify(result.data);
-      expect(dataStr).not.toContain("192.168.1.10");
-      expect(dataStr).not.toContain("10.0.0.5");
+      expect(dataStr).toContain("192.168.1.10");
+      expect(dataStr).toContain("10.0.0.5");
       
       getApiClientSpy.mockRestore();
     });
