@@ -1019,6 +1019,21 @@ export class TwinQueryService {
     }
   }
 
+  async deleteVmById(id: string): Promise<boolean> {
+    const result = await this.runQuery(
+      `
+        MATCH (vm:TwinEntity {id: $id, type: $vmType})
+        DETACH DELETE vm
+        RETURN count(vm) AS deleted
+      `,
+      { id, vmType: "compute_vm" }
+    );
+    const deleted = result.records[0]?.get("deleted");
+    return typeof deleted?.toNumber === "function"
+      ? deleted.toNumber() > 0
+      : Number(deleted ?? 0) > 0;
+  }
+
   /**
    * List all firewall rules.
    */

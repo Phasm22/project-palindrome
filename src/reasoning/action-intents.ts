@@ -93,7 +93,9 @@ function extractVmName(text: string): string | null {
   }
 
   // Match patterns like "destroy X", "delete X", "remove X" where X is a VM name
-  const destroyMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
+  const destroyMatch = text.match(
+    /\b(?:destroy|delete|remove)\s+(?:(?:the|a|an)\s+)?(?:(?:vm|virtual\s+machine|container|lxc)\s+)?([a-z0-9][a-z0-9._-]*)/i
+  );
   if (destroyMatch) {
     return destroyMatch[1] ?? null;
   }
@@ -116,7 +118,9 @@ function extractVmId(text: string): number | null {
   }
 
   // Match standalone numbers after destroy/delete/remove
-  const destroyIdMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?(\d+)/i);
+  const destroyIdMatch = text.match(
+    /\b(?:destroy|delete|remove)\s+(?:(?:the|a|an)\s+)?(?:(?:vm|virtual\s+machine|container|lxc)\s+)?(\d+)/i
+  );
   if (destroyIdMatch?.[1]) {
     return parseInt(destroyIdMatch[1], 10);
   }
