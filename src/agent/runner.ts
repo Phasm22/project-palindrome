@@ -70,7 +70,10 @@ import {
   listInternetExposedVmsChain,
 } from "../reasoning/chains/exposure";
 import { detectActionIntent } from "../reasoning/action-intents";
-import { parseCompoundApplicationRequest } from "./application-request";
+import {
+  buildApplicationManifest,
+  parseCompoundApplicationRequest,
+} from "./application-request";
 import {
   loadKnownEntitiesFromIngestionSummary,
   loadKnownEntitiesFromProxmox,
@@ -1474,6 +1477,94 @@ export async function runAgent(
       vmName: compoundApplicationRequest.vmName,
       node: compoundApplicationRequest.node,
     });
+    const manifest = buildApplicationManifest(compoundApplicationRequest, {
+      input: userInput,
+      sshUsername: options.getProfileSshUsername?.(session.userId) ?? undefined,
+    });
+    emitStepEvent(eventBus, sessionId, {
+      step: 1,
+      maxSteps: 1,
+      userInput,
+      intent: "application_lifecycle",
+      tool: "application_lifecycle",
+    });
+    const toolCallId = `application-lifecycle-${Date.now()}`;
+    eventBus.emit({
+      type: "tool:start",
+      sessionId,
+      timestamp: Date.now(),
+      data: {
+        type: "tool:start",
+        toolName: "application_lifecycle",
+        parameters: manifest,
+        toolCallId,
+      },
+    });
+    const result = await executeToolCall(
+      { toolName: "application_lifecycle", parameters: manifest },
+      tools,
+      { userId: session.userId, aclGroup: session.aclGroup, node: compoundApplicationRequest.node }
+    );
+    eventBus.emit({
+      type: "tool:complete",
+      sessionId,
+      timestamp: Date.now(),
+      data: {
+        type: "tool:complete",
+        toolName: "application_lifecycle",
+        parameters: manifest,
+        toolCallId,
+        success: !result.error,
+        error: result.error,
+        durationMs: result.durationMs,
+      },
+    });
+    const application = manifest.applications[0]!;
+    const answer = result.error
+      ? `Application deployment failed | vm=${application.vms[0]!.name} | node=${application.vms[0]!.node} | error=${result.error}`
+      : `Application deployed | vm=${application.vms[0]!.name} | node=${application.vms[0]!.node} | domain=${application.domain}`;
+    const durationMs = Date.now() - startTime;
+    let traceId: string | undefined;
+    try {
+      traceId = await getReasoningTraceStore().recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: answer,
+        steps: [{
+          step: 1,
+          toolCalls: [{
+            toolName: "application_lifecycle",
+            parameters: manifest,
+            result: { success: !result.error, error: result.error },
+            durationMs: result.durationMs ?? durationMs,
+          }],
+          decisions: [{
+            type: "tool_choice",
+            description: "Compiled the confirmed compound request into one application lifecycle manifest.",
+            metadata: { mode: "deterministic_manifest", requestId: manifest.requestId },
+          }],
+        }],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
+        totalSteps: 1,
+        totalToolCalls: 1,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs,
+      });
+    } catch (error: unknown) {
+      logger.warn("Failed to record application lifecycle trace", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    emitFinalEvent(eventBus, sessionId, startTime, answer, {
+      traceId,
+      conversationState: state.postExecutionState,
+      conversationContext: state.finalContextUpdate,
+      totalSteps: 1,
+      totalToolCalls: 1,
+    });
+    return { text: answer };
   } else if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
 
@@ -2020,7 +2111,6 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     pendingActionExecuteInput,
     pendingAction,
     usedPendingAction,
-    useApplicationLifecycle: compoundApplicationRequest !== null,
     entityCache: options.conversationContext?.resolvedEntities ?? {},
   });
 

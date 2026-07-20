@@ -1,6 +1,7 @@
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { runAgent } from "../../src/agent/runner";
 import { AgentEventBus, type AgentEvent } from "../../src/agent/event-bus";
+import { ApplicationLifecycleTool } from "../../src/tools/actions/ApplicationLifecycleTool";
 import { installIsolatedObservabilityStores } from "../helpers/isolated-observability";
 
 let cleanupObservability: (() => void) | null = null;
@@ -138,4 +139,52 @@ test("compound application request asks for a node before confirmation", async (
   expect(turn2.response.text).toContain("Firewall ports: 22, 80, 43");
   expect(turn2.response.text).toContain("Generated image: A Grand piano");
   expect(turn2.response.text).toContain("Domain: samsung.ops.prox");
+}, { timeout: 15000 });
+
+test("confirmed compound request executes one deterministic lifecycle manifest", async () => {
+  const request =
+    "Create a VM called Samsung Open Ports 22, 443, and 80. create the Nginx server with the picture of Of A Grand piano. Also put the VM under the ops domain. on yin";
+  const executeSpy = spyOn(ApplicationLifecycleTool.prototype, "execute").mockResolvedValue({
+    data: { success: true },
+    durationMs: 1,
+  });
+
+  try {
+    const result = await runAgent("CONFIRM deadbeef", {
+      conversationState: "AWAITING_CONFIRMATION",
+      conversationContext: {
+        pendingAction: request,
+        pendingActionId: "deadbeef",
+        pendingActionCreatedAt: Date.now(),
+        pendingActionExpiresAt: Date.now() + 10 * 60 * 1000,
+        pendingActionPreview: "deploy application Samsung",
+        pendingActionExecuteInput: request,
+      },
+    });
+
+    expect(result.text).toContain("Application deployed");
+    expect(executeSpy).toHaveBeenCalledTimes(1);
+    expect(executeSpy.mock.calls[0]?.[0]).toMatchObject({
+      schemaVersion: "1",
+      operation: "deploy",
+      applications: [{
+        name: "samsung",
+        domain: "samsung.ops.prox",
+        vms: [{
+          name: "samsung",
+          node: "yin",
+          services: ["nginx"],
+          firewall: {
+            rules: [
+              { port: 22 },
+              { port: 443 },
+              { port: 80 },
+            ],
+          },
+        }],
+      }],
+    });
+  } finally {
+    executeSpy.mockRestore();
+  }
 }, { timeout: 15000 });

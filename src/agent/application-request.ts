@@ -125,3 +125,90 @@ export function summarizeCompoundApplicationRequest(request: CompoundApplication
   if (request.domain) lines.push(`- Domain: ${request.domain}`);
   return lines.join("\n");
 }
+
+export function buildApplicationManifest(
+  request: CompoundApplicationRequest,
+  options: { input: string; sshUsername?: string; opsboxIp?: string }
+): ApplicationManifest {
+  if (!request.vmName || !request.node) {
+    throw new Error("Application deployment requires a VM name and Proxmox node");
+  }
+
+  const name = request.vmName.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const protectedByOps = request.domain?.endsWith(".ops.prox") === true;
+  const domain = request.domain ?? `${name}.prox`;
+  const opsboxIp = options.opsboxIp ?? process.env.OPSBOX_IP ?? "172.16.0.184";
+  const services = request.services.map((service) => service.toLowerCase()) as Array<"nginx" | "docker">;
+  const backendPort = request.requestedPorts.includes(80)
+    ? 80
+    : request.requestedPorts[0] ?? 80;
+
+  return {
+    schemaVersion: "1",
+    requestId: `application-${createHash("sha256").update(options.input).digest("hex").slice(0, 16)}`,
+    operation: "deploy",
+    dryRun: false,
+    rollbackPolicy: "automatic",
+    applications: [
+      {
+        name,
+        domain,
+        description: `Application deployment for ${request.vmName}`,
+        identity: {
+          protected: protectedByOps,
+          provider: protectedByOps ? "ops-authentik" : "none",
+          allowedGroups: [],
+        },
+        exposure: {
+          enabled: true,
+          backendPort,
+          opsboxIp,
+        },
+        vms: [
+          {
+            name,
+            node: request.node,
+            cores: 2,
+            memory: 4096,
+            diskSize: "20G",
+            templateId: null,
+            datastore: "local-lvm",
+            cloudInitDatastore: request.node === "proxBig" ? "snippets" : "local",
+            bridge: "vmbr0",
+            vlanId: null,
+            sshUsername: options.sshUsername || "ops",
+            bootstrap: false,
+            services,
+            firewall: {
+              defaultIncoming: "deny",
+              rules: request.requestedPorts.map((port) => ({
+                port,
+                protocol: "tcp" as const,
+                action: "allow" as const,
+                source: "any" as const,
+              })),
+            },
+            assets: request.assetDescription
+              ? [
+                  {
+                    id: "hero",
+                    kind: "image",
+                    source: "generate",
+                    prompt: request.assetDescription,
+                    path: null,
+                    width: 1536,
+                    height: 1024,
+                    format: "jpeg",
+                    destination: "/var/www/html/hero.jpg",
+                    altText: request.assetDescription,
+                  },
+                ]
+              : [],
+          },
+        ],
+      },
+    ],
+  };
+}
+import { createHash } from "node:crypto";
+import type { ApplicationManifest } from "../actions/applications/application-manifest";

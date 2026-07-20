@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildApplicationManifest,
   parseCompoundApplicationRequest,
   summarizeCompoundApplicationRequest,
 } from "../../src/agent/application-request";
@@ -34,5 +35,44 @@ describe("compound application requests", () => {
 
   test("does not capture ordinary VM creation", () => {
     expect(parseCompoundApplicationRequest("create a VM called apple on yin")).toBeNull();
+  });
+
+  test("builds a valid strict manifest without model-authored defaults", () => {
+    const parsed = parseCompoundApplicationRequest(`${request} on yin`)!;
+    const manifest = buildApplicationManifest(parsed, {
+      input: `${request} on yin`,
+      sshUsername: "ops",
+      opsboxIp: "172.16.0.184",
+    });
+
+    expect(manifest.applications[0]?.vms[0]).toMatchObject({
+      name: "samsung",
+      node: "yin",
+      templateId: null,
+      cloudInitDatastore: "local",
+      services: ["nginx"],
+      firewall: {
+        defaultIncoming: "deny",
+        rules: [
+          { port: 22, protocol: "tcp", action: "allow", source: "any" },
+          { port: 80, protocol: "tcp", action: "allow", source: "any" },
+          { port: 43, protocol: "tcp", action: "allow", source: "any" },
+        ],
+      },
+    });
+    expect(manifest.applications[0]?.identity.provider).toBe("ops-authentik");
+    expect(manifest.applications[0]?.vms[0]?.assets[0]).toMatchObject({
+      source: "generate",
+      prompt: "A Grand piano",
+      destination: "/var/www/html/hero.jpg",
+    });
+  });
+
+  test("normalizes comma-separated numeric ports", () => {
+    const parsed = parseCompoundApplicationRequest(
+      "Create a VM called Samsung. Open ports 22, 443, and 80, install Nginx, add an image of a grand piano, and use the ops domain on yin."
+    );
+
+    expect(parsed?.requestedPorts).toEqual([22, 443, 80]);
   });
 });
