@@ -38,6 +38,13 @@ describe("detectFirewallIntent", () => {
     expect(intent).toEqual({ type: "allowed_ports_between", from: "home network", to: "lab network" });
   });
 
+  test("keeps a ports-and-hosts policy question on the dedicated firewall intent", () => {
+    const intent = detectFirewallIntent(
+      "what ports are we allowing from home to lab? and for what hosts"
+    );
+    expect(intent).toEqual({ type: "allowed_ports_between", from: "home", to: "lab" });
+  });
+
   test("routes alias content questions to dedicated firewall intent", () => {
     const intent = detectFirewallIntent("what all is in the alias tjs computers");
     expect(intent).toEqual({ type: "alias_contents", aliasName: "tjs computers" });

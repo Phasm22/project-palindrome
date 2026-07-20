@@ -1,6 +1,8 @@
 import type { BaseTool } from "../../tools/BaseTool";
 import type { ToolSession } from "../../agent/tool-policy";
 import { executeToolCall } from "../../agent/tool-executor";
+import { getNetworkLabel } from "../../config/network-labels";
+import { ipInCidr } from "../../parsers/network/network-utils";
 
 interface FirewallAliasDef {
   name: string;
@@ -22,8 +24,10 @@ interface FirewallRuleSummary {
 
 interface ParsedPfRule {
   line: string;
+  action: "pass" | "block";
   direction?: "in" | "out";
   iface?: string;
+  ifaceNegated?: boolean;
   source?: string;
   destination?: string;
   protocol?: string;
@@ -49,25 +53,44 @@ function normalizeText(value: string): string {
 function parseInterfaceBindings(lines: string[]): Array<{ label: string; iface: string; cidr?: string }> {
   const bindings: Array<{ label: string; iface: string; cidr?: string }> = [];
   const bindingRegex = /^([a-z0-9_-]+)\s+\(([a-z0-9._-]+)\)\s+->.*?:\s+(\d+\.\d+\.\d+\.\d+\/\d+)/i;
+  const antispoofRegex = /^block\b.*\bon\s+!\s*([a-z0-9._-]+)\b.*\bfrom\s+(\d+\.\d+\.\d+\.\d+\/\d+)\s+to\s+any\b/i;
   for (const line of lines) {
     const match = line.match(bindingRegex);
-    if (!match?.[1] || !match?.[2]) continue;
-    bindings.push({
-      label: match[1],
-      iface: match[2],
-      cidr: match[3],
-    });
+    if (match?.[1] && match?.[2]) {
+      bindings.push({
+        label: match[1],
+        iface: match[2],
+        cidr: match[3],
+      });
+      continue;
+    }
+
+    // OPNsense emits one of these rules per interface. It gives us the live
+    // interface-to-CIDR binding even though `pfctl -sr` omits GUI descriptions.
+    const antispoofMatch = line.match(antispoofRegex);
+    if (antispoofMatch?.[1] && antispoofMatch?.[2]) {
+      const cidr = antispoofMatch[2];
+      bindings.push({
+        label: getNetworkLabel(cidr) ?? antispoofMatch[1],
+        iface: antispoofMatch[1],
+        cidr,
+      });
+    }
   }
   return bindings;
 }
 
+function normalizeScope(value: string): string {
+  return normalizeText(value).replace(/(?:network|net)$/i, "");
+}
+
 function resolveBinding(term: string, bindings: Array<{ label: string; iface: string; cidr?: string }>): { iface?: string; cidr?: string } {
-  const normalizedTerm = normalizeText(term);
+  const normalizedTerm = normalizeScope(term);
   if (!normalizedTerm) return {};
 
   let best: { iface?: string; cidr?: string; score: number } = { score: 0 };
   for (const binding of bindings) {
-    const labelNorm = normalizeText(binding.label);
+    const labelNorm = normalizeScope(binding.label);
     if (!labelNorm) continue;
     let score = 0;
     if (labelNorm.includes(normalizedTerm) || normalizedTerm.includes(labelNorm)) {
@@ -85,21 +108,28 @@ function resolveBinding(term: string, bindings: Array<{ label: string; iface: st
   return best.score > 0 ? { iface: best.iface, cidr: best.cidr } : {};
 }
 
-function parsePassRule(line: string): ParsedPfRule | null {
+function parseFilterRule(line: string): ParsedPfRule | null {
   const trimmed = line.trim();
-  if (!/^pass\b/i.test(trimmed)) {
+  const action = trimmed.match(/^(pass|block)\b/i)?.[1]?.toLowerCase() as "pass" | "block" | undefined;
+  if (!action) {
     return null;
   }
   const direction = (trimmed.match(/\b(in|out)\b/i)?.[1] ?? "").toLowerCase() as "in" | "out" | "";
-  const iface = trimmed.match(/\bon\s+([a-z0-9._-]+)/i)?.[1]?.toLowerCase();
+  const interfaceMatch = trimmed.match(/\bon\s+(!\s*)?([a-z0-9._-]+)/i);
+  const iface = interfaceMatch?.[2]?.toLowerCase();
   const protocol = trimmed.match(/\bproto\s+([a-z0-9._-]+)/i)?.[1]?.toLowerCase();
-  const source = trimmed.match(/\bfrom\s+(.+?)\s+to\s+/i)?.[1]?.trim();
-  const destination = trimmed.match(/\bto\s+(.+?)(?:\s+port\s*=|\s+flags\b|\s+keep\b|\s+label\b|$)/i)?.[1]?.trim();
+  const endpoints = trimmed.match(
+    /\bfrom\s+(.+?)\s+to\s+(.+?)(?:\s+port\s*=|\s+flags\b|\s+keep\b|\s+label\b|$)/i
+  );
+  const source = endpoints?.[1]?.trim();
+  const destination = endpoints?.[2]?.trim();
   const port = trimmed.match(/\bport\s*=\s*([a-z0-9._-]+)/i)?.[1]?.toLowerCase();
   return {
     line: trimmed,
+    action,
     direction: direction || undefined,
     iface,
+    ifaceNegated: Boolean(interfaceMatch?.[1]),
     source,
     destination,
     protocol,
@@ -133,6 +163,250 @@ function matchesRuleSide(side: string | undefined, iface: string | undefined, ci
   const termNorm = normalizeText(rawTerm);
   const sideNorm = normalizeText(side);
   return Boolean(termNorm && sideNorm && (sideNorm.includes(termNorm) || termNorm.includes(sideNorm)));
+}
+
+interface OpnsenseAliasRow {
+  name?: unknown;
+  type?: unknown;
+  content?: unknown;
+}
+
+interface AccessSourceGroup {
+  label: string;
+  aliasName?: string;
+  allPorts: boolean;
+  protocols: Set<string>;
+  ports: Map<number, Set<string>>;
+}
+
+function aliasRowsByName(payload: unknown): Map<string, { name: string; type: string; entries: string[] }> {
+  const aliases = (payload as { aliases?: unknown[] } | undefined)?.aliases ?? [];
+  const byName = new Map<string, { name: string; type: string; entries: string[] }>();
+  for (const value of aliases) {
+    if (!value || typeof value !== "object") continue;
+    const row = value as OpnsenseAliasRow;
+    const name = typeof row.name === "string" ? row.name.trim() : "";
+    if (!name) continue;
+    byName.set(name.toLowerCase(), {
+      name,
+      type: typeof row.type === "string" ? row.type.toLowerCase() : "",
+      entries: splitAliasContent(row.content),
+    });
+  }
+  return byName;
+}
+
+function resolveAliasLeaves(
+  aliasName: string,
+  aliases: Map<string, { name: string; type: string; entries: string[] }>,
+  seen: Set<string> = new Set()
+): string[] {
+  const key = aliasName.toLowerCase();
+  if (seen.has(key)) return [];
+  const alias = aliases.get(key);
+  if (!alias) return [aliasName];
+
+  const nextSeen = new Set(seen);
+  nextSeen.add(key);
+  return alias.entries.flatMap((entry) =>
+    aliases.has(entry.toLowerCase())
+      ? resolveAliasLeaves(entry, aliases, nextSeen)
+      : [entry]
+  );
+}
+
+function isIpv4(value: string): boolean {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value);
+}
+
+function sourceMatchesBinding(
+  rule: ParsedPfRule,
+  binding: { iface?: string; cidr?: string },
+  aliases: Map<string, { name: string; type: string; entries: string[] }>
+): boolean {
+  const source = rule.source?.trim();
+  if (!source) return false;
+  if (rule.ifaceNegated && rule.iface === binding.iface) return false;
+  if (matchesRuleSide(source, binding.iface, binding.cidr, "")) return true;
+  if (source.toLowerCase() === "any") return Boolean(binding.iface && rule.iface === binding.iface);
+
+  const aliasNames = extractAliasTokens(source);
+  if (!binding.cidr || aliasNames.length === 0) return false;
+  return aliasNames.some((name) =>
+    resolveAliasLeaves(name, aliases).some((entry) => isIpv4(entry) && ipInCidr(entry, binding.cidr!))
+  );
+}
+
+function destinationMatchesBinding(
+  destination: string | undefined,
+  binding: { iface?: string; cidr?: string },
+  rawTerm: string
+): boolean {
+  if (!destination) return false;
+  if (destination.trim().toLowerCase() === "any") return true;
+  return matchesRuleSide(destination, binding.iface, binding.cidr, rawTerm);
+}
+
+function sourceGroupForRule(
+  rule: ParsedPfRule,
+  from: string,
+  binding: { iface?: string; cidr?: string }
+): { key: string; label: string; aliasName?: string } {
+  const aliasName = extractAliasTokens(rule.source)[0];
+  if (aliasName) {
+    return { key: `alias:${aliasName.toLowerCase()}`, label: aliasName, aliasName };
+  }
+  const networkLabel = binding.cidr ? getNetworkLabel(binding.cidr) : null;
+  const label = networkLabel && binding.cidr
+    ? `${networkLabel} (${binding.cidr})`
+    : binding.cidr ?? from;
+  return { key: `network:${binding.cidr ?? normalizeText(from)}`, label };
+}
+
+function formatAliasHosts(
+  aliasName: string,
+  aliases: Map<string, { name: string; type: string; entries: string[] }>,
+  sourceCidr?: string
+): string[] {
+  const alias = aliases.get(aliasName.toLowerCase());
+  if (!alias) return [];
+
+  const hosts: string[] = [];
+  for (const entry of alias.entries) {
+    const leaves = aliases.has(entry.toLowerCase())
+      ? resolveAliasLeaves(entry, aliases)
+      : [entry];
+    const scopedLeaves = sourceCidr
+      ? leaves.filter((leaf) => !isIpv4(leaf) || ipInCidr(leaf, sourceCidr))
+      : leaves;
+    if (scopedLeaves.length === 0) continue;
+    if (scopedLeaves.length === 1 && scopedLeaves[0] !== entry) {
+      hosts.push(`${entry} (${scopedLeaves[0]})`);
+    } else {
+      hosts.push(...scopedLeaves);
+    }
+  }
+  return hosts;
+}
+
+function formatPortEntry(port: number, protocols: Set<string>): string {
+  const protocolList = Array.from(protocols)
+    .map((protocol) => protocol.toUpperCase())
+    .sort()
+    .join("/");
+  return `${port} (${labelForPort(port)}${protocolList ? `, ${protocolList}` : ""})`;
+}
+
+export function formatAllowedPortsBetweenPayload(
+  from: string,
+  to: string,
+  rulesPayload: unknown,
+  aliasesPayload: unknown
+): string {
+  const rawRules = (rulesPayload as { rules?: unknown[] } | undefined)?.rules ?? [];
+  const lines = rawRules.filter((line): line is string => typeof line === "string");
+  const aliases = aliasRowsByName(aliasesPayload);
+  const bindings = parseInterfaceBindings(lines);
+  const fromBinding = resolveBinding(from, bindings);
+  const toBinding = resolveBinding(to, bindings);
+
+  if (!fromBinding.iface || !toBinding.iface) {
+    return [
+      "Access Policy",
+      `Could not resolve the live interface bindings for ${from} -> ${to}.`,
+      "No policy conclusion was inferred from unrelated rules.",
+    ].join("\n");
+  }
+
+  const rules = lines
+    .map(parseFilterRule)
+    .filter((rule): rule is ParsedPfRule => Boolean(rule));
+  const matchingPasses = rules.filter((rule) =>
+    rule.action === "pass" &&
+    rule.direction !== "out" &&
+    rule.iface === fromBinding.iface &&
+    sourceMatchesBinding(rule, fromBinding, aliases) &&
+    destinationMatchesBinding(rule.destination, toBinding, to)
+  );
+
+  const groups = new Map<string, AccessSourceGroup>();
+  for (const rule of matchingPasses) {
+    const sourceGroup = sourceGroupForRule(rule, from, fromBinding);
+    let group = groups.get(sourceGroup.key);
+    if (!group) {
+      group = {
+        label: sourceGroup.label,
+        aliasName: sourceGroup.aliasName,
+        allPorts: false,
+        protocols: new Set(),
+        ports: new Map(),
+      };
+      groups.set(sourceGroup.key, group);
+    }
+
+    const protocol = rule.protocol?.toLowerCase() ?? "any";
+    group.protocols.add(protocol);
+    const port = parsePortNumber(rule.port);
+    if (!port) {
+      if (protocol === "any") group.allPorts = true;
+      continue;
+    }
+    if (!group.ports.has(port)) group.ports.set(port, new Set());
+    group.ports.get(port)?.add(protocol);
+  }
+
+  if (groups.size === 0) {
+    return [
+      "Access Policy",
+      `No matching pass rules were found for ${from} -> ${to}.`,
+      "No ports are reported as allowed.",
+    ].join("\n");
+  }
+
+  const fromLabel = fromBinding.cidr ? getNetworkLabel(fromBinding.cidr) ?? from : from;
+  const toLabel = toBinding.cidr ? getNetworkLabel(toBinding.cidr) ?? to : to;
+  const output = [`Access Policy: ${fromLabel} -> ${toLabel}`];
+  const sortedGroups = Array.from(groups.values()).sort((a, b) =>
+    Number(b.allPorts) - Number(a.allPorts) || a.label.localeCompare(b.label)
+  );
+
+  for (const group of sortedGroups) {
+    if (group.allPorts) {
+      output.push(`- \`${group.label}\`: all ports (all IPv4 protocols).`);
+    } else if (group.ports.size > 0) {
+      const ports = Array.from(group.ports.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([port, protocols]) => formatPortEntry(port, protocols))
+        .join(", ");
+      output.push(`- \`${group.label}\`: ${ports}.`);
+    }
+
+    if (group.aliasName) {
+      const hosts = formatAliasHosts(group.aliasName, aliases, fromBinding.cidr);
+      if (hosts.length > 0) output.push(`  Hosts: ${hosts.map((host) => `\`${host}\``).join(", ")}.`);
+    }
+    if (group.protocols.has("icmp")) {
+      output.push("  ICMP is also allowed.");
+    }
+  }
+
+  const hasBlockingRule = rules.some((rule) =>
+    rule.action === "block" &&
+    rule.direction !== "out" &&
+    sourceMatchesBinding(rule, fromBinding, aliases) &&
+    destinationMatchesBinding(rule.destination, toBinding, to)
+  );
+  const networkWideAllPorts = sortedGroups.some((group) =>
+    group.allPorts && !group.aliasName
+  );
+  if (!networkWideAllPorts) {
+    output.push(
+      hasBlockingRule
+        ? `- Other ${fromLabel}-to-${toLabel} traffic is blocked by the explicit block rule.`
+        : `- No other ${fromLabel}-to-${toLabel} ports have a matching pass rule; remaining traffic falls through to the firewall's default deny.`
+    );
+  }
+  return output.join("\n");
 }
 
 function extractAliasTokens(value: string | undefined): string[] {
@@ -341,77 +615,33 @@ export async function allowedPortsBetweenChain(
   tools: BaseTool[],
   session: ToolSession
 ): Promise<string> {
-  const result = await executeToolCall(
-    {
-      toolName: "opnsense_readonly",
-      parameters: { action: "firewall_rules_list" },
-    },
-    tools,
-    session
+  const [rulesResult, aliasesResult] = await Promise.all([
+    executeToolCall(
+      {
+        toolName: "opnsense_readonly",
+        parameters: { action: "firewall_rules_list" },
+      },
+      tools,
+      session
+    ),
+    executeToolCall(
+      {
+        toolName: "opnsense_readonly",
+        parameters: { action: "firewall_aliases_list" },
+      },
+      tools,
+      session
+    ),
+  ]);
+  if (rulesResult.error) throw new Error(rulesResult.error);
+  if (aliasesResult.error) throw new Error(aliasesResult.error);
+
+  return formatAllowedPortsBetweenPayload(
+    from,
+    to,
+    rulesResult.data,
+    aliasesResult.data
   );
-  if (result.error) {
-    throw new Error(result.error);
-  }
-
-  const payload = result.data as { rules?: unknown[] };
-  const lines = (payload?.rules ?? []).filter((line): line is string => typeof line === "string");
-  const bindings = parseInterfaceBindings(lines);
-  const fromBinding = resolveBinding(from, bindings);
-  const toBinding = resolveBinding(to, bindings);
-  const parsedRules = lines
-    .map(parsePassRule)
-    .filter((rule): rule is ParsedPfRule => Boolean(rule));
-
-  const matchingRules = parsedRules.filter((rule) => {
-    const destinationMatch = matchesRuleSide(rule.destination, toBinding.iface, toBinding.cidr, to);
-    if (!destinationMatch) return false;
-
-    // Source match is softer: interface or explicit source side.
-    if (!fromBinding.iface && !fromBinding.cidr) {
-      return matchesRuleSide(rule.source, undefined, undefined, from) || rule.iface === toBinding.iface;
-    }
-    return (
-      matchesRuleSide(rule.source, fromBinding.iface, fromBinding.cidr, from) ||
-      rule.iface === fromBinding.iface
-    );
-  });
-
-  const portMap = new Map<number, Set<string>>();
-  for (const rule of matchingRules) {
-    const port = parsePortNumber(rule.port);
-    if (!port) continue;
-    if (!portMap.has(port)) {
-      portMap.set(port, new Set<string>());
-    }
-    const proto = rule.protocol?.toUpperCase() ?? "ANY";
-    portMap.get(port)?.add(proto);
-  }
-
-  if (portMap.size === 0) {
-    const linesOut = [
-      "Access Summary",
-      "No explicit allowed port entries were found for this path in current firewall rules.",
-      `Path context: from=${from} to=${to}.`,
-      'Ask "show full firewall rules for this path" for full rule detail.',
-    ];
-    return linesOut.join("\n");
-  }
-
-  const sortedPorts = Array.from(portMap.keys()).sort((a, b) => a - b);
-  const allowedList = sortedPorts
-    .map((port) => {
-      const protoSet = Array.from(portMap.get(port) ?? []).sort().join("/");
-      return `${port} (${labelForPort(port)}${protoSet && protoSet !== "ANY" ? `, ${protoSet}` : ""})`;
-    })
-    .join(", ");
-
-  const linesOut = [
-    "Access Summary",
-    `${sortedPorts.length} explicit allowed service port(s) found for traffic from ${from} to ${to}.`,
-    `Allowed ports: ${allowedList}.`,
-    'Ask "show full firewall rules for this path" for full rule detail.',
-  ];
-  return linesOut.join("\n");
 }
 
 export async function firewallRulesByChainChain(

@@ -696,7 +696,10 @@ function buildFirewallToolCalls(intent: FirewallIntent): Array<{ toolName: strin
     case "alias_contents":
       return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_aliases_get", alias_name: intent.aliasName } }];
     case "allowed_ports_between":
-      return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } }];
+      return [
+        { toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } },
+        { toolName: "opnsense_readonly", parameters: { action: "firewall_aliases_list" } },
+      ];
     case "rules_by_chain":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_by_chain", params: { chain: intent.chain } } }];
     case "sources_accessing_network":
@@ -1772,13 +1775,16 @@ IMPORTANT: When calling proxmox_write, you MUST use:
   } else {
     // Only check query intents if no action intent was detected.
     // Composite queries (e.g. node + exposure, subnet + level) skip twin-first and use EXECUTE path.
-    if (isCompositeQuery) {
+    const directFirewallIntent = detectFirewallIntent(userInput);
+    const supportsDirectFirewallComposite =
+      directFirewallIntent?.type === "allowed_ports_between";
+    if (isCompositeQuery && !supportsDirectFirewallComposite) {
       logger.info("Composite query detected, skipping twin-first chains and using EXECUTE path", {
         userInput: userInput.slice(0, 80),
         compositeFromMetadata: classification?.metadata?.composite === true,
       });
     }
-    if (!isCompositeQuery) {
+    if (!isCompositeQuery || supportsDirectFirewallComposite) {
     // Check exposure intent first (most specific).
     // Exposure is cross-domain — fire when domain is "compute", "general", or absent.
     // Suppressed for purely network/firewall/metrics queries to avoid false positives.
@@ -1868,7 +1874,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
 
     // Check firewall QUERY intent (only if no action intent detected)
     // Action intents like "configure firewall" are handled above
-    const firewallIntent = detectFirewallIntent(userInput);
+    const firewallIntent = directFirewallIntent;
     const firewallDomain = classification.metadata?.domain;
     if (firewallIntent && (!firewallDomain || firewallDomain === "firewall" || firewallDomain === "network")) {
       const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
@@ -1889,7 +1895,10 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         const firewallSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
         const firewallMode: ResponseMode = state.responseMode ?? (firewallSummaryWords ? "EXPLAINER" : "ASSISTIVE");
         let formattedAnswer = firewallAnswer;
-        if (firewallIntent.type !== "sources_accessing_network") {
+        if (
+          firewallIntent.type !== "sources_accessing_network" &&
+          firewallIntent.type !== "allowed_ports_between"
+        ) {
           try {
             formattedAnswer = await formatResponseForBot(firewallAnswer, {
               userQuery: userInput,
