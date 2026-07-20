@@ -59,3 +59,8 @@ export function isMetaIdentityQuery(input: string): boolean {
   if (isUserNameQuery(normalized) || isAssistantNameQuery(normalized)) return true;
   return /^(what do you do|what can you do)\??$/.test(normalized);
 }
+
+export function isLivenessCheck(input: string): boolean {
+  const normalized = input.trim().toLowerCase();
+  return /^(?:test|ping|health\s*check|are you (?:online|alive|up))[.!?]*$/.test(normalized);
+}

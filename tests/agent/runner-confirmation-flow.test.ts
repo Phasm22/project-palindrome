@@ -77,6 +77,12 @@ test("cancel clears pending change", async () => {
   expect(res.text).toContain("Cancelled the pending change");
 });
 
+test("bare test input returns a liveness response without clarification", async () => {
+  const res = await runAgent("test");
+
+  expect(res.text).toBe("Agent is online.");
+});
+
 test("confirmed id replays pending executable input", async () => {
   const res = await runAgent("CONFIRM deadbeef", {
     conversationContext: {

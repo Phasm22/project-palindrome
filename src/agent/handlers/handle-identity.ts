@@ -6,7 +6,12 @@
 import type { AgentEventBus } from "../event-bus";
 import type { AgentStateV1 } from "../state";
 import { emitFinalEvent } from "./emit-helpers";
-import { extractUserNameUpdate, isUserNameQuery, isAssistantNameQuery } from "./identity-helpers";
+import {
+  extractUserNameUpdate,
+  isAssistantNameQuery,
+  isLivenessCheck,
+  isUserNameQuery,
+} from "./identity-helpers";
 
 export interface HandleIdentityInput {
   state: AgentStateV1;
@@ -73,6 +78,18 @@ export async function handleIdentityAndSocial(input: HandleIdentityInput): Promi
     const text = `My name is ${assistantName}.`;
     const traceId = await recordIdentityTrace({ finalResponse: text, reason: "meta_identity" });
     emitFinalEvent(eventBus, sessionId, startTime, text, {
+      conversationState: "FOLLOWUP",
+      conversationContext: contextUpdate,
+      traceId,
+    });
+    return { handled: true, response: { text } };
+  }
+
+  if (!confirmation.confirmed && isLivenessCheck(originalUserInput)) {
+    const text = "Agent is online.";
+    const traceId = await recordIdentityTrace({ finalResponse: text, reason: "liveness_check" });
+    emitFinalEvent(eventBus, sessionId, startTime, text, {
+      classification,
       conversationState: "FOLLOWUP",
       conversationContext: contextUpdate,
       traceId,
