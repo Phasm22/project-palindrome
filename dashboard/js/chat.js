@@ -934,6 +934,156 @@ function formatAgentResponse(text) {
   const stripBold = (input) => input.replace(/\*\*(.*?)\*\*/g, '$1');
   const stripAnsi = (input) => input.replace(/\u001b\[[0-9;]*m/g, '');
   text = stripAnsi(stripBold(text));
+
+  const stripInlineCode = (input) => String(input ?? '').replace(/`([^`]+)`/g, '$1');
+
+  const parseAnswerEvidenceResponse = (raw) => {
+    const source = String(raw ?? '').trim();
+    const lines = source.split('\n');
+    const answerIndex = lines.findIndex((line) => /^Answer:\s*/i.test(line.trim()));
+    if (answerIndex === -1) return null;
+
+    const evidenceIndex = lines.findIndex((line, index) => index > answerIndex && /^Evidence:\s*$/i.test(line.trim()));
+    const detailsIndex = lines.findIndex((line, index) => index > answerIndex && /^Details:\s*$/i.test(line.trim()));
+    const answerEnd = [evidenceIndex, detailsIndex].filter((index) => index !== -1).sort((a, b) => a - b)[0] ?? lines.length;
+    const answerLines = lines.slice(answerIndex, answerEnd);
+    if (!answerLines.length) return null;
+
+    const answerMarkdown = answerLines
+      .join('\n')
+      .replace(/^Answer:\s*/i, '')
+      .trim();
+    if (!answerMarkdown) return null;
+
+    const evidenceEnd = detailsIndex !== -1 ? detailsIndex : lines.length;
+    const evidence = evidenceIndex === -1
+      ? []
+      : lines.slice(evidenceIndex + 1, evidenceEnd)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => line.replace(/^-+\s*/, ''))
+          .map((line) => {
+            const separatorIndex = line.indexOf(':');
+            if (separatorIndex <= 0) {
+              return { key: '', value: stripInlineCode(line) };
+            }
+            return {
+              key: stripInlineCode(line.slice(0, separatorIndex).trim()),
+              value: stripInlineCode(line.slice(separatorIndex + 1).trim()),
+            };
+          });
+
+    const details = detailsIndex === -1
+      ? ''
+      : lines.slice(detailsIndex + 1)
+          .join('\n')
+          .replace(/^```[a-zA-Z0-9_-]*\n?/, '')
+          .replace(/\n?```$/, '')
+          .trim();
+
+    const inlineCodeValues = [...answerMarkdown.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+    const aliasMatch = answerMarkdown.match(/^Alias\s+`?([^`]+?)`?\s+contains\s+(\d+)\s+entries?:\s+(.+)\.?$/i);
+    const alias = aliasMatch
+      ? {
+          name: inlineCodeValues[0] || aliasMatch[1].trim(),
+          count: Number.parseInt(aliasMatch[2], 10) || 0,
+          entries: inlineCodeValues.length > 1
+            ? inlineCodeValues.slice(1)
+            : aliasMatch[3]
+                .replace(/\.$/, '')
+                .split(',')
+                .map((entry) => stripInlineCode(entry.trim()))
+                .filter(Boolean),
+        }
+      : null;
+
+    return {
+      answer: stripInlineCode(answerMarkdown),
+      evidence,
+      details,
+      alias,
+    };
+  };
+
+  const renderAnswerEvidenceResponse = (raw) => {
+    const parsed = parseAnswerEvidenceResponse(raw);
+    if (!parsed) return null;
+
+    const renderStatusValue = (key, value) => {
+      const normalizedKey = key.toLowerCase();
+      const normalizedValue = value.toLowerCase();
+      if (normalizedKey === 'enabled') {
+        const enabled = /^(yes|true|1|enabled)$/i.test(value);
+        const color = enabled ? '#10b981' : '#94a3b8';
+        const background = enabled ? 'rgba(16, 185, 129, 0.12)' : 'rgba(148, 163, 184, 0.12)';
+        return `<span style="display:inline-flex;align-items:center;border:1px solid ${color};background:${background};color:${color};border-radius:999px;padding:2px 8px;font-size:0.82em;font-weight:700;">${escapeHtml(value)}</span>`;
+      }
+      if (/^(yes|no)$/i.test(value) && /(blocked|allowed|match|enabled|active|found)/i.test(normalizedKey)) {
+        const positive = normalizedValue === 'yes';
+        const color = positive ? '#10b981' : '#f87171';
+        const background = positive ? 'rgba(16, 185, 129, 0.12)' : 'rgba(248, 113, 113, 0.12)';
+        return `<span style="display:inline-flex;align-items:center;border:1px solid ${color};background:${background};color:${color};border-radius:999px;padding:2px 8px;font-size:0.82em;font-weight:700;">${escapeHtml(value)}</span>`;
+      }
+      return escapeHtml(value || '-');
+    };
+
+    const evidenceHtml = parsed.evidence.length
+      ? `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;margin-top:12px;">
+          ${parsed.evidence.map((item) => `
+            <div style="min-width:0;padding:8px 10px;background:rgba(15,23,42,0.64);border:1px solid rgba(51,65,85,0.72);border-radius:8px;">
+              ${item.key
+                ? `<div style="color:#94a3b8;font-size:0.75em;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px;">${escapeHtml(item.key)}</div>`
+                : ''}
+              <div style="color:#e2e8f0;font-size:0.92em;line-height:1.35;word-break:break-word;">${renderStatusValue(item.key, item.value)}</div>
+            </div>
+          `).join('')}
+        </div>
+      `
+      : '';
+
+    const detailsHtml = parsed.details
+      ? `
+        <details style="margin-top:12px;border-top:1px solid rgba(51,65,85,0.72);padding-top:10px;">
+          <summary style="cursor:pointer;color:#fdba74;font-size:0.84em;font-weight:700;">Details</summary>
+          <pre class="kv-pre" style="margin-top:8px;">${escapeHtml(parsed.details)}</pre>
+        </details>
+      `
+      : '';
+
+    if (parsed.alias) {
+      const entries = parsed.alias.entries.length
+        ? parsed.alias.entries
+        : [`No entries returned`];
+      return `
+        <div style="display:grid;gap:12px;">
+          <div>
+            <div style="color:#f8fafc;font-size:1.02em;font-weight:700;line-height:1.35;">${escapeHtml(parsed.alias.name)} contains ${escapeHtml(String(parsed.alias.count || entries.length))} ${entries.length === 1 ? 'entry' : 'entries'}</div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:7px;">
+            ${entries.map((entry) => `
+              <span style="display:inline-flex;align-items:center;min-height:26px;background:rgba(249,115,22,0.14);border:1px solid rgba(249,115,22,0.45);color:#fed7aa;border-radius:999px;padding:4px 9px;font-size:0.86em;font-weight:650;line-height:1.2;">${escapeHtml(entry)}</span>
+            `).join('')}
+          </div>
+          ${evidenceHtml}
+          ${detailsHtml}
+        </div>
+      `;
+    }
+
+    return `
+      <div style="display:grid;gap:10px;">
+        <div style="color:#f8fafc;font-size:1.02em;font-weight:700;line-height:1.4;">${escapeHtml(parsed.answer)}</div>
+        ${evidenceHtml}
+        ${detailsHtml}
+      </div>
+    `;
+  };
+
+  const semanticAnswerHtml = renderAnswerEvidenceResponse(text);
+  if (semanticAnswerHtml) {
+    return semanticAnswerHtml;
+  }
   
   // Check if this is a clarification message
   if (text.includes('🔍') && text.includes('Did you mean')) {
