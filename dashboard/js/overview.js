@@ -366,6 +366,8 @@ function renderFreshness(data) {
           ${sourceRunRow('Proxmox', lastRun.proxmox)}
           ${sourceRunRow('Network', lastRun.network)}
           ${sourceRunRow('Firewall', lastRun.firewall, 'rules')}
+          ${sourceRunRow('Switch', lastRun.switch)}
+          ${sourceRunRow('Topology', lastRun.topology)}
           ${lastRun.temperature ? `
             <div class="source-row">
               <div class="source-row-main">

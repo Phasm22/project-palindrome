@@ -1573,6 +1573,8 @@ export class PceApiServer {
           proxmox: lastRunDetails.proxmox,
           network: lastRunDetails.network,
           firewall: lastRunDetails.firewall,
+          switch: lastRunDetails.switch,
+          topology: lastRunDetails.topology,
           cleanup: lastRunDetails.cleanup,
           temperature: lastRunDetails.temperature,
         } : null,
@@ -1581,19 +1583,31 @@ export class PceApiServer {
           duration: run.duration,
           success: run.success,
           proxmox: { success: run.proxmox.success, duration: run.proxmox.duration, error: run.proxmox.error },
-          network: { 
-            success: run.network.success, 
-            duration: run.network.duration, 
+          network: {
+            success: run.network.success,
+            duration: run.network.duration,
             entities: run.network.entities,
             relationships: run.network.relationships,
-            error: run.network.error 
+            error: run.network.error
           },
-          firewall: { 
-            success: run.firewall.success, 
-            duration: run.firewall.duration, 
+          firewall: {
+            success: run.firewall.success,
+            duration: run.firewall.duration,
             entities: run.firewall.entities,
             relationships: run.firewall.relationships,
-            error: run.firewall.error 
+            error: run.firewall.error
+          },
+          switch: {
+            success: run.switch?.success ?? false,
+            duration: run.switch?.duration ?? 0,
+            entities: run.switch?.entities,
+            relationships: run.switch?.relationships,
+            error: run.switch?.error,
+          },
+          topology: {
+            success: run.topology?.success ?? false,
+            duration: run.topology?.duration ?? 0,
+            error: run.topology?.error,
           },
           cleanup: run.cleanup,
           temperature: run.temperature,
