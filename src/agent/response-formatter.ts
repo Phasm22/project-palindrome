@@ -241,8 +241,8 @@ function normalizeCountPackaging(responseText: string, context: FormatContext): 
   // Extract numeric count: "None" / "no VMs" → 0; "N VMs" / "N nodes" / "Count: N" → N
   let count: number | null = null;
   if (/none\s+of\s+the|no\s+vms?|zero\s+vms?|0\s+vms?/i.test(trimmed)) count = 0;
-  const countMatch = trimmed.match(/(?:count\s*:\s*)?(\d+)\s*(vms?|nodes?|containers?|lxcs?)/i)
-    ?? trimmed.match(/(\d+)\s+(?:vms?|nodes?|containers?|lxcs?)\s+(?:have|with)/i);
+  const countMatch = trimmed.match(/(?:count\s*:\s*)?(\d+)\s*(vms?|nodes?|containers?|lxcs?|rules?|aliases?)/i)
+    ?? trimmed.match(/(\d+)\s+(?:vms?|nodes?|containers?|lxcs?|rules?|aliases?)\s+(?:have|with)/i);
   if (countMatch) count = parseInt(countMatch[1]!, 10);
   if (count === null && lines.length > 0) {
     const first = lines[0]!;
@@ -256,7 +256,13 @@ function normalizeCountPackaging(responseText: string, context: FormatContext): 
     const qualifier = lines[0]?.replace(/^\D*\d+\s*(vms?|nodes?|containers?|lxcs?)\s*/i, "").replace(/\.$/, "").trim();
     return formatCountAnswer(count, unit, qualifier && qualifier.length < 80 ? qualifier : undefined);
   }
-  return lines[0] ?? trimmed;
+  // Couldn't confidently extract a single count. The response may be a
+  // multi-line, data-bearing answer in a shape this function doesn't recognize
+  // (e.g. a chain's "Firewall Rule Count\n- total | Count=104" line, or a
+  // per-item breakdown for "how many X does each Y have"). Collapsing that to
+  // just `lines[0]` silently throws the real answer away, so leave the
+  // response untouched instead and let later packaging/formatting handle it.
+  return null;
 }
 
 function normalizeVmInventoryPackaging(

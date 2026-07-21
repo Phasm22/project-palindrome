@@ -1064,6 +1064,15 @@ export async function handleExecute(
         }
       } else {
         // Sequential execution (original behavior)
+        // Failure-reclassification context messages must NOT be inserted into the
+        // conversation until every tool_call_id in this batch has a tool-role
+        // response — OpenAI's API requires all tool responses for an assistant
+        // message to directly follow it with no other role in between. Adding a
+        // user message mid-loop (before later tool calls in the same batch are
+        // processed) previously produced: "An assistant message with 'tool_calls'
+        // must be followed by tool messages responding to each 'tool_call_id'" on
+        // the next LLM call — see fuzz-campaign-2026-07-21.md CRASH findings.
+        const pendingFailureContextMessages: string[] = [];
         for (const toolCall of toolCalls) {
         throwIfStopped();
         // Create a signature for this tool call to detect duplicates
@@ -1496,14 +1505,17 @@ export async function handleExecute(
               },
             });
 
-            // If reclassification suggests a different approach, add context to help LLM
+            // If reclassification suggests a different approach, add context to help LLM.
+            // Deferred until after the full toolCalls batch is processed (see comment
+            // above the loop) so we never insert a user message between two tool
+            // responses that both belong to the same assistant tool_calls message.
             if (reclassification.shouldRetry && reclassification.suggestedAction) {
-              context.addUserMessage(
+              pendingFailureContextMessages.push(
                 `Previous attempt failed: ${result.error}. ${reclassification.suggestedAction}`
               );
             } else if (!reclassification.shouldRetry) {
               // Don't retry - add context explaining why
-              context.addUserMessage(
+              pendingFailureContextMessages.push(
                 `Tool execution failed: ${result.error}. ${reclassification.reason}. Please try a different approach or ask for clarification.`
               );
             }
@@ -1635,6 +1647,12 @@ export async function handleExecute(
           durationMs: result.durationMs ?? 0,
         });
         totalToolCalls++;
+        }
+
+        // Now that every tool_call_id in this batch has a tool-role response,
+        // it's safe to add any deferred failure-context messages.
+        for (const message of pendingFailureContextMessages) {
+          context.addUserMessage(message);
         }
       }
 

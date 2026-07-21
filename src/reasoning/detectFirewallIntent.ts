@@ -61,6 +61,17 @@ function extractAllowedPortsScope(text: string): { from: string; to: string } | 
   return null;
 }
 
+// Words that can never be part of an alias name — used to stop a greedy capture
+// from running on into the rest of the sentence (e.g. "the WG_VIP alias were
+// removed, and are any of them internet-exposed?" previously captured the alias
+// name as "were removed, and are any of them internet-exposed").
+const ALIAS_NAME_STOPWORDS = new Set([
+  "the", "a", "an", "this", "that", "which", "who", "were", "was", "is", "are",
+  "has", "have", "had", "would", "could", "should", "will", "and", "or", "but",
+  "if", "when", "then", "removed", "deleted", "gone", "named", "called",
+  "contents", "members", "entries", "for", "of", "in",
+]);
+
 function cleanAliasName(value: string | undefined): string | null {
   if (!value) return null;
   const cleaned = value
@@ -71,15 +82,39 @@ function cleanAliasName(value: string | undefined): string | null {
   return cleaned || null;
 }
 
+/** Truncates a greedily-captured candidate at the first stopword so trailing
+ * sentence text (e.g. "were removed, and are any of them...") never leaks in. */
+function truncateAliasCandidate(candidate: string): string | null {
+  const words = candidate.trim().split(/\s+/).filter(Boolean);
+  const kept: string[] = [];
+  for (const word of words) {
+    const bare = word.replace(/[.,;:!?"'`]+$/g, "");
+    if (ALIAS_NAME_STOPWORDS.has(bare.toLowerCase())) break;
+    kept.push(word);
+  }
+  return kept.length > 0 ? kept.join(" ") : null;
+}
+
 function extractAliasName(text: string): string | null {
+  // "the WG_VIP alias", "WG_VIP alias were removed" — name precedes the word
+  // "alias", which is the more natural English ordering and was previously
+  // unhandled outside of quoted names.
+  const precedingTokenMatch = text.match(/\b([A-Za-z][A-Za-z0-9_.-]{1,40})\s+alias\b/i);
+  if (precedingTokenMatch?.[1] && !ALIAS_NAME_STOPWORDS.has(precedingTokenMatch[1].toLowerCase())) {
+    const cleaned = cleanAliasName(precedingTokenMatch[1]);
+    if (cleaned) return cleaned;
+  }
+
   const aliasAfterMatch = text.match(/\balias\s+["'`]?(.+?)(?:["'`]?\s*(?:contents?|members?|entries?)\b|[.?!]|$)/i);
   if (aliasAfterMatch?.[1]) {
-    return cleanAliasName(aliasAfterMatch[1]);
+    const truncated = truncateAliasCandidate(aliasAfterMatch[1]);
+    if (truncated) return cleanAliasName(truncated);
   }
 
   const aliasBeforeMatch = text.match(/\b(?:contents?|members?|entries?)\s+(?:of|in|for)\s+(?:the\s+)?alias\s+["'`]?(.+?)(?:["'`]?[.?!]|$)/i);
   if (aliasBeforeMatch?.[1]) {
-    return cleanAliasName(aliasBeforeMatch[1]);
+    const truncated = truncateAliasCandidate(aliasBeforeMatch[1]);
+    if (truncated) return cleanAliasName(truncated);
   }
 
   const quotedAliasMatch = text.match(/["'`]([^"'`]+)["'`]\s+alias\b/i);
@@ -162,7 +197,16 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   }
 
   // Alias content queries, e.g. "what all is in the alias tjs computers".
-  if (normalized.includes("alias") && /\b(what|which|show|list|contents?|members?|entries?|in)\b/.test(normalized)) {
+  // Excludes impact/removal-flavored questions ("what would break if I deleted the
+  // X alias") — those need the LLM/EXECUTE path to reason about impact, not a
+  // "show me the alias's contents" dump.
+  const looksLikeAliasImpactQuestion =
+    /\b(break|breaks|breaking|remov(?:e|ed|ing)|delet(?:e|ed|ing)|affect(?:s|ed|ing)?|impact)\b/.test(normalized);
+  if (
+    normalized.includes("alias") &&
+    !looksLikeAliasImpactQuestion &&
+    /\b(what|which|show|list|contents?|members?|entries?|in)\b/.test(normalized)
+  ) {
     const aliasName = extractAliasName(userInput);
     if (aliasName) {
       return { type: "alias_contents", aliasName };

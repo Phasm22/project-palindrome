@@ -238,6 +238,32 @@ test("normalizes LXC inline inventory rows into renderer-friendly format", () =>
   expect(packaged).toContain("trace=compute-vm:yang:100");
 });
 
+test("does not truncate a non-single-count 'how many' answer down to just its title", () => {
+  // Regression: "List all firewall aliases and how many entries each one has."
+  // matches isCountQuery (contains "how many"), but the chain's answer is a
+  // per-alias breakdown, not a single number. The old fallback collapsed this
+  // to just "Firewall Rule Count", discarding the actual data — see
+  // fuzz-campaign-2026-07-21.md finding E-04.
+  const response = "Firewall Rule Count\n- total | Count=104 | PASS=60 | BLOCK=40 | NAT=4";
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "List all firewall aliases and how many entries each one has.",
+  });
+
+  expect(packaged).toBeNull();
+});
+
+test("still collapses a genuine single-number count answer embedded in a longer response", () => {
+  const response = "Answer\n3 VMs have uptime greater than 20 days.";
+
+  const packaged = applyAdaptivePackaging(response, {
+    userQuery: "how many VMs have uptime greater than 20 days?",
+  });
+
+  expect(packaged).toBeTruthy();
+  expect(packaged).toContain("Count: 3 VMs");
+});
+
 test("converts a wide single-record table into an entity fact list", () => {
   const response = `vm_id | name | node | type | state | memory | cores | tags | provenanceId | recent_changes
 --- | --- | --- | --- | --- | --- | --- | --- | --- | ---

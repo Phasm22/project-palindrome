@@ -82,7 +82,32 @@ export class AskMissingTool extends BaseTool {
       return { data: { question: "What type of VM do you want to create?" } };
     }
 
+    if (normalizedMissing.some((slot) => ["fromid", "from_id", "sourceid", "source_id"].includes(slot))) {
+      return { data: { question: "Which VM, node, or subnet should I start from?" } };
+    }
+
+    if (normalizedMissing.some((slot) => ["chain", "interface"].includes(slot))) {
+      return { data: { question: "Which network interface or firewall chain do you mean?" } };
+    }
+
+    if (normalizedMissing.some((slot) => ["subnet", "cidr"].includes(slot))) {
+      return { data: { question: "Which subnet or CIDR range do you mean?" } };
+    }
+
+    if (normalizedMissing.some((slot) => ["ruleid", "rule_id", "rule"].includes(slot))) {
+      return { data: { question: "Which firewall rule do you mean?" } };
+    }
+
+    if (normalizedMissing.some((slot) => ["alias", "aliasname", "alias_name"].includes(slot))) {
+      return { data: { question: "Which firewall alias do you mean?" } };
+    }
+
+    // Generic fallback for any other unmapped slot: ask in plain English rather
+    // than leaking the raw parameter name (e.g. "fromId") to the user — the LLM
+    // formatting call below tends to just echo the slot name verbatim otherwise.
     const systemPrompt = `You ask a single, specific question to unblock an ops assistant.
+Never mention internal parameter/field names verbatim (e.g. "fromId", "vmId") —
+translate them into plain English (e.g. "which VM or subnet").
 Return one short question, no extra text.`;
 
     const userPrompt = `Intent: ${parsed.data.intent ?? "unknown"}

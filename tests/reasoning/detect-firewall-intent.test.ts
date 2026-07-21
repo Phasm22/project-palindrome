@@ -49,4 +49,24 @@ describe("detectFirewallIntent", () => {
     const intent = detectFirewallIntent("what all is in the alias tjs computers");
     expect(intent).toEqual({ type: "alias_contents", aliasName: "tjs computers" });
   });
+
+  test("extracts the alias name when it precedes the word 'alias' (natural ordering)", () => {
+    const intent = detectFirewallIntent("what's in the WG_VIP alias?");
+    expect(intent).toEqual({ type: "alias_contents", aliasName: "WG_VIP" });
+  });
+
+  test("does not swallow the rest of the sentence as the alias name (regression)", () => {
+    // Previously: aliasName ended up as "were removed, and are any of them
+    // internet-exposed" because the greedy "alias <name>" regex had nothing to
+    // stop it at — see fuzz-campaign-2026-07-21.md finding F-10.
+    const intent = detectFirewallIntent(
+      "What VMs would be affected if the WG_VIP alias were removed, and are any of them internet-exposed?"
+    );
+    expect(intent?.type).not.toBe("alias_contents");
+  });
+
+  test("does not treat 'what would break if I deleted alias X' as an alias-contents query", () => {
+    const intent = detectFirewallIntent("What would break if I deleted the Home_DNS alias?");
+    expect(intent?.type).not.toBe("alias_contents");
+  });
 });

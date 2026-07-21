@@ -415,9 +415,18 @@ function isClearInformationalQuery(userInput: string): boolean {
     /\bwhich (ip|network)\b/,
     /\bare there (any)?\s+/,
     /\b(is|are) there (any)?\s+/,
-    /\b(show|tell|list|describe)\s+(me\s+)?(the\s+)?/,
+    /\b(show|tell|list|describe|give|gimme)\s+(me\s+)?(the\s+)?/,
     /\b(what|how)\s+(is|are|does|do)\s+/,
     /\b(which|what)\s+(vm|container|node|firewall|rule|network)\s+/,
+    // Imperative read-only diagnostic commands ("ping X", "traceroute to X") — clearly
+    // a request to observe/check, not an ambiguous "observe/diagnose/change?" case.
+    /^(ping|traceroute|trace route)\b/,
+    /\b(check|run)\b.*\b(diagnostic|health|connectivity|disk|status)\b/,
+    /\bdiagnose\b/,
+    /\bsummar(y|ize)\b/,
+    // Loose "<entity noun> ... on <target>" phrasing tolerant of filler/punctuation
+    // (e.g. "vms???? on yang???? pls?????").
+    /\b(vms?|nodes?|containers?|interfaces?|rules?)\b.{0,20}\bon\b/,
   ];
   return patterns.some((p) => p.test(n));
 }
