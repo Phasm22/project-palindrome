@@ -49,8 +49,13 @@ class SSHConnectionPool {
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor() {
-    // Clean up idle connections every 10 seconds
+    // Clean up idle connections every 10 seconds. unref() so this recurring
+    // timer never keeps a process alive on its own — a one-shot script
+    // (ingest-all, ingest-switches, ...) that only ever touches SSHTool
+    // should still be able to exit naturally once its real work is done,
+    // instead of hanging forever waiting on housekeeping.
     this.cleanupInterval = setInterval(() => this.cleanupIdle(), 10000);
+    this.cleanupInterval.unref?.();
   }
 
   private isClientDestroyed(client: Client): boolean {
