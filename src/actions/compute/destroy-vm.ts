@@ -10,6 +10,7 @@ import { join } from "path";
 import type { DnsRecord } from "../../tools/pihole/client";
 import { ProxmoxClient } from "../../tools/proxmox/client";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
+import { isPlausibleVmIdentifier } from "../helpers/identifier-validation";
 
 /**
  * Destroy VM Action Schema
@@ -209,6 +210,18 @@ export async function destroyVm(
     logger.info("Name appears to be a VM ID, converting", { name, vmId });
     vmId = parseInt(name.trim(), 10);
     name = undefined; // Clear name so we look it up from twin
+  }
+
+  // Reject implausible target names before any twin/Proxmox/Terraform lookup.
+  // Twin lookups below match by substring, so a garbled or adversarial "name"
+  // (e.g. a leftover fragment of injected Cypher/SQL text) can otherwise
+  // silently resolve to an unrelated real VM instead of failing to resolve.
+  if (name && !isPlausibleVmIdentifier(name)) {
+    logger.warn("Refusing destroy_vm: name does not look like a plausible VM identifier", { name });
+    return {
+      success: false,
+      message: `"${name}" does not look like a valid VM name (expected a short hostname-like identifier, e.g. "windowsVM"). Refusing to resolve it against live infrastructure — please provide the exact VM name or ID.`,
+    };
   }
 
   // If VM ID provided but no name, look up the name from the twin

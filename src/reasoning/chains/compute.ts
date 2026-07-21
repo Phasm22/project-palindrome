@@ -479,6 +479,9 @@ export async function findVmByNameChain(
  */
 const KNOWN_NODES = ["proxBig", "YANG", "YIN"];
 
+/** Minimum length required on both sides of a fuzzy substring VM-name match. See usage below. */
+const MIN_FUZZY_MATCH_LENGTH = 3;
+
 /**
  * Resolve VM details by name or ID using cluster_resources
  * This is used before write operations to get the node, vmid, and type
@@ -570,7 +573,16 @@ export async function resolveVmDetailsChain(
       // Case-insensitive name match
       const name = (r.name || "").toLowerCase();
       const searchStr = String(searchValue);
-      return name === searchStr || name.includes(searchStr) || searchStr.includes(name);
+      if (name === searchStr) return true;
+      // Fuzzy substring matching is only meaningful for reasonably specific
+      // terms. A degenerately short search string (e.g. a stray character
+      // left over from garbled/adversarial input) or short real name would
+      // otherwise match almost any VM via .includes() in either direction,
+      // silently resolving to an unrelated real destructive target.
+      if (searchStr.length < MIN_FUZZY_MATCH_LENGTH || name.length < MIN_FUZZY_MATCH_LENGTH) {
+        return false;
+      }
+      return name.includes(searchStr) || searchStr.includes(name);
     }
   });
 
