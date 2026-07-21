@@ -205,7 +205,9 @@ hosts:
     commands:
       system:
         - "show version"
+        - "show privilege"
         - "show running-config"
+        - "show run"
         - "show vlan brief"
         - "show interfaces status"
         - "dir flash:"

@@ -8,7 +8,7 @@ import { loadYaml } from "../utils/config";
 import { Client } from "ssh2";
 import path from "path";
 import { fileURLToPath } from "url";
-import { execFile } from "child_process";
+import { execFile, spawn as spawnChild } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
@@ -497,6 +497,117 @@ export class SSHTool extends BaseTool {
   }
 
   /**
+   * Cisco IOS's non-interactive SSH exec ("ssh user@host 'command'") only
+   * accepts a limited set of commands on this switch — anything requiring
+   * privileged EXEC (show running-config, dir flash:, show boot, ...) fails
+   * with "Line has invalid autocommand" because there's no way to answer
+   * the `enable` password prompt inside a single one-shot request. This
+   * drives a real interactive session instead: login (via sshpass), send
+   * `enable`, answer its password prompt, disable pagination, then run the
+   * actual command and capture output up to the next prompt.
+   *
+   * IMPORTANT: send bare `\r`, not `\r\n`, for each line. Sending `\r\n` on
+   * this device's PTY was observed to register as two Enter presses — the
+   * second one silently submits an empty response to whatever prompt comes
+   * next (e.g. an empty enable password), which reads exactly like a wrong
+   * password ("% Access denied") even though the real password was never
+   * actually sent yet. Cost real time to track down; don't reintroduce it.
+   */
+  private async executeLegacyInteractiveSSHCommand(
+    host: string,
+    command: string,
+    username: string,
+    password: string,
+    enablePassword: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const DEBOUNCE_MS = 600;
+    const PRE_WRITE_DELAY_MS = 400;
+    const OVERALL_TIMEOUT_MS = 30_000;
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    return new Promise((resolve, reject) => {
+      const child = spawnChild("sshpass", [
+        "-e", "ssh", "-tt",
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "KexAlgorithms=+diffie-hellman-group1-sha1",
+        "-o", "HostKeyAlgorithms=+ssh-rsa",
+        "-o", "Ciphers=+aes128-cbc",
+        `${username}@${host}`,
+      ], { env: { ...process.env, SSHPASS: password } });
+
+      let buffer = "";
+      let stage: "login" | "enable-sent" | "password-sent" | "unpaginating" | "command-sent" = "login";
+      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
+
+      const finish = (result: { stdout: string; stderr: string; exitCode: number } | null, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(overallTimeout);
+        child.kill();
+        if (error) reject(error);
+        else resolve(result!);
+      };
+
+      const overallTimeout = setTimeout(
+        () => finish(null, new Error(`Interactive SSH session to ${host} timed out (last buffer: ${JSON.stringify(buffer.slice(-200))})`)),
+        OVERALL_TIMEOUT_MS
+      );
+
+      const onSettled = () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(async () => {
+          try {
+            if (stage === "login" && /[>#]\s*$/.test(buffer)) {
+              stage = "enable-sent";
+              buffer = "";
+              await sleep(PRE_WRITE_DELAY_MS);
+              child.stdin.write("enable\r");
+            } else if (stage === "enable-sent" && /password:\s*$/i.test(buffer)) {
+              stage = "password-sent";
+              buffer = "";
+              await sleep(PRE_WRITE_DELAY_MS);
+              child.stdin.write(`${enablePassword}\r`);
+            } else if (stage === "password-sent") {
+              if (/#\s*$/.test(buffer)) {
+                stage = "unpaginating";
+                buffer = "";
+                await sleep(PRE_WRITE_DELAY_MS);
+                child.stdin.write("terminal length 0\r");
+              } else if (/access denied/i.test(buffer)) {
+                finish(null, new Error(`Enable authentication failed on ${host}`));
+              }
+            } else if (stage === "unpaginating" && /#\s*$/.test(buffer)) {
+              stage = "command-sent";
+              buffer = "";
+              await sleep(PRE_WRITE_DELAY_MS);
+              child.stdin.write(`${command}\r`);
+            } else if (stage === "command-sent" && /#\s*$/.test(buffer)) {
+              // Strip the echoed command line and the trailing prompt line.
+              const lines = buffer.replace(/\r/g, "").split("\n");
+              const firstRealLine = lines[0]?.trim() === command.trim() ? 1 : 0;
+              const withoutPrompt = lines.slice(firstRealLine, -1).join("\n");
+              finish({ stdout: withoutPrompt, stderr: "", exitCode: 0 });
+            }
+          } catch (error: any) {
+            finish(null, error);
+          }
+        }, DEBOUNCE_MS);
+      };
+
+      child.stdout.on("data", (data: Buffer) => {
+        buffer += data.toString();
+        onSettled();
+      });
+      child.on("error", (error) => finish(null, error));
+      child.on("close", (code) => {
+        if (!settled) finish(null, new Error(`Interactive SSH session to ${host} closed unexpectedly (exit ${code})`));
+      });
+    });
+  }
+
+  /**
    * ssh2 (the pure-JS library the connection pool uses) lists
    * diffie-hellman-group1-sha1 in its own default KEX constants but throws
    * "Unknown DH group" if it's actually negotiated — this library appears
@@ -545,13 +656,17 @@ export class SSHTool extends BaseTool {
     privateKey?: string,
     password?: string,
     resolvedHost?: string,
-    legacyCompat?: boolean
+    legacyCompat?: boolean,
+    enablePassword?: string
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const targetHost = resolvedHost || host;
 
     if (legacyCompat) {
       if (!password) {
         throw new Error(`Legacy SSH host ${targetHost} requires a password (key auth is not supported for this path)`);
+      }
+      if (enablePassword) {
+        return this.executeLegacyInteractiveSSHCommand(targetHost, command, username || "root", password, enablePassword);
       }
       return this.executeLegacySSHCommand(targetHost, command, username || "root", password);
     }
@@ -957,6 +1072,10 @@ export class SSHTool extends BaseTool {
       let username = hostConfig?.username || process.env[`SSH_USER_${envHostKey}`] || process.env.SSH_USER || "root";
       let password = process.env[`SSH_PASSWORD_${envHostKey}`] || process.env.SSH_PASSWORD;
       let privateKey = process.env[`SSH_KEY_${envHostKey}`];
+      // Only meaningful for legacy_ssh hosts — enables privileged-EXEC
+      // commands via an interactive `enable` handshake. See
+      // executeLegacyInteractiveSSHCommand.
+      const enablePassword = process.env[`SSH_ENABLE_PASSWORD_${envHostKey}`];
       
       // If no key specified, try to use default SSH keys for passwordless auth
       if (!privateKey && !password) {
@@ -989,7 +1108,7 @@ export class SSHTool extends BaseTool {
       logger.info(`SSH auth: user=${username}, hasPassword=${!!password}, hasKey=${!!privateKey}`);
 
       const result = await this.executeSSHCommand(
-        resolvedHost, finalCommand, username, privateKey, password, resolvedHost, hostConfig?.legacy_ssh === true
+        resolvedHost, finalCommand, username, privateKey, password, resolvedHost, hostConfig?.legacy_ssh === true, enablePassword
       );
 
       if (result.exitCode !== 0) {
