@@ -695,7 +695,16 @@ export class SSHTool extends BaseTool {
       const executeCommand = () => {
         // For Proxmox nodes, use exec for cleaner output
         // For OPNsense, we need shell to navigate the menu
-        const useShell = targetHost.includes("172.16.0.1") || 
+        // NOTE: targetHost is the resolved IP by this point, not the alias
+        // that was requested — "opnsense"/"radar"/"firewall" are kept for
+        // safety but rarely if ever match here. This must be an exact IP
+        // match: .includes("172.16.0.1") also matches "172.16.0.10",
+        // "172.16.0.11", and "172.16.0.12" (proxBig/yin/yang) as substrings,
+        // which incorrectly routed all three Proxmox nodes through
+        // OPNsense's menu-navigation shell logic instead of plain exec —
+        // that's what caused "SSH command timeout before completion
+        // marker" on commands like `sensors`/`sensors -j` against them.
+        const useShell = targetHost === "172.16.0.1" ||
                         targetHost.includes("opnsense") ||
                         targetHost.includes("radar") ||
                         targetHost.includes("firewall");
