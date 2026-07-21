@@ -73,6 +73,26 @@ export function ipInCidr(ip: string, cidr: string): boolean {
   return (ipN & mask) === (baseN & mask);
 }
 
+/**
+ * Returns true if two CIDRs describe overlapping IPv4 ranges.
+ *
+ * The twin models a "subnet" as one entity per interface's own IP/mask (e.g.
+ * "172.16.0.198/22"), not one canonical network-address entity per physical
+ * network (e.g. "172.16.0.0/22"). A plain string/exact match against a
+ * user-supplied CIDR like "172.16.0.0/22" therefore never matches anything,
+ * even though every host on that physical network "is on" that subnet in the
+ * sense a user means. This checks real IPv4 range overlap instead: true if
+ * either CIDR's network address falls inside the other's range, which covers
+ * both "user gave the canonical network address" and "user gave a specific
+ * host/mask" without requiring exact string equality.
+ */
+export function cidrOverlaps(cidrA: string, cidrB: string): boolean {
+  const ipA = cidrA.trim().split("/")[0] ?? "";
+  const ipB = cidrB.trim().split("/")[0] ?? "";
+  if (!ipA || !ipB) return false;
+  return ipInCidr(ipA, cidrB) || ipInCidr(ipB, cidrA);
+}
+
 export function safeStatus(value: string | number | undefined | null): "up" | "down" | "unknown" {
   if (value === undefined || value === null) return "unknown";
   if (typeof value === "number") {

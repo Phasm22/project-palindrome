@@ -190,6 +190,42 @@ export async function switchPortsByVlanChain(
   return lines.join("\n");
 }
 
+export async function interfaceLookupChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  interfaceName: string
+): Promise<string> {
+  const result = await executeToolCall(
+    { toolName: "twin_query", parameters: { operation: "network_list_interfaces" } },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const interfaces: Array<{ id?: string; name?: string; nodeName?: string; status?: string; vlan?: string; primaryIp?: string; vmId?: string }> =
+    payload?.data ?? [];
+  const target = interfaceName.toLowerCase();
+  const match = interfaces.find(
+    (iface) =>
+      iface.name?.toLowerCase() === target ||
+      iface.id?.toLowerCase() === target ||
+      iface.id?.toLowerCase().endsWith(`:${target}`)
+  );
+  if (!match) {
+    return `No network interface named "${interfaceName}" was found in the digital twin. It may not have been ingested yet, or the name doesn't match any known interface.`;
+  }
+  const parts = [
+    match.nodeName ? `node=${match.nodeName}` : null,
+    match.status ? `status=${match.status}` : null,
+    match.primaryIp ? `ip=${match.primaryIp}` : null,
+    match.vlan ? `vlan=${match.vlan}` : null,
+    match.vmId ? `vm=${match.vmId}` : null,
+  ].filter(Boolean);
+  return `${interfaceName} is a network interface${match.nodeName ? ` on ${match.nodeName}` : ""}${parts.length ? ` (${parts.join(" | ")})` : ""}.`;
+}
+
 export async function listNodeInterfacesChain(
   tools: BaseTool[],
   session: ToolSession,

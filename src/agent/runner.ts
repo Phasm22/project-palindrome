@@ -51,6 +51,7 @@ import {
   vmReachabilityChain,
   switchVlansChain,
   switchPortsByVlanChain,
+  interfaceLookupChain,
 } from "../reasoning/chains/network";
 import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
 import {
@@ -626,6 +627,8 @@ async function executeNetworkIntent(
         return await switchVlansChain(tools, session);
       case "switch_ports_by_vlan":
         return await switchPortsByVlanChain(tools, session, intent.vlan);
+      case "interface_lookup":
+        return await interfaceLookupChain(tools, session, intent.interfaceName);
       default:
         return null;
     }

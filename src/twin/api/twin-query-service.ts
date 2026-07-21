@@ -4,6 +4,7 @@ import { ProxmoxClient } from "../../tools/proxmox/client";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { getExpectedEndpointLabel, wasEndpointVerified } from "../../tools/proxmox/endpoint-attribution";
 import { pceLogger as logger } from "../../pce/utils/logger";
+import { cidrOverlaps } from "../../parsers/network/network-utils";
 
 type VmKind = "qemu" | "lxc" | null;
 
@@ -207,11 +208,16 @@ export class TwinQueryService {
   async vmsBySubnet(subnetCidr: string): Promise<
     Array<{ vmId: string; vmName: string; subnet: string; nodeName?: string }>
   > {
+    // The twin models one network_subnet entity per interface's own host IP/mask
+    // (e.g. "172.16.0.198/22"), not one canonical network-address entity per
+    // physical network (e.g. "172.16.0.0/22") — so a caller asking about the
+    // canonical network address needs real CIDR-overlap matching, not an exact
+    // displayName/id match (which never has any hits). See A-TQ-10.
     const result = await this.runQuery(
       `
         MATCH (i:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(s:TwinEntity {type: $subnetType})
         MATCH (vm:TwinEntity {type: $vmType})
-        WHERE vm.id = i.vmId AND (s.displayName = $subnetCidr OR s.id = $subnetId)
+        WHERE vm.id = i.vmId AND s.displayName IS NOT NULL
         RETURN vm.id AS vmId,
                coalesce(vm.displayName, vm.id) AS vmName,
                s.displayName AS subnet,
@@ -222,17 +228,17 @@ export class TwinQueryService {
         ifaceType: "network_interface",
         subnetType: "network_subnet",
         vmType: "compute_vm",
-        subnetCidr,
-        subnetId: `network-subnet:${subnetCidr.toLowerCase()}`,
       }
     );
 
-    return result.records.map((record) => ({
-      vmId: record.get("vmId") as string,
-      vmName: record.get("vmName") as string,
-      subnet: record.get("subnet") as string,
-      nodeName: record.get("nodeName") ?? undefined,
-    }));
+    return result.records
+      .map((record) => ({
+        vmId: record.get("vmId") as string,
+        vmName: record.get("vmName") as string,
+        subnet: record.get("subnet") as string,
+        nodeName: record.get("nodeName") ?? undefined,
+      }))
+      .filter((row) => cidrOverlaps(row.subnet, subnetCidr));
   }
 
   async reachability(fromId: string): Promise<
@@ -1217,6 +1223,79 @@ export class TwinQueryService {
   }
 
   /**
+   * Find rules whose source or destination port matches the given port
+   * number/name (e.g. "8006", "ssh"). Port fields aren't promoted to their
+   * own indexed Neo4j properties (unlike action/source/destination/chain) —
+   * they're only present inside each rule's `dataJson` blob — so this reads
+   * that JSON rather than adding new schema/ingestion surface for a single
+   * lookup. See C-03.
+   */
+  async rulesByPort(port: string): Promise<Array<{
+    ruleId: string;
+    action: string;
+    direction?: string;
+    protocol?: string;
+    source?: string;
+    destination?: string;
+    sourcePort?: string;
+    destinationPort?: string;
+    chain?: string;
+  }>> {
+    const normalizedPort = port.trim().toLowerCase();
+    const result = await this.runQuery(
+      `
+        MATCH (r:TwinEntity {type: $ruleType})
+        WHERE r.dataJson CONTAINS $port
+        RETURN r.id AS ruleId, r.dataJson AS dataJson
+      `,
+      { ruleType: "firewall_rule", port: normalizedPort }
+    );
+
+    const matches: Array<{
+      ruleId: string;
+      action: string;
+      direction?: string;
+      protocol?: string;
+      source?: string;
+      destination?: string;
+      sourcePort?: string;
+      destinationPort?: string;
+      chain?: string;
+    }> = [];
+
+    for (const record of result.records) {
+      const dataJson = record.get("dataJson") as string | null;
+      if (!dataJson) continue;
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(dataJson);
+      } catch {
+        continue;
+      }
+      const sourcePort = typeof data.sourcePort === "string" ? data.sourcePort.toLowerCase() : undefined;
+      const destinationPort = typeof data.destinationPort === "string" ? data.destinationPort.toLowerCase() : undefined;
+      if (sourcePort !== normalizedPort && destinationPort !== normalizedPort) {
+        // The CONTAINS pre-filter can match on unrelated JSON substrings
+        // (e.g. a rule id or CIDR containing the same digits) — confirm an
+        // exact port-field match before including it.
+        continue;
+      }
+      matches.push({
+        ruleId: record.get("ruleId") as string,
+        action: typeof data.action === "string" ? data.action : "unknown",
+        direction: typeof data.direction === "string" ? data.direction : undefined,
+        protocol: typeof data.protocol === "string" ? data.protocol : undefined,
+        source: typeof data.source === "string" ? data.source : undefined,
+        destination: typeof data.destination === "string" ? data.destination : undefined,
+        sourcePort: typeof data.sourcePort === "string" ? data.sourcePort : undefined,
+        destinationPort: typeof data.destinationPort === "string" ? data.destinationPort : undefined,
+        chain: typeof data.chain === "string" ? data.chain : undefined,
+      });
+    }
+    return matches;
+  }
+
+  /**
    * Find rules that ALLOW access to a subnet.
    * Matches by exact CIDR or by mask pattern (e.g., /22 matches any /22 subnet).
    */
@@ -1267,8 +1346,54 @@ export class TwinQueryService {
   }
 
   /**
+   * Resolve a `<AliasName>` reference to its CIDR list via the already-ingested
+   * firewall_alias entities, keyed lowercase for case-insensitive lookup.
+   */
+  private async buildAliasCidrLookup(): Promise<Map<string, string[]>> {
+    const aliases = await this.listFirewallAliases();
+    return new Map(aliases.map((alias) => [alias.name.toLowerCase(), alias.cidrs]));
+  }
+
+  /**
+   * Finds the first value (rule source/destination) that overlaps `targetCidr`,
+   * resolving plain CIDR literals directly and `<AliasName>` references via the
+   * alias CIDR lookup. Returns the matched CIDR (for provenance) or null.
+   */
+  private findOverlappingCidr(
+    values: Array<string | null | undefined>,
+    targetCidr: string,
+    aliasCidrsByName: Map<string, string[]>
+  ): string | null {
+    for (const value of values) {
+      if (!value) continue;
+      const plainCidrMatch = value.match(/\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/);
+      if (plainCidrMatch && cidrOverlaps(plainCidrMatch[0], targetCidr)) {
+        return plainCidrMatch[0];
+      }
+      const aliasMatch = value.match(/^<([^>]+)>$/);
+      if (aliasMatch?.[1]) {
+        const cidrs = aliasCidrsByName.get(aliasMatch[1].toLowerCase()) ?? [];
+        const hit = cidrs.find((cidr) => cidrOverlaps(cidr, targetCidr));
+        if (hit) return hit;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Find rules that BLOCK access to a subnet.
-   * Matches by exact CIDR or by mask pattern (e.g., /22 matches any /22 subnet).
+   *
+   * Previously matched via the `-[:BLOCKS]->` relationship, but that
+   * relationship requires a network_subnet entity matching the rule's literal
+   * source/destination CIDR to already exist. Firewall rules reference
+   * canonical network addresses (e.g. "192.168.68.0/22") while the twin only
+   * ever creates subnet entities from real interface host IPs (e.g.
+   * "192.168.68.78/22") — so that entity never exists and the relationship
+   * write is silently skipped at ingestion time (confirmed live: 0 BLOCKS
+   * edges in the graph for any rule/subnet pair). Matches directly against
+   * the rule's own source/destination fields instead, via real CIDR-overlap
+   * (and alias resolution), so this doesn't depend on that relationship at
+   * all. See A-TQ-16.
    */
   async rulesBlockingSubnet(subnetCidr: string): Promise<Array<{
     ruleId: string;
@@ -1276,45 +1401,48 @@ export class TwinQueryService {
     direction?: string;
     protocol?: string;
     subnetId: string;
+    subnetCidr?: string;
   }>> {
-    const subnetId = `network-subnet:${subnetCidr.toLowerCase()}`;
-    // Extract mask for pattern matching (e.g., "172.16.0.0/22" -> "/22")
-    const maskMatch = subnetCidr.match(/\/(\d+)$/);
-    const mask = maskMatch ? maskMatch[1] : null;
-    
     const result = await this.runQuery(
       `
-        MATCH (r:TwinEntity {type: $ruleType})-[:BLOCKS]->(s:TwinEntity {type: $subnetType})
-        WHERE s.id = $subnetId 
-           OR s.displayName = $subnetCidr
-           OR (s.displayName ENDS WITH $maskPattern AND $mask IS NOT NULL)
-           OR (s.id ENDS WITH $maskPattern AND $mask IS NOT NULL)
+        MATCH (r:TwinEntity {type: $ruleType})
+        WHERE r.action IN ['block', 'reject']
         RETURN r.id AS ruleId,
                r.action AS action,
                r.direction AS direction,
                r.protocol AS protocol,
-               s.id AS subnetId,
-               s.displayName AS subnetCidr
+               r.source AS source,
+               r.destination AS destination
         ORDER BY r.action, r.direction
       `,
-      {
-        ruleType: "firewall_rule",
-        subnetType: "network_subnet",
-        subnetId,
-        subnetCidr,
-        maskPattern: mask ? `/${mask}` : null,
-        mask,
-      }
+      { ruleType: "firewall_rule" }
     );
 
-    return result.records.map((record) => ({
-      ruleId: record.get("ruleId") as string,
-      action: record.get("action") as string,
-      direction: record.get("direction") ?? undefined,
-      protocol: record.get("protocol") ?? undefined,
-      subnetId: record.get("subnetId") as string,
-      subnetCidr: record.get("subnetCidr") ?? undefined,
-    }));
+    const aliasCidrsByName = await this.buildAliasCidrLookup();
+
+    const matches: Array<{
+      ruleId: string;
+      action: string;
+      direction?: string;
+      protocol?: string;
+      subnetId: string;
+      subnetCidr?: string;
+    }> = [];
+    for (const record of result.records) {
+      const source = record.get("source") as string | null;
+      const destination = record.get("destination") as string | null;
+      const matchedCidr = this.findOverlappingCidr([source, destination], subnetCidr, aliasCidrsByName);
+      if (!matchedCidr) continue;
+      matches.push({
+        ruleId: record.get("ruleId") as string,
+        action: record.get("action") as string,
+        direction: record.get("direction") ?? undefined,
+        protocol: record.get("protocol") ?? undefined,
+        subnetId: `network-subnet:${matchedCidr.toLowerCase()}`,
+        subnetCidr: matchedCidr,
+      });
+    }
+    return matches;
   }
 
   /**
@@ -1415,6 +1543,28 @@ export class TwinQueryService {
     }));
   }
 
+  /**
+   * Find what's reachable (VM/subnet pairs) from a firewall chain (e.g.
+   * "chain:wireguard"), based on that chain's own `pass` rules.
+   *
+   * Previously joined through the `-[:ALLOWS]->` relationship, which — like
+   * `-[:BLOCKS]->` (see rulesBlockingSubnet above) — is essentially
+   * unpopulated (confirmed live: 0 ALLOWS edges anywhere in the graph, not
+   * just for this chain). Two independent ingestion-time resolution gaps
+   * both prevent it: (1) rules with a literal CIDR destination hit the same
+   * canonical-network-vs-host-address subnet-entity mismatch as BLOCKS, and
+   * (2) rules whose destination is an OPNsense-internal interface macro like
+   * "(vtnet0:network)" never resolve because the twin's interface names
+   * (e.g. "opsbox-net0") don't correspond to OPNsense's internal names
+   * (vtnet0/vtnet1/vlan01) at all — `subnetsByInterfaceName("vtnet0")`
+   * legitimately finds nothing. Reasons directly from the chain's pass rules
+   * instead: a rule with an unrestricted ("any"/absent) destination makes
+   * every VM/subnet reachable; a rule with a literal CIDR or resolvable
+   * `<Alias>` destination is matched via real CIDR overlap. Interface-macro
+   * destinations are left unmatched rather than guessed at (same gap as
+   * before, just no longer silently swallowed into "no data at all"). See
+   * A-TQ-19.
+   */
   async reachableFromInterfaceChain(
     chain: string
   ): Promise<Array<{
@@ -1425,38 +1575,85 @@ export class TwinQueryService {
     allowedBy: string[];
     blockedBy: string[];
   }>> {
-    const result = await this.runQuery(
+    const rulesResult = await this.runQuery(
       `
-        MATCH (allowRule:TwinEntity {type: $ruleType, chain: $chain})-[:ALLOWS]->(subnet:TwinEntity {type: $subnetType})
-        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType, chain: $chain})-[:BLOCKS]->(subnet)
-        MATCH (iface:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(subnet)
-        MATCH (vm:TwinEntity {type: $vmType})
-        WHERE iface.vmId = vm.id
-        RETURN vm.id AS vmId,
-               coalesce(vm.displayName, vm.id) AS vmName,
-               subnet.displayName AS subnet,
-               subnet.id AS subnetId,
-               collect(DISTINCT allowRule.id) AS allowedBy,
-               collect(DISTINCT blockRule.id) AS blockedBy
-        ORDER BY vmName
+        MATCH (r:TwinEntity {type: $ruleType, chain: $chain})
+        WHERE r.action = 'pass'
+        RETURN r.id AS ruleId, r.destination AS destination
       `,
-      {
-        ruleType: "firewall_rule",
-        subnetType: "network_subnet",
-        ifaceType: "network_interface",
-        vmType: "compute_vm",
-        chain,
-      }
+      { ruleType: "firewall_rule", chain }
     );
 
-    return result.records.map((record) => ({
-      vmId: record.get("vmId") as string,
-      vmName: record.get("vmName") as string,
-      subnet: record.get("subnet") as string,
-      subnetId: record.get("subnetId") as string,
-      allowedBy: (record.get("allowedBy")?.toArray?.() || record.get("allowedBy") || []).filter((x: any) => x),
-      blockedBy: (record.get("blockedBy")?.toArray?.() || record.get("blockedBy") || []).filter((x: any) => x),
-    }));
+    const aliasCidrsByName = await this.buildAliasCidrLookup();
+    const unrestrictedRuleIds: string[] = [];
+    const cidrRestrictedRules: Array<{ ruleId: string; cidr: string }> = [];
+
+    for (const record of rulesResult.records) {
+      const ruleId = record.get("ruleId") as string;
+      const destination = record.get("destination") as string | null;
+      if (!destination || destination.trim().toLowerCase() === "any") {
+        unrestrictedRuleIds.push(ruleId);
+        continue;
+      }
+      const plainCidrMatch = destination.match(/\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/);
+      if (plainCidrMatch) {
+        cidrRestrictedRules.push({ ruleId, cidr: plainCidrMatch[0] });
+        continue;
+      }
+      const aliasMatch = destination.match(/^<([^>]+)>$/);
+      if (aliasMatch?.[1]) {
+        const cidrs = aliasCidrsByName.get(aliasMatch[1].toLowerCase()) ?? [];
+        for (const cidr of cidrs) {
+          cidrRestrictedRules.push({ ruleId, cidr });
+        }
+      }
+    }
+
+    if (unrestrictedRuleIds.length === 0 && cidrRestrictedRules.length === 0) {
+      return [];
+    }
+
+    const vmSubnetResult = await this.runQuery(
+      `
+        MATCH (i:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(s:TwinEntity {type: $subnetType})
+        MATCH (vm:TwinEntity {type: $vmType})
+        WHERE vm.id = i.vmId AND s.displayName IS NOT NULL
+        RETURN vm.id AS vmId,
+               coalesce(vm.displayName, vm.id) AS vmName,
+               s.displayName AS subnet,
+               s.id AS subnetId
+        ORDER BY vmName
+      `,
+      { ifaceType: "network_interface", subnetType: "network_subnet", vmType: "compute_vm" }
+    );
+
+    const results: Array<{
+      vmId: string;
+      vmName: string;
+      subnet: string;
+      subnetId: string;
+      allowedBy: string[];
+      blockedBy: string[];
+    }> = [];
+    for (const record of vmSubnetResult.records) {
+      const subnet = record.get("subnet") as string;
+      const allowedBy = [...unrestrictedRuleIds];
+      for (const restricted of cidrRestrictedRules) {
+        if (cidrOverlaps(subnet, restricted.cidr)) {
+          allowedBy.push(restricted.ruleId);
+        }
+      }
+      if (allowedBy.length === 0) continue;
+      results.push({
+        vmId: record.get("vmId") as string,
+        vmName: record.get("vmName") as string,
+        subnet,
+        subnetId: record.get("subnetId") as string,
+        allowedBy: Array.from(new Set(allowedBy)),
+        blockedBy: [],
+      });
+    }
+    return results;
   }
 
   async ruleImpact(ruleId: string): Promise<{
@@ -1672,6 +1869,21 @@ export class TwinQueryService {
   /**
    * Find VMs exposed to a specific subnet (e.g., WAN).
    */
+  /**
+   * Find VMs exposed to (i.e. sharing a subnet with) a given CIDR.
+   *
+   * Previously fell back to matching any subnet whose displayName merely
+   * ENDS WITH the same mask suffix (e.g. "/22") when the exact match failed
+   * — since nearly every subnet in this environment happens to be a /22, that
+   * fallback matched almost every VM in the twin regardless of which network
+   * they were actually on, returning what was effectively the entire
+   * exposure map for any /22 query (confirmed live; this is the A-TQ-22
+   * self-contradiction: a "None exposed" summary line computed from a
+   * separate, correctly-empty query, followed by this over-broad list).
+   * Replaced with real CIDR-overlap matching (see A-TQ-10 for why the twin
+   * needs this at all: subnets are modeled per-interface host IP, not by
+   * canonical network address). See A-TQ-22.
+   */
   async vmsExposedToSubnet(subnetCidr: string): Promise<Array<{
     vmId: string;
     vmName: string;
@@ -1680,20 +1892,13 @@ export class TwinQueryService {
     allowRules: number;
     blockRules: number;
   }>> {
-    // Extract mask for pattern matching
-    const maskMatch = subnetCidr.match(/\/(\d+)$/);
-    const mask = maskMatch ? maskMatch[1] : null;
-    const maskPattern = mask ? `/${mask}` : null;
-
     const result = await this.runQuery(
       `
         MATCH (vm:TwinEntity {type: $vmType})
         MATCH (iface:TwinEntity {type: $ifaceType})
         WHERE iface.vmId = vm.id
         MATCH (iface)-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
-        WHERE subnet.displayName = $subnetCidr
-           OR subnet.id = $subnetId
-           OR (subnet.displayName ENDS WITH $maskPattern AND $mask IS NOT NULL)
+        WHERE subnet.displayName IS NOT NULL
         OPTIONAL MATCH (vm)-[:RUNS_ON]->(node:TwinEntity {type: $nodeType})
         OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
         OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(subnet)
@@ -1711,21 +1916,19 @@ export class TwinQueryService {
         ifaceType: "network_interface",
         subnetType: "network_subnet",
         ruleType: "firewall_rule",
-        subnetId: `network-subnet:${subnetCidr.toLowerCase()}`,
-        subnetCidr,
-        maskPattern,
-        mask,
       }
     );
 
-    return result.records.map((record) => ({
-      vmId: record.get("vmId") as string,
-      vmName: record.get("vmName") as string,
-      nodeName: record.get("nodeName") ?? undefined,
-      subnet: record.get("subnet") as string,
-      allowRules: this.safeToNumber(record.get("allowRules")),
-      blockRules: this.safeToNumber(record.get("blockRules")),
-    }));
+    return result.records
+      .map((record) => ({
+        vmId: record.get("vmId") as string,
+        vmName: record.get("vmName") as string,
+        nodeName: record.get("nodeName") ?? undefined,
+        subnet: record.get("subnet") as string,
+        allowRules: this.safeToNumber(record.get("allowRules")),
+        blockRules: this.safeToNumber(record.get("blockRules")),
+      }))
+      .filter((row) => cidrOverlaps(row.subnet, subnetCidr));
   }
 
   /**

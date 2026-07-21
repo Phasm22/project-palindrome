@@ -2,11 +2,13 @@ export type FirewallIntent =
   | { type: "list_rules" }
   | { type: "count_rules"; direction?: "in" | "out" }
   | { type: "alias_contents"; aliasName: string }
+  | { type: "alias_list" }
   | { type: "allowed_ports_between"; from: string; to: string }
   | { type: "rules_by_chain"; chain: string }
   | { type: "sources_accessing_network"; chain: string; target: string }
   | { type: "rules_allowing_subnet"; subnet: string }
   | { type: "rules_blocking_subnet"; subnet: string }
+  | { type: "rules_by_port"; port: string }
   | { type: "exposure_map"; vmId?: string }
   | { type: "reachability_from_chain"; chain: string }
   | { type: "rule_impact"; ruleId: string };
@@ -15,6 +17,7 @@ const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
 const VM_ID_REGEX = /(?:vm|vm-)(\d+)|compute-vm:[\w:-]+/i;
 const RULE_ID_REGEX = /\bfw-rule:[a-z0-9:._-]+/i;
 const WIREGUARD_PATTERN = /\b(?:wireguard|wg)\b/i;
+const PORT_NUMBER_REGEX = /\bport\s+(\d{1,5})\b/i;
 
 function extractSubnet(text: string): string | null {
   const match = text.match(CIDR_REGEX);
@@ -28,6 +31,19 @@ function extractVmId(text: string): string | null {
       return `compute-vm:proxbig:${match[1]}`;
     }
     return match[0];
+  }
+  // Bare VM display name, e.g. "is windowsVM exposed?" or "the opnsense VM" —
+  // extractVmId previously only handled the "vm123"/"compute-vm:..." id
+  // conventions, so a real display name like "windowsVM" (no digits, no
+  // prefix) fell through and every exposure question about a *named* VM
+  // came back unscoped (the whole-cluster exposure map). See A-TQ-21/A-TQ-23.
+  const camelCaseVmSuffix = text.match(/\b([A-Za-z][\w-]*[a-z])VM\b/);
+  if (camelCaseVmSuffix) {
+    return `${camelCaseVmSuffix[1]}VM`;
+  }
+  const theNameVm = text.match(/\bthe\s+([A-Za-z][\w-]*)\s+VM\b/);
+  if (theNameVm?.[1]) {
+    return theNameVm[1];
   }
   return null;
 }
@@ -196,20 +212,32 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     return null;
   }
 
-  // Alias content queries, e.g. "what all is in the alias tjs computers".
-  // Excludes impact/removal-flavored questions ("what would break if I deleted the
-  // X alias") — those need the LLM/EXECUTE path to reason about impact, not a
-  // "show me the alias's contents" dump.
+  // Alias queries: "list ALL the aliases" (no specific name to extract, and
+  // extractAliasName was never meant to find one) vs. "what's in the WG_VIP
+  // alias" (contents of one named alias). Previously only the latter had a
+  // dedicated intent, so "List all OPNsense firewall aliases." fell through
+  // every other branch and landed on the generic list_rules fallback,
+  // dumping firewall *rules* instead of aliases. See A-OP-02.
   const looksLikeAliasImpactQuestion =
     /\b(break|breaks|breaking|remov(?:e|ed|ing)|delet(?:e|ed|ing)|affect(?:s|ed|ing)?|impact)\b/.test(normalized);
-  if (
-    normalized.includes("alias") &&
-    !looksLikeAliasImpactQuestion &&
-    /\b(what|which|show|list|contents?|members?|entries?|in)\b/.test(normalized)
-  ) {
-    const aliasName = extractAliasName(userInput);
-    if (aliasName) {
-      return { type: "alias_contents", aliasName };
+  if (normalized.includes("alias") && !looksLikeAliasImpactQuestion) {
+    // "aliases" (plural) with no specific name extractable reads as "list ALL
+    // of them"; a specific name (singular "alias X", regardless of "all" used
+    // loosely elsewhere in the sentence, e.g. "what ALL is in THE alias X")
+    // always takes priority when extractAliasName finds one.
+    const specificAliasName = extractAliasName(userInput);
+    const mentionsAliasesPlural = /\baliases\b/.test(normalized);
+    if (
+      mentionsAliasesPlural &&
+      !specificAliasName &&
+      /\b(what|which|show|list|all|every)\b/.test(normalized)
+    ) {
+      return { type: "alias_list" };
+    }
+
+    // Alias content queries, e.g. "what all is in the alias tjs computers".
+    if (specificAliasName && /\b(what|which|show|list|contents?|members?|entries?|in)\b/.test(normalized)) {
+      return { type: "alias_contents", aliasName: specificAliasName };
     }
   }
 
@@ -235,6 +263,19 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   }
   if (reachabilityKeywords && chain) {
     return { type: "reachability_from_chain", chain };
+  }
+
+  // Rule-attribution-by-port: "which firewall rule permits access to port 8006?",
+  // "what rule blocks port 22?" — distinct from the "ports allowed from X to Y"
+  // scope question below. Previously had no dedicated intent at all, so these
+  // fell all the way through to the generic list_rules fallback (matched by
+  // "rule" itself) — a full unfiltered rule dump instead of the one rule the
+  // question was actually about, even though the port IS already present on
+  // the ingested rule's dataJson. See C-03.
+  const portNumberMatch = userInput.match(PORT_NUMBER_REGEX);
+  const asksWhichRule = /\brule/.test(normalized) && /\b(which|what)\b/.test(normalized);
+  if (portNumberMatch?.[1] && asksWhichRule) {
+    return { type: "rules_by_port", port: portNumberMatch[1] };
   }
 
   // Port/service reachability: "what ports from X to Y?", "can port 22 come from home to lab?",

@@ -24,6 +24,7 @@ const TwinQueryParams = z.object({
     "firewall_rules_by_chain",
     "firewall_rules_allowing_subnet",
     "firewall_rules_blocking_subnet",
+    "firewall_rules_by_port",
     "firewall_exposure_map",
     "firewall_reachability_from_subnet",
     "firewall_reachability_from_chain",
@@ -46,9 +47,17 @@ const TwinQueryParams = z.object({
       fromSubnet: z.string().optional(),
       toVmId: z.string().optional(),
       vmName: z.string().optional(),
-      vmId: z.union([z.number(), z.string()]).optional(),
+      vmId: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe(
+          "A specific VM's name or id. REQUIRED for exposure_vm_analysis (a single VM's exposure). " +
+            "Leave unset for cluster-wide operations (firewall_exposure_map with no vmId, exposure_internet_exposed) " +
+            "— do not call exposure_vm_analysis for a 'list all nodes/VMs and their exposure' style question."
+        ),
       vmKind: z.enum(["qemu", "lxc", "all"]).optional(),
       vlan: z.union([z.number(), z.string()]).optional(),
+      port: z.union([z.number(), z.string()]).optional().describe("Port number or name (e.g. 8006, ssh) for firewall_rules_by_port."),
     })
     .partial()
     .optional(),
@@ -130,6 +139,10 @@ export class TwinQueryTool extends BaseTool {
           parameters: { operation: "firewall_rules_allowing_subnet", params: { subnet: "172.16.0.0/22" } },
         },
         {
+          description: "Find rules referencing a specific port (e.g. 'which rule permits access to port 8006')",
+          parameters: { operation: "firewall_rules_by_port", params: { port: "8006" } },
+        },
+        {
           description: "Get exposure map for all VMs",
           parameters: { operation: "firewall_exposure_map" },
         },
@@ -180,6 +193,33 @@ export class TwinQueryTool extends BaseTool {
       return `compute-vm:${value}`;
     }
     return value;
+  }
+
+  /**
+   * Like normalizeVmEntityId, but also resolves a bare VM display name (e.g.
+   * "windowsVM", "opnsense" — not a canonical `compute-vm:node:id` string) to
+   * its real entity id via a case-insensitive twin lookup. Callers upstream
+   * (detectFirewallIntent's exposure_map extraction) only have the query text
+   * to work with and can extract a display name but not a canonical id;
+   * without this, exposure_vm_analysis/firewall_exposure_map silently matched
+   * nothing and fell back to the unscoped, cluster-wide answer. See A-TQ-21/23.
+   */
+  private async resolveVmEntityId(value?: string | number): Promise<string | undefined> {
+    const normalized = this.normalizeVmEntityId(value);
+    if (!normalized || normalized.toLowerCase().startsWith("compute-vm:")) {
+      return normalized;
+    }
+    try {
+      const matches = await this.service.findVmByName(normalized, { verifyAgainstProxmox: false });
+      const first = matches[0];
+      if (first?.id) {
+        return first.id;
+      }
+    } catch {
+      // Fall through — return the raw value so the caller's own "not found"
+      // handling still applies, rather than throwing here.
+    }
+    return normalized;
   }
 
   async execute(
@@ -378,9 +418,17 @@ export class TwinQueryTool extends BaseTool {
           const aliases = await this.service.listFirewallAliases();
           return { data: { kind: "firewall_rule_list", subnet, data, aliases } };
         }
+        case "firewall_rules_by_port": {
+          const port = opParams?.port;
+          if (port === undefined || port === null || port === "") {
+            return { error: "port is required for firewall_rules_by_port" };
+          }
+          const data = await this.service.rulesByPort(String(port));
+          return { data: { kind: "firewall_rule_list_by_port", port, data } };
+        }
         case "firewall_exposure_map": {
           const vmId = opParams?.vmId;
-          const vmEntityId = this.normalizeVmEntityId(vmId);
+          const vmEntityId = await this.resolveVmEntityId(vmId);
           const data = await this.service.exposureMap(vmEntityId);
           return { data: { kind: "exposure_map", vmId, data } };
         }
@@ -415,7 +463,7 @@ export class TwinQueryTool extends BaseTool {
           if (!vmId) {
             return { error: "vmId is required for exposure_vm_analysis" };
           }
-          const vmEntityId = this.normalizeVmEntityId(vmId);
+          const vmEntityId = await this.resolveVmEntityId(vmId);
           if (!vmEntityId) {
             return { error: "vmId is required for exposure_vm_analysis" };
           }

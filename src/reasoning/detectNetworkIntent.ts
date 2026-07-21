@@ -11,13 +11,21 @@ export type NetworkIntent =
   | { type: "vm_ip_by_name"; vmNameOrId: string }
   | { type: "vms_with_multiple_interfaces" }
   | { type: "switch_vlans" }
-  | { type: "switch_ports_by_vlan"; vlan: number };
+  | { type: "switch_ports_by_vlan"; vlan: number }
+  | { type: "interface_lookup"; interfaceName: string };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
 const IP_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\b/;
 const ENTITY_ID_REGEX = /(network-if:[\w:-]+|compute-vm:[\w:-]+)/i;
 const VM_NAME_REGEX = /\bvm\s+([a-z0-9\-_]+)/i;
 const VLAN_NUMBER_REGEX = /\bvlan\s+(\d+)\b/i;
+// Linux persistent interface naming convention: "enx" + 12 hex chars (the
+// interface's MAC address). Matched regardless of surrounding phrasing (bare
+// "what is enx...?" vs. "what network interface is this? enx...") so a
+// specific, real interface lookup never depends on the LLM recognizing the
+// naming convention itself and hallucinating a plausible-sounding answer
+// instead of querying the twin. See B-06.
+const MAC_INTERFACE_REGEX = /\benx[0-9a-f]{12}\b/i;
 const MULTI_NIC_PATTERNS = [
   /\btwo\s+nics?\b/i,
   /\bmultiple\s+nics?\b/i,
@@ -67,6 +75,11 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
   if (hasActionKeyword) {
     // This is likely an action, not a query - let action intent detection handle it
     return null;
+  }
+
+  const macInterfaceMatch = userInput.match(MAC_INTERFACE_REGEX);
+  if (macInterfaceMatch) {
+    return { type: "interface_lookup", interfaceName: macInterfaceMatch[0] };
   }
 
   const vmNameOrId = extractVmNameOrId(userInput) || extractKnownVmName(userInput);
@@ -131,8 +144,17 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
     return { type: "switch_vlans" };
   }
 
-  // Only match subnet/routing if it's clearly a query (not an action)
-  if ((normalized.includes("subnet") || normalized.includes("routing")) && !hasActionKeyword) {
+  // Only match subnet/routing if it's clearly a query (not an action).
+  // Excludes "routing table" specifically: that's a live OPNsense diagnostic
+  // (opnsense_readonly's diagnostics_routing_table action) the twin doesn't
+  // model at all, so swallowing it into the generic interface-list fallback
+  // here means the EXECUTE/LLM path — which could actually call that action —
+  // never even sees the query. See A-OP-09.
+  if (
+    (normalized.includes("subnet") || normalized.includes("routing")) &&
+    !hasActionKeyword &&
+    !/\brouting\s+table\b/.test(normalized)
+  ) {
     return { type: "describe_network" };
   }
 
