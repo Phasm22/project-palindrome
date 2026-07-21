@@ -120,6 +120,76 @@ export async function describeNetworkChain(tools: BaseTool[], session: ToolSessi
   return formatInterfaceList("Network Interfaces:", interfaces);
 }
 
+function formatSwitchVlanList(
+  entries: Array<{
+    vlan: number;
+    provenance?: string;
+    switchHostname?: string;
+    ports: string[];
+    portCount: number;
+  }>
+): string {
+  if (!entries.length) {
+    return "No VLANs found on any ingested switch.";
+  }
+  const lines = ["VLANs on switch:"];
+  for (const entry of entries) {
+    const parts = [
+      `vlan=${entry.vlan}`,
+      entry.switchHostname ? `switch=${entry.switchHostname}` : null,
+      entry.provenance ? `provenance=${entry.provenance}` : null,
+      `ports=${entry.portCount}`,
+    ].filter(Boolean);
+    lines.push(`- ${parts.join(" | ")} (${entry.ports.join(", ")})`);
+  }
+  return lines.join("\n");
+}
+
+export async function switchVlansChain(tools: BaseTool[], session: ToolSession): Promise<string> {
+  const result = await executeToolCall(
+    { toolName: "twin_query", parameters: { operation: "switch_list_vlans" } },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const entries = payload?.data ?? [];
+  return formatSwitchVlanList(entries);
+}
+
+export async function switchPortsByVlanChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  vlan: number
+): Promise<string> {
+  const result = await executeToolCall(
+    { toolName: "twin_query", parameters: { operation: "switch_ports_by_vlan", params: { vlan } } },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const ports = payload?.data ?? [];
+  if (!ports.length) {
+    return `No switch ports found carrying VLAN ${vlan}.`;
+  }
+  const lines = [`Switch ports carrying VLAN ${vlan}:`];
+  for (const port of ports) {
+    const parts = [
+      port.switchHostname ? `switch=${port.switchHostname}` : null,
+      port.mode ? `mode=${port.mode}` : null,
+      port.provenance ? `provenance=${port.provenance}` : null,
+      port.description ? `desc=${port.description}` : null,
+    ].filter(Boolean);
+    lines.push(`- ${port.portName} (${parts.join(" | ")})`);
+  }
+  return lines.join("\n");
+}
+
 export async function listNodeInterfacesChain(
   tools: BaseTool[],
   session: ToolSession,

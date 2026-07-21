@@ -2,6 +2,7 @@ import type { QueryResult, Record as Neo4jRecord } from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 import { ProxmoxClient } from "../../tools/proxmox/client";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
+import { getExpectedEndpointLabel, wasEndpointVerified } from "../../tools/proxmox/endpoint-attribution";
 import { pceLogger as logger } from "../../pce/utils/logger";
 
 type VmKind = "qemu" | "lxc" | null;
@@ -109,6 +110,76 @@ export class TwinQueryService {
     );
 
     return result.records.map(this.mapInterface);
+  }
+
+  /**
+   * List distinct VLANs seen across all switch ports, grouped by vlan number,
+   * provenance (declared vs observed), and switch — see docs/network/ on why
+   * declared/observed facts are kept separate rather than merged.
+   */
+  async listSwitchVlans(): Promise<any[]> {
+    const result = await this.runQuery(
+      `
+        MATCH (sw:TwinEntity {type: $switchType})-[:HAS_PORT]->(sp:TwinEntity {type: $portType})
+        WITH sw, sp,
+             CASE
+               WHEN sp.mode = "trunk" THEN coalesce(sp.trunkVlans, [])
+               WHEN sp.accessVlan IS NULL THEN []
+               ELSE [sp.accessVlan]
+             END AS vlans
+        UNWIND vlans AS vlan
+        RETURN vlan AS vlan,
+               sp.provenance AS provenance,
+               sw.hostname AS switchHostname,
+               sw.id AS switchId,
+               collect(sp.portName) AS ports,
+               count(sp) AS portCount
+        ORDER BY vlan, provenance
+      `,
+      { switchType: "switch", portType: "switch_port" }
+    );
+
+    return result.records.map((record) => ({
+      vlan: record.get("vlan"),
+      provenance: record.get("provenance") ?? undefined,
+      switchHostname: record.get("switchHostname") ?? undefined,
+      switchId: record.get("switchId") as string,
+      ports: record.get("ports") ?? [],
+      portCount:
+        typeof record.get("portCount")?.toNumber === "function"
+          ? record.get("portCount").toNumber()
+          : Number(record.get("portCount") ?? 0),
+    }));
+  }
+
+  /**
+   * Find switch ports carrying a given VLAN, whether as an access port's
+   * native VLAN or as one of a trunk port's tagged VLANs.
+   */
+  async switchPortsByVlan(vlan: number): Promise<any[]> {
+    const result = await this.runQuery(
+      `
+        MATCH (sw:TwinEntity {type: $switchType})-[:HAS_PORT]->(sp:TwinEntity {type: $portType})
+        WHERE sp.accessVlan = $vlan OR $vlan IN coalesce(sp.trunkVlans, [])
+        RETURN sw.hostname AS switchHostname,
+               sw.id AS switchId,
+               sp.portName AS portName,
+               sp.mode AS mode,
+               sp.provenance AS provenance,
+               sp.portDescription AS description
+        ORDER BY switchHostname, portName
+      `,
+      { switchType: "switch", portType: "switch_port", vlan }
+    );
+
+    return result.records.map((record) => ({
+      switchHostname: record.get("switchHostname") ?? undefined,
+      switchId: record.get("switchId") as string,
+      portName: record.get("portName") as string,
+      mode: record.get("mode") ?? undefined,
+      provenance: record.get("provenance") ?? undefined,
+      description: record.get("description") ?? undefined,
+    }));
   }
 
   async subnetsByInterfaceName(interfaceName: string): Promise<string[]> {
@@ -814,14 +885,8 @@ export class TwinQueryService {
           continue;
         }
 
-        const expectedEndpoint = neo4jVm.nodeName?.toLowerCase() === "proxbig"
-          ? "proxbig"
-          : neo4jVm.nodeName
-            ? "cluster"
-            : undefined;
-        const endpointWasChecked = expectedEndpoint
-          ? successfulEndpoints.has(expectedEndpoint)
-          : successfulEndpoints.size === configs.length;
+        const expectedEndpoint = getExpectedEndpointLabel(neo4jVm.nodeName);
+        const endpointWasChecked = wasEndpointVerified(expectedEndpoint, successfulEndpoints, configs.length);
         if (!endpointWasChecked) {
           logger.warn("Could not verify VM because its Proxmox endpoint was unavailable", {
             id: neo4jVm.id,
@@ -930,6 +995,7 @@ export class TwinQueryService {
       }
 
       const proxmoxResources: Array<{ vmid?: number; node?: string; type?: string }> = [];
+      const successfulEndpoints = new Set<string>();
       for (const c of configs) {
         try {
           const client = new ProxmoxClient({
@@ -941,6 +1007,7 @@ export class TwinQueryService {
           const resourcesResult = await client.get("/cluster/resources");
           const data = resourcesResult.data?.data || [];
           proxmoxResources.push(...data);
+          successfulEndpoints.add(c.label.toLowerCase());
         } catch (err: unknown) {
           logger.warn(`Failed to fetch Proxmox resources from ${c.label}`, {
             url: c.url,
@@ -959,10 +1026,23 @@ export class TwinQueryService {
           continue; // Skip if we can't parse VMID
         }
 
+        // A transient failure fetching this VM's expected endpoint must not
+        // be treated as "the VM is gone" — skip (keep) it instead.
+        const expectedEndpoint = getExpectedEndpointLabel(neo4jVm.nodeName);
+        if (!wasEndpointVerified(expectedEndpoint, successfulEndpoints, configs.length)) {
+          logger.warn("Skipping stale-check: VM's Proxmox endpoint was unavailable this run", {
+            id: neo4jVm.id,
+            name: neo4jVm.name,
+            nodeName: neo4jVm.nodeName,
+            expectedEndpoint,
+          });
+          continue;
+        }
+
         const vmExists = proxmoxResources.some((r) => {
           const matchesVmid = r.vmid === vmid;
           const matchesType = !neo4jVm.vmKind || r.type === neo4jVm.vmKind;
-          const matchesNode = !neo4jVm.nodeName || 
+          const matchesNode = !neo4jVm.nodeName ||
             r.node?.toLowerCase() === neo4jVm.nodeName.toLowerCase();
           return matchesVmid && matchesType && matchesNode;
         });

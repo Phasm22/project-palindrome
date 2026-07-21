@@ -9,12 +9,15 @@ export type NetworkIntent =
   | { type: "vm_networks"; vmNameOrId: string }
   | { type: "vm_by_ip"; ip: string }
   | { type: "vm_ip_by_name"; vmNameOrId: string }
-  | { type: "vms_with_multiple_interfaces" };
+  | { type: "vms_with_multiple_interfaces" }
+  | { type: "switch_vlans" }
+  | { type: "switch_ports_by_vlan"; vlan: number };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
 const IP_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\b/;
 const ENTITY_ID_REGEX = /(network-if:[\w:-]+|compute-vm:[\w:-]+)/i;
 const VM_NAME_REGEX = /\bvm\s+([a-z0-9\-_]+)/i;
+const VLAN_NUMBER_REGEX = /\bvlan\s+(\d+)\b/i;
 const MULTI_NIC_PATTERNS = [
   /\btwo\s+nics?\b/i,
   /\bmultiple\s+nics?\b/i,
@@ -118,8 +121,18 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
     }
   }
 
-  // Only match VLAN/subnet/routing if it's clearly a query (not an action)
-  if ((normalized.includes("vlan") || normalized.includes("subnet") || normalized.includes("routing")) && !hasActionKeyword) {
+  // VLAN/switch-port queries route to the switch twin data, not the generic
+  // VM/node interface dump — see the "What VLANs are on the switch?" gap.
+  if (normalized.includes("vlan")) {
+    const vlanMatch = userInput.match(VLAN_NUMBER_REGEX);
+    if (vlanMatch?.[1]) {
+      return { type: "switch_ports_by_vlan", vlan: parseInt(vlanMatch[1], 10) };
+    }
+    return { type: "switch_vlans" };
+  }
+
+  // Only match subnet/routing if it's clearly a query (not an action)
+  if ((normalized.includes("subnet") || normalized.includes("routing")) && !hasActionKeyword) {
     return { type: "describe_network" };
   }
 

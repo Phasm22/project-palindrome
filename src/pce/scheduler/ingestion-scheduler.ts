@@ -29,6 +29,7 @@ export interface IngestionRunDetails {
     entities?: number;
     relationships?: number;
     error?: string;
+    degraded?: boolean;
   };
   firewall: {
     success: boolean;
@@ -182,6 +183,7 @@ export class IngestionScheduler {
     let networkError: string | undefined;
     let networkEntities = 0;
     let networkRelationships = 0;
+    let networkDegraded = false;
     let firewallError: string | undefined;
     let firewallEntities = 0;
     let firewallRelationships = 0;
@@ -235,11 +237,17 @@ export class IngestionScheduler {
       try {
         logger.info("Running Network ingestion...");
         networkOrchestrator = new NetworkIngestionOrchestrator();
-        await networkOrchestrator.ingestNetwork();
+        const networkResult = await networkOrchestrator.ingestNetwork();
         networkDuration = Date.now() - networkStart;
         networkSuccess = true;
-        // Note: Network ingestion doesn't return counts, but we can track from logs
-        logger.info("Network ingestion completed");
+        networkEntities = networkResult.entitiesWritten;
+        networkRelationships = networkResult.relationshipsWritten;
+        networkDegraded = networkResult.proxmoxDegraded || networkResult.opnsenseDegraded;
+        logger.info("Network ingestion completed", {
+          entities: networkEntities,
+          relationships: networkRelationships,
+          degraded: networkDegraded,
+        });
         this.metricsCollector.record("ingestion_scheduler_network_duration_ms", networkDuration, { status: "success" });
         this.metricsCollector.record("ingestion_scheduler_network_success", 1);
       } catch (error: any) {
@@ -385,6 +393,7 @@ export class IngestionScheduler {
           entities: networkEntities,
           relationships: networkRelationships,
           error: networkError,
+          degraded: networkDegraded,
         },
         firewall: {
           success: firewallSuccess,

@@ -49,6 +49,8 @@ import {
   vmIpByNameChain,
   vmNetworksFromIngestionChain,
   vmReachabilityChain,
+  switchVlansChain,
+  switchPortsByVlanChain,
 } from "../reasoning/chains/network";
 import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
 import {
@@ -620,6 +622,10 @@ async function executeNetworkIntent(
         return await vmIpByNameChain(intent.vmNameOrId, tools, session);
       case "vms_with_multiple_interfaces":
         return await vmsWithMultipleInterfacesFromIngestionChain();
+      case "switch_vlans":
+        return await switchVlansChain(tools, session);
+      case "switch_ports_by_vlan":
+        return await switchPortsByVlanChain(tools, session, intent.vlan);
       default:
         return null;
     }

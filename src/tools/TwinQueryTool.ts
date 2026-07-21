@@ -33,6 +33,8 @@ const TwinQueryParams = z.object({
     "exposure_path",
     "exposure_internet_exposed",
     "node_temperature",
+    "switch_list_vlans",
+    "switch_ports_by_vlan",
   ]),
   params: z
     .object({
@@ -46,6 +48,7 @@ const TwinQueryParams = z.object({
       vmName: z.string().optional(),
       vmId: z.union([z.number(), z.string()]).optional(),
       vmKind: z.enum(["qemu", "lxc", "all"]).optional(),
+      vlan: z.union([z.number(), z.string()]).optional(),
     })
     .partial()
     .optional(),
@@ -65,7 +68,9 @@ export class TwinQueryTool extends BaseTool {
         "Do NOT assume a VM is on a specific node - always search by name first. " +
         "For temperature queries: Use operation='node_temperature' WITHOUT nodeName param to get all nodes, or WITH nodeName for a specific node. " +
         "Note: For IP addresses, check the 'primaryIp' field on network interfaces (even if 'ips' array is empty). " +
-        "If twin data doesn't have IPs, use proxmox_readonly get_vm_ip for real-time IP resolution.",
+        "If twin data doesn't have IPs, use proxmox_readonly get_vm_ip for real-time IP resolution. " +
+        "For switch/VLAN questions (e.g. 'what VLANs are on the switch', 'what's on VLAN 40'), use operation='switch_list_vlans' or 'switch_ports_by_vlan' — " +
+        "these read real switch/switch-port entities, distinct from the VM/node network interfaces network_list_interfaces returns.",
       categories: ["twin", "compute", "graph", "read"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
@@ -135,6 +140,14 @@ export class TwinQueryTool extends BaseTool {
         {
           description: "Get temperature for a specific node",
           parameters: { operation: "node_temperature", params: { nodeName: "proxBig" } },
+        },
+        {
+          description: "List VLANs configured on switches, grouped by declared vs observed",
+          parameters: { operation: "switch_list_vlans" },
+        },
+        {
+          description: "Find switch ports carrying VLAN 40",
+          parameters: { operation: "switch_ports_by_vlan", params: { vlan: 40 } },
         },
       ],
     });
@@ -434,6 +447,22 @@ export class TwinQueryTool extends BaseTool {
           const nodeName = opParams?.nodeName;
           const data = await this.service.getNodeTemperature(nodeName);
           return { data: { kind: "node_temperature", data } };
+        }
+        case "switch_list_vlans": {
+          const data = await this.service.listSwitchVlans();
+          return { data: { kind: "switch_vlan_list", data } };
+        }
+        case "switch_ports_by_vlan": {
+          const vlanRaw = opParams?.vlan;
+          if (vlanRaw === undefined || vlanRaw === null) {
+            return { error: "vlan is required for switch_ports_by_vlan" };
+          }
+          const vlan = typeof vlanRaw === "string" ? parseInt(vlanRaw, 10) : vlanRaw;
+          if (Number.isNaN(vlan)) {
+            return { error: `Invalid vlan value: ${vlanRaw}` };
+          }
+          const data = await this.service.switchPortsByVlan(vlan);
+          return { data: { kind: "switch_port_list", vlan, data } };
         }
         default:
           return { error: `Unsupported operation: ${operation}` };
