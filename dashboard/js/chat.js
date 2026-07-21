@@ -110,6 +110,11 @@ let finalEventTimeout = null;
 let currentConversationId = null;
 let agentRunStatus = 'idle';
 let agentStatusPoll = null;
+// True while a rendered agent:final message is showing a live Confirm/Cancel
+// prompt. Guards against reconcileAgentRunState() reloading chat history
+// (which has no notion of pending-confirmation state) out from under it —
+// see the "confirm button flashed and went away" bug.
+let pendingConfirmationActive = false;
 let isNewConversationMode = true; // Keep composer visible even before first conversation exists
 let isCreatingConversation = false; // Prevent spamming New Chat button
 let promptSuggestionCache = null;
@@ -257,7 +262,10 @@ async function reconcileAgentRunState() {
   if (!state.active) {
     stopAgentStatusPolling();
     currentSessionId = null;
-    if (currentConversationId) loadChatHistory(currentConversationId);
+    // Skip the reload while a Confirm/Cancel prompt is live — the persisted
+    // history endpoint doesn't carry that ephemeral state, so reloading here
+    // would wipe the buttons before the user can click them.
+    if (currentConversationId && !pendingConfirmationActive) loadChatHistory(currentConversationId);
     const primaryInput = getPrimaryChatInput();
     if (primaryInput) primaryInput.focus();
   }
@@ -1263,6 +1271,7 @@ function handleAgentEvent(event, toolExecutions) {
       const durationSeconds = (event.data.durationMs || 0) / 1000;
       const traceId = event.data.traceId;
       const confirmId = escapeHtml(event.data.confirmationId || '');
+      pendingConfirmationActive = Boolean(event.data.confirmationRequired);
       const confirmationMetaHtml = event.data.confirmationRequired
         ? `
         <div style="margin-top: 14px; padding: 14px 16px; background: #1e293b; border: 1px solid rgba(249, 115, 22, 0.4); border-radius: 10px;">
@@ -1429,6 +1438,10 @@ export async function sendChatMessage(messageOverride = null) {
     return;
   }
   if (agentRunStatus === 'stopping') return;
+
+  // Any new message (including CONFIRM/CANCEL from the buttons themselves)
+  // supersedes whatever pending-confirmation prompt was on screen.
+  pendingConfirmationActive = false;
 
   const inputs = getChatInputs();
   const buttons = getSendButtons();
