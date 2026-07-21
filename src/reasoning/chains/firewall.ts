@@ -22,7 +22,7 @@ interface FirewallRuleSummary {
   chain?: string;
 }
 
-interface ParsedPfRule {
+export interface ParsedPfRule {
   line: string;
   action: "pass" | "block";
   direction?: "in" | "out";
@@ -108,7 +108,7 @@ function resolveBinding(term: string, bindings: Array<{ label: string; iface: st
   return best.score > 0 ? { iface: best.iface, cidr: best.cidr } : {};
 }
 
-function parseFilterRule(line: string): ParsedPfRule | null {
+export function parseFilterRule(line: string): ParsedPfRule | null {
   const trimmed = line.trim();
   const action = trimmed.match(/^(pass|block)\b/i)?.[1]?.toLowerCase() as "pass" | "block" | undefined;
   if (!action) {

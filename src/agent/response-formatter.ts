@@ -10,6 +10,7 @@
 
 import OpenAI from "openai";
 import { logger } from "../utils/logger";
+import { parseFilterRule } from "../reasoning/chains/firewall";
 
 interface EntityListEntry {
   label: string;
@@ -634,6 +635,89 @@ function parseFirewallRuleEntries(lines: string[]): FirewallRuleEntry[] {
     });
   }
   return entries;
+}
+
+// A bare two-word phrase like "pass the salt" or "block him" parses as a
+// technically-valid ParsedPfRule (action-only, per parseFilterRule's own
+// contract for other callers) but isn't a real firewall rule. Only treat a
+// parse as a genuine pf rule here if it carries at least one other field a
+// real rule would have.
+function isConfidentPfRule(rule: ReturnType<typeof parseFilterRule>): rule is NonNullable<typeof rule> {
+  if (!rule) return false;
+  return Boolean(rule.direction || rule.iface || rule.source || rule.destination || rule.port || rule.protocol);
+}
+
+function formatParsedPfRule(rule: ReturnType<typeof parseFilterRule>): string | null {
+  if (!isConfidentPfRule(rule)) return null;
+  const parts = [
+    rule.action.toUpperCase(),
+    rule.direction ? `dir=${rule.direction}` : null,
+    rule.iface ? `if=${rule.ifaceNegated ? "!" : ""}${rule.iface}` : null,
+    rule.protocol ? `proto=${rule.protocol}` : null,
+    rule.source ? `src=${rule.source}` : null,
+    rule.destination ? `dst=${rule.destination}` : null,
+    rule.port ? `port=${rule.port}` : null,
+  ].filter(Boolean);
+  return parts.join(" | ");
+}
+
+/**
+ * Rewrites raw pfctl rule syntax embedded in an otherwise free-form response
+ * into the same readable `ACTION | dir=... | src=... | dst=...` pipe format
+ * the rest of this module already produces for twin-sourced firewall data.
+ *
+ * The EXECUTE-path LLM loop sometimes echoes opnsense_readonly's live
+ * `firewall_rules_list` output (an array of raw pfctl lines, e.g.
+ * `"block drop in log on ! vtnet1 inet from 192.168.68.0/22 to any"`) verbatim
+ * into its final answer instead of summarizing it — see fuzz-campaign F-06.
+ * Observed live re-verification shapes vary: sometimes each raw rule is its
+ * own quoted, pipe-joined string; sometimes the model dumps the *entire*
+ * pipe-joined rule array as one giant quoted blob (with pf rule "label"
+ * values' embedded quotes left escaped, e.g. `label \"abc123\"`, un-unescaped
+ * from whatever the tool JSON originally looked like). Both are handled by
+ * finding the true quoted span first (honoring escaped characters so it
+ * isn't truncated at the first escaped inner quote), then splitting on the
+ * model's own " | " join convention and prettifying each pf-rule-shaped
+ * segment independently. This only rewrites substrings that actually parse
+ * as a pf pass/block rule with real rule fields (via the same parser the
+ * twin-first firewall chain uses); anything else (prose, housekeeping
+ * directives like `scrub in all fragment reassemble`, already-formatted pipe
+ * rules, incidental English sentences containing the words "pass"/"block")
+ * passes through untouched.
+ */
+export function prettifyRawPfctlText(text: string): string {
+  if (!text) return text;
+
+  // Case 1: raw rule(s) inside a double-quoted span — either one rule per
+  // quoted string, or an entire pipe-joined rule array quoted as a single
+  // string. `(?:\\.|[^"\\])*` matches standard JSON-string-body semantics so
+  // an escaped inner quote (from a rule's `label \"...\"`) doesn't end the
+  // span early.
+  let result = text.replace(/"((?:\\.|[^"\\])*)"/g, (whole, inner: string) => {
+    if (!/\b(?:pass|block)\b/i.test(inner)) return whole;
+    let rewroteAny = false;
+    const segments = inner.split(/\s*\|\s*/).map((segment) => {
+      const pretty = formatParsedPfRule(parseFilterRule(segment));
+      if (pretty) rewroteAny = true;
+      return pretty ?? segment;
+    });
+    return rewroteAny ? segments.join(" | ") : whole;
+  });
+
+  // Case 2: a raw rule appears bare, one per line (optionally bulleted),
+  // without quoting.
+  result = result
+    .split("\n")
+    .map((line) => {
+      const bulletMatch = line.match(/^(\s*(?:[-*]\s+)?)((?:pass|block)\b.*)$/i);
+      if (!bulletMatch) return line;
+      const [, prefix, candidate] = bulletMatch;
+      const pretty = formatParsedPfRule(parseFilterRule(candidate ?? ""));
+      return pretty ? `${prefix}${pretty}` : line;
+    })
+    .join("\n");
+
+  return result;
 }
 
 function stripAliasWrapper(value: string | undefined): string | undefined {

@@ -274,6 +274,25 @@ export function hasDomainMatch(domain: string | undefined, rag: HybridApiContext
   return tokens.some((token) => haystack.includes(token));
 }
 
+/**
+ * Gate for the twin-first network reasoning chain (see the "network domain gate" block in
+ * runAgent). Normally restricted to domain === "network" (or absent domain), but the LLM
+ * classifier doesn't reliably tag every network-shaped query with domain "network" — e.g. bare
+ * interface lookups like "what is enx000ec698587a?" sometimes come back domain: "general". A
+ * domain-only gate would silently skip detectNetworkIntent() entirely for those, letting the LLM
+ * hallucinate instead of querying the twin (B-06). A positive match from the deterministic
+ * detector is trusted at least as much as the LLM's own domain guess for routing purposes here —
+ * same spirit as the canHandleDirectlyFromRoute/ASK_CLARIFY bypass elsewhere in this file. This
+ * does NOT weaken the gate for queries the detector doesn't recognize at all: those still require
+ * an absent or exact "network" domain, same as before.
+ */
+export function networkDomainGateAllows(
+  domain: string | undefined,
+  networkIntentMatch: unknown | null
+): boolean {
+  return !domain || domain === "network" || networkIntentMatch !== null;
+}
+
 export function buildRetrievalArtifacts(rag: HybridApiContext): {
   artifacts: ReasoningTraceArtifactInput[];
   ragContextId?: string;
@@ -2161,9 +2180,11 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     }
     // end firewall domain gate
 
-    // Only check network intent if no action, exposure, compute, or firewall intent was detected
-    if (!classification.metadata?.domain || classification.metadata.domain === "network") {
-    const networkIntent = detectNetworkIntent(userInput);
+    // Only check network intent if no action, exposure, compute, or firewall intent was detected.
+    // See networkDomainGateAllows() for why this isn't a plain domain check (B-06).
+    const networkIntentMatch = detectNetworkIntent(userInput);
+    if (networkDomainGateAllows(classification.metadata?.domain, networkIntentMatch)) {
+    const networkIntent = networkIntentMatch;
     if (networkIntent) {
       const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
       if (networkAnswer) {

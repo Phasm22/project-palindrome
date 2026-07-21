@@ -26,6 +26,28 @@ describe("detectNetworkIntent bare MAC-style interface lookup (B-06)", () => {
   });
 });
 
+describe("detectNetworkIntent VLAN reachability-framed phrasing (C-01)", () => {
+  test("threads the VLAN number through a 'can VLAN N reach ...' question to switch_ports_by_vlan", () => {
+    // fuzz-campaign-2026-07-21.md's "not fixed" table describes this as
+    // "switch_ports_by_vlan isn't being called with vlan=50 for this
+    // phrasing." Investigation (this session) found that claim doesn't hold:
+    // both the campaign's own raw trace for this exact query and live
+    // re-verification confirm switch_ports_by_vlan already fires with the
+    // correct vlan, and the returned ports match the twin's ground truth for
+    // VLAN 50 exactly. This test locks in that already-correct behavior so a
+    // future change to the "reach"/"reachable" branch above (which runs
+    // first and could start swallowing VLAN-mentioning queries) doesn't
+    // silently regress it.
+    const intent = detectNetworkIntent("Can VLAN 50 reach the Proxmox management interfaces?");
+    expect(intent).toEqual({ type: "switch_ports_by_vlan", vlan: 50 });
+  });
+
+  test("still falls back to switch_vlans when no VLAN number is present in a reachability question", () => {
+    const intent = detectNetworkIntent("Can VLAN traffic reach the management interfaces?");
+    expect(intent).toEqual({ type: "switch_vlans" });
+  });
+});
+
 describe("detectNetworkIntent routing-table bypass (A-OP-09)", () => {
   test("does not swallow 'routing table' questions into the generic interface dump", () => {
     // Previously: the "routing" keyword alone routed to describe_network (a

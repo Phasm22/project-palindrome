@@ -111,7 +111,8 @@ async function fetchTrace(traceId: string): Promise<any | null> {
 async function runSingleQuery(
   job: Job,
   userId: string,
-  sessionIdOverride?: string
+  sessionIdOverride?: string,
+  conversationIdOverride?: string
 ): Promise<Record<string, unknown>> {
   const sessionId = sessionIdOverride || `fuzz-${job.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const startedAt = Date.now();
@@ -127,7 +128,21 @@ async function runSingleQuery(
     const postResp = await fetch(`${BASE}/api/agent/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: job.query, sessionId, userId, aclGroup: "admin" }),
+      body: JSON.stringify({
+        query: job.query,
+        sessionId,
+        userId,
+        aclGroup: "admin",
+        // POST /api/agent/query creates a brand-new, context-free
+        // conversation whenever conversationId is omitted — reusing
+        // sessionId alone across turns is NOT the persistence key (see
+        // fuzz-campaign-2026-07-21.md's G-08 finding, root-caused to this
+        // exact gap: this harness previously never forwarded it, so every
+        // "multi-turn" flow was actually N independent, contextless
+        // conversations, matching neither the real dashboard client's
+        // behavior nor the server's actual persistence contract).
+        ...(conversationIdOverride ? { conversationId: conversationIdOverride } : {}),
+      }),
     });
     postStatus = postResp.status;
     postJson = await postResp.json().catch(() => null);
@@ -167,11 +182,18 @@ async function runSingleQuery(
 async function runMultiTurnFlow(flow: MultiTurnFlow, userId: string): Promise<Record<string, unknown>> {
   const sessionId = `fuzz-${flow.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const turnResults: Record<string, unknown>[] = [];
+  // conversationId (not sessionId) is the server's actual persistence key —
+  // thread the one returned by each turn's response into the next turn's
+  // request so the flow is a genuine multi-turn conversation. Without this,
+  // every turn silently starts a brand-new, context-free conversation.
+  let conversationId: string | undefined;
   for (let i = 0; i < flow.turns.length; i++) {
     const turn = flow.turns[i];
     const job: Job = { id: `${flow.id}-turn${i + 1}`, category: flow.category, query: turn.input };
-    const result = await runSingleQuery(job, userId, sessionId);
+    const result = await runSingleQuery(job, userId, sessionId, conversationId);
     turnResults.push(result);
+    const postJson = result.postJson as { conversationId?: string } | null;
+    conversationId = postJson?.conversationId || conversationId;
   }
   return {
     id: flow.id,

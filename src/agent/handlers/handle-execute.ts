@@ -39,7 +39,7 @@ import { pceLogger } from "../../pce/utils/logger";
 import type { AgentStateV1, AgentRunOptions } from "../state";
 import type { ConfirmationParseResult } from "../dialog-policy";
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "../tool-risk";
-import { applyAdaptivePackaging } from "../response-formatter";
+import { applyAdaptivePackaging, prettifyRawPfctlText } from "../response-formatter";
 import {
   buildToolDefinitions,
   buildProvenance,
@@ -72,6 +72,74 @@ import {
   detectVmProvenanceIntent,
   formatVmProvenanceAnswer,
 } from "../vm-provenance";
+
+/**
+ * MAX_STEPS policy (2026-07-21 fuzz campaign, Task 2). Evidence from 10 live MAXSTEPS hits
+ * across fuzz-results-2026-07-21.jsonl and fuzz-reverify-results-2026-07-21.jsonl split into
+ * three distinct patterns, only one of which a bigger flat budget actually helps:
+ *
+ *  1. Genuine forward progress that ran out of budget (e.g. "Run a full health diagnostic on
+ *     windowsVM" — 12 real tool calls across 5 steps, still climbing toward a real answer when
+ *     the budget ran out; "For every stopped VM, tell me which node it's on..." — real
+ *     per-node data gathered, cut short before covering all nodes). These are genuinely
+ *     multi-step query *shapes* (composite questions, "all nodes" sweeps, "for every X"
+ *     iteration, explicit "full/complete diagnostic" requests) that routinely need more than
+ *     5 LLM turns. BASE_MAX_STEPS stays 5 for the common case (most queries resolve in 1-3
+ *     turns; raising the ceiling for everyone would only make already-failing queries slower
+ *     and more expensive, not help successes) — computeMaxSteps() extends the budget only for
+ *     these specific shapes.
+ *  2. Thrashing: the same tool call fails identically on every retry (e.g. "Traceroute to
+ *     8.8.8.8" repeated the exact same failing command 3x with only cosmetic param changes).
+ *     More budget would just make the eventual (identical) failure slower and costlier.
+ *  3. A genuine loop bug, not a budget problem: when the LLM returns neither a tool call nor
+ *     final text, nothing gets appended to the conversation context, so the *next* iteration
+ *     re-sends an unchanged prompt — observed as 2-4 consecutive "no tool calls this step"
+ *     entries in traces (e.g. "Which nodes have VMs on both the home and lab subnets...",
+ *     "For every stopped VM..."). This silently burns the entire remaining budget for zero
+ *     benefit regardless of how big MAX_STEPS is. isStuckOnEmptyStep() + the empty-step nudge
+ *     in the main loop fix this directly instead of just giving it more budget to waste.
+ *
+ * Full evidence and per-query classification: see the "MAX_STEPS policy" section appended to
+ * docs/tests/fuzz-campaign-2026-07-21.md.
+ */
+export const BASE_MAX_STEPS = 5;
+export const EXTENDED_MAX_STEPS = 8;
+
+/** A step is "stuck" (making zero forward progress) after this many consecutive empty steps. */
+export const EMPTY_STEP_STUCK_THRESHOLD = 2;
+
+/**
+ * Decides the step budget for one agent run. Extends the base budget only for query shapes
+ * that the campaign evidence showed genuinely need more than 5 LLM turns — composite
+ * (multi-dimension) questions, "all nodes" sweeps, explicit full/complete diagnostic requests,
+ * and "for every/each X" iteration-over-entities questions. Everything else keeps the tight
+ * default so failures (thrashing, capability gaps) stay cheap and fast.
+ */
+export function computeMaxSteps(params: {
+  isCompositeQuery: boolean;
+  isAllNodesQuery: boolean;
+  userInput: string;
+}): number {
+  const { isCompositeQuery, isAllNodesQuery, userInput } = params;
+  const isFullDiagnosticRequest = /\b(full|complete|comprehensive)\s+(health\s+)?diagnostic\b/i.test(userInput);
+  const isIterateAllEntitiesQuery = /\bfor\s+(every|each)\b/i.test(userInput);
+  const needsExtendedBudget =
+    isCompositeQuery || isAllNodesQuery || isFullDiagnosticRequest || isIterateAllEntitiesQuery;
+  return needsExtendedBudget ? EXTENDED_MAX_STEPS : BASE_MAX_STEPS;
+}
+
+/**
+ * True once the loop has produced this many consecutive steps with neither a tool call nor
+ * final text — i.e. genuinely zero forward progress, not just a slow multi-step query. Distinct
+ * from MAX_STEPS: this fires regardless of how much budget remains, because more of the same
+ * unchanged prompt won't help (see the MAX_STEPS policy comment above).
+ */
+export function isStuckOnEmptyStep(
+  consecutiveEmptySteps: number,
+  threshold: number = EMPTY_STEP_STUCK_THRESHOLD
+): boolean {
+  return consecutiveEmptySteps >= threshold;
+}
 
 export interface HandleExecuteInput {
   state: AgentStateV1;
@@ -660,7 +728,11 @@ export async function handleExecute(
     ? [{ role: "system", content: "IMPORTANT: This query asks for real-time metrics (uptime, memory, CPU, etc.). You MUST use tools (twin_query and/or proxmox_readonly) to get current data. Do not answer from memory or training data - always use tools for real-time metrics." }]
     : [];
 
-  const MAX_STEPS = 5;
+  // Track "all nodes" queries to prevent partial answers
+  // Match patterns like "all nodes", "all the nodes", "temperature of all nodes", etc.
+  const isAllNodesQuery = /\ball\s+(the\s+)?nodes?\b/i.test(userInput);
+
+  const MAX_STEPS = computeMaxSteps({ isCompositeQuery, isAllNodesQuery, userInput });
   const MAX_TOOL_CALLS_PER_STEP = 5; // Prevent tool call flooding (reduced from 10)
   const seenToolCalls = new Set<string>(); // Track tool calls to prevent infinite loops
   const client = getOpenAIClient();
@@ -669,9 +741,9 @@ export async function handleExecute(
   // Once we have the data, allow text responses instead of forcing more tool calls
   let hasRealTimeMetricData = false;
 
-  // Track "all nodes" queries to prevent partial answers
-  // Match patterns like "all nodes", "all the nodes", "temperature of all nodes", etc.
-  const isAllNodesQuery = /\ball\s+(the\s+)?nodes?\b/i.test(userInput);
+  // Track consecutive steps where the LLM produced neither a tool call nor final text.
+  // See isStuckOnEmptyStep() for why this needs its own guard, separate from MAX_STEPS.
+  let consecutiveEmptySteps = 0;
   let discoveredNodeCount = 0;
   let queriedNodeCount = 0;
   let expectedProxmoxNodes: string[] = []; // Track which Proxmox nodes we expect to query
@@ -866,6 +938,7 @@ export async function handleExecute(
 
     const toolCalls = ((message?.tool_calls as any[]) ?? []) as Array<any>;
     if (toolCalls.length) {
+      consecutiveEmptySteps = 0;
       // Limit tool calls per step to prevent flooding
       if (toolCalls.length > MAX_TOOL_CALLS_PER_STEP) {
         logger.warn(`Too many tool calls in step ${step + 1} (${toolCalls.length}), limiting to ${MAX_TOOL_CALLS_PER_STEP}`);
@@ -1701,6 +1774,12 @@ export async function handleExecute(
 
     let finalText = coerceTextContent(message?.content).trim();
     if (finalText) {
+      // The EXECUTE-path LLM loop mixes tool output from multiple domains
+      // (e.g. opnsense_readonly's live pfctl dump alongside twin_query
+      // exposure data) with no second formatting pass. If the model echoed
+      // raw pf rule syntax verbatim instead of summarizing it, clean that up
+      // here before it reaches the user — see fuzz-campaign F-06.
+      finalText = prettifyRawPfctlText(finalText);
       const shouldPreserveClarificationQuestion =
         state.classification.intent === "ACTION" &&
         reasoningStep.toolCalls.length === 0 &&
@@ -1860,9 +1939,34 @@ export async function handleExecute(
 
       return { text: finalText, entityCacheUpdate };
     }
+
+    // Neither a tool call nor usable text: zero forward progress this step. Nothing was added
+    // to context above, so looping again unchanged would very likely just repeat the same
+    // non-answer (see the MAX_STEPS policy comment at the top of this file — this is the
+    // "silent stall" pattern the 2026-07-21 campaign found eating the entire step budget for
+    // no benefit). Nudge once so the next attempt has a genuinely different prompt; if that
+    // doesn't help either, stop now instead of burning the rest of the budget on repeats.
+    consecutiveEmptySteps++;
+    // reasoningStep was already pushed to reasoningSteps above ("Record step even if no tool
+    // calls"); mutate it in place rather than pushing a second time.
+    reasoningStep.decisions.push({
+      type: "empty_step",
+      description: `Step produced neither a tool call nor a final answer (${consecutiveEmptySteps} consecutive)`,
+      metadata: { consecutiveEmptySteps },
+    });
+    if (isStuckOnEmptyStep(consecutiveEmptySteps)) {
+      logger.warn(`Stuck: ${consecutiveEmptySteps} consecutive empty steps, stopping early`, {
+        userInput: userInput.slice(0, 80),
+        step: step + 1,
+      });
+      break;
+    }
+    context.addUserMessage(
+      "You did not call a tool or provide an answer. If you have enough information, answer the question now. Otherwise, call an appropriate tool."
+    );
   }
 
-  // Max steps reached - record trace
+  // Max steps reached (or stopped early — see isStuckOnEmptyStep above) - record trace
   const durationMs = Date.now() - startTime;
   let traceId: string | undefined;
   try {

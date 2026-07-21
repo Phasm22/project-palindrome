@@ -39,7 +39,8 @@ export interface ReasoningStep {
       | "clarification_requested"
       | "validation_failed"
       | "failure_limit_reached"
-      | "failure_reclassification";
+      | "failure_reclassification"
+      | "empty_step";
     description: string;
     metadata?: Record<string, any>;
   }>;
