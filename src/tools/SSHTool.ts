@@ -140,6 +140,11 @@ class SSHConnectionPool {
 
       client.on("ready", () => {
         this.connections.set(key, newConn);
+        // Same reasoning as the cleanup interval's unref() above: a pooled
+        // connection sitting idle (up to maxIdleTime) shouldn't by itself
+        // keep a one-shot script alive. _sock is undocumented but this file
+        // already reaches into it elsewhere (see isClientDestroyed above).
+        (client as unknown as { _sock?: { unref?: () => void } })._sock?.unref?.();
         resolve(client);
       });
 
