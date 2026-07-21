@@ -87,6 +87,13 @@ hosts:
     # with no machine-readable structure beyond its hostname ("TJ-TP-Switch")
     # and one VLAN name ("uplinkHome"); no automated ingestion path exists
     # yet without live SNMP/CLI access to the switch itself.
+    #
+    # Per TJ (2026-07-21): the one thing worth knowing about this switch is
+    # its downlink to the lab (the 2960G) — VLAN 40, UNTAGGED. Deliberate,
+    # not an oversight: tagging it caused the TP-Link Deco home router to
+    # stop routing traffic entirely, so it was reverted to untagged as a
+    # workaround. Not modeled as a graph fact (no ingestion path exists for
+    # this device), but keep this in mind if that link ever looks "wrong."
 
 containers:
   - name: "lab_pihole"

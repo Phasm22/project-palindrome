@@ -192,6 +192,25 @@ hosts:
         - "du -h --max-depth=1 /var/log"
         - "ls -lh /var/log | head -20"
 
+  "172.16.0.9":  # Cisco 2960G lab switch ("TJswitch")
+    hostname: "172.16.0.9"
+    aliases:
+      - "tjswitch"
+      - "2960g"
+      - "switch.prox"
+    description: "Cisco 2960G lab switch — old IOS, needs legacy SSH algorithms"
+    username: "cisco"
+    read_only: true
+    legacy_ssh: true
+    commands:
+      system:
+        - "show version"
+        - "show running-config"
+        - "show vlan brief"
+        - "show interfaces status"
+        - "dir flash:"
+        - "show boot"
+
   # Example: Add more hosts as needed
   # "192.168.1.100":
   #   hostname: "192.168.1.100"

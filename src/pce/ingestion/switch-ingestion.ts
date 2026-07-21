@@ -30,6 +30,7 @@ import { TwinUpdateService } from "../../twin";
 import { TwinEntityType, type TwinEntity } from "../../twin/models/entities";
 import { TwinRelationshipType, type TwinRelationship } from "../../twin/models/relationships";
 import { CiscoIosSwitchParser } from "../../parsers/network/cisco-ios-switch-parser";
+import { SSHTool } from "../../tools/SSHTool";
 import { pceLogger } from "../utils/logger";
 
 interface DeclaredSwitchBlock {
@@ -39,9 +40,16 @@ interface DeclaredSwitchBlock {
   ip?: string[];
 }
 
+interface CiscoSwitchSource {
+  /** approved-commands.yaml host alias to try a live `show running-config` fetch against first. */
+  liveHostAlias?: string;
+  /** Falls back to this committed snapshot if the live fetch fails or isn't configured. */
+  staticSeedPath: string;
+}
+
 export interface SwitchIngestionOptions {
   topologyPath?: string;
-  ciscoConfigPaths?: string[];
+  ciscoSources?: CiscoSwitchSource[];
 }
 
 export interface SwitchIngestionResult {
@@ -60,11 +68,15 @@ const DECLARED_CISCO_SWITCH_SLUG = "tjswitch";
 export class SwitchIngestionOrchestrator {
   private twinUpdater = new TwinUpdateService();
   private ciscoParser = new CiscoIosSwitchParser();
+  private sshTool = new SSHTool();
 
   async ingestSwitches(options: SwitchIngestionOptions = {}): Promise<SwitchIngestionResult> {
     const topologyPath = options.topologyPath || join(process.cwd(), "docs", "topology.yaml");
-    const ciscoConfigPaths = options.ciscoConfigPaths || [
-      join(process.cwd(), "docs", "network", "2960g-running-config-2026-07-20.txt"),
+    const ciscoSources = options.ciscoSources || [
+      {
+        liveHostAlias: "tjswitch",
+        staticSeedPath: join(process.cwd(), "docs", "network", "2960g-running-config-2026-07-20.txt"),
+      },
     ];
     const collectedAt = new Date();
 
@@ -72,8 +84,8 @@ export class SwitchIngestionOrchestrator {
     const relationships: TwinRelationship[] = [];
 
     await this.collectDeclared(topologyPath, collectedAt, entities, relationships);
-    for (const configPath of ciscoConfigPaths) {
-      await this.collectObserved(configPath, collectedAt, entities, relationships);
+    for (const source of ciscoSources) {
+      await this.collectObserved(source, collectedAt, entities, relationships);
     }
 
     if (entities.length > 0) {
@@ -144,24 +156,88 @@ export class SwitchIngestionOrchestrator {
   }
 
   private async collectObserved(
-    configPath: string,
+    source: CiscoSwitchSource,
     collectedAt: Date,
     entities: TwinEntity[],
     relationships: TwinRelationship[]
   ): Promise<void> {
+    // A live fetch can return a non-empty string that still isn't usable
+    // config (e.g. an IOS error message for a rejected command) — so
+    // "fetched something" isn't enough to skip the static fallback. Only a
+    // config that actually PARSES counts as a successful live fetch.
+    if (source.liveHostAlias) {
+      const live = await this.fetchLiveConfig(source.liveHostAlias);
+      if (live && await this.tryParseInto(live, `cisco-ios:live:${source.liveHostAlias}`, collectedAt, entities, relationships)) {
+        return;
+      }
+      pceLogger.warn("Switch ingestion: live config unusable, falling back to static seed", {
+        hostAlias: source.liveHostAlias,
+      });
+    }
+
+    let configText: string;
     try {
-      const configText = await fs.readFile(configPath, "utf8");
-      const result = await this.ciscoParser.parse(
-        { configText },
-        { source: `cisco-ios:${configPath}`, collectedAt }
-      );
-      entities.push(...result.entities);
-      relationships.push(...(result.relationships as TwinRelationship[]));
+      configText = await fs.readFile(source.staticSeedPath, "utf8");
     } catch (error: any) {
-      pceLogger.warn("Switch ingestion: could not read/parse observed switch config", {
-        configPath,
+      pceLogger.warn("Switch ingestion: could not read static switch config seed", {
+        staticSeedPath: source.staticSeedPath,
         error: error.message,
       });
+      return;
+    }
+    await this.tryParseInto(configText, `cisco-ios:${source.staticSeedPath}`, collectedAt, entities, relationships);
+  }
+
+  private async tryParseInto(
+    configText: string,
+    sourceLabel: string,
+    collectedAt: Date,
+    entities: TwinEntity[],
+    relationships: TwinRelationship[]
+  ): Promise<boolean> {
+    try {
+      const result = await this.ciscoParser.parse({ configText }, { source: sourceLabel, collectedAt });
+      entities.push(...result.entities);
+      relationships.push(...(result.relationships as TwinRelationship[]));
+      return true;
+    } catch (error: any) {
+      pceLogger.warn("Switch ingestion: could not parse observed switch config", {
+        source: sourceLabel,
+        error: error.message,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Attempts a live `show running-config` fetch via the approved-commands.yaml
+   * host alias. Returns null (never throws) on any failure — missing
+   * credentials, unreachable host, or (currently, for the 2960G specifically)
+   * this IOS image rejecting multi-word commands over non-interactive SSH
+   * exec with "invalid autocommand". Falling back to the static seed keeps
+   * ingestion working either way; fixing the underlying exec-vs-interactive-
+   * shell gap for this device is a follow-up, not blocking.
+   */
+  private async fetchLiveConfig(hostAlias: string): Promise<string | null> {
+    try {
+      const result: any = await this.sshTool.execute(
+        { host: hostAlias, command: "show running-config" },
+        { userId: "switch-ingestion", aclGroup: "admin" } as any
+      );
+      if (result.error || typeof result.data?.stdout !== "string") {
+        pceLogger.warn("Switch ingestion: live config fetch failed, falling back to static seed", {
+          hostAlias,
+          error: result.error,
+        });
+        return null;
+      }
+      return result.data.stdout as string;
+    } catch (error: any) {
+      pceLogger.warn("Switch ingestion: live config fetch threw, falling back to static seed", {
+        hostAlias,
+        error: error.message,
+      });
+      return null;
     }
   }
 

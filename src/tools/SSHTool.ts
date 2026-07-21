@@ -8,6 +8,10 @@ import { loadYaml } from "../utils/config";
 import { Client } from "ssh2";
 import path from "path";
 import { fileURLToPath } from "url";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +27,11 @@ interface ApprovedCommands {
         [category: string]: string[];
       };
       read_only?: boolean;
+      // Some older network gear (e.g. Cisco IOS switches from ~2010s) only
+      // offers SSH KEX/cipher algorithms modern clients disable by default.
+      // Set true to opt that specific host into a legacy-compatible algorithm
+      // list instead of weakening defaults for every host.
+      legacy_ssh?: boolean;
     };
   };
 }
@@ -487,17 +496,68 @@ export class SSHTool extends BaseTool {
     };
   }
 
+  /**
+   * ssh2 (the pure-JS library the connection pool uses) lists
+   * diffie-hellman-group1-sha1 in its own default KEX constants but throws
+   * "Unknown DH group" if it's actually negotiated — this library appears
+   * unable to complete that exchange even though it recognizes the name.
+   * The system OpenSSH client handles it fine, so old gear that only offers
+   * this KEX (e.g. this repo's Cisco 2960G) is routed through the real
+   * `ssh` binary via sshpass instead of the ssh2 connection pool.
+   */
+  private async executeLegacySSHCommand(
+    host: string,
+    command: string,
+    username: string,
+    password: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        "sshpass",
+        [
+          "-e", "ssh",
+          "-o", "ConnectTimeout=10",
+          "-o", "StrictHostKeyChecking=accept-new",
+          "-o", "KexAlgorithms=+diffie-hellman-group1-sha1",
+          "-o", "HostKeyAlgorithms=+ssh-rsa",
+          "-o", "Ciphers=+aes128-cbc",
+          `${username}@${host}`,
+          command,
+        ],
+        { env: { ...process.env, SSHPASS: password }, timeout: 20000, maxBuffer: 10 * 1024 * 1024 }
+      );
+      return { stdout, stderr, exitCode: 0 };
+    } catch (error: any) {
+      // execFile rejects on non-zero exit; surface stdout/stderr if present
+      // instead of just the generic "Command failed" message.
+      return {
+        stdout: error?.stdout || "",
+        stderr: error?.stderr || error?.message || "sshpass/ssh execution failed",
+        exitCode: typeof error?.code === "number" ? error.code : 1,
+      };
+    }
+  }
+
   private async executeSSHCommand(
     host: string,
     command: string,
     username?: string,
     privateKey?: string,
     password?: string,
-    resolvedHost?: string
+    resolvedHost?: string,
+    legacyCompat?: boolean
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const targetHost = resolvedHost || host;
+
+    if (legacyCompat) {
+      if (!password) {
+        throw new Error(`Legacy SSH host ${targetHost} requires a password (key auth is not supported for this path)`);
+      }
+      return this.executeLegacySSHCommand(targetHost, command, username || "root", password);
+    }
+
     let conn: Client;
-    
+
     try {
       // Get connection from pool
       conn = await sshPool.getConnection(targetHost, username, privateKey, password);
@@ -928,7 +988,9 @@ export class SSHTool extends BaseTool {
 
       logger.info(`SSH auth: user=${username}, hasPassword=${!!password}, hasKey=${!!privateKey}`);
 
-      const result = await this.executeSSHCommand(resolvedHost, finalCommand, username, privateKey, password, resolvedHost);
+      const result = await this.executeSSHCommand(
+        resolvedHost, finalCommand, username, privateKey, password, resolvedHost, hostConfig?.legacy_ssh === true
+      );
 
       if (result.exitCode !== 0) {
         return {
