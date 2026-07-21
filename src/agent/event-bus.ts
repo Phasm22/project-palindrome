@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentEventData, ToolProgressPayload } from "./event-payloads";
 
 /**
@@ -10,6 +11,7 @@ export type AgentEventType =
   | "tool:complete"
   | "llm:token"
   | "llm:thinking"
+  | "connection:update"
   | "agent:step"
   | "agent:final"
   | "agent:plan";
@@ -39,6 +41,12 @@ export interface AgentEvent {
   sessionId?: string;
   timestamp: number;
   data: AgentEventData;
+}
+
+const agentSessionStorage = new AsyncLocalStorage<string>();
+
+export function runWithAgentSession<T>(sessionId: string | undefined, operation: () => Promise<T>): Promise<T> {
+  return sessionId ? agentSessionStorage.run(sessionId, operation) : operation();
 }
 
 /**
@@ -115,5 +123,5 @@ export class AgentEventBus extends EventEmitter {
  * Note: Without sessionId, events will be broadcast to ALL SSE clients
  */
 export function emitToolProgress(progress: ToolProgressData, sessionId?: string): void {
-  AgentEventBus.getInstance().emitProgress(progress, sessionId);
+  AgentEventBus.getInstance().emitProgress(progress, sessionId ?? agentSessionStorage.getStore());
 }

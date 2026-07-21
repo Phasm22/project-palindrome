@@ -1,6 +1,8 @@
 import { z } from "zod";
+import type { ConnectionTarget } from "../../types/connections";
 import {
   TerraformRunner,
+  parseVmConfigsFromTfvars,
   type TerraformConfig,
   type TerraformExecutionOptions,
 } from "../helpers/terraform-runner";
@@ -14,7 +16,7 @@ import { allocateVmId } from "../helpers/vm-id-allocator";
 import { ProxmoxClient } from "../../tools/proxmox/client";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { emitToolProgress } from "../../agent/event-bus";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -48,6 +50,7 @@ export interface CreateVmResult {
   ipAddresses?: string[];
   message: string;
   terraformOutput?: any;
+  connectionTarget?: ConnectionTarget;
 }
 
 export interface CreateVmExecutionOptions {
@@ -569,11 +572,24 @@ export async function createVm(
       verifySsl: process.env.PROXMOX_VERIFY_SSL !== "false",
     });
     
+    const reservedVmIds = new Set<number>();
+    try {
+      const managedTfvars = await readFile(join(process.cwd(), "lab-infra/environments/palindrome.tfvars"), "utf8");
+      for (const config of Object.values(parseVmConfigsFromTfvars(managedTfvars))) {
+        if (typeof config.vm_id === "number") reservedVmIds.add(config.vm_id);
+      }
+    } catch (error: unknown) {
+      logger.warn("Could not read reserved VM IDs from managed tfvars", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     const allocationResult = await allocateVmId(proxmoxClient, {
       startId: 9000,
       endId: 9999,
       preferredId: preferredVmId,
       maxAttempts: 100,
+      reservedIds: reservedVmIds,
     });
     
     if (allocationResult) {
@@ -668,11 +684,23 @@ export async function createVm(
         targets: terraformTargets,
         tfvarsPath: terraformTfvarsPath,
       });
+      if (!planResult.success) {
+        return {
+          success: false,
+          message: `Dry-run failed: ${planResult.stderr}`,
+        };
+      }
+      const planSummary = parseTerraformPlanSummary(planResult.stdout || "");
+      const vmDestroyTargets = extractTerraformVmDestroyTargets(planResult.stdout || "");
+      if (vmDestroyTargets.length > 0 || (planSummary?.destroy ?? 0) > 0) {
+        return {
+          success: false,
+          message: `Safety check blocked VM creation: Terraform dry-run would destroy or replace existing resources${vmDestroyTargets.length > 0 ? ` (${vmDestroyTargets.join(", ")})` : ""}.`,
+        };
+      }
       return {
-        success: planResult.success,
-        message: planResult.success
-          ? `Dry-run successful. Would create VM "${finalName}" on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""} using bridge "${finalVmBridge}" and datastore "${finalDatastore}".${selectionNoteText}`
-          : `Dry-run failed: ${planResult.stderr}`,
+        success: true,
+        message: `Dry-run successful. Would create VM "${finalName}" on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""} using bridge "${finalVmBridge}" and datastore "${finalDatastore}".${selectionNoteText}`,
       };
     }
 
@@ -824,6 +852,8 @@ export async function createVm(
       });
     const firstIp = flattenedIps.length > 0 ? flattenedIps[0] : null;
     
+    let dnsRecordCreated = false;
+    let dnsRecordDomain: string | undefined;
     if (
       executionOptions.manageDns !== false &&
       firstIp &&
@@ -839,6 +869,8 @@ export async function createVm(
         });
         
         if (dnsResult.success) {
+          dnsRecordCreated = true;
+          dnsRecordDomain = dnsResult.record?.domain;
           logger.info("DNS record created automatically", {
             hostname: finalName,
             ip: firstIp,
@@ -924,15 +956,24 @@ export async function createVm(
     });
 
     const connectUsername = (sshUsername && sshUsername.trim().length > 0) ? sshUsername.trim() : "ops";
-    const connectLine =
-      firstIp ? ` Connect with: ssh ${connectUsername}@${firstIp}.` : "";
+    const connectionHints: ConnectionTarget["hints"] = [
+      { service: "SSH", protocol: "ssh", port: 22, username: connectUsername },
+    ];
+    if (bootstrapResult?.success) {
+      connectionHints.push({ service: "Portainer", protocol: "http", port: 9000, path: "/" });
+    }
 
     return {
       success: true,
       vmId: vmInfo.id.toString(),
       hostname: vmInfo.hostname,
       ipAddresses,
-      message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}. Bridge: ${finalVmBridge}. Datastore: ${finalDatastore}.${firstIp ? ` DNS record created: ${finalName}.prox → ${firstIp}.` : ""}${connectLine}${bootstrapMessage}${selectionNoteText}`,
+      connectionTarget: {
+        hostname: dnsRecordDomain || vmInfo.hostname || `${finalName}.prox`,
+        ipAddresses: flattenedIps,
+        hints: connectionHints,
+      },
+      message: `VM "${finalName}" created successfully on node "${normalizedNode}"${allocatedVmId ? ` with VM ID ${allocatedVmId}` : ""}. Hostname: ${vmInfo.hostname}. Bridge: ${finalVmBridge}. Datastore: ${finalDatastore}.${dnsRecordCreated && firstIp ? ` DNS record created: ${dnsRecordDomain || `${finalName}.prox`} → ${firstIp}.` : firstIp ? " DNS record was not confirmed." : " IP address is still pending; DNS was not created."}${bootstrapMessage}${selectionNoteText}`,
       terraformOutput: outputs,
     };
   } finally {

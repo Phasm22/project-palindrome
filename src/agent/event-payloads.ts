@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { AgentResponseSchema } from "./schemas/agent-response";
 import { ActionPlanSchema } from "./schemas/action-step";
+import { ConnectionEndpointSchema } from "../types/connections";
 
 // ---------------------------------------------------------------------------
 // Tool events
@@ -59,6 +60,13 @@ export const LlmThinkingPayloadSchema = z.object({
   thinking: z.string(),
 });
 
+export const ConnectionUpdatePayloadSchema = z.object({
+  type: z.literal("connection:update"),
+  phase: z.enum(["candidates", "verifying", "complete"]),
+  resource: z.string().optional(),
+  endpoints: z.array(ConnectionEndpointSchema),
+});
+
 // ---------------------------------------------------------------------------
 // Agent lifecycle events
 // ---------------------------------------------------------------------------
@@ -105,6 +113,7 @@ export const AgentFinalPayloadSchema = z
     )
     .optional(),
   structuredResponse: AgentResponseSchema,
+  connections: z.array(ConnectionEndpointSchema).optional(),
 })
   .passthrough();
 
@@ -128,6 +137,7 @@ export const AgentEventDataSchema = z.discriminatedUnion("type", [
   ToolCompletePayloadSchema,
   LlmTokenPayloadSchema,
   LlmThinkingPayloadSchema,
+  ConnectionUpdatePayloadSchema,
   AgentStepPayloadSchema,
   AgentFinalPayloadSchema,
   AgentPlanPayloadSchema,
@@ -138,6 +148,7 @@ export type ToolProgressPayload = z.infer<typeof ToolProgressPayloadSchema>;
 export type ToolCompletePayload = z.infer<typeof ToolCompletePayloadSchema>;
 export type LlmTokenPayload = z.infer<typeof LlmTokenPayloadSchema>;
 export type LlmThinkingPayload = z.infer<typeof LlmThinkingPayloadSchema>;
+export type ConnectionUpdatePayload = z.infer<typeof ConnectionUpdatePayloadSchema>;
 export type AgentStepPayload = z.infer<typeof AgentStepPayloadSchema>;
 export type AgentFinalPayload = z.infer<typeof AgentFinalPayloadSchema>;
 export type AgentPlanPayload = z.infer<typeof AgentPlanPayloadSchema>;

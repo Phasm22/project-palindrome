@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { classifyAndRoute } from "../../src/reasoning/intent-router";
-import { detectActionIntent } from "../../src/reasoning/action-intents";
+import { detectActionIntent, extractCreateVmParameters } from "../../src/reasoning/action-intents";
 
 test("routes 'make a vm called apple on yin' as ACTION", () => {
   const { classification, routing } = classifyAndRoute("make a vm called apple on yin");
@@ -19,6 +19,21 @@ test("extracts inline VM name in create prompt", () => {
   expect(actionIntent?.type).toBe("create_vm");
   expect((actionIntent as any)?.name).toBe("sentinel-test");
   expect((actionIntent as any)?.node).toBe("yin");
+});
+
+test("recognizes noun-form dry-run VM creation as an action", () => {
+  const actionIntent = detectActionIntent("Dry-run creation of VM preview-box on YANG");
+  expect(actionIntent?.type).toBe("create_vm");
+  expect((actionIntent as any)?.node).toBe("YANG");
+});
+
+test("extracts deterministic VM sizing and SSH parameters", () => {
+  expect(extractCreateVmParameters("Create VM demo with 1 core, 1024 MB RAM, 8G disk, SSH user ops")).toEqual({
+    cores: 1,
+    memory: 1024,
+    diskSize: "8G",
+    sshUsername: "ops",
+  });
 });
 
 test("keeps create VM name empty when prompt only defines node", () => {

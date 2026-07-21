@@ -15,6 +15,27 @@ export type ActionIntent =
   | { type: "configure_firewall"; vmName: string }
   | { type: "set_static_ip"; vmName: string; ip?: string; gateway?: string };
 
+export function extractCreateVmParameters(text: string): {
+  cores?: number;
+  memory?: number;
+  diskSize?: string;
+  sshUsername?: string;
+} {
+  const coreMatch = text.match(/\b(\d+)\s*(?:v?cpus?|cores?)\b/i);
+  const memoryMatch = text.match(/\b(\d+)\s*(mb|gb)\s*(?:of\s+)?(?:ram|memory)\b/i);
+  const diskMatch = text.match(/\b(\d+)\s*(g|gb)\s*(?:of\s+)?(?:disk|storage)\b/i);
+  const sshUserMatch = text.match(/\bssh\s+(?:user|username)\s*(?:is|=|:)?\s*([a-z_][a-z0-9_-]*)\b/i);
+  const memoryValue = memoryMatch
+    ? Number(memoryMatch[1]) * (memoryMatch[2]?.toLowerCase() === "gb" ? 1024 : 1)
+    : undefined;
+  return {
+    ...(coreMatch ? { cores: Number(coreMatch[1]) } : {}),
+    ...(memoryValue ? { memory: memoryValue } : {}),
+    ...(diskMatch ? { diskSize: `${diskMatch[1]}G` } : {}),
+    ...(sshUserMatch ? { sshUsername: sshUserMatch[1] } : {}),
+  };
+}
+
 function isLikelyQuestion(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (normalized.endsWith("?")) return true;
@@ -155,6 +176,7 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
   if (
     (
       normalized.includes("create") ||
+      normalized.includes("creation") ||
       normalized.includes("make") ||
       normalized.includes("spin up") ||
       normalized.includes("provision")

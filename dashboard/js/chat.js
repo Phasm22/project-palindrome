@@ -1,7 +1,7 @@
 import { API_URL, escapeHtml } from './utils.js';
 import { createButton } from './components.js';
 import { showConfirm } from './modal.js';
-import { renderAssistantResponse } from './response-renderer.js';
+import { renderAssistantResponse, renderConnectionEndpoints } from './response-renderer.js';
 
 /**
  * Copy trace ID to clipboard. Uses data-trace-id on the button to avoid
@@ -108,6 +108,8 @@ let currentSessionId = null;
 let currentResponseId = null;
 let finalEventTimeout = null;
 let currentConversationId = null;
+let agentRunStatus = 'idle';
+let agentStatusPoll = null;
 let isNewConversationMode = true; // Keep composer visible even before first conversation exists
 let isCreatingConversation = false; // Prevent spamming New Chat button
 let promptSuggestionCache = null;
@@ -213,6 +215,84 @@ function getSendButtons() {
   const mobile = document.getElementById('chat-send-btn');
   const desktop = document.getElementById('chat-send-btn-desktop');
   return [mobile, desktop].filter(Boolean);
+}
+
+function setComposerAgentState(status) {
+  agentRunStatus = status;
+  const active = status === 'running' || status === 'stopping';
+  getChatInputs().forEach(input => { input.disabled = active; });
+
+  getSendButtons().forEach(button => {
+    const isDesktop = button.id === 'chat-send-btn-desktop';
+    button.disabled = status === 'stopping';
+    button.setAttribute('aria-label', active ? (status === 'stopping' ? 'Stopping agent' : 'Stop agent') : 'Send message');
+    button.title = active ? (status === 'stopping' ? 'Stopping…' : 'Stop response') : 'Send message';
+    if (active) {
+      button.innerHTML = `
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M7 5h3v14H7V5zm7 0h3v14h-3V5z"/></svg>
+        ${isDesktop ? `<span>${status === 'stopping' ? 'Stopping…' : 'Stop'}</span>` : ''}
+      `;
+    } else {
+      button.innerHTML = `
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2 .01 7z"/></svg>
+        ${isDesktop ? '<span>Send</span>' : ''}
+      `;
+    }
+  });
+}
+
+function stopAgentStatusPolling() {
+  if (agentStatusPoll) clearInterval(agentStatusPoll);
+  agentStatusPoll = null;
+}
+
+async function reconcileAgentRunState() {
+  const params = new URLSearchParams({ userId: USER_ID });
+  if (currentSessionId) params.set('sessionId', currentSessionId);
+  const response = await fetch(`${API_URL}/api/agent/status?${params}`, { cache: 'no-store' });
+  if (!response.ok) return;
+  const state = await response.json();
+  if (state.active && state.sessionId) currentSessionId = state.sessionId;
+  setComposerAgentState(state.status || 'idle');
+  if (!state.active) {
+    stopAgentStatusPolling();
+    currentSessionId = null;
+    if (currentConversationId) loadChatHistory(currentConversationId);
+    const primaryInput = getPrimaryChatInput();
+    if (primaryInput) primaryInput.focus();
+  }
+}
+
+function startAgentStatusPolling() {
+  stopAgentStatusPolling();
+  agentStatusPoll = setInterval(() => {
+    reconcileAgentRunState().catch(error => console.warn('Failed to reconcile agent state', error));
+  }, 2000);
+}
+
+async function stopCurrentAgentRun() {
+  if (agentRunStatus !== 'running') return;
+  setComposerAgentState('stopping');
+  try {
+    const response = await fetch(`${API_URL}/api/agent/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: currentSessionId, conversationId: currentConversationId }),
+    });
+    if (!response.ok && response.status !== 409) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    startAgentStatusPolling();
+  } catch (error) {
+    console.error('Failed to stop agent run', error);
+    await reconcileAgentRunState().catch(() => setComposerAgentState('running'));
+  }
+}
+
+function getAgentWorkingLabel(message) {
+  if (/^cancel\b/i.test(message)) return 'Cancelling the pending change…';
+  if (/^confirm\b/i.test(message)) return 'Confirming the pending change…';
+  return 'Palindrome is working…';
 }
 
 // Helper: Get primary chat messages container (visible one)
@@ -732,6 +812,7 @@ export async function restoreConversation() {
     if (!response.ok) {
       // No saved conversation - keep input visible for first message
       updateInputVisibility(true);
+      await reconcileAgentRunState().catch(() => {});
       return null;
     }
 
@@ -750,6 +831,7 @@ export async function restoreConversation() {
     } else {
       // No saved conversation - keep input visible for first message
       updateInputVisibility(true);
+      await reconcileAgentRunState().catch(() => {});
     }
   } catch (error) {
     console.error('Failed to restore conversation:', error);
@@ -1017,6 +1099,23 @@ function handleAgentEvent(event, toolExecutions) {
   const messagesDiv = getPrimaryChatMessages();
   
   switch (event.type) {
+    case 'connection:update': {
+      lockScrollToBottom();
+      const panelHtml = `
+        <div class="connection-live-panel" data-connection-panel>
+          <div class="connection-live-title">${event.data.phase === 'complete' ? 'Connection verification complete' : 'Verifying connections…'}</div>
+          ${renderConnectionEndpoints(event.data.endpoints)}
+        </div>`;
+      getChatMessageContainers().forEach(container => {
+        const message = container.querySelector(`#${currentResponseId}`);
+        if (!message) return;
+        const existing = message.querySelector('[data-connection-panel]');
+        if (existing) existing.outerHTML = panelHtml;
+        else message.insertAdjacentHTML('beforeend', panelHtml);
+      });
+      break;
+    }
+
     case 'agent:step':
       // Lock scroll during async operations
       lockScrollToBottom();
@@ -1074,7 +1173,7 @@ function handleAgentEvent(event, toolExecutions) {
         updateChatMessage(currentResponseId, 
           `<div class="agent-thinking">
             <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-            Thinking...
+            Palindrome is working…
           </div>${toolHtml}`);
       }
       break;
@@ -1256,10 +1355,10 @@ function handleAgentEvent(event, toolExecutions) {
         finalEventTimeout = null;
       }
       
-      getChatInputs().forEach(i => i.disabled = false);
-      getSendButtons().forEach(b => b.disabled = false);
-      const primaryInput = getPrimaryChatInput();
-      if (primaryInput) setTimeout(() => primaryInput.focus(), 100);
+      // The final response can be emitted just before runner cleanup completes.
+      // Keep the composer locked until the server reports the run as truly idle.
+      startAgentStatusPolling();
+      reconcileAgentRunState().catch(error => console.warn('Failed to confirm final agent state', error));
       break;
   }
 }
@@ -1311,15 +1410,7 @@ function bindAgentEventSourceHandlers(eventSource, toolExecutions) {
         `);
       }
 
-      const inputs = getChatInputs();
-      const buttons = getSendButtons();
-      inputs.forEach(i => { i.disabled = false; });
-      buttons.forEach(b => {
-        b.disabled = false;
-        b.textContent = 'Send';
-      });
-      const primaryInput = getPrimaryChatInput();
-      if (primaryInput) primaryInput.focus();
+      startAgentStatusPolling();
     }
 
     if (currentEventSource) {
@@ -1333,6 +1424,12 @@ function bindAgentEventSourceHandlers(eventSource, toolExecutions) {
 
 // Main chat functions
 export async function sendChatMessage(messageOverride = null) {
+  if (agentRunStatus === 'running') {
+    await stopCurrentAgentRun();
+    return;
+  }
+  if (agentRunStatus === 'stopping') return;
+
   const inputs = getChatInputs();
   const buttons = getSendButtons();
   const primaryInput = getPrimaryChatInput();
@@ -1342,8 +1439,8 @@ export async function sendChatMessage(messageOverride = null) {
     : (primaryInput?.value?.trim() || '');
   if (!message) return;
 
-  inputs.forEach(i => { i.disabled = true; i.value = ''; });
-  buttons.forEach(b => b.disabled = true);
+  inputs.forEach(i => { i.value = ''; });
+  setComposerAgentState('running');
 
   if (currentEventSource) {
     currentEventSource.close();
@@ -1359,7 +1456,7 @@ export async function sendChatMessage(messageOverride = null) {
   currentResponseId = addChatMessage('assistant', `
     <div class="agent-thinking">
       <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-      Thinking...
+      ${escapeHtml(getAgentWorkingLabel(message))}
     </div>
   `, true);
 
@@ -1420,16 +1517,8 @@ export async function sendChatMessage(messageOverride = null) {
         currentEventSource.close();
         currentEventSource = null;
         
-        // Re-enable inputs and buttons
-        const inputs = getChatInputs();
-        const buttons = getSendButtons();
-        inputs.forEach(i => { i.disabled = false; });
-        buttons.forEach(b => { 
-          b.disabled = false;
-          b.textContent = 'Send';
-        });
-        const primaryInput = getPrimaryChatInput();
-        if (primaryInput) primaryInput.focus();
+        startAgentStatusPolling();
+        reconcileAgentRunState().catch(error => console.warn('Failed to confirm final agent state', error));
       } else if (currentEventSource && !finalResponse) {
         const isActionOperation = currentQuery && (
           currentQuery.toLowerCase().includes('create') ||
@@ -1453,16 +1542,8 @@ export async function sendChatMessage(messageOverride = null) {
         currentEventSource.close();
         currentEventSource = null;
         
-        // Re-enable inputs and buttons
-        const inputs = getChatInputs();
-        const buttons = getSendButtons();
-        inputs.forEach(i => { i.disabled = false; });
-        buttons.forEach(b => { 
-          b.disabled = false;
-          b.textContent = 'Send';
-        });
-        const primaryInput = getPrimaryChatInput();
-        if (primaryInput) primaryInput.focus();
+        setComposerAgentState('running');
+        startAgentStatusPolling();
       }
       finalEventTimeout = null;
     }, (() => {
@@ -1532,14 +1613,7 @@ export async function sendChatMessage(messageOverride = null) {
       finalEventTimeout = null;
     }
     
-    // Re-enable inputs and buttons
-    const inputs = getChatInputs();
-    const buttons = getSendButtons();
-    inputs.forEach(i => { i.disabled = false; });
-    buttons.forEach(b => { 
-      b.disabled = false;
-      b.textContent = 'Send';
-    });
+    setComposerAgentState('idle');
     const primaryInput = getPrimaryChatInput();
     if (primaryInput) primaryInput.focus();
   }
@@ -1614,6 +1688,7 @@ export async function selectConversation(conversationId) {
   
   await loadChatHistory(conversationId);
   updateInputVisibility(true); // Show input when conversation is selected
+  await reconcileAgentRunState().catch(error => console.warn('Failed to load agent state', error));
   loadConversations();
 }
 
@@ -1688,6 +1763,7 @@ export async function createNewConversation() {
     
     // Show input box (it will be shown by updateInputVisibility)
     updateInputVisibility(true);
+    await reconcileAgentRunState().catch(error => console.warn('Failed to load agent state', error));
     
     // Focus input
     const primaryInput = getPrimaryChatInput();

@@ -2,12 +2,14 @@ import type { ToolCall, ExecutionResult, ExecutionContext, ACLGroup } from "../t
 import type { BaseTool } from "../tools/BaseTool";
 import { logger } from "../utils/logger";
 import { getToolExecutionStore } from "../pce/api/tool-execution-store";
+import { runWithAgentSession } from "./event-bus";
 
 export interface ToolExecutionContext {
   userId?: string;
   aclGroup?: ACLGroup;
   node?: string; // For Proxmox operations
   vmid?: number; // For VM operations
+  sessionId?: string;
 }
 
 export async function executeToolCall(
@@ -30,7 +32,10 @@ export async function executeToolCall(
   logger.info(`Executing tool: ${call.toolName}`);
   
   const startTime = Date.now();
-  const result = await tool.execute(call.parameters ?? {}, context);
+  const result = await runWithAgentSession(
+    executionContext?.sessionId,
+    () => tool.execute(call.parameters ?? {}, context)
+  );
   const durationMs = Date.now() - startTime;
   
   // Record execution for dashboard (if context provided)
@@ -72,4 +77,3 @@ export async function executeToolCall(
   
   return result;
 }
-

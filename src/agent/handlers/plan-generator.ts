@@ -32,6 +32,7 @@ export async function generateActionPlan(
 
     const result = await generateObject({
       model: aiSdkOpenai("gpt-4o-mini"),
+      abortSignal: AbortSignal.timeout(30_000),
       schema: ActionPlanSchema,
       prompt: `You are a planning agent for an infrastructure automation system. Given the user's request, generate a structured execution plan.
 

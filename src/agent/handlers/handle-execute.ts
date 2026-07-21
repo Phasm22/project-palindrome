@@ -12,7 +12,13 @@ import { logger } from "../../utils/logger";
 import { executeToolCall } from "../tool-executor";
 import type { AgentContext } from "../context";
 import { buildSystemPrompt, buildStructuredResponsePrompt } from "../system-prompt";
-import { AgentResponseSchema, type AgentResponse } from "../schemas/agent-response";
+import { AgentResponseSchema, createTextAgentResponse, type AgentResponse } from "../schemas/agent-response";
+import { ConnectionTargetSchema, type ConnectionEndpoint } from "../../types/connections";
+import {
+  buildConnectionEndpoints,
+  resolveConnectionTarget,
+  verifyConnectionEndpoints,
+} from "../../connections/verifier";
 import { fetchHybridContext, type HybridApiContext } from "../rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "../tool-policy";
 import { sanitizeToolPayload } from "../tool-sanitizer";
@@ -127,6 +133,69 @@ export async function handleExecute(
     usedPendingAction,
     entityCache,
   } = input;
+
+  const throwIfStopped = () => options.signal?.throwIfAborted();
+  throwIfStopped();
+  let connectionEndpoints: ConnectionEndpoint[] = [];
+
+  const emitConnectionUpdate = (
+    phase: "candidates" | "verifying" | "complete",
+    endpoints: ConnectionEndpoint[],
+    resource?: string
+  ) => {
+    eventBus.emit({
+      type: "connection:update",
+      sessionId,
+      timestamp: Date.now(),
+      data: { type: "connection:update", phase, resource, endpoints },
+    });
+  };
+
+  const attachVerifiedConnections = async (result: ExecutionResult): Promise<void> => {
+    if (!result.data || typeof result.data !== "object") return;
+    const parsed = ConnectionTargetSchema.safeParse((result.data as any).connectionTarget);
+    if (!parsed.success) return;
+
+    const target = await resolveConnectionTarget(parsed.data);
+    throwIfStopped();
+    const candidates = buildConnectionEndpoints(target);
+    if (candidates.length === 0) return;
+    emitConnectionUpdate("candidates", candidates, target.hostname);
+    eventBus.emitProgress({
+      toolName: "connection_verifier",
+      action: "verify_connections",
+      status: "verifying",
+      message: `Verifying ${candidates.length} connection endpoint(s) for ${target.hostname}...`,
+      progress: 0.85,
+      details: { hostname: target.hostname, endpoints: candidates.length },
+    }, sessionId);
+
+    const verified = await verifyConnectionEndpoints(candidates, target.ipAddresses, {
+      signal: options.signal,
+      sshDeadlineMs: Number(process.env.CONNECTION_SSH_DEADLINE_MS || 300_000),
+      httpDeadlineMs: Number(process.env.CONNECTION_HTTP_DEADLINE_MS || 120_000),
+      retryIntervalMs: Number(process.env.CONNECTION_RETRY_INTERVAL_MS || 5_000),
+      onUpdate: (endpoints) => emitConnectionUpdate(
+        endpoints.every((endpoint) => endpoint.status !== "pending") ? "complete" : "verifying",
+        endpoints,
+        target.hostname
+      ),
+    });
+    connectionEndpoints = [
+      ...connectionEndpoints.filter((existing) => !verified.some((endpoint) => endpoint.id === existing.id)),
+      ...verified,
+    ];
+    (result.data as any).connections = verified;
+    const failed = verified.some((endpoint) => endpoint.status === "failed");
+    eventBus.emitProgress({
+      toolName: "connection_verifier",
+      action: "verify_connections",
+      status: failed ? "failed" : "completed",
+      message: `${verified.filter((endpoint) => endpoint.status === "verified").length}/${verified.length} connection endpoint(s) verified for ${target.hostname}.`,
+      progress: 1,
+      details: { hostname: target.hostname },
+    }, sessionId);
+  };
 
   const buildBotMoveContext = async (observations: string, intentLabel: string): Promise<string> => {
     if (!observations || observations.trim().length < 40) {
@@ -676,6 +745,7 @@ export async function handleExecute(
   // before any tool executes. Single-step plans fall through to the normal loop.
   if (state.classification.intent === "ACTION" && actionIntent != null && Object.keys(actionIntent).length > 0) {
     const plan = await generateActionPlan({ userInput, sessionId });
+    throwIfStopped();
     if (plan !== null && plan.steps.length > 1) {
       // Persist plan on state so callers (runner.ts) can inspect it later
       state.executionPlan = plan;
@@ -702,6 +772,7 @@ export async function handleExecute(
   }
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    throwIfStopped();
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
 
     emitStepEvent(eventBus, sessionId, {
@@ -786,7 +857,8 @@ export async function handleExecute(
       request.tool_choice = (isRealTimeMetricQuery && !hasRealTimeMetricData) ? "required" : "auto";
     }
 
-    const response = await client.chat.completions.create(request);
+    const response = await client.chat.completions.create(request, { signal: options.signal });
+    throwIfStopped();
     const message = response.choices[0]?.message;
 
     // Capture LLM response
@@ -833,6 +905,7 @@ export async function handleExecute(
         // Execute all SSH calls in parallel for "all nodes" queries
         logger.info(`Parallelizing ${toolCalls.length} SSH tool calls for "all nodes" query`);
         const toolPromises = toolCalls.map(async (toolCall) => {
+          throwIfStopped();
           const fnCall = toolCall.function ?? {};
           const toolName = fnCall.name as string | undefined;
           if (!toolName) return null;
@@ -874,6 +947,7 @@ export async function handleExecute(
             userId: session.userId,
             aclGroup: session.aclGroup,
             node,
+            sessionId,
           };
 
           // Emit tool:start
@@ -890,6 +964,8 @@ export async function handleExecute(
             tools,
             execContext
           );
+          await attachVerifiedConnections(result);
+          throwIfStopped();
 
           // Emit tool:complete
           eventBus.emit({
@@ -989,6 +1065,7 @@ export async function handleExecute(
       } else {
         // Sequential execution (original behavior)
         for (const toolCall of toolCalls) {
+        throwIfStopped();
         // Create a signature for this tool call to detect duplicates
         const fnCall = toolCall.function ?? {};
         const toolName = fnCall.name as string | undefined;
@@ -1129,6 +1206,7 @@ export async function handleExecute(
           aclGroup: session.aclGroup,
           node,
           vmid: typeof vmid === "number" ? vmid : undefined,
+          sessionId,
         };
 
         const toolRisk = mapToolRiskToIntentRisk(getToolRisk(targetTool));
@@ -1256,6 +1334,7 @@ export async function handleExecute(
             tools,
             execContext
           );
+          throwIfStopped();
 
           // Check if the dry-run indicates no action is needed
           const noActionNeeded =
@@ -1274,6 +1353,8 @@ export async function handleExecute(
               tools,
               execContext
             );
+            await attachVerifiedConnections(result);
+            throwIfStopped();
           }
         } else {
           result = await executeToolCall(
@@ -1281,6 +1362,8 @@ export async function handleExecute(
             tools,
             execContext
           );
+          await attachVerifiedConnections(result);
+          throwIfStopped();
         }
 
         // Emit tool:complete event
@@ -1724,6 +1807,21 @@ export async function handleExecute(
         logger.warn("Agent response structuring failed; using the text response", { err: err?.message });
       }
 
+      if (connectionEndpoints.length > 0) {
+        structuredResponse ??= createTextAgentResponse(finalText, {
+          state: shouldPreserveConfirmationPrompt
+            ? "AWAITING_CONFIRMATION"
+            : shouldPreserveClarificationQuestion
+              ? "NEED_CLARIFICATION"
+              : "IDLE",
+        });
+        structuredResponse.answer.sections.push({
+          type: "connections",
+          title: "Connections",
+          data: connectionEndpoints,
+        });
+      }
+
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
       emitFinalEvent(eventBus, sessionId, startTime, finalText, {
@@ -1731,6 +1829,7 @@ export async function handleExecute(
         totalToolCalls,
         traceId,
         structuredResponse,
+        connections: connectionEndpoints,
         conversationState: shouldPreserveClarificationQuestion
           ? "NEED_CLARIFICATION"
           : shouldPreserveConfirmationPrompt

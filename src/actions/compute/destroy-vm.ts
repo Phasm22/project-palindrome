@@ -8,6 +8,8 @@ import { randomUUID } from "crypto";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { DnsRecord } from "../../tools/pihole/client";
+import { ProxmoxClient } from "../../tools/proxmox/client";
+import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 
 /**
  * Destroy VM Action Schema
@@ -83,6 +85,53 @@ export function findUnexpectedTerraformDeletes(
 
 export function terraformTargetWasDestroyed(stdout: string, targetAddress: string): boolean {
   return stdout.includes(`${targetAddress}: Destruction complete`);
+}
+
+async function destroyExactLiveVm(
+  vmName: string,
+  requestedNode?: string
+): Promise<{ vmId: number; node: string }> {
+  const matches: Array<{ client: ProxmoxClient; vmId: number; node: string; type: "qemu" | "lxc" }> = [];
+  for (const config of getProxmoxEndpointConfigs()) {
+    const client = new ProxmoxClient(config);
+    const response = await client.get("/cluster/resources", { type: "vm" });
+    for (const resource of response.data?.data || []) {
+      if (
+        String(resource.name || "").toLowerCase() === vmName.toLowerCase() &&
+        (!requestedNode || String(resource.node || "").toLowerCase() === requestedNode.toLowerCase()) &&
+        (resource.type === "qemu" || resource.type === "lxc")
+      ) {
+        matches.push({ client, vmId: resource.vmid, node: resource.node, type: resource.type });
+      }
+    }
+  }
+  const unique = matches.filter((match, index, all) =>
+    all.findIndex((candidate) => candidate.vmId === match.vmId && candidate.node === match.node) === index
+  );
+  if (unique.length !== 1) {
+    throw new Error(`Exact live recovery requires one matching VM; found ${unique.length}.`);
+  }
+  const target = unique[0]!;
+  const endpoint = `/nodes/${encodeURIComponent(target.node)}/${target.type}/${target.vmId}`;
+  const current = await target.client.get(`${endpoint}/status/current`);
+  if (current.data?.data?.status !== "stopped") {
+    await target.client.post(`${endpoint}/status/stop`, {});
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const status = await target.client.get(`${endpoint}/status/current`);
+      if (status.data?.data?.status === "stopped") break;
+      if (attempt === 59) throw new Error("Timed out stopping exact live VM.");
+    }
+  }
+  await target.client.delete(endpoint, { purge: 1, "destroy-unreferenced-disks": 1 });
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const resources = await target.client.get("/cluster/resources", { type: "vm" });
+    if (!(resources.data?.data || []).some((resource: any) => resource.vmid === target.vmId && resource.node === target.node)) {
+      return { vmId: target.vmId, node: target.node };
+    }
+  }
+  throw new Error("Timed out verifying exact live VM deletion.");
 }
 
 /** Client interface for DNS cleanup (allows mocking in tests). */
@@ -513,9 +562,34 @@ export async function destroyVm(
         expectedDeletes: [targetResource, cloudConfigTarget],
         unexpectedDeletes,
       });
+      if (process.env.PROXMOX_EXACT_DESTROY_FALLBACK !== "true") {
+        return {
+          success: false,
+          message: `Refusing destroy because Terraform also planned unrelated deletions: ${unexpectedDeletes.join(", ")}. Repair the shared Terraform state before retrying.`,
+          terraformOutput: planResult,
+        };
+      }
+
+      logger.warn("Using opt-in exact Proxmox destroy recovery", {
+        name: terraformVmName,
+        node: finalNode,
+        unexpectedDeletes,
+      });
+      const recovered = await destroyExactLiveVm(terraformVmName, finalNode);
+      await terraformRunner.removeVmFromState(terraformVmName);
+      await terraformRunner.removeVmFromTfvars(terraformVmName);
+      let dnsRecordDeleted = false;
+      if (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY) {
+        const { getPiholeClient } = await import("../../tools/pihole/client");
+        dnsRecordDeleted = (await deleteDnsRecordForDestroyedVm(
+          getPiholeClient(),
+          dnsDomain,
+          terraformVmName
+        )).dnsRecordDeleted;
+      }
       return {
-        success: false,
-        message: `Refusing destroy because Terraform also planned unrelated deletions: ${unexpectedDeletes.join(", ")}. Repair the shared Terraform state before retrying.`,
+        success: true,
+        message: `VM "${terraformVmName}" (ID: ${recovered.vmId}) has been successfully destroyed using exact-target recovery after Terraform refused an unsafe shared-state plan.${dnsRecordDeleted ? " DNS record deleted." : ""}`,
         terraformOutput: planResult,
       };
     }

@@ -90,6 +90,69 @@ afterEach(async () => {
 });
 
 describe("agent query history contract", () => {
+  it("keeps run state authoritative, rejects a second chat, and stops cooperatively", async () => {
+    let receivedSignal: AbortSignal | undefined;
+    const agentRunner: typeof runAgent = async (_input, optionsOrStream) => {
+      const options = typeof optionsOrStream === "boolean" ? {} : optionsOrStream ?? {};
+      receivedSignal = options.signal;
+      await new Promise<void>((resolve) => {
+        options.signal?.addEventListener("abort", () => setTimeout(resolve, 50), { once: true });
+      });
+      options.signal?.throwIfAborted();
+      return { text: "unexpected" } as any;
+    };
+
+    const { server, baseUrl, chatHistoryStore } = await startAgentTestServer({}, { agentRunner });
+    servers.push(server);
+    const firstConversationId = await chatHistoryStore.createConversation("user-1", "first");
+    const secondConversationId = await chatHistoryStore.createConversation("user-1", "second");
+
+    const first = await fetch(`${baseUrl}/api/agent/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "first request",
+        userId: "user-1",
+        conversationId: firstConversationId,
+        sessionId: "active-session",
+      }),
+    });
+    expect(first.status).toBe(200);
+    expect(receivedSignal).toBeDefined();
+
+    const status = await fetch(`${baseUrl}/api/agent/status?userId=user-1`).then(response => response.json());
+    expect(status).toMatchObject({ active: true, status: "running", sessionId: "active-session" });
+
+    const second = await fetch(`${baseUrl}/api/agent/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "second request",
+        userId: "user-1",
+        conversationId: secondConversationId,
+        sessionId: "second-session",
+      }),
+    });
+    expect(second.status).toBe(409);
+    expect(await second.json()).toMatchObject({ sessionId: "active-session", status: "running" });
+
+    const stop = await fetch(`${baseUrl}/api/agent/stop`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "active-session" }),
+    });
+    expect(stop.status).toBe(202);
+    expect(receivedSignal?.aborted).toBe(true);
+
+    const stopping = await fetch(`${baseUrl}/api/agent/status?sessionId=active-session`).then(response => response.json());
+    expect(stopping).toMatchObject({ active: true, status: "stopping" });
+
+    await waitFor(async () => {
+      const settled = await fetch(`${baseUrl}/api/agent/status?sessionId=active-session`).then(response => response.json());
+      return settled.active === false && settled.status === "idle";
+    });
+  });
+
   it("passes loaded conversation inputs to the injected runner and persists matching final events", async () => {
     const captured: Array<{ input: string; options: any }> = [];
     const agentRunner: typeof runAgent = async (input, optionsOrStream) => {

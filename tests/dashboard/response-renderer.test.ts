@@ -2,10 +2,27 @@ import { describe, expect, test } from "bun:test";
 import {
   renderAdaptiveValue,
   renderAssistantResponse,
+  renderConnectionEndpoints,
   renderRawTextFallback,
 } from "../../dashboard/js/response-renderer.js";
 
 describe("adaptive response renderer", () => {
+  test("renders verified connection cards with copyable commands", () => {
+    const html = renderConnectionEndpoints([{
+      service: "SSH",
+      protocol: "ssh",
+      addressType: "dns",
+      port: 22,
+      value: "ssh -p 22 ops@vm.prox",
+      status: "verified",
+      detail: "Authenticated SSH check passed",
+    }]);
+    expect(html).toContain("connection-card-verified");
+    expect(html).toContain("ssh -p 22 ops@vm.prox");
+    expect(html).toContain("data-copyable");
+    expect(html).toContain("Authenticated SSH check passed");
+  });
+
   test("renders homogeneous records as a table without a domain schema", () => {
     const html = renderAdaptiveValue([
       { name: "node-a", online: true, guests: 4 },

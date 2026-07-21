@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { AgentEventBus, emitToolProgress } from "../../src/agent/event-bus";
+import { AgentEventBus, emitToolProgress, runWithAgentSession } from "../../src/agent/event-bus";
+import { AgentEventDataSchema } from "../../src/agent/event-payloads";
 import { emitFinalEvent, emitStepEvent } from "../../src/agent/handlers/emit-helpers";
 
 test("emitStepEvent emits a discriminator-typed payload", () => {
@@ -45,6 +46,49 @@ test("emitToolProgress emits a discriminator-typed payload", () => {
   expect(received?.sessionId).toBe("progress-session");
   expect(received?.data?.type).toBe("tool:progress");
   expect(received?.data?.toolName).toBe("proxmox_write");
+});
+
+test("tool progress inherits the active agent session", async () => {
+  const eventBus = AgentEventBus.getInstance();
+  let received: any;
+  const unsubscribe = eventBus.onType("tool:progress", (event) => {
+    if (event.data.message === "Scoped progress") received = event;
+  });
+
+  try {
+    await runWithAgentSession("scoped-session", async () => {
+      await Promise.resolve();
+      emitToolProgress({
+        toolName: "action",
+        status: "verifying",
+        message: "Scoped progress",
+      });
+    });
+  } finally {
+    unsubscribe();
+  }
+
+  expect(received?.sessionId).toBe("scoped-session");
+});
+
+test("connection updates validate as structured agent events", () => {
+  const parsed = AgentEventDataSchema.parse({
+    type: "connection:update",
+    phase: "complete",
+    resource: "web-1",
+    endpoints: [{
+      id: "nginx:http:80:dns:web-1.prox",
+      service: "nginx",
+      protocol: "http",
+      host: "web-1.prox",
+      addressType: "dns",
+      port: 80,
+      value: "http://web-1.prox:80/",
+      status: "verified",
+    }],
+  });
+
+  expect(parsed.type).toBe("connection:update");
 });
 
 test("emitFinalEvent always emits a structured response", () => {

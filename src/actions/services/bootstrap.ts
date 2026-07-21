@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ConnectionTarget } from "../../types/connections";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { AnsibleRunner } from "../helpers/ansible-runner";
 import {
@@ -38,6 +39,7 @@ export interface BootstrapResult {
   duration: number;
   message: string;
   errors?: string[];
+  connectionTarget?: ConnectionTarget;
 }
 
 /**
@@ -183,6 +185,16 @@ export async function bootstrap(params: BootstrapParams): Promise<BootstrapResul
           stdout: result.stdout,
           stderr: result.stderr,
           duration,
+          connectionTarget: {
+            hostname,
+            ipAddresses: [],
+            hints: [
+              { service: "SSH", protocol: "ssh", port: 22, username: "ops" },
+              ...(["common.yml", "docker.yml"].includes(playbook)
+                ? [{ service: "Portainer", protocol: "http" as const, port: 9000, path: "/" }]
+                : []),
+            ],
+          },
           message: `Bootstrap completed successfully on ${hostname}. ` +
             `${tasksChanged} task(s) changed, ${tasksFailed} task(s) failed.`,
         };

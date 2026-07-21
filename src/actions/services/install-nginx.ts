@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ConnectionTarget } from "../../types/connections";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { AnsibleRunner } from "../helpers/ansible-runner";
 import {
@@ -34,6 +35,7 @@ export interface InstallNginxResult {
   duration: number;
   message: string;
   errors?: string[];
+  connectionTarget?: ConnectionTarget;
 }
 
 /**
@@ -200,6 +202,14 @@ export async function installNginx(params: InstallNginxParams): Promise<InstallN
         stdout: results.join("\n"),
         stderr: errors.join("\n"),
         duration,
+        connectionTarget: {
+          hostname,
+          ipAddresses: [],
+          hints: [
+            { service: "SSH", protocol: "ssh", port: 22, username: "ops" },
+            { service: "Nginx", protocol: "http", port: 80, path: "/" },
+          ],
+        },
         message: `Nginx installed successfully on ${hostname}. Service is running and enabled.`,
       };
     }

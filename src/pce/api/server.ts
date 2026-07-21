@@ -21,12 +21,23 @@ import { IngestionSummaryStore } from "./ingestion-summary-store";
 import { transformHybridContext } from "./context-transformer";
 import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
+import { emitFinalEvent } from "../../agent/handlers/emit-helpers";
 import { IngestionScheduler } from "../scheduler/ingestion-scheduler";
 import { normalizeProxmoxResponse } from "../../tools/proxmox/readonly/normalization";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
 
 type BunServer = ReturnType<typeof Bun.serve>;
+
+type ActiveAgentRun = {
+  sessionId: string;
+  conversationId: string | null;
+  userId: string;
+  startedAt: number;
+  status: "running" | "stopping";
+  controller: AbortController;
+  finalEventSeen: boolean;
+};
 
 const QueryRequestSchema = z.object({
   query: z.string().min(1),
@@ -87,6 +98,9 @@ export class PceApiServer {
   private startTime = Date.now();
   private redactor: Redactor;
   private ingestionScheduler: IngestionScheduler | null = null;
+  private activeAgentRuns = new Map<string, ActiveAgentRun>();
+  private activeRunByConversation = new Map<string, string>();
+  private activeRunByUser = new Map<string, string>();
 
   constructor(deps: PceApiServerDependencies, options: PceApiServerOptions = {}) {
     this.options = {
@@ -171,6 +185,11 @@ export class PceApiServer {
   }
 
   async stop(): Promise<void> {
+    for (const run of this.activeAgentRuns.values()) {
+      run.status = "stopping";
+      run.controller.abort(new DOMException("Server stopping", "AbortError"));
+    }
+
     // Stop ingestion scheduler
     if (this.ingestionScheduler) {
       this.ingestionScheduler.stop();
@@ -323,6 +342,14 @@ export class PceApiServer {
     // Agent query endpoint (triggers agent with tool calling)
     if (req.method === "POST" && url.pathname === "/api/agent/query") {
       return await this.handleAgentQuery(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/agent/status") {
+      return this.handleAgentStatus(url);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/agent/stop") {
+      return await this.handleAgentStop(req);
     }
 
     // Chat history endpoints
@@ -1828,6 +1855,17 @@ export class PceApiServer {
       const sessionId = body.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const conversationId = body.conversationId || null;
 
+      const activeUserSessionId = this.activeRunByUser.get(userId);
+      const activeUserRun = activeUserSessionId ? this.activeAgentRuns.get(activeUserSessionId) : undefined;
+      if (activeUserRun) {
+        return this.jsonResponse(409, {
+          error: "Another chat already has an active agent run.",
+          sessionId: activeUserRun.sessionId,
+          conversationId: activeUserRun.conversationId,
+          status: activeUserRun.status,
+        });
+      }
+
       // Get or create conversation
       let activeConversationId = conversationId;
       if (!activeConversationId) {
@@ -1837,6 +1875,26 @@ export class PceApiServer {
         } catch (error: any) {
           pceLogger.warn("Failed to create conversation", { error: error.message });
         }
+      }
+
+      if (activeConversationId) {
+        const activeSessionId = this.activeRunByConversation.get(activeConversationId);
+        const activeRun = activeSessionId ? this.activeAgentRuns.get(activeSessionId) : undefined;
+        if (activeRun) {
+          return this.jsonResponse(409, {
+            error: "This conversation already has an active agent run.",
+            sessionId: activeRun.sessionId,
+            conversationId: activeConversationId,
+            status: activeRun.status,
+          });
+        }
+      }
+      if (this.activeAgentRuns.has(sessionId)) {
+        return this.jsonResponse(409, {
+          error: "This agent session is already active.",
+          sessionId,
+          status: this.activeAgentRuns.get(sessionId)?.status,
+        });
       }
 
       // Load conversation history for context
@@ -1892,6 +1950,8 @@ export class PceApiServer {
           return;
         }
         if (event.sessionId === sessionId && finalData.text && activeConversationId) {
+          const activeRun = this.activeAgentRuns.get(sessionId);
+          if (activeRun) activeRun.finalEventSeen = true;
           try {
             await this.chatHistoryStore.saveMessage({
               conversationId: activeConversationId,
@@ -1955,6 +2015,23 @@ export class PceApiServer {
 
       // Start agent execution in background (non-blocking)
       // Pass conversation history as context
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const activeRun: ActiveAgentRun = {
+        sessionId,
+        conversationId: activeConversationId,
+        userId,
+        startedAt,
+        status: "running",
+        controller,
+        finalEventSeen: false,
+      };
+      this.activeAgentRuns.set(sessionId, activeRun);
+      this.activeRunByUser.set(userId, sessionId);
+      if (activeConversationId) {
+        this.activeRunByConversation.set(activeConversationId, sessionId);
+      }
+
       this.agentRunner(body.query, {
         userId,
         aclGroup,
@@ -1965,11 +2042,39 @@ export class PceApiServer {
         conversationContext,
         userPreferences,
         conversationHistory, // Pass history to agent
+        signal: controller.signal,
         getProfilePublicKey: (_uid: string) => this.profileStore.get(profileUserId)?.publicKey ?? null,
         getProfileSshUsername: (_uid: string) => this.profileStore.get(profileUserId)?.sshUsername ?? null,
+      }).then(() => {
+        if (controller.signal.aborted && !activeRun.finalEventSeen) {
+          emitFinalEvent(eventBus, sessionId, startedAt, "Stopped by user.", {
+            stopped: true,
+            conversationState: "IDLE",
+          });
+        }
       }).catch((error: any) => {
-        pceLogger.error("Agent execution error", { error: error.message, sessionId });
+        const stopped = controller.signal.aborted || error?.name === "AbortError";
+        if (!activeRun.finalEventSeen) {
+          emitFinalEvent(
+            eventBus,
+            sessionId,
+            startedAt,
+            stopped ? "Stopped by user." : "The agent run failed before it completed.",
+            { stopped, failed: !stopped, conversationState: "IDLE" }
+          );
+        }
+        if (!stopped) {
+          pceLogger.error("Agent execution error", { error: error.message, sessionId });
+        }
+      }).finally(() => {
         unsubscribe();
+        this.activeAgentRuns.delete(sessionId);
+        if (this.activeRunByUser.get(userId) === sessionId) {
+          this.activeRunByUser.delete(userId);
+        }
+        if (activeConversationId && this.activeRunByConversation.get(activeConversationId) === sessionId) {
+          this.activeRunByConversation.delete(activeConversationId);
+        }
       });
 
       // Return immediately with sessionId and conversationId so client can connect to SSE stream
@@ -1977,12 +2082,58 @@ export class PceApiServer {
         success: true,
         sessionId,
         conversationId: activeConversationId,
+        status: "running",
         message: "Agent query started. Connect to /api/agent/stream?sessionId=" + sessionId + " to receive events.",
       });
     } catch (error: any) {
       pceLogger.error("Agent query endpoint error", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
     }
+  }
+
+  private handleAgentStatus(url: URL): Response {
+    const sessionId = url.searchParams.get("sessionId");
+    const conversationId = url.searchParams.get("conversationId");
+    const userId = url.searchParams.get("userId");
+    const directRun = sessionId ? this.activeAgentRuns.get(sessionId) : undefined;
+    const conversationSessionId = conversationId ? this.activeRunByConversation.get(conversationId) : undefined;
+    const conversationRun = conversationSessionId ? this.activeAgentRuns.get(conversationSessionId) : undefined;
+    const userSessionId = userId ? this.activeRunByUser.get(userId) : undefined;
+    const userRun = userSessionId ? this.activeAgentRuns.get(userSessionId) : undefined;
+    const run = directRun ?? conversationRun ?? userRun;
+
+    return this.jsonResponse(200, {
+      success: true,
+      active: !!run,
+      status: run?.status ?? "idle",
+      sessionId: run?.sessionId ?? null,
+      conversationId: run?.conversationId ?? conversationId ?? null,
+      startedAt: run?.startedAt ?? null,
+    });
+  }
+
+  private async handleAgentStop(req: Request): Promise<Response> {
+    const body = await req.json().catch(() => ({})) as { sessionId?: string; conversationId?: string };
+    const resolvedSessionId = body.sessionId || (body.conversationId ? this.activeRunByConversation.get(body.conversationId) : undefined);
+    const run = resolvedSessionId ? this.activeAgentRuns.get(resolvedSessionId) : undefined;
+
+    if (!run) {
+      return this.jsonResponse(409, {
+        error: "No active agent run was found.",
+        active: false,
+        status: "idle",
+      });
+    }
+
+    run.status = "stopping";
+    run.controller.abort(new DOMException("Stopped by user", "AbortError"));
+    return this.jsonResponse(202, {
+      success: true,
+      active: true,
+      status: "stopping",
+      sessionId: run.sessionId,
+      conversationId: run.conversationId,
+    });
   }
 
   /**
@@ -2020,9 +2171,7 @@ export class PceApiServer {
         const eventBus = AgentEventBus.getInstance();
         const unsubscribe = eventBus.onEvent((event: AgentEvent) => {
           // Filter by sessionId if provided
-          // Allow tool:progress events through even without matching sessionId
-          // (tools emit progress without session context)
-          if (sessionId && event.sessionId !== sessionId && event.type !== "tool:progress") {
+          if (sessionId && event.sessionId !== sessionId) {
             return;
           }
 

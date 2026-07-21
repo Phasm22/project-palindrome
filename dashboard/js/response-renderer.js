@@ -119,6 +119,34 @@ function renderRecord(value, options) {
   `).join("")}</dl>`;
 }
 
+function connectionStatusLabel(status) {
+  if (status === "verified") return "Verified";
+  if (status === "failed") return "Failed";
+  return "Verifying…";
+}
+
+export function renderConnectionEndpoints(value) {
+  const endpoints = Array.isArray(value) ? value : [];
+  if (!endpoints.length) return '<span class="response-empty">No connection endpoints</span>';
+  return `<div class="connection-grid">${endpoints.map((endpoint) => {
+    const status = ["verified", "failed"].includes(endpoint?.status) ? endpoint.status : "pending";
+    const copyValue = String(endpoint?.value ?? "");
+    return `
+      <div class="connection-card connection-card-${status}">
+        <div class="connection-card-header">
+          <strong>${escapeHtml(endpoint?.service || endpoint?.protocol || "Connection")}</strong>
+          <span class="connection-status connection-status-${status}">${connectionStatusLabel(status)}</span>
+        </div>
+        <div class="connection-meta">${escapeHtml(String(endpoint?.addressType || "host").toUpperCase())} · ${escapeHtml(endpoint?.protocol || "")} · port ${escapeHtml(endpoint?.port || "")}</div>
+        <div class="connection-value-row">
+          <code>${escapeHtml(copyValue)}</code>
+          <button type="button" data-copyable="${escapeHtml(copyValue)}" onclick="window.copyCopyableText(this)" ${copyValue ? "" : "disabled"}>Copy</button>
+        </div>
+        ${endpoint?.detail ? `<div class="connection-detail">${escapeHtml(endpoint.detail)}</div>` : ""}
+      </div>`;
+  }).join("")}</div>`;
+}
+
 export function renderAdaptiveValue(value, options = {}) {
   if (Array.isArray(value)) return renderArray(value, options);
   if (isRecord(value)) return renderRecord(value, options);
@@ -135,6 +163,8 @@ function renderSection(section) {
     : "";
   const content = type === "steps"
     ? renderAdaptiveValue(section.data, { ordered: true })
+    : type === "connections"
+      ? renderConnectionEndpoints(section.data)
     : renderAdaptiveValue(section.data);
 
   if (type === "details") {

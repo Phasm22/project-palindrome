@@ -9,6 +9,7 @@ export const AgentResponseSectionTypeSchema = z.enum([
   "steps",
   "alert",
   "details",
+  "connections",
 ]);
 
 export const AgentResponseSectionSchema = z.object({

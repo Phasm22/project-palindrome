@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import type { AgentResponse } from "../types/agent";
 import type { ExecutionResult } from "../types/execution";
+import { ConnectionTargetSchema, type ConnectionEndpoint } from "../types/connections";
+import { buildConnectionEndpoints, resolveConnectionTarget, verifyConnectionEndpoints } from "../connections/verifier";
 import type { ConversationContext, ConversationState, UserPreferences } from "../types";
 import { logger } from "../utils/logger";
 import { loadTools } from "./tool-loader";
@@ -21,6 +23,7 @@ import {
   type ReasoningTraceProvenance,
 } from "../pce/api/reasoning-trace-store";
 import { AgentEventBus } from "./event-bus";
+import { createTextAgentResponse } from "./schemas/agent-response";
 import type { BaseTool } from "../tools/BaseTool";
 import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-intents";
 import {
@@ -69,7 +72,7 @@ import {
   attackPathChain,
   listInternetExposedVmsChain,
 } from "../reasoning/chains/exposure";
-import { detectActionIntent } from "../reasoning/action-intents";
+import { detectActionIntent, extractCreateVmParameters } from "../reasoning/action-intents";
 import {
   buildApplicationManifest,
   parseCompoundApplicationRequest,
@@ -740,6 +743,8 @@ export type AgentRunOptions = {
   conversationContext?: ConversationContext;
   userPreferences?: UserPreferences;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>; // Previous messages in conversation
+  /** Cooperatively stops the run. In-flight tools finish before the run becomes idle. */
+  signal?: AbortSignal;
   /** When set (e.g. by PCE API), used to inject profile public key into create_vm params for dashboard users */
   getProfilePublicKey?: (userId: string) => string | null;
   /** When set (e.g. by PCE API), used to inject profile SSH username into create_vm params for dashboard users */
@@ -763,6 +768,8 @@ export async function runAgent(
 ): Promise<AgentResponse> {
   const options: AgentRunOptions =
     typeof optionsOrStream === "boolean" ? { stream: optionsOrStream } : optionsOrStream ?? {};
+
+  options.signal?.throwIfAborted();
 
   if (options.stream) {
     logger.warn("Streaming mode is not available with tool orchestration; defaulting to non-streaming mode.");
@@ -1568,6 +1575,57 @@ export async function runAgent(
   } else if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
 
+    if (actionIntent.type === "install_service" && ["nginx", "docker"].includes(actionIntent.service)) {
+      const actionName = actionIntent.service === "nginx" ? "services.install_nginx" : "services.install_docker";
+      emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "install_service", tool: "action" });
+      const result = await executeToolCall({
+        toolName: "action",
+        parameters: { action: actionName, params: { vmName: actionIntent.vmName } },
+      }, tools, { userId: session.userId, aclGroup: session.aclGroup, sessionId });
+      const data = (result as any)?.data;
+      const ok = (result as any)?.success === true || data?.success === true;
+      const message = data?.message || (result as any)?.message || (result as any)?.error || "Action completed.";
+      let connections: ConnectionEndpoint[] = [];
+      const parsedTarget = ConnectionTargetSchema.safeParse(data?.connectionTarget);
+      if (ok && parsedTarget.success) {
+        const target = await resolveConnectionTarget(parsedTarget.data);
+        const candidates = buildConnectionEndpoints(target);
+        if (candidates.length > 0) {
+          eventBus.emit({ type: "connection:update", sessionId, timestamp: Date.now(), data: { type: "connection:update", phase: "candidates", resource: target.hostname, endpoints: candidates } });
+          connections = await verifyConnectionEndpoints(candidates, target.ipAddresses, {
+            signal: options.signal,
+            sshDeadlineMs: Number(process.env.CONNECTION_SSH_DEADLINE_MS || 300_000),
+            httpDeadlineMs: Number(process.env.CONNECTION_HTTP_DEADLINE_MS || 120_000),
+            retryIntervalMs: Number(process.env.CONNECTION_RETRY_INTERVAL_MS || 5_000),
+            onUpdate: (endpoints) => {
+              eventBus.emit({ type: "connection:update", sessionId, timestamp: Date.now(), data: {
+                type: "connection:update",
+                phase: endpoints.every((endpoint) => endpoint.status !== "pending") ? "complete" : "verifying",
+                resource: target.hostname,
+                endpoints,
+              } });
+            },
+          });
+          data.connections = connections;
+        }
+      }
+      const text = ok
+        ? `ServiceInstall | service=${actionIntent.service} | vm=${actionIntent.vmName} | message=${formatStructuredFieldValue(message)}`
+        : `Error | action=${actionName} | vm=${actionIntent.vmName} | message=${formatStructuredFieldValue(message)}`;
+      const structuredResponse = createTextAgentResponse(text, { state: "IDLE" });
+      if (connections.length > 0) structuredResponse.answer.sections.push({ type: "connections", title: "Connections", data: connections });
+      emitFinalEvent(eventBus, sessionId, startTime, text, {
+        classification: state.classification,
+        conversationState: state.postExecutionState,
+        conversationContext: state.finalContextUpdate,
+        totalSteps: 1,
+        totalToolCalls: 1,
+        structuredResponse,
+        connections,
+      });
+      return { text };
+    }
+
     // Deterministic fast-path: create VM requests must include a node; we already extracted it.
     // This avoids relying on the LLM to remember required action params (node is required by CreateVmSchema).
     if (actionIntent.type === "create_vm") {
@@ -1589,7 +1647,8 @@ export async function runAgent(
 
       const params: Record<string, any> = { node };
       if (name && name.trim().length > 0) params.name = name.trim();
-      if (/\bdry\s*run\b/i.test(userInput) || /\bdryrun\b/i.test(userInput) || /\bpreview\b/i.test(userInput) || /\bplan\b/i.test(userInput)) {
+      Object.assign(params, extractCreateVmParameters(userInput));
+      if (/\bdry(?:\s|-)*run\b/i.test(userInput) || /\bpreview\b/i.test(userInput) || /\bplan\b/i.test(userInput)) {
         params.dryRun = true;
       }
       if (options.getProfilePublicKey && session.userId) {
@@ -1610,7 +1669,7 @@ export async function runAgent(
           },
         },
         tools,
-        { userId: session.userId, aclGroup: session.aclGroup }
+        { userId: session.userId, aclGroup: session.aclGroup, sessionId }
       );
 
       const data = (result as any)?.data;
@@ -1618,6 +1677,56 @@ export async function runAgent(
       const message = data?.message || (result as any)?.message || (result as any)?.error || "Action completed.";
       const vmId = data?.vmId || data?.vmid || data?.id;
       const hostname = data?.hostname || data?.name;
+      let connections: ConnectionEndpoint[] = [];
+
+      const connectionTarget = ConnectionTargetSchema.safeParse(data?.connectionTarget);
+      if (ok && connectionTarget.success) {
+        const target = await resolveConnectionTarget(connectionTarget.data);
+        options.signal?.throwIfAborted();
+        const candidates = buildConnectionEndpoints(target);
+        if (candidates.length > 0) {
+          eventBus.emit({
+            type: "connection:update",
+            sessionId,
+            timestamp: Date.now(),
+            data: { type: "connection:update", phase: "candidates", resource: target.hostname, endpoints: candidates },
+          });
+          eventBus.emitProgress({
+            toolName: "connection_verifier",
+            action: "verify_connections",
+            status: "verifying",
+            message: `Verifying ${candidates.length} connection endpoint(s) for ${target.hostname}...`,
+            progress: 0.85,
+          }, sessionId);
+          connections = await verifyConnectionEndpoints(candidates, target.ipAddresses, {
+            signal: options.signal,
+            sshDeadlineMs: Number(process.env.CONNECTION_SSH_DEADLINE_MS || 300_000),
+            retryIntervalMs: Number(process.env.CONNECTION_RETRY_INTERVAL_MS || 5_000),
+            onUpdate: (endpoints) => {
+              eventBus.emit({
+                type: "connection:update",
+                sessionId,
+                timestamp: Date.now(),
+                data: {
+                  type: "connection:update",
+                  phase: endpoints.every((endpoint) => endpoint.status !== "pending") ? "complete" : "verifying",
+                  resource: target.hostname,
+                  endpoints,
+                },
+              });
+            },
+          });
+          data.connections = connections;
+          const failed = connections.some((endpoint) => endpoint.status === "failed");
+          eventBus.emitProgress({
+            toolName: "connection_verifier",
+            action: "verify_connections",
+            status: failed ? "failed" : "completed",
+            message: `${connections.filter((endpoint) => endpoint.status === "verified").length}/${connections.length} connection endpoint(s) verified for ${target.hostname}.`,
+            progress: 1,
+          }, sessionId);
+        }
+      }
 
       const text = ok
         ? `VMCreate | node=${node} | ${hostname ? `name=${hostname} | ` : ""}${vmId ? `vmid=${vmId} | ` : ""}message=${formatStructuredFieldValue(message)}`
@@ -1667,11 +1776,20 @@ export async function runAgent(
         logger.warn("Failed to record reasoning trace for create_vm", { error: error.message });
       }
 
+      const structuredResponse = createTextAgentResponse(text, {
+        state: "IDLE",
+        traceId: createVmTraceId,
+      });
+      if (connections.length > 0) {
+        structuredResponse.answer.sections.push({ type: "connections", title: "Connections", data: connections });
+      }
       emitFinalEvent(eventBus, sessionId, startTime, text, {
         classification: state.classification,
         conversationState: state.postExecutionState,
         conversationContext: state.finalContextUpdate,
         traceId: createVmTraceId,
+        structuredResponse,
+        connections,
       });
       return { text };
     }
@@ -1876,8 +1994,10 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     // Skip ALL query intents (including firewall) - let the LLM handle action execution
     // The LLM will use the action tool with proper parameters
     // For compound requests (e.g., "install nginx and configure firewall"), the LLM will execute sequentially
-  } else {
-    // Only check query intents if no action intent was detected.
+  } else if (classification.intent !== "ACTION") {
+    // Only check query intents when the classifier also considers this a read.
+    // An ACTION that the deterministic parser does not recognize must continue
+    // to the LLM action path instead of being intercepted by a twin-first read.
     // Composite queries (e.g. node + exposure, subnet + level) skip twin-first and use EXECUTE path.
     const directFirewallIntent = detectFirewallIntent(userInput);
     const supportsDirectFirewallComposite =
