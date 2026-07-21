@@ -141,6 +141,48 @@ export function isStuckOnEmptyStep(
   return consecutiveEmptySteps >= threshold;
 }
 
+/**
+ * True when a step emitted tool calls but every one was filtered out as an exact
+ * duplicate of a call already tried this run (via the seenToolCalls dedup) — so the step
+ * burned an LLM turn for zero new information. Distinct from an empty step (which carries
+ * no tool_calls at all): isStuckOnEmptyStep()'s counter never sees this case because the
+ * raw LLM response *did* carry tool_calls, so consecutiveEmptySteps was reset. Evidenced
+ * live in RV-CRASH-05 and F-08 (2026-07-21 fuzz-campaign residuals — steps that are 100%
+ * duplicate_detected, zero real tool calls). Folded into the same stuck-detection budget
+ * as empty steps because more of the same re-proposed calls can't help either.
+ */
+export function isDuplicateOnlyStep(params: {
+  toolCallCount: number;
+  duplicateCount: number;
+  executedCount: number;
+}): boolean {
+  const { toolCallCount, duplicateCount, executedCount } = params;
+  return toolCallCount > 0 && executedCount === 0 && duplicateCount > 0;
+}
+
+/**
+ * At the MAX_STEPS boundary, decide whether to attempt a final tool-free synthesis from
+ * the results already gathered instead of discarding everything behind the canned "max
+ * reasoning depth" message. Gated on "at least one tool call this run succeeded": with no
+ * successful data there is nothing to synthesize from, so the canned message stays the
+ * honest answer. See RV-CRASH-03/RV-CRASH-05 (2026-07-21 fuzz-campaign residual), which
+ * reached the budget holding genuinely-answerable data then threw it away.
+ */
+export function shouldSynthesizeAtBoundary(succeededToolCallCount: number): boolean {
+  return succeededToolCallCount > 0;
+}
+
+/** User-facing message when the step budget is exhausted with nothing to synthesize. */
+export const MAX_STEPS_CANNED_MESSAGE = "Max reasoning depth reached. Please try a simpler query.";
+
+/** Instruction for the boundary-synthesis LLM call (no tools are offered on this call). */
+export const MAX_STEPS_SYNTHESIS_INSTRUCTION =
+  "You have reached the maximum number of reasoning steps and can no longer call any tools. " +
+  "Using ONLY the tool results already gathered earlier in this conversation, give the best answer " +
+  "you can to the user's question. Summarize what the tool results actually show. If they only " +
+  "partially answer the question, provide the partial answer and briefly note what could not be " +
+  "determined. Do not invent data that is not present in the tool results.";
+
 export interface HandleExecuteInput {
   state: AgentStateV1;
   userInput: string;
@@ -744,6 +786,9 @@ export async function handleExecute(
   // Track consecutive steps where the LLM produced neither a tool call nor final text.
   // See isStuckOnEmptyStep() for why this needs its own guard, separate from MAX_STEPS.
   let consecutiveEmptySteps = 0;
+  // Count tool calls that actually executed and succeeded this run — gates boundary
+  // synthesis (Residual 2): only synthesize a final answer if there is real data to use.
+  let succeededToolCallCount = 0;
   let discoveredNodeCount = 0;
   let queriedNodeCount = 0;
   let expectedProxmoxNodes: string[] = []; // Track which Proxmox nodes we expect to query
@@ -938,7 +983,11 @@ export async function handleExecute(
 
     const toolCalls = ((message?.tool_calls as any[]) ?? []) as Array<any>;
     if (toolCalls.length) {
-      consecutiveEmptySteps = 0;
+      // Per-step productivity counters (Residual 1: duplicate-only-step stall). A step
+      // that executes at least one tool call made forward progress; a step whose calls
+      // were ALL filtered as duplicates made none. Assessed after the batch, below.
+      let executedToolCallsThisStep = 0;
+      let duplicateToolCallsThisStep = 0;
       // Limit tool calls per step to prevent flooding
       if (toolCalls.length > MAX_TOOL_CALLS_PER_STEP) {
         logger.warn(`Too many tool calls in step ${step + 1} (${toolCalls.length}), limiting to ${MAX_TOOL_CALLS_PER_STEP}`);
@@ -1066,6 +1115,8 @@ export async function handleExecute(
           if (!toolResult) continue;
 
           const { toolCall, toolName, parsedArgs, result, provenanceId } = toolResult;
+          executedToolCallsThisStep++;
+          if (!result.error) succeededToolCallCount++;
 
           // Track node queries
           if (isAllNodesQuery && !result.error) {
@@ -1200,6 +1251,7 @@ export async function handleExecute(
           ? `${toolName}:${parsedArgs.operation}:${parsedArgs.params?.nodeName || "all"}`
           : `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
         if (seenToolCalls.has(callSignature)) {
+          duplicateToolCallsThisStep++;
           logger.warn(`Duplicate tool call detected, skipping: ${callSignature}`);
           reasoningStep.decisions.push({
             type: "duplicate_detected",
@@ -1219,6 +1271,7 @@ export async function handleExecute(
         if (toolName === "proxmox_write" && parsedArgs.action && parsedArgs.vmid && parsedArgs.node) {
           const similarSignature = `${toolName}:${parsedArgs.action}:${parsedArgs.vmid}:${parsedArgs.node}`;
           if (seenToolCalls.has(similarSignature)) {
+            duplicateToolCallsThisStep++;
             logger.warn(`Similar proxmox_write call detected, skipping: ${similarSignature}`);
             reasoningStep.decisions.push({
               type: "duplicate_detected",
@@ -1447,6 +1500,7 @@ export async function handleExecute(
           await attachVerifiedConnections(result);
           throwIfStopped();
         }
+        executedToolCallsThisStep++;
 
         // Emit tool:complete event
         eventBus.emit({
@@ -1479,6 +1533,7 @@ export async function handleExecute(
           durationMs: result.durationMs ?? 0,
         });
         if (!result.error) {
+          succeededToolCallCount++;
           resolvedVmEntity =
             extractResolvedVmEntity(toolName, result.data) ?? resolvedVmEntity;
         }
@@ -1761,8 +1816,44 @@ export async function handleExecute(
         return { text: confirmationAbort.prompt, entityCacheUpdate };
       }
 
+      // Productivity assessment (Residual 1). A step whose tool calls were ALL filtered as
+      // duplicates made zero forward progress — the same stall the empty-step guard handles,
+      // except the raw LLM response carried tool_calls so consecutiveEmptySteps never saw it.
+      // Fold it into the same counter/threshold: nudge once so the next attempt has a
+      // genuinely different prompt, then stop if it recurs, instead of burning the rest of
+      // the budget re-proposing the identical calls (see RV-CRASH-05/F-08 in the report).
+      let stuckBreakThisStep = false;
+      if (executedToolCallsThisStep > 0) {
+        consecutiveEmptySteps = 0;
+      } else if (
+        isDuplicateOnlyStep({
+          toolCallCount: toolCalls.length,
+          duplicateCount: duplicateToolCallsThisStep,
+          executedCount: executedToolCallsThisStep,
+        })
+      ) {
+        consecutiveEmptySteps++;
+        reasoningStep.decisions.push({
+          type: "empty_step",
+          description: `All ${duplicateToolCallsThisStep} tool call(s) this step were filtered as duplicates — zero new information (${consecutiveEmptySteps} consecutive unproductive)`,
+          metadata: { consecutiveEmptySteps, duplicateToolCalls: duplicateToolCallsThisStep },
+        });
+        if (isStuckOnEmptyStep(consecutiveEmptySteps)) {
+          logger.warn(
+            `Stuck: ${consecutiveEmptySteps} consecutive unproductive (duplicate-only) steps, stopping early`,
+            { userInput: userInput.slice(0, 80), step: step + 1 }
+          );
+          stuckBreakThisStep = true;
+        } else {
+          context.addUserMessage(
+            "Every tool call you just made repeats a call already tried this session, so it returned no new information. Either answer the question now using the results you already have, or call a different tool (or the same tool with different parameters). Do not repeat an identical call."
+          );
+        }
+      }
+
       // Record this reasoning step
       reasoningSteps.push(reasoningStep);
+      if (stuckBreakThisStep) break;
       continue;
     }
 
@@ -1966,8 +2057,60 @@ export async function handleExecute(
     );
   }
 
-  // Max steps reached (or stopped early — see isStuckOnEmptyStep above) - record trace
+  // Max steps reached (or stopped early — see isStuckOnEmptyStep above).
   const durationMs = Date.now() - startTime;
+
+  // Residual 2 (boundary-synthesis discard): rather than always discarding every tool
+  // result gathered this run behind the canned "max reasoning depth" message, make one
+  // final tool-free LLM call to synthesize an answer from the results already in context —
+  // but only when at least one tool call actually succeeded this run (otherwise there's
+  // nothing to synthesize and the canned message is the honest answer). Evidenced by
+  // RV-CRASH-03/RV-CRASH-05 (2026-07-21 fuzz campaign), which reached the budget holding
+  // genuinely-answerable data (real uptime/df -h; real twin_query results) then threw it
+  // all away. Any failure here degrades cleanly back to the canned message.
+  let boundaryText = MAX_STEPS_CANNED_MESSAGE;
+  let boundarySynthesized = false;
+  if (shouldSynthesizeAtBoundary(succeededToolCallCount)) {
+    try {
+      const synthesisMessages = [
+        { role: "system", content: buildSystemPrompt(state.responseMode) },
+        ...ragMessage,
+        ...context.getMessages(),
+        { role: "system", content: MAX_STEPS_SYNTHESIS_INSTRUCTION },
+      ] as any[];
+      const synthResponse = await client.chat.completions.create(
+        { model: "gpt-4o-mini", messages: synthesisMessages },
+        { signal: options.signal }
+      );
+      throwIfStopped();
+      const synthText = coerceTextContent(synthResponse.choices[0]?.message?.content).trim();
+      if (synthText) {
+        boundaryText = prettifyRawPfctlText(synthText);
+        boundarySynthesized = true;
+        context.addAssistantMessage(boundaryText);
+        logger.info("Boundary synthesis produced an answer from gathered tool results", {
+          succeededToolCallCount,
+          totalSteps: reasoningSteps.length,
+          query: userInput.slice(0, 80),
+        });
+      }
+    } catch (error: any) {
+      logger.warn("Boundary synthesis failed; falling back to canned max-steps message", {
+        error: error?.message,
+      });
+    }
+  }
+  const lastReasoningStep = reasoningSteps[reasoningSteps.length - 1];
+  if (lastReasoningStep) {
+    lastReasoningStep.decisions.push({
+      type: boundarySynthesized ? "boundary_synthesis" : "limit_reached",
+      description: boundarySynthesized
+        ? `Synthesized a final answer from ${succeededToolCallCount} successful tool call(s) at the step-budget boundary`
+        : "Reached the step budget with no successful tool data to synthesize from",
+      metadata: { succeededToolCallCount, totalSteps: reasoningSteps.length },
+    });
+  }
+
   let traceId: string | undefined;
   try {
     const traceStore = getReasoningTraceStore();
@@ -1975,7 +2118,7 @@ export async function handleExecute(
       userId: session.userId,
       aclGroup: session.aclGroup,
       userInput,
-      finalResponse: "Max reasoning depth reached. Please try a simpler query.",
+      finalResponse: boundaryText,
       steps: reasoningSteps,
       provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
       artifacts: retrievalArtifacts,
@@ -1989,7 +2132,7 @@ export async function handleExecute(
     logger.warn("Failed to record reasoning trace", { error: error.message });
   }
 
-  emitFinalEvent(eventBus, sessionId, startTime, "Max reasoning depth reached. Please try a simpler query.", {
+  emitFinalEvent(eventBus, sessionId, startTime, boundaryText, {
     totalSteps: reasoningSteps.length,
     totalToolCalls,
     traceId,
@@ -1997,5 +2140,5 @@ export async function handleExecute(
     conversationContext: state.contextUpdate,
   });
 
-  return { text: "Max reasoning depth reached. Please try a simpler query.", entityCacheUpdate };
+  return { text: boundaryText, entityCacheUpdate };
 }

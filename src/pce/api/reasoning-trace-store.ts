@@ -40,7 +40,8 @@ export interface ReasoningStep {
       | "validation_failed"
       | "failure_limit_reached"
       | "failure_reclassification"
-      | "empty_step";
+      | "empty_step"
+      | "boundary_synthesis";
     description: string;
     metadata?: Record<string, any>;
   }>;

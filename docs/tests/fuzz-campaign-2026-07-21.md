@@ -392,3 +392,64 @@ So the *data* returned is already correctly scoped to VLAN 50 in every observed 
 | F-06 (raw pfctl dump) | **Fixed** — targeted post-process in the EXECUTE-path finalization; live-reverified across 2 distinct bad-output shapes. |
 | C-01 (VLAN-50 scoping) | **Flagged, not reproducible** — already correctly scoped on `b8cdc34`; the original "not fixed" table's description doesn't match its own underlying trace evidence. Added a regression test to lock in current-correct behavior. |
 | H-05 residual (optional) | **Fixed** — confirmation preview text no longer shows an implausible single-character target; execution-time safety untouched (was already sufficient). |
+
+---
+
+## 2026-07-21 residuals session — duplicate-call thrashing + boundary-synthesis discard
+
+**Branch:** `realAgent` @ `960218f` (HEAD at session start, clean working tree). **Scope:** the two `MAX_STEPS`-policy residuals deliberately left unfixed by the follow-up session above (see "Residuals — repro evidence for a future session"), both in `src/agent/handlers/handle-execute.ts`. **Files touched:** `src/agent/handlers/handle-execute.ts`, `src/pce/api/reasoning-trace-store.ts` (one-line decision-type addition), `tests/agent/max-steps-policy.test.ts` (extended). No commit — diff left for review.
+
+**Environment:** `palindrome` was cold at session start; brought up with `PCE_INGESTION_ENABLED=1 pc-stacks up palindrome` (Neo4j/Qdrant/Ollama recreated, `pce_documents` Qdrant collection + Neo4j twin data confirmed intact — the `clear-vector-store` hazard flagged above did **not** trigger this time). The shared `pce-api` process on `:4000` was ~45 min old at session start (started 15:30, so it already carried the `45d1988` MAX_STEPS code the residuals live in) — used **read-only** for "before" reproduction only. Ports `:4000` **and** `:4001` were both already occupied by pre-existing bun processes (the stale-process hazard flagged above, twice over), so all post-fix live verification ran against a fresh isolated `PCE_API_PORT=4007 bun run src/pce/api/main.ts` instance carrying this session's source; the shared Docker stack and `:4000`/`:4001` processes were never restarted.
+
+**Reproduced live before touching code (per the standing instruction not to trust the report's own "before" descriptions).** Findings partly diverged from the prior session's write-up — flagged rather than glossed:
+- `RV-CRASH-05` ("For every stopped VM...") reproduced **both** residuals in a single run: MAXSTEPS at `totalSteps: 8`, with duplicate-only steps 4/5/7/8 (`calls=[]`, `dup≥1`, zero real executions) **and** multiple successful `twin_query` results (steps 1/2/3/6) all discarded behind the canned `"Max reasoning depth reached."` message. Trace `bcb0bfce-fb48-4bb9-9edf-9aa28621aee5`.
+- `F-08` ("...dual-homed VMs...exposed?") did **not** MAXSTEPS this run (LLM recovered with final text at step 3), but step 2 was a clean duplicate-only step (`dup=1`, `calls=[]`) — the residual-1 pattern in isolation. Trace `977f3f9a-...`.
+- `RV-CRASH-03` ("...system status of the OPNsense box?") did **not** MAXSTEPS this run either — it synthesized `uptime`+`df -h` at step 4, within the base budget (LLM variance vs. the prior session's documented 5-step MAXSTEPS). So `RV-CRASH-05` — not `RV-CRASH-03` — was the reliable live repro of the boundary discard this session.
+
+### Residual 1 — duplicate-call thrashing: **fixed**
+
+**Root cause (confirmed from source + live traces):** `isStuckOnEmptyStep()`'s `consecutiveEmptySteps` counter (and the reset at the top of the `if (toolCalls.length)` branch) only ever saw steps where the raw LLM response carried **zero** `tool_calls`. When the LLM instead emits `tool_calls` that are all exact repeats of already-tried calls, the existing `seenToolCalls` dedup correctly filters them (records a `duplicate_detected` decision, adds a "duplicate" tool-role result, executes nothing) — but the step still "had tool_calls", so `consecutiveEmptySteps` was reset to 0 and the stuck-detector never fired. A run could burn its entire remaining budget on such steps (RV-CRASH-05 steps 4/5/7/8).
+
+**Fix:** added a pure exported predicate `isDuplicateOnlyStep({ toolCallCount, duplicateCount, executedCount })` (true iff the step emitted ≥1 tool call, executed none, and ≥1 was filtered as a duplicate). Wired per-step counters (`executedToolCallsThisStep`, `duplicateToolCallsThisStep`) through both the sequential and parallel tool-dispatch paths, and moved the `consecutiveEmptySteps` reset out of the unconditional top-of-branch position to a post-batch **productivity assessment**: a step that executed ≥1 real call resets the counter; a duplicate-only step increments the **same** `consecutiveEmptySteps`/`EMPTY_STEP_STUCK_THRESHOLD` budget the empty-step guard already uses, records an `empty_step` decision, and — mirroring the empty-step handler — injects a **one-time corrective nudge** ("every tool call you just made repeats a call already tried... answer now or call a *different* tool") before continuing, breaking early only if it recurs. This is exactly the "extend the stuck-detection to also count a step whose tool calls were entirely filtered as duplicates" direction the prior session suggested; the nudge (rather than a bare break) gives the model a chance to recover with a genuinely different prompt.
+
+**Live re-verification (isolated `:4007`, this session's source):** `RV-CRASH-05` — the duplicate-only steps now carry `empty_step` decisions (they're counted), and the nudge visibly worked: the model recovered real `twin_query` progress after each stall (steps 3/6/8 duplicate-only → steps 4/5/7 each a fresh successful call), `totalToolCalls: 9` with 4+ successes vs. the pre-fix stall. `F-08` — completed in 3 steps with a correct answer; step 1 had a duplicate alongside a real call, so `executedToolCallsThisStep>0` → correctly **not** flagged as duplicate-only (no spurious nudge). No fast-path regression (see below).
+
+### Residual 2 — boundary-synthesis discard: **fixed**
+
+**Root cause:** when `MAX_STEPS` is hit (or the loop breaks early on a stall), the handler emitted a hardcoded `"Max reasoning depth reached. Please try a simpler query."` and discarded every tool result gathered during the run — even when some calls succeeded and held a genuinely answerable result (RV-CRASH-03's real `uptime`+`df -h`; RV-CRASH-05's real `twin_query` stopped-VM/node data).
+
+**Fix:** track `succeededToolCallCount` across the run (incremented wherever a tool call returns without error, in both dispatch paths). At the boundary, gate on a pure exported predicate `shouldSynthesizeAtBoundary(succeededToolCallCount)` (`> 0`): when true, make **one final tool-free LLM call** (`gpt-4o-mini`, no `tools` offered) over the accumulated conversation context — which already contains every tool result — with a `MAX_STEPS_SYNTHESIS_INSTRUCTION` telling it to answer using only the gathered results, note what couldn't be determined, and not fabricate. The synthesized text is run through the existing `prettifyRawPfctlText()` and returned; the trace records a new `boundary_synthesis` decision. With zero successful data (`shouldSynthesizeAtBoundary` false) the exported `MAX_STEPS_CANNED_MESSAGE` stays the honest answer, and any error in the synthesis call degrades cleanly back to it. Deliberately scoped to a single extra LLM call only at the boundary — fast/complete queries never reach it, so no latency/cost change for the common case.
+
+**Live re-verification (isolated `:4007`):**
+
+| Query | Before (documented / this-session repro) | After |
+|---|---|---|
+| `RV-CRASH-03` "...system status of the OPNsense box?" | MAXSTEPS → canned message, real `uptime`+`df -h` discarded | ✅ MAXSTEPS (`totalSteps: 5`), **but** `boundary_synthesis` fires → real answer: `system_status \| uptime="...up 59 days..." \| disk_usage="...23G 10G 11G 49% /..."`, honestly noting memory unreadable (`free -h` absent on BSD). Trace `55138122-...` |
+| `RV-CRASH-05` "For every stopped VM..." | MAXSTEPS → canned message, real `twin_query` results discarded | ✅ MAXSTEPS (`totalSteps: 8`), `boundary_synthesis` at step 8 → real table (`ubuntu-cloudinit-template \| YANG \| None`, ...) with an honest "could not be confirmed due to tool call limits" note for the one unqueried node. Trace `23bc2a02-...` |
+
+### No regressions
+
+Fast-path queries re-checked on `:4007` — `"What VMs are on yang?"` (2 steps), `"What is the uptime of pihole?"` (3 steps), `"List all firewall aliases"` (2 steps) — all complete normally, no `empty_step`, no `boundary_synthesis`, no `maxStepsReached`. Boundary synthesis only fires at the budget boundary, as designed.
+
+### Test seam & verification gates
+
+- **Unit tests** (`tests/agent/max-steps-policy.test.ts`, +6 cases): the two new predicates are pure and unit-tested directly — `isDuplicateOnlyStep` (all-duplicate → true; any real execution → false; empty/parse-error steps → false) and `shouldSynthesizeAtBoundary` (`>0` → true, `0` → false), plus a lock on `MAX_STEPS_CANNED_MESSAGE`. Same test-seam judgment as every prior session for this file: `handleExecute()` has no mock-free OpenAI seam (module-level singleton client, 30+ input fields), so the pure decision helpers are unit-tested and the loop wiring (nudge, early-break, synthesis call) is verified live above. Both new functions did not exist pre-fix, so the extended test file's imports fail to compile on baseline (pre-fix fail evidence); all 16 pass on the fix.
+- `bun run --bun tsc --noEmit`: clean.
+- `bun test` (full suite): **732 pass / 67 fail / 11 skip** (810 total). The documented baseline at `960218f` was 727/66/11; the +5 net passes are this session's 6 new deterministic unit cases (minus one full-suite-concurrency flake). Diffed all 67 failing names against the documented baseline buckets — every one is a pre-existing `TL-2A.1`/`TL-2A.2`/`TL-2A.4`/`TL-2A.6.A` (live Proxmox/OPNsense credentials, not configured in this sandbox), `TL-1A.5` (End-to-End PCE, calls the live server), `Proxmox credential pairing` (known env-var-order flake), or `runner-confirmation-flow.test.ts` (known-flaky **live-LLM** test) failure. The single +1 over baseline is that last one: `"confirmed compound request executes one deterministic lifecycle manifest"`, whose failure mode is a live-LLM clarification (`"Which VMID is this for?"`) on a code path this diff never touches — confirmed flaky by running it in isolation (2 fail / 1 pass across 3 consecutive runs *with* the fix applied; passed cleanly on a stashed-baseline run too). **Zero failures in any file this session touched; zero new deterministic regressions.**
+- `.pce-dod-test/snapshots.json` / `.pce-ib-dod-test/snapshots.json`: reverted after the full run regenerated them with fresh timestamps.
+- Scratch driver (`scripts/_residual-repro.ts`, a base-URL-parametrized SSE repro/verify harness used for both `:4000` before and `:4007` after) created, used, and deleted.
+
+### Files changed (this session)
+
+| File | Change |
+|---|---|
+| `src/agent/handlers/handle-execute.ts` | Residual 1: `isDuplicateOnlyStep()` (new, exported, pure) + per-step executed/duplicate counters across both dispatch paths + post-batch productivity assessment (nudge + fold into `consecutiveEmptySteps`/stuck-break). Residual 2: `shouldSynthesizeAtBoundary()` (new, exported, pure) + `succeededToolCallCount` tracking + `MAX_STEPS_CANNED_MESSAGE`/`MAX_STEPS_SYNTHESIS_INSTRUCTION` constants + a final tool-free synthesis LLM call at the boundary. |
+| `src/pce/api/reasoning-trace-store.ts` | Added `"boundary_synthesis"` to the reasoning-step decision-type union (one line; matches how `"empty_step"` was added the prior session). |
+| `tests/agent/max-steps-policy.test.ts` | Extended (+6 cases) for `isDuplicateOnlyStep`, `shouldSynthesizeAtBoundary`, `MAX_STEPS_CANNED_MESSAGE`. |
+
+### Summary: fixed vs. flagged
+
+| Residual | Outcome |
+|---|---|
+| 1 — duplicate-call thrashing | **Fixed** — duplicate-only steps now count toward the same stuck-detection budget as empty steps (with a one-time corrective nudge first); live-reverified on `RV-CRASH-05` (recovers real progress) and `F-08` (no false positive). |
+| 2 — boundary-synthesis discard | **Fixed** — at the budget boundary, a final tool-free LLM call synthesizes an answer from gathered results when ≥1 tool call succeeded, instead of discarding everything; live-reverified on `RV-CRASH-03` (real `uptime`+`df -h` answer) and `RV-CRASH-05` (real stopped-VM table). Degrades cleanly to the canned message otherwise. |

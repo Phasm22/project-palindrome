@@ -2,9 +2,12 @@ import { expect, test } from "bun:test";
 import {
   computeMaxSteps,
   isStuckOnEmptyStep,
+  isDuplicateOnlyStep,
+  shouldSynthesizeAtBoundary,
   BASE_MAX_STEPS,
   EXTENDED_MAX_STEPS,
   EMPTY_STEP_STUCK_THRESHOLD,
+  MAX_STEPS_CANNED_MESSAGE,
 } from "../../src/agent/handlers/handle-execute";
 
 /**
@@ -95,4 +98,51 @@ test("isStuckOnEmptyStep is true at and above the threshold", () => {
 test("isStuckOnEmptyStep respects a custom threshold", () => {
   expect(isStuckOnEmptyStep(2, 3)).toBe(false);
   expect(isStuckOnEmptyStep(3, 3)).toBe(true);
+});
+
+/**
+ * Residual 1 — duplicate-call thrashing (2026-07-21 fuzz campaign residual).
+ * A step where the LLM emitted tool_calls but every one was filtered as an exact duplicate
+ * (RV-CRASH-05 steps 4/5/7/8, F-08 step 2 — live-reproduced this session) makes zero forward
+ * progress yet, before this fix, never tripped isStuckOnEmptyStep because the raw response
+ * carried tool_calls. isDuplicateOnlyStep() is the pure predicate folding it into the same
+ * stuck-detection budget.
+ */
+test("isDuplicateOnlyStep is true when every emitted tool call was a duplicate", () => {
+  // RV-CRASH-05 step 4/5: 3 tool calls, all filtered as duplicates, none executed.
+  expect(isDuplicateOnlyStep({ toolCallCount: 3, duplicateCount: 3, executedCount: 0 })).toBe(true);
+  // RV-CRASH-05 step 7/8, F-08 step 2: a single duplicate-only call.
+  expect(isDuplicateOnlyStep({ toolCallCount: 1, duplicateCount: 1, executedCount: 0 })).toBe(true);
+});
+
+test("isDuplicateOnlyStep is false when at least one call actually executed", () => {
+  // RV-CRASH-05 step 3/6: a real tool call alongside duplicates is still forward progress.
+  expect(isDuplicateOnlyStep({ toolCallCount: 4, duplicateCount: 3, executedCount: 1 })).toBe(false);
+  expect(isDuplicateOnlyStep({ toolCallCount: 2, duplicateCount: 0, executedCount: 2 })).toBe(false);
+});
+
+test("isDuplicateOnlyStep is false for a step with no tool calls or no duplicates", () => {
+  // A genuinely empty step (no tool_calls) is handled by the empty-step guard, not this one.
+  expect(isDuplicateOnlyStep({ toolCallCount: 0, duplicateCount: 0, executedCount: 0 })).toBe(false);
+  // A step with tool calls that all failed to parse (but weren't duplicates) is not this stall.
+  expect(isDuplicateOnlyStep({ toolCallCount: 2, duplicateCount: 0, executedCount: 0 })).toBe(false);
+});
+
+/**
+ * Residual 2 — boundary-synthesis discard (2026-07-21 fuzz campaign residual).
+ * shouldSynthesizeAtBoundary() gates the final tool-free synthesis LLM call on "at least one
+ * tool call succeeded this run" (RV-CRASH-03/RV-CRASH-05 reached the budget holding real,
+ * answerable data). With zero successful data the canned message stays the honest answer.
+ */
+test("shouldSynthesizeAtBoundary is true only when a tool call succeeded this run", () => {
+  expect(shouldSynthesizeAtBoundary(1)).toBe(true);
+  expect(shouldSynthesizeAtBoundary(5)).toBe(true);
+});
+
+test("shouldSynthesizeAtBoundary is false with no successful tool data", () => {
+  expect(shouldSynthesizeAtBoundary(0)).toBe(false);
+});
+
+test("MAX_STEPS_CANNED_MESSAGE is unchanged from the documented fallback text", () => {
+  expect(MAX_STEPS_CANNED_MESSAGE).toBe("Max reasoning depth reached. Please try a simpler query.");
 });
