@@ -4,7 +4,7 @@ import type { ToolSchema } from "../../tool-schema";
 import { createToolSchema } from "../../tool-helpers";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { ProxmoxClient } from "../client";
-import { getProxmoxEndpointConfigs } from "../config";
+import { getProxmoxEndpointConfigs, type ProxmoxEndpointConfig } from "../config";
 import { normalizeProxmoxResponse, normalizeMemory } from "./normalization";
 import { pceLogger } from "../../../pce/utils/logger";
 import { promises as dns } from "dns";
@@ -68,6 +68,19 @@ export type ProxmoxReadOnlyParams = z.infer<typeof ProxmoxReadOnlyParams>;
  * Provides comprehensive read-only access to Proxmox cluster state
  */
 export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
+  // Which configured endpoint answers for a given (normalized) node name,
+  // learned the first time normalizeNodeName() has to fall back to scanning
+  // every endpoint. This is purely informational — it does NOT replace the
+  // per-call this.apiClient reset in execute() below (that reset is
+  // deliberate, to stop one request's endpoint selection leaking into an
+  // unrelated one) — it only lets a repeat lookup for the same node skip
+  // straight to the right endpoint instead of re-scanning all of them.
+  // Without this, ingesting N interfaces/VMs against a multi-endpoint
+  // cluster fires N redundant /nodes calls per endpoint per node, which is
+  // what was piling up enough load to eventually time out a plain /nodes
+  // call during network ingestion.
+  private nodeEndpointCache = new Map<string, ProxmoxEndpointConfig>();
+
   constructor() {
     super({
       name: "proxmox_readonly",
@@ -652,24 +665,48 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     const configs = getProxmoxEndpointConfigs();
     const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
     const searchNormalized = normalizeForMatch(nodeName);
+
+    const tryEndpoint = async (cfg: ProxmoxEndpointConfig) => {
+      const endpointClient = new ProxmoxClient({
+        url: cfg.url,
+        tokenId: cfg.tokenId,
+        tokenSecret: cfg.tokenSecret,
+        verifySsl: cfg.verifySsl,
+      });
+      const result = await endpointClient.get("/nodes");
+      const nodes: any[] = Array.isArray(result?.data?.data) ? result.data.data : Array.isArray(result?.data) ? result.data : [];
+      const normalized = nodes.find(
+        (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
+      );
+      return normalized?.node ? { client: endpointClient, resolved: normalized.node as string } : null;
+    };
+
+    // Fast path: this node's endpoint was already discovered earlier in this
+    // tool instance's lifetime — try it directly instead of scanning everyone.
+    const cachedCfg = this.nodeEndpointCache.get(searchNormalized);
+    if (cachedCfg) {
+      try {
+        const hit = await tryEndpoint(cachedCfg);
+        if (hit) {
+          pceLogger.debug(`Found node "${nodeName}" via cached endpoint ${cachedCfg.label ?? cachedCfg.url} (normalized to "${hit.resolved}")`);
+          this.apiClient = hit.client;
+          return hit.resolved;
+        }
+        this.nodeEndpointCache.delete(searchNormalized); // stale, fall through to full scan
+      } catch {
+        this.nodeEndpointCache.delete(searchNormalized);
+      }
+    }
+
     for (const cfg of configs) {
       try {
         pceLogger.debug(`Trying configured endpoint for node "${nodeName}": ${cfg.label ?? cfg.url}`);
-        const endpointClient = new ProxmoxClient({
-          url: cfg.url,
-          tokenId: cfg.tokenId,
-          tokenSecret: cfg.tokenSecret,
-          verifySsl: cfg.verifySsl,
-        });
-        const result = await endpointClient.get("/nodes");
-        const nodes: any[] = Array.isArray(result?.data?.data) ? result.data.data : Array.isArray(result?.data) ? result.data : [];
-        const normalized = nodes.find(
-          (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
-        );
-        if (normalized?.node) {
-          pceLogger.info(`Found node "${nodeName}" on endpoint ${cfg.label ?? cfg.url} (normalized to "${normalized.node}")`);
-          this.apiClient = endpointClient;
-          return normalized.node;
+        const hit = await tryEndpoint(cfg);
+        if (hit) {
+          pceLogger.info(`Found node "${nodeName}" on endpoint ${cfg.label ?? cfg.url} (normalized to "${hit.resolved}")`);
+          this.apiClient = hit.client;
+          this.nodeEndpointCache.set(searchNormalized, cfg);
+          return hit.resolved;
         }
       } catch (altError: any) {
         pceLogger.debug(`Endpoint ${cfg.label ?? cfg.url} failed for node "${nodeName}": ${altError?.message ?? "unknown"}`);
