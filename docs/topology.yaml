@@ -77,6 +77,17 @@ hosts:
     ip: "192.168.71.40"
     network: "home"
 
+  - name: "tj-tp-switch"
+    role: "switch"
+    network: "home"
+    status: "unverified"
+    # Declared only. This is the managed 8-port TP-Link switch between the
+    # home router and the Cisco 2960G (`switch:` block below) — a different
+    # physical device. Its config.cfg export is a proprietary binary format
+    # with no machine-readable structure beyond its hostname ("TJ-TP-Switch")
+    # and one VLAN name ("uplinkHome"); no automated ingestion path exists
+    # yet without live SNMP/CLI access to the switch itself.
+
 containers:
   - name: "lab_pihole"
     type: "lxc"
@@ -144,6 +155,15 @@ dependencies:
   # Services depend on their hosts (auto-inferred from services[].host)
 
 # Optional: Switch/network hardware
+# This declared block is hand-maintained and known to disagree with the
+# switch's real running-config (see docs/network/2960g-running-config-*.txt,
+# parsed by src/parsers/network/cisco-ios-switch-parser.ts): the actual
+# uplink to home is a single port (Gi0/41), not a Gi0/33-34 trunk, and the
+# lab subnet (172.16.0.0/22) rides the switch's untagged default VLAN 1, not
+# VLAN 50 as declared here. Both the declared and observed facts are
+# ingested and kept side by side (see SwitchIngestionOrchestrator) rather
+# than one silently overwriting the other — this block is intentionally
+# left as originally written so that disagreement stays visible.
 switch:
   model: "Cisco 2960G"
   trunk_ports:

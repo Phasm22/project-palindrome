@@ -8,7 +8,18 @@ export enum TwinEntityType {
   FIREWALL_RULE = "firewall_rule",
   FIREWALL_ALIAS = "firewall_alias",
   STORAGE = "storage",
+  SWITCH = "switch",
+  SWITCH_PORT = "switch_port",
 }
+
+// Whether a fact was hand-maintained (topology.yaml) or parsed from a real
+// device config/live read. Kept distinct from `source` (which system produced
+// it, e.g. "proxmox"/"opnsense") because the two axes are independent and a
+// fact's provenance determines how much to trust it when declared and
+// observed facts disagree — see docs/network/ and the truth hierarchy in
+// the lvl3 vision notes.
+export const FactProvenanceSchema = z.enum(["declared", "observed"]);
+export type FactProvenance = z.infer<typeof FactProvenanceSchema>;
 
 const BaseTwinEntitySchema = z.object({
   id: z.string().min(1),
@@ -127,6 +138,35 @@ export const StorageEntitySchema = BaseTwinEntitySchema.extend({
   }),
 });
 
+export const SwitchEntitySchema = BaseTwinEntitySchema.extend({
+  type: z.literal(TwinEntityType.SWITCH),
+  data: z.object({
+    hostname: z.string(),
+    model: z.string().nullable().optional(),
+    managementIps: z.array(z.string()).default([]),
+    role: z.string().nullable().optional(), // e.g. "lab-core", "home-uplink"
+    provenance: FactProvenanceSchema,
+    // Present on the observed record when topology.yaml's hand-maintained
+    // switch: block disagrees with the real parsed config — preserved
+    // instead of silently overwritten. See docs/network/.
+    declaredTrunkPorts: z.array(z.string()).optional(),
+    declaredVlans: z.array(z.number()).optional(),
+  }),
+});
+
+export const SwitchPortEntitySchema = BaseTwinEntitySchema.extend({
+  type: z.literal(TwinEntityType.SWITCH_PORT),
+  data: z.object({
+    switchId: z.string(),
+    portName: z.string(), // e.g. "Gi0/41"
+    mode: z.enum(["access", "trunk"]).nullable().optional(),
+    accessVlan: z.number().nullable().optional(),
+    trunkVlans: z.array(z.number()).default([]),
+    description: z.string().nullable().optional(),
+    provenance: FactProvenanceSchema,
+  }),
+});
+
 export const TwinEntitySchema = z.union([
   ComputeNodeEntitySchema,
   ComputeVmEntitySchema,
@@ -135,6 +175,8 @@ export const TwinEntitySchema = z.union([
   FirewallRuleEntitySchema,
   FirewallAliasEntitySchema,
   StorageEntitySchema,
+  SwitchEntitySchema,
+  SwitchPortEntitySchema,
 ]);
 
 export type TwinEntity = z.infer<typeof TwinEntitySchema>;
@@ -145,4 +187,6 @@ export type NetworkSubnetEntity = z.infer<typeof NetworkSubnetEntitySchema>;
 export type FirewallRuleEntity = z.infer<typeof FirewallRuleEntitySchema>;
 export type FirewallAliasEntity = z.infer<typeof FirewallAliasEntitySchema>;
 export type StorageEntity = z.infer<typeof StorageEntitySchema>;
+export type SwitchEntity = z.infer<typeof SwitchEntitySchema>;
+export type SwitchPortEntity = z.infer<typeof SwitchPortEntitySchema>;
 

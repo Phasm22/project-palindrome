@@ -130,7 +130,7 @@ export async function loadGraph() {
   }
   
   try {
-    const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=200`);
+    const response = await fetch(`${API_URL}/api/dashboard/twin-graph?limit=200`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }

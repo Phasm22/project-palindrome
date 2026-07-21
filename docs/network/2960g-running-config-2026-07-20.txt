@@ -1,0 +1,321 @@
+# Sanitized `show running-config` capture — Cisco 2960G ("TJswitch")
+#
+# Source: 2960g_ShowConfig.html (Dropbox drop, captured 2026-07-20 21:07 MDT
+# via the switch's HTTP CLI-exec interface: /level/15/exec/-/show/config/CR).
+# This is an OBSERVED fact snapshot, parsed by
+# src/parsers/network/cisco-ios-switch-parser.ts — see docs/topology.yaml's
+# hand-maintained `switch:` block for the DECLARED facts about this same
+# device, which disagree with this capture in some places (see project plan
+# / commit message for specifics). Both are preserved rather than one
+# silently overwriting the other.
+#
+# Redacted from the original: `enable secret`, `enable password`,
+# `username ... password`, and the two `line con`/`line vty` passwords
+# (all type-5/type-7 IOS-obfuscated, not plaintext, but redacted anyway
+# since they aren't needed for topology parsing). Everything else —
+# interfaces, VLANs, routes, ACL/crypto trustpoint structure — is
+# unmodified so the parser sees the real config.
+!
+! Last configuration change at 20:06:32 mst Mon Mar 24 2025 by cisco
+! NVRAM config last updated at 20:10:02 mst Mon Mar 24 2025 by cisco
+!
+version 12.2
+no service pad
+service timestamps debug uptime
+service timestamps log datetime msec
+service password-encryption
+!
+hostname TJswitch
+!
+boot-start-marker
+boot-end-marker
+!
+enable secret 5 <redacted>
+enable password 7 <redacted>
+!
+username cisco password 7 <redacted>
+!
+!
+aaa new-model
+!
+!
+aaa authentication login default local enable
+!
+!
+!
+aaa session-id common
+clock timezone mst -7
+system mtu routing 1500
+ip routing
+ip dhcp excluded-address 192.168.68.1
+!
+ip dhcp pool security
+   network 10.10.31.0 255.255.255.0
+   default-router 10.10.31.1
+!
+!
+no ip domain-lookup
+ip domain-name TJswitch.prox
+ip name-server 172.16.0.13
+!
+!
+crypto pki trustpoint TP-self-signed-1907954048
+ enrollment selfsigned
+ subject-name cn=IOS-Self-Signed-Certificate-1907954048
+ revocation-check none
+ rsakeypair TP-self-signed-1907954048
+!
+crypto pki trustpoint HTTPS_SS_CERT_KEYPAIR
+ enrollment selfsigned
+ serial-number
+ revocation-check none
+ rsakeypair HTTPS_SS_CERT_KEYPAIR
+!
+!
+crypto pki certificate chain TP-self-signed-1907954048
+crypto pki certificate chain HTTPS_SS_CERT_KEYPAIR
+ certificate self-signed 01 nvram:71B91180host#6868.cer
+!
+!
+!
+spanning-tree mode pvst
+spanning-tree extend system-id
+!
+vlan internal allocation policy ascending
+!
+ip ssh time-out 60
+ip ssh authentication-retries 2
+ip ssh logging events
+ip ssh version 2
+!
+!
+interface GigabitEthernet0/1
+ switchport mode access
+!
+interface GigabitEthernet0/2
+ switchport mode access
+!
+interface GigabitEthernet0/3
+ switchport mode access
+!
+interface GigabitEthernet0/4
+ switchport mode access
+!
+interface GigabitEthernet0/5
+ switchport mode access
+!
+interface GigabitEthernet0/6
+ switchport mode access
+!
+interface GigabitEthernet0/7
+ switchport mode access
+!
+interface GigabitEthernet0/8
+ switchport mode access
+!
+interface GigabitEthernet0/9
+ switchport mode access
+!
+interface GigabitEthernet0/10
+ switchport mode access
+!
+interface GigabitEthernet0/11
+ switchport mode access
+!
+interface GigabitEthernet0/12
+ switchport mode access
+!
+interface GigabitEthernet0/13
+ switchport mode access
+!
+interface GigabitEthernet0/14
+ switchport mode access
+!
+interface GigabitEthernet0/15
+ switchport mode access
+!
+interface GigabitEthernet0/16
+ switchport mode access
+!
+interface GigabitEthernet0/17
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/18
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/19
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/20
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/21
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/22
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/23
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/24
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/25
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/26
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/27
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/28
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/29
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/30
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/31
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/32
+ switchport access vlan 50
+ switchport mode access
+!
+interface GigabitEthernet0/33
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/34
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/35
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/36
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/37
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/38
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/39
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/40
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/41
+ description uplink to home network
+ switchport access vlan 40
+ switchport trunk allowed vlan 1,40,50
+ switchport mode access
+!
+interface GigabitEthernet0/42
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/43
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/44
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/45
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/46
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/47
+ switchport access vlan 40
+ switchport mode access
+!
+interface GigabitEthernet0/48
+ switchport access vlan 40
+ switchport mode access
+!
+interface Vlan1
+ ip address 172.16.0.9 255.255.252.0
+ ip helper-address 172.16.0.13
+ ip information-reply
+!
+interface Vlan10
+ no ip address
+ ip helper-address 10.10.12.1
+ shutdown
+!
+interface Vlan20
+ no ip address
+!
+interface Vlan40
+ description Home to Lab
+ ip address 192.168.71.6 255.255.252.0
+ ip helper-address 192.168.68.1
+ ip information-reply
+ ip route-cache policy
+!
+interface Vlan50
+ description 10.10.31.0/24 network, security lab
+ ip address 10.10.31.2 255.255.255.0
+ ip helper-address 10.10.31.2
+ ip information-reply
+ ip route-cache policy
+!
+ip default-gateway 192.168.68.1
+ip http server
+ip http secure-server
+ip route 0.0.0.0 0.0.0.0 192.168.68.1
+ip route 10.10.31.0 255.255.255.0 Vlan50
+ip route 192.168.68.0 255.255.252.0 192.168.68.1
+logging source-interface Vlan40
+logging 192.168.71.30
+banner motd ^CUnauthorized configuration is prohibited.^C
+!
+line con 0
+ password 7 <redacted>
+ logging synchronous
+line vty 0 4
+ exec-timeout 30 0
+ password 7 <redacted>
+ transport input ssh
+line vty 5 15
+ transport input none
+!
+ntp logging
+ntp clock-period 36029178
+ntp server 65.73.197.211 source Vlan1 prefer
+ntp server 5.78.62.36
+end

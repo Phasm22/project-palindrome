@@ -281,8 +281,8 @@ export class PceApiServer {
       return await this.handleClusterStatus(req);
     }
 
-    if (req.method === "GET" && url.pathname === "/api/dashboard/ontology-graph") {
-      return await this.handleOntologyGraph(req);
+    if (req.method === "GET" && url.pathname === "/api/dashboard/twin-graph") {
+      return await this.handleTwinGraph(req);
     }
 
     if (req.method === "GET" && url.pathname === "/api/dashboard/prompt-suggestions") {
@@ -1103,7 +1103,11 @@ export class PceApiServer {
     }
   }
 
-  private async handleOntologyGraph(req: Request): Promise<Response> {
+  // Named after the Twin graph (:TwinEntity) it actually queries below — this route
+  // was previously misnamed "/api/dashboard/ontology-graph", which collided in name
+  // (but not in data) with the separate legacy ontology graph (:Entity) served by
+  // /api/dashboard/query/graph.
+  private async handleTwinGraph(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
       const limitParam = url.searchParams.get("limit") || "300";

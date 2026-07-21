@@ -8,3 +8,4 @@ export { ProxmoxIngestionOrchestrator, computeVersionHash, type ProxmoxIngestion
 export { TopologyIngestionOrchestrator, extractTopologyEntities, type TopologyIngestionResult, type TopologyYaml } from "./topology-ingestion";
 export { NetworkIngestionOrchestrator, type NetworkIngestionOptions } from "./network-ingestion";
 export { FirewallIngestionOrchestrator, type FirewallIngestionOptions } from "./firewall-ingestion";
+export { SwitchIngestionOrchestrator, type SwitchIngestionOptions, type SwitchIngestionResult } from "./switch-ingestion";
