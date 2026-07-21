@@ -1,0 +1,20 @@
+{
+  "singleTurn": [
+    { "id": "RV-ROUTING-01", "category": "reverify_isClearInformationalQuery", "query": "Give me a summary of the whole cluster.", "fix": "intent-router.ts isClearInformationalQuery" },
+    { "id": "RV-ROUTING-02", "category": "reverify_isClearInformationalQuery", "query": "Ping 172.16.0.1 for me." , "fix": "intent-router.ts isClearInformationalQuery" },
+    { "id": "RV-ROUTING-03", "category": "reverify_isClearInformationalQuery", "query": "Traceroute to 8.8.8.8.", "fix": "intent-router.ts isClearInformationalQuery" },
+    { "id": "RV-ROUTING-04", "category": "reverify_isClearInformationalQuery", "query": "Run a full health diagnostic on windowsVM.", "fix": "intent-router.ts isClearInformationalQuery" },
+    { "id": "RV-ROUTING-05", "category": "reverify_isClearInformationalQuery", "query": "Why can't I reach pihole, can you diagnose it?", "fix": "intent-router.ts isClearInformationalQuery" },
+    { "id": "RV-ROUTING-06", "category": "reverify_isClearInformationalQuery", "query": "vms???? on yang???? pls?????", "fix": "intent-router.ts isClearInformationalQuery" },
+    { "id": "RV-ALIAS-01", "category": "reverify_extractAliasName", "query": "What VMs would be affected if the WG_VIP alias were removed, and are any of them internet-exposed?", "fix": "detectFirewallIntent.ts extractAliasName + impact guard" },
+    { "id": "RV-ALIAS-02", "category": "reverify_extractAliasName", "query": "What would break if I deleted the Home_DNS alias?", "fix": "detectFirewallIntent.ts impact guard (control, should stay EXECUTE-path answer)" },
+    { "id": "RV-ALIAS-03", "category": "reverify_extractAliasName", "query": "What's in the WG_VIP alias?", "fix": "detectFirewallIntent.ts extractAliasName preceding-token support" },
+    { "id": "RV-COUNT-01", "category": "reverify_normalizeCountPackaging", "query": "List all firewall aliases and how many entries each one has.", "fix": "response-formatter.ts normalizeCountPackaging fallback" },
+    { "id": "RV-ASKMISSING-01", "category": "reverify_askMissing", "query": "Which assets have an undocumented path between the home and lab trust zones?", "fix": "AskMissingTool.ts fromId/chain/subnet/alias mappings" },
+    { "id": "RV-CRASH-01", "category": "reverify_executeToolCall", "query": "Can something on 172.16.0.0/22 reach 192.168.68.0/22?", "fix": "tool-executor.ts try/catch" },
+    { "id": "RV-CRASH-02", "category": "reverify_executeToolCall", "query": "What disks are attached to proxBig?", "fix": "tool-executor.ts try/catch" },
+    { "id": "RV-CRASH-03", "category": "reverify_executeToolCall", "query": "What's the system status of the OPNsense box?", "fix": "tool-executor.ts try/catch" },
+    { "id": "RV-CRASH-04", "category": "reverify_executeToolCall", "query": "List every network interface on every node.", "fix": "tool-executor.ts try/catch" },
+    { "id": "RV-CRASH-05", "category": "reverify_executeToolCall", "query": "For every stopped VM, tell me which node it's on and whether any firewall rule references it.", "fix": "tool-executor.ts try/catch" }
+  ]
+}

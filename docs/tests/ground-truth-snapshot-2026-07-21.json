@@ -1,0 +1,2464 @@
+{
+  "computeNodes": [
+    {
+      "id": "compute-node:yang",
+      "displayName": "YANG",
+      "status": "online"
+    },
+    {
+      "id": "compute-node:proxbig",
+      "displayName": "proxBig",
+      "status": "online"
+    },
+    {
+      "id": "compute-node:yin",
+      "displayName": "yin",
+      "status": "online"
+    }
+  ],
+  "computeVms": [
+    {
+      "id": "compute-vm:yang:103",
+      "displayName": "PvVPN-Home",
+      "state": "running",
+      "nodeName": "yang",
+      "vmKind": "lxc",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:yang:100",
+      "displayName": "homebridge",
+      "state": "running",
+      "nodeName": "yang",
+      "vmKind": "lxc",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:proxbig:101",
+      "displayName": "opnsense",
+      "state": "running",
+      "nodeName": "proxbig",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:yang:211",
+      "displayName": "opsbox",
+      "state": "running",
+      "nodeName": "yang",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:yang:101",
+      "displayName": "pihole",
+      "state": "running",
+      "nodeName": "yang",
+      "vmKind": "lxc",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:yin:102",
+      "displayName": "piholelab",
+      "state": "running",
+      "nodeName": "yin",
+      "vmKind": "lxc",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:proxbig:200",
+      "displayName": "sentinel-hunter",
+      "state": "running",
+      "nodeName": "proxbig",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:yin:200",
+      "displayName": "sentinelZero",
+      "state": "running",
+      "nodeName": "yin",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:yin:8001",
+      "displayName": "ubuntu-cloud-template",
+      "state": "stopped",
+      "nodeName": "yin",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:proxbig:8001",
+      "displayName": "ubuntu-cloudinit-8001",
+      "state": "stopped",
+      "nodeName": "proxbig",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:yang:8000",
+      "displayName": "ubuntu-cloudinit-template",
+      "state": "stopped",
+      "nodeName": "yang",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    },
+    {
+      "id": "compute-vm:proxbig:100",
+      "displayName": "windowsVM",
+      "state": "running",
+      "nodeName": "proxbig",
+      "vmKind": "qemu",
+      "agentAvailable": null
+    }
+  ],
+  "networkInterfaces": [
+    {
+      "id": "network-if:yang:pvvpn-home-net0",
+      "displayName": "YANG:PvVPN-Home-net0",
+      "nodeName": "YANG",
+      "primaryIp": "192.168.71.40",
+      "ips": [
+        "192.168.71.40/22"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yang:enp1s0",
+      "displayName": "YANG:enp1s0",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yang:enx000ec69857c2",
+      "displayName": "YANG:enx000ec69857c2",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yang:enx5091e36863e1",
+      "displayName": "YANG:enx5091e36863e1",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yang:homebridge-net0",
+      "displayName": "YANG:homebridge-net0",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yang:opsbox-net0",
+      "displayName": "YANG:opsbox-net0",
+      "nodeName": "YANG",
+      "primaryIp": "172.16.0.184",
+      "ips": [
+        "172.16.0.184/22",
+        "fe80::be24:11ff:feb9:76e6/64"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yang:pihole-net1",
+      "displayName": "YANG:pihole-net1",
+      "nodeName": "YANG",
+      "primaryIp": "192.168.71.25",
+      "ips": [
+        "192.168.71.25/22"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yang:ubuntu-cloudinit-template-net0",
+      "displayName": "YANG:ubuntu-cloudinit-template-net0",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yang:vmbr0",
+      "displayName": "YANG:vmbr0",
+      "nodeName": "YANG",
+      "primaryIp": "172.16.0.12",
+      "ips": [
+        "172.16.0.12/22"
+      ],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yang:vmbr1",
+      "displayName": "YANG:vmbr1",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yang:vmbr2",
+      "displayName": "YANG:vmbr2",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yang:wlp2s0",
+      "displayName": "YANG:wlp2s0",
+      "nodeName": "YANG",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:enp1s0",
+      "displayName": "proxBig:enp1s0",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:proxbig:enx000ec698587a",
+      "displayName": "proxBig:enx000ec698587a",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:proxbig:enx5091e36862f6",
+      "displayName": "proxBig:enx5091e36862f6",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:proxbig:enx5091e3686dad",
+      "displayName": "proxBig:enx5091e3686dad",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:proxbig:opnsense-net0",
+      "displayName": "proxBig:opnsense-net0",
+      "nodeName": "proxBig",
+      "primaryIp": "172.16.0.1",
+      "ips": [
+        "172.16.0.1/22"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:opnsense-net1",
+      "displayName": "proxBig:opnsense-net1",
+      "nodeName": "proxBig",
+      "primaryIp": "192.168.71.5",
+      "ips": [
+        "192.168.71.5/22"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:opnsense-net2",
+      "displayName": "proxBig:opnsense-net2",
+      "nodeName": "proxBig",
+      "primaryIp": "10.10.31.1",
+      "ips": [
+        "10.10.31.1/24"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:sentinel-hunter-net0",
+      "displayName": "proxBig:sentinel-hunter-net0",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:sentinel-hunter-net1",
+      "displayName": "proxBig:sentinel-hunter-net1",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:ubuntu-cloudinit-8001-net0",
+      "displayName": "proxBig:ubuntu-cloudinit-8001-net0",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:vmbr0",
+      "displayName": "proxBig:vmbr0",
+      "nodeName": "proxBig",
+      "primaryIp": "172.16.0.10",
+      "ips": [
+        "172.16.0.10/22"
+      ],
+      "status": "up"
+    },
+    {
+      "id": "network-if:proxbig:vmbr1",
+      "displayName": "proxBig:vmbr1",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:proxbig:vmbr2",
+      "displayName": "proxBig:vmbr2",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:proxbig:windowsvm-net0",
+      "displayName": "proxBig:windowsVM-net0",
+      "nodeName": "proxBig",
+      "primaryIp": "192.168.68.78",
+      "ips": [
+        "fe80::453d:e2e9:ce20:1cb7%8/64",
+        "192.168.68.78/22"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:windowsvm-net1",
+      "displayName": "proxBig:windowsVM-net1",
+      "nodeName": "proxBig",
+      "primaryIp": "172.16.0.100",
+      "ips": [
+        "fe80::bb39:bf71:10a7:31d0%4/64",
+        "172.16.0.100/22"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:proxbig:wlp2s0",
+      "displayName": "proxBig:wlp2s0",
+      "nodeName": "proxBig",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yin:enp1s0",
+      "displayName": "yin:enp1s0",
+      "nodeName": "yin",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yin:enx000ec695555b",
+      "displayName": "yin:enx000ec695555b",
+      "nodeName": "yin",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yin:piholelab-net0",
+      "displayName": "yin:piholelab-net0",
+      "nodeName": "yin",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yin:sentinelzero-net0",
+      "displayName": "yin:sentinelZero-net0",
+      "nodeName": "yin",
+      "primaryIp": "172.16.0.198",
+      "ips": [
+        "172.16.0.198/22",
+        "fe80::be24:11ff:fe21:649a/64"
+      ],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yin:ubuntu-cloud-template-net0",
+      "displayName": "yin:ubuntu-cloud-template-net0",
+      "nodeName": "yin",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    },
+    {
+      "id": "network-if:yin:vmbr0",
+      "displayName": "yin:vmbr0",
+      "nodeName": "yin",
+      "primaryIp": "172.16.0.11",
+      "ips": [
+        "172.16.0.11/22"
+      ],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yin:vmbr1",
+      "displayName": "yin:vmbr1",
+      "nodeName": "yin",
+      "primaryIp": null,
+      "ips": [],
+      "status": "up"
+    },
+    {
+      "id": "network-if:yin:wlp2s0",
+      "displayName": "yin:wlp2s0",
+      "nodeName": "yin",
+      "primaryIp": null,
+      "ips": [],
+      "status": "unknown"
+    }
+  ],
+  "networkSubnets": [
+    {
+      "id": "network-subnet:10.10.31.1/24",
+      "displayName": "10.10.31.1/24",
+      "cidr": "10.10.31.1/24",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:172.16.0.1/22",
+      "displayName": "172.16.0.1/22",
+      "cidr": "172.16.0.1/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:172.16.0.10/22",
+      "displayName": "172.16.0.10/22",
+      "cidr": "172.16.0.10/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:172.16.0.100/22",
+      "displayName": "172.16.0.100/22",
+      "cidr": "172.16.0.100/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:172.16.0.11/22",
+      "displayName": "172.16.0.11/22",
+      "cidr": "172.16.0.11/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:172.16.0.12/22",
+      "displayName": "172.16.0.12/22",
+      "cidr": "172.16.0.12/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:172.16.0.184/22",
+      "displayName": "172.16.0.184/22",
+      "cidr": "172.16.0.184/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:172.16.0.198/22",
+      "displayName": "172.16.0.198/22",
+      "cidr": "172.16.0.198/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:192.168.68.78/22",
+      "displayName": "192.168.68.78/22",
+      "cidr": "192.168.68.78/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:192.168.71.25/22",
+      "displayName": "192.168.71.25/22",
+      "cidr": "192.168.71.25/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:192.168.71.40/22",
+      "displayName": "192.168.71.40/22",
+      "cidr": "192.168.71.40/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:192.168.71.5/22",
+      "displayName": "192.168.71.5/22",
+      "cidr": "192.168.71.5/22",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:fe80::453d:e2e9:ce20:1cb7%8/64",
+      "displayName": "fe80::453d:e2e9:ce20:1cb7%8/64",
+      "cidr": "fe80::453d:e2e9:ce20:1cb7%8/64",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:fe80::bb39:bf71:10a7:31d0%4/64",
+      "displayName": "fe80::bb39:bf71:10a7:31d0%4/64",
+      "cidr": "fe80::bb39:bf71:10a7:31d0%4/64",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:fe80::be24:11ff:fe21:649a/64",
+      "displayName": "fe80::be24:11ff:fe21:649a/64",
+      "cidr": "fe80::be24:11ff:fe21:649a/64",
+      "gateway": null
+    },
+    {
+      "id": "network-subnet:fe80::be24:11ff:feb9:76e6/64",
+      "displayName": "fe80::be24:11ff:feb9:76e6/64",
+      "cidr": "fe80::be24:11ff:feb9:76e6/64",
+      "gateway": null
+    }
+  ],
+  "switches": [
+    {
+      "id": "switch:tjswitch:declared",
+      "displayName": "Cisco 2960G (declared)",
+      "hostname": "tjswitch",
+      "role": null,
+      "provenance": "declared",
+      "declaredVlans": [
+        1,
+        40,
+        50
+      ],
+      "declaredTrunkPorts": [
+        "Gi0/33",
+        "Gi0/34"
+      ],
+      "managementIps": [
+        "172.16.0.9",
+        "192.168.71.6"
+      ]
+    },
+    {
+      "id": "switch:tjswitch:observed",
+      "displayName": "TJswitch",
+      "hostname": "TJswitch",
+      "role": null,
+      "provenance": "observed",
+      "declaredVlans": null,
+      "declaredTrunkPorts": null,
+      "managementIps": [
+        "172.16.0.9",
+        "192.168.71.6",
+        "10.10.31.2"
+      ]
+    }
+  ],
+  "switchPorts": [
+    {
+      "id": "switch-port:tjswitch:gi0-1:observed",
+      "displayName": "TJswitch:Gi0/1",
+      "portName": "Gi0/1",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-10:observed",
+      "displayName": "TJswitch:Gi0/10",
+      "portName": "Gi0/10",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-11:observed",
+      "displayName": "TJswitch:Gi0/11",
+      "portName": "Gi0/11",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-12:observed",
+      "displayName": "TJswitch:Gi0/12",
+      "portName": "Gi0/12",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-13:observed",
+      "displayName": "TJswitch:Gi0/13",
+      "portName": "Gi0/13",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-14:observed",
+      "displayName": "TJswitch:Gi0/14",
+      "portName": "Gi0/14",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-15:observed",
+      "displayName": "TJswitch:Gi0/15",
+      "portName": "Gi0/15",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-16:observed",
+      "displayName": "TJswitch:Gi0/16",
+      "portName": "Gi0/16",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-17:observed",
+      "displayName": "TJswitch:Gi0/17",
+      "portName": "Gi0/17",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-18:observed",
+      "displayName": "TJswitch:Gi0/18",
+      "portName": "Gi0/18",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-19:observed",
+      "displayName": "TJswitch:Gi0/19",
+      "portName": "Gi0/19",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-2:observed",
+      "displayName": "TJswitch:Gi0/2",
+      "portName": "Gi0/2",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-20:observed",
+      "displayName": "TJswitch:Gi0/20",
+      "portName": "Gi0/20",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-21:observed",
+      "displayName": "TJswitch:Gi0/21",
+      "portName": "Gi0/21",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-22:observed",
+      "displayName": "TJswitch:Gi0/22",
+      "portName": "Gi0/22",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-23:observed",
+      "displayName": "TJswitch:Gi0/23",
+      "portName": "Gi0/23",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-24:observed",
+      "displayName": "TJswitch:Gi0/24",
+      "portName": "Gi0/24",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-25:observed",
+      "displayName": "TJswitch:Gi0/25",
+      "portName": "Gi0/25",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-26:observed",
+      "displayName": "TJswitch:Gi0/26",
+      "portName": "Gi0/26",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-27:observed",
+      "displayName": "TJswitch:Gi0/27",
+      "portName": "Gi0/27",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-28:observed",
+      "displayName": "TJswitch:Gi0/28",
+      "portName": "Gi0/28",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-29:observed",
+      "displayName": "TJswitch:Gi0/29",
+      "portName": "Gi0/29",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-3:observed",
+      "displayName": "TJswitch:Gi0/3",
+      "portName": "Gi0/3",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-30:observed",
+      "displayName": "TJswitch:Gi0/30",
+      "portName": "Gi0/30",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-31:observed",
+      "displayName": "TJswitch:Gi0/31",
+      "portName": "Gi0/31",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-32:observed",
+      "displayName": "TJswitch:Gi0/32",
+      "portName": "Gi0/32",
+      "mode": "access",
+      "accessVlan": 50,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-33:declared",
+      "displayName": "tjswitch:Gi0/33 (declared)",
+      "portName": "Gi0/33",
+      "mode": "trunk",
+      "accessVlan": null,
+      "trunkVlans": [
+        1,
+        40,
+        50
+      ],
+      "provenance": "declared",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-33:observed",
+      "displayName": "TJswitch:Gi0/33",
+      "portName": "Gi0/33",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-34:declared",
+      "displayName": "tjswitch:Gi0/34 (declared)",
+      "portName": "Gi0/34",
+      "mode": "trunk",
+      "accessVlan": null,
+      "trunkVlans": [
+        1,
+        40,
+        50
+      ],
+      "provenance": "declared",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-34:observed",
+      "displayName": "TJswitch:Gi0/34",
+      "portName": "Gi0/34",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-35:observed",
+      "displayName": "TJswitch:Gi0/35",
+      "portName": "Gi0/35",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-36:observed",
+      "displayName": "TJswitch:Gi0/36",
+      "portName": "Gi0/36",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-37:observed",
+      "displayName": "TJswitch:Gi0/37",
+      "portName": "Gi0/37",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-38:observed",
+      "displayName": "TJswitch:Gi0/38",
+      "portName": "Gi0/38",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-39:observed",
+      "displayName": "TJswitch:Gi0/39",
+      "portName": "Gi0/39",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-4:observed",
+      "displayName": "TJswitch:Gi0/4",
+      "portName": "Gi0/4",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-40:observed",
+      "displayName": "TJswitch:Gi0/40",
+      "portName": "Gi0/40",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-41:observed",
+      "displayName": "TJswitch:Gi0/41",
+      "portName": "Gi0/41",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [
+        1,
+        40,
+        50
+      ],
+      "provenance": "observed",
+      "portDescription": "uplink to home network"
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-42:observed",
+      "displayName": "TJswitch:Gi0/42",
+      "portName": "Gi0/42",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-43:observed",
+      "displayName": "TJswitch:Gi0/43",
+      "portName": "Gi0/43",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-44:observed",
+      "displayName": "TJswitch:Gi0/44",
+      "portName": "Gi0/44",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-45:observed",
+      "displayName": "TJswitch:Gi0/45",
+      "portName": "Gi0/45",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-46:observed",
+      "displayName": "TJswitch:Gi0/46",
+      "portName": "Gi0/46",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-47:observed",
+      "displayName": "TJswitch:Gi0/47",
+      "portName": "Gi0/47",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-48:observed",
+      "displayName": "TJswitch:Gi0/48",
+      "portName": "Gi0/48",
+      "mode": "access",
+      "accessVlan": 40,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-5:observed",
+      "displayName": "TJswitch:Gi0/5",
+      "portName": "Gi0/5",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-6:observed",
+      "displayName": "TJswitch:Gi0/6",
+      "portName": "Gi0/6",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-7:observed",
+      "displayName": "TJswitch:Gi0/7",
+      "portName": "Gi0/7",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-8:observed",
+      "displayName": "TJswitch:Gi0/8",
+      "portName": "Gi0/8",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-9:observed",
+      "displayName": "TJswitch:Gi0/9",
+      "portName": "Gi0/9",
+      "mode": "access",
+      "accessVlan": null,
+      "trunkVlans": [],
+      "provenance": "observed",
+      "portDescription": null
+    }
+  ],
+  "firewallRules": [
+    {
+      "id": "fw-rule:vlan01:block:in:10.10.31.0_24:any:any:any:3165e2ae8b",
+      "action": "block",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": null,
+      "source": "10.10.31.0/24",
+      "destination": "any",
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:block:in:_vlan01:network_:_vtnet1:network_:any:any:a67444648f",
+      "action": "block",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": null,
+      "source": "(vlan01:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:in:any:any:udp:bootpc:97b32434cd",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:in:any:any:udp:bootpc:32e8073a08",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:out:_self_:any:udp:bootps:455940f4d3",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vlan01",
+      "protocol": "udp",
+      "source": "(self)",
+      "destination": null,
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:in:any:any:any:any:8cdc2d267e",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:in:any:172.16.0.0_22:any:any:dbe6dad56c",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": null,
+      "source": "any",
+      "destination": "172.16.0.0/22",
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:in:any:_vtnet1:network_:any:any:5367a8172b",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": null,
+      "source": "any",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:in:_vlan01:network_:172.16.0.0_24:any:any:2c5721736d",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vlan01",
+      "protocol": null,
+      "source": "(vlan01:network)",
+      "destination": "172.16.0.0/24",
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vlan01:pass:out:any:any:any:any:defdf67892",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vlan01",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vlan01"
+    },
+    {
+      "id": "fw-rule:vtnet0:block:in:172.16.0.0_22:any:any:any:763d69cd69",
+      "action": "block",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": null,
+      "source": "172.16.0.0/22",
+      "destination": "any",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:in:any:any:udp:bootpc:e77a2bc7cb",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:in:any:any:udp:bootpc:25e9e1c70c",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_self_:any:udp:bootps:27b780bb63",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "udp",
+      "source": "(self)",
+      "destination": null,
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:in:any:_self_:tcp:ssh:d04e70e8c8",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "(self)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:in:any:_self_:tcp:http:a33c5d5ff8",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "(self)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:in:any:_self_:tcp:https:c71d53a0c9",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "(self)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:ssh:4ff23e63c5",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:domain:c0ca2ea291",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:http:7e1637eb7a",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:https:78492295d4",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:3000:254ebc5efd",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:ms-wbt-server:d28364418b",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:5000:80131209d2",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:8006:0883e2974d",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:17875:40a691d602",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:51820:6c4cdcfcff",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet0",
+      "protocol": "tcp",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:in:_wg_vip_:any:any:any:4bc89c964a",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": null,
+      "source": "<WG_VIP>",
+      "destination": "any",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet0:pass:in:_vtnet0:network_:any:any:any:a76bdfc4ed",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet0",
+      "protocol": null,
+      "source": "(vtnet0:network)",
+      "destination": "any",
+      "chain": "chain:vtnet0"
+    },
+    {
+      "id": "fw-rule:vtnet1:block:in:192.168.68.0_22:any:any:any:e8a443d037",
+      "action": "block",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": "192.168.68.0/22",
+      "destination": "any",
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:block:in:any:any:any:any:da62475b6e",
+      "action": "block",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:block:in:_blocked_countries_:any:any:any:2b882ad9cb",
+      "action": "block",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": "<blocked_countries>",
+      "destination": "any",
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:block:in:any:any:any:any:a27f0c03a7",
+      "action": "block",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:udp:bootps:d44c3f7c2c",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:out:any:any:udp:bootpc:cce980034f",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet1",
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:6c74f28e66",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:7123949d70",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:420c372998",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:9cbe700f65",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:b30ac44b1a",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:6242df1a8e",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:61e52075e6",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:f831833a65",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:02ad3ff077",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:933d065134",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:fac045484f",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:200acee37c",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:3e0d9e2c42",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:050b1eae69",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:f00bc278eb",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:2839bb4114",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:f13282de1f",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:b381237e15",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:80a94d74bc",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:682d1bca5c",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:65938fe657",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:8f204903a8",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:71a3fe3647",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:6aa80dac02",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:750f91c406",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:6543e5d861",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:1bab066906",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:1e1537972d",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:2f58b990d9",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:ead21669dd",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:b53875b04f",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:f2836f4ca1",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:a825ce54e2",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:out:any:any:any:any:60edfa5082",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:out:any:any:any:any:8c712448c2",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:out:any:any:any:any:d4b83c5e9d",
+      "action": "pass",
+      "direction": "out",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:vtnet1:pass:in:any:any:any:any:3bc57757c1",
+      "action": "pass",
+      "direction": "in",
+      "interface": "vtnet1",
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:vtnet1"
+    },
+    {
+      "id": "fw-rule:wireguard:pass:in:_wg_vip_:_vtnet0:network_:any:any:d00ab24e96",
+      "action": "pass",
+      "direction": "in",
+      "interface": "wireguard",
+      "protocol": null,
+      "source": "<WG_VIP>",
+      "destination": "(vtnet0:network)",
+      "chain": "chain:wireguard"
+    },
+    {
+      "id": "fw-rule:wireguard:pass:in:_wg_vip_:_vtnet1:network_:any:any:220fde25d3",
+      "action": "pass",
+      "direction": "in",
+      "interface": "wireguard",
+      "protocol": null,
+      "source": "<WG_VIP>",
+      "destination": "(vtnet1:network)",
+      "chain": "chain:wireguard"
+    },
+    {
+      "id": "fw-rule:wireguard:pass:out:_wg_vip_:any:any:any:9f94f232f4",
+      "action": "pass",
+      "direction": "out",
+      "interface": "wireguard",
+      "protocol": null,
+      "source": "<WG_VIP>",
+      "destination": "any",
+      "chain": "chain:wireguard"
+    },
+    {
+      "id": "fw-rule:wireguard:pass:out:_wg_friends_:any:any:any:deb2670e2b",
+      "action": "pass",
+      "direction": "out",
+      "interface": "wireguard",
+      "protocol": null,
+      "source": "<WG_Friends>",
+      "destination": "any",
+      "chain": "chain:wireguard"
+    },
+    {
+      "id": "fw-rule:any:block:in:192.168.71.5:any:any:any:e3b776f177",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": null,
+      "source": "192.168.71.5",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:172.16.0.1:any:any:any:315202b66d",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": null,
+      "source": "172.16.0.1",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:10.10.31.1:any:any:any:d01905a85c",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": null,
+      "source": "10.10.31.1",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:any:any:3658c979fd",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:any:any:355269b006",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:any:any:a5c67b1a5b",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:tcp:0:2528f26351",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "tcp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:udp:0:b39ddd1a55",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:tcp:0:3cc50ff7fe",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "tcp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:udp:0:2766f74962",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "udp",
+      "source": "any",
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:tcp:0:d2983959f7",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:udp:0:418fe071cb",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "udp",
+      "source": "any",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:tcp:0:550837e33d",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "tcp",
+      "source": "any",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:any:any:udp:0:dfd0884e8d",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "udp",
+      "source": "any",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:_sshlockout_:_self_:tcp:ssh:2fcaf383e6",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "tcp",
+      "source": "<sshlockout>",
+      "destination": "(self)",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:_sshlockout_:_self_:tcp:https:d3bcb12a6c",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": "tcp",
+      "source": "<sshlockout>",
+      "destination": "(self)",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:block:in:_virusprot_:any:any:any:415050a719",
+      "action": "block",
+      "direction": "in",
+      "interface": null,
+      "protocol": null,
+      "source": "<virusprot>",
+      "destination": "any",
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:5310884d61",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:4c0bfb902b",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:946d1d178d",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:4ffa6b2ec2",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:aa533527f3",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:00f70b80f5",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:8c7530be7b",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:0bb3664daa",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:nat:any:any:any:any:any:b38f997a8e",
+      "action": "nat",
+      "direction": "any",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:pass:out:any:any:any:any:a4f98a271e",
+      "action": "pass",
+      "direction": "out",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    },
+    {
+      "id": "fw-rule:any:pass:out:any:any:any:any:c3518684a7",
+      "action": "pass",
+      "direction": "out",
+      "interface": null,
+      "protocol": null,
+      "source": null,
+      "destination": null,
+      "chain": "chain:default"
+    }
+  ],
+  "firewallAliases": [
+    {
+      "id": "firewall-alias:allowed_devices",
+      "displayName": "Allowed_Devices",
+      "aliasName": "Allowed_Devices",
+      "aliasType": "host",
+      "aliasEntryCount": 3,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:dns_ntp",
+      "displayName": "DNS_NTP",
+      "aliasName": "DNS_NTP",
+      "aliasType": "port",
+      "aliasEntryCount": 2,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:home_dns",
+      "displayName": "Home_DNS",
+      "aliasName": "Home_DNS",
+      "aliasType": "host",
+      "aliasEntryCount": 2,
+      "aliasCidrCount": 2
+    },
+    {
+      "id": "firewall-alias:home_open_vpn",
+      "displayName": "Home_OPEN_VPN",
+      "aliasName": "Home_OPEN_VPN",
+      "aliasType": "network",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:home_router",
+      "displayName": "Home_Router",
+      "aliasName": "Home_Router",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:home_vpn",
+      "displayName": "Home_VPN",
+      "aliasName": "Home_VPN",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:lab_services_ports",
+      "displayName": "LAB_SERVICES_PORTS",
+      "aliasName": "LAB_SERVICES_PORTS",
+      "aliasType": "port",
+      "aliasEntryCount": 10,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:sentinelzero_local",
+      "displayName": "SentinelZero_local",
+      "aliasName": "SentinelZero_local",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:tj_iphone",
+      "displayName": "TJ_iPhone",
+      "aliasName": "TJ_iPhone",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:tj_surface",
+      "displayName": "TJ_surface",
+      "aliasName": "TJ_surface",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:tj_thinpad",
+      "displayName": "TJ_thinpad",
+      "aliasName": "TJ_thinpad",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:tjs_computers",
+      "displayName": "TJs_Computers",
+      "aliasName": "TJs_Computers",
+      "aliasType": "host",
+      "aliasEntryCount": 7,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:tj_server",
+      "displayName": "Tj_server",
+      "aliasName": "Tj_server",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:vpn",
+      "displayName": "VPN",
+      "aliasName": "VPN",
+      "aliasType": "network",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:wg_friends",
+      "displayName": "WG_Friends",
+      "aliasName": "WG_Friends",
+      "aliasType": "network",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:wg_vip",
+      "displayName": "WG_VIP",
+      "aliasName": "WG_VIP",
+      "aliasType": "network",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:_tj_mbp4",
+      "displayName": "_TJ_MBP4",
+      "aliasName": "_TJ_MBP4",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:__lan_network",
+      "displayName": "__lan_network",
+      "aliasName": "__lan_network",
+      "aliasType": "internal",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:__lo0_network",
+      "displayName": "__lo0_network",
+      "aliasName": "__lo0_network",
+      "aliasType": "internal",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:__opt1_network",
+      "displayName": "__opt1_network",
+      "aliasName": "__opt1_network",
+      "aliasType": "internal",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:__opt2_network",
+      "displayName": "__opt2_network",
+      "aliasName": "__opt2_network",
+      "aliasType": "internal",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:__wan_network",
+      "displayName": "__wan_network",
+      "aliasName": "__wan_network",
+      "aliasType": "internal",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:__wazuh_agent_drop",
+      "displayName": "__wazuh_agent_drop",
+      "aliasName": "__wazuh_agent_drop",
+      "aliasType": "external",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:__wireguard_network",
+      "displayName": "__wireguard_network",
+      "aliasName": "__wireguard_network",
+      "aliasType": "internal",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:allowed_guest",
+      "displayName": "allowed_guest",
+      "aliasName": "allowed_guest",
+      "aliasType": "host",
+      "aliasEntryCount": 3,
+      "aliasCidrCount": 2
+    },
+    {
+      "id": "firewall-alias:blocked_countries",
+      "displayName": "blocked_countries",
+      "aliasName": "blocked_countries",
+      "aliasType": "geoip",
+      "aliasEntryCount": 2,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:bogons",
+      "displayName": "bogons",
+      "aliasName": "bogons",
+      "aliasType": "external",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:bogonsv6",
+      "displayName": "bogonsv6",
+      "aliasName": "bogonsv6",
+      "aliasType": "external",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:ntopg",
+      "displayName": "ntopg",
+      "aliasName": "ntopg",
+      "aliasType": "port",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:sentinelzero",
+      "displayName": "sentinelZero",
+      "aliasName": "sentinelZero",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:sentinel_hunter",
+      "displayName": "sentinel_hunter",
+      "aliasName": "sentinel_hunter",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:sshlockout",
+      "displayName": "sshlockout",
+      "aliasName": "sshlockout",
+      "aliasType": "external",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    },
+    {
+      "id": "firewall-alias:tj_palindrome",
+      "displayName": "tj_palindrome",
+      "aliasName": "tj_palindrome",
+      "aliasType": "host",
+      "aliasEntryCount": 1,
+      "aliasCidrCount": 1
+    },
+    {
+      "id": "firewall-alias:virusprot",
+      "displayName": "virusprot",
+      "aliasName": "virusprot",
+      "aliasType": "external",
+      "aliasEntryCount": 0,
+      "aliasCidrCount": 0
+    }
+  ],
+  "storage": [
+    {
+      "id": "storage:proxBig:images",
+      "displayName": "images (proxBig)"
+    },
+    {
+      "id": "storage:YANG:local",
+      "displayName": "local (YANG)"
+    },
+    {
+      "id": "storage:proxBig:local",
+      "displayName": "local (proxBig)"
+    },
+    {
+      "id": "storage:yin:local",
+      "displayName": "local (yin)"
+    },
+    {
+      "id": "storage:YANG:local-lvm",
+      "displayName": "local-lvm (YANG)"
+    },
+    {
+      "id": "storage:proxBig:local-lvm",
+      "displayName": "local-lvm (proxBig)"
+    },
+    {
+      "id": "storage:yin:local-lvm",
+      "displayName": "local-lvm (yin)"
+    },
+    {
+      "id": "storage:proxBig:snippets",
+      "displayName": "snippets (proxBig)"
+    }
+  ],
+  "rulesTouchingPort8006": [
+    {
+      "id": "fw-rule:vtnet0:pass:out:_vtnet0:network_:_vtnet1:network_:tcp:8006:0883e2974d",
+      "action": "pass",
+      "interface": "vtnet0",
+      "source": "(vtnet0:network)",
+      "destination": "(vtnet1:network)"
+    }
+  ],
+  "trunkPorts": [
+    {
+      "id": "switch-port:tjswitch:gi0-33:declared",
+      "portName": "Gi0/33",
+      "trunkVlans": [
+        1,
+        40,
+        50
+      ],
+      "provenance": "declared"
+    },
+    {
+      "id": "switch-port:tjswitch:gi0-34:declared",
+      "portName": "Gi0/34",
+      "trunkVlans": [
+        1,
+        40,
+        50
+      ],
+      "provenance": "declared"
+    }
+  ]
+}
