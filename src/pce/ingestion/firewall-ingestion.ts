@@ -534,6 +534,8 @@ export class FirewallIngestionOrchestrator {
     let skippedAliasUnresolved = 0;
     let skippedInterfaceMacroUnresolved = 0;
     let createdCount = 0;
+    const unresolvedAliasNames = new Set<string>();
+    const unresolvedInterfaceNames = new Set<string>();
 
     for (const entity of entities) {
       if (entity.type !== TwinEntityType.FIREWALL_RULE) continue;
@@ -574,8 +576,10 @@ export class FirewallIngestionOrchestrator {
           } else {
             if (resolvedDest.unresolvedAliases.length > 0) {
               skippedAliasUnresolved++;
+              resolvedDest.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
             } else if (resolvedDest.unresolvedInterfaces.length > 0) {
               skippedInterfaceMacroUnresolved++;
+              resolvedDest.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
             } else {
               skippedCidrInvalid++;
             }
@@ -608,8 +612,10 @@ export class FirewallIngestionOrchestrator {
             } else {
               if (resolvedSource.unresolvedAliases.length > 0) {
                 skippedAliasUnresolved++;
+                resolvedSource.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
               } else if (resolvedSource.unresolvedInterfaces.length > 0) {
                 skippedInterfaceMacroUnresolved++;
+                resolvedSource.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
               } else {
                 skippedCidrInvalid++;
               }
@@ -646,8 +652,10 @@ export class FirewallIngestionOrchestrator {
           } else {
             if (resolvedDest.unresolvedAliases.length > 0) {
               skippedAliasUnresolved++;
+              resolvedDest.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
             } else if (resolvedDest.unresolvedInterfaces.length > 0) {
               skippedInterfaceMacroUnresolved++;
+              resolvedDest.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
             } else {
               skippedCidrInvalid++;
             }
@@ -680,8 +688,10 @@ export class FirewallIngestionOrchestrator {
             } else {
               if (resolvedSource.unresolvedAliases.length > 0) {
                 skippedAliasUnresolved++;
+                resolvedSource.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
               } else if (resolvedSource.unresolvedInterfaces.length > 0) {
                 skippedInterfaceMacroUnresolved++;
+                resolvedSource.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
               } else {
                 skippedCidrInvalid++;
               }
@@ -698,10 +708,20 @@ export class FirewallIngestionOrchestrator {
       pceLogger.warn(`Skipped ${skippedCidrInvalid} relationships due to invalid CIDR format`);
     }
     if (skippedAliasUnresolved > 0) {
-      pceLogger.warn(`Skipped ${skippedAliasUnresolved} relationships due to unresolved aliases`);
+      // "Unresolved" here almost always means the alias exists but its content
+      // isn't expressible as a CIDR — a dynamic/runtime table (sshlockout,
+      // virusprot), a GeoIP country-code alias, or a hostname/FQDN alias — not
+      // a missing/misconfigured alias. Naming them here saves re-deriving this
+      // by hand each time (see aliasMap in buildAliasMap for where the actual
+      // content gets checked).
+      pceLogger.warn(
+        `Skipped ${skippedAliasUnresolved} relationships: alias content not expressible as a CIDR (dynamic table, GeoIP, or hostname alias) — ${Array.from(unresolvedAliasNames).sort().join(", ")}`
+      );
     }
     if (skippedInterfaceMacroUnresolved > 0) {
-      pceLogger.warn(`Skipped ${skippedInterfaceMacroUnresolved} relationships due to unresolved interface macros`);
+      pceLogger.warn(
+        `Skipped ${skippedInterfaceMacroUnresolved} relationships due to unresolved interface macros: ${Array.from(unresolvedInterfaceNames).sort().join(", ")}`
+      );
     }
     if (createdCount > 0) {
       pceLogger.info(`Created ${createdCount} firewall rule relationships`);
