@@ -24,12 +24,239 @@ function isRecord(value) {
 
 function renderInlineText(value) {
   const source = String(value ?? "");
-  const parts = source.split(/(`[^`\n]+`)/g);
+  const parts = source.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
   return parts.map((part) => {
     if (part.length >= 3 && part.startsWith("`") && part.endsWith("`")) {
       return `<code class="response-inline-code">${escapeHtml(part.slice(1, -1))}</code>`;
     }
+    if (part.length >= 5 && part.startsWith("**") && part.endsWith("**")) {
+      return `<strong>${escapeHtml(part.slice(2, -2))}</strong>`;
+    }
     return escapeHtml(part);
+  }).join("");
+}
+
+// --- Plain-text formatting fallback -----------------------------------
+// The main LLM pass (and the raw-text fallback path when structuring fails)
+// often emits pipe-delimited "entity | key=value | ..." rows, markdown-ish
+// bullet/numbered lists, or plain prose. Browsers don't format any of that
+// for free, so we parse it into real HTML (tables/lists) where the shape is
+// unambiguous, and degrade to an aligned monospace ASCII table — never raw
+// unformatted pipes — when it isn't.
+
+function splitPipeCells(line) {
+  // A leading "- "/"* " is a list-bullet marker, not part of the first
+  // cell's content — TERSE_DATA emits single entities as bulleted pipe
+  // rows ("- name | key=value | ...").
+  let trimmed = line.trim().replace(/^[-*]\s+/, "");
+  // Only strip a *paired* leading+trailing pipe ("| a | b |" markdown
+  // fencing). A lone trailing pipe ("stopped |") means an empty last
+  // cell, not decorative fencing — stripping it unconditionally used to
+  // collapse the row to 1 cell, drop it from the table, and leak a
+  // stray " | " into plain paragraph text.
+  if (trimmed.length > 1 && trimmed.startsWith("|") && trimmed.endsWith("|")) {
+    trimmed = trimmed.slice(1, -1);
+  }
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function isSeparatorRow(cells) {
+  return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell));
+}
+
+function isBulletLine(line) {
+  return /^[-*]\s+/.test(line.trim());
+}
+
+function isNumberedLine(line) {
+  return /^\d+[.)]\s+/.test(line.trim());
+}
+
+function groupTextLines(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+
+    const fenceMatch = line.match(/^```(\S*)\s*$/);
+    if (fenceMatch) {
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++; // consume closing fence
+      blocks.push({ type: "code", code: codeLines.join("\n") });
+      continue;
+    }
+
+    if (line.includes("|")) {
+      // Any line containing a literal pipe is routed here — never left as
+      // plain-paragraph text — because a paragraph renders the raw line
+      // verbatim and would leak the pipe character straight through. This
+      // also covers a paired fence around a single value ("| YANG |"),
+      // which collapses to 1 cell in splitPipeCells and would otherwise
+      // fail a ">=2 cells" gate and fall through to a leaking paragraph.
+      const rows = [];
+      const firstCells = splitPipeCells(line);
+      if (!isSeparatorRow(firstCells)) rows.push(firstCells);
+      i++; // always advance — this line is consumed regardless of cell count
+      while (i < lines.length && lines[i].trim()) {
+        const cells = splitPipeCells(lines[i]);
+        if (cells.length < 2) break;
+        if (!isSeparatorRow(cells)) rows.push(cells);
+        i++;
+      }
+      blocks.push({ type: "pipe", rows });
+      continue;
+    }
+
+    if (isBulletLine(line)) {
+      // Stop as soon as a bullet line contains a pipe — e.g. a plain
+      // "- Exposed VMs:" header bullet followed by "- Name: X | Id: Y"
+      // data bullets — so the pipe-bearing lines fall through to the
+      // pipe-block branch above (on the next outer-loop iteration)
+      // instead of being swallowed here as literal <li> text.
+      const items = [];
+      while (i < lines.length && isBulletLine(lines[i]) && !lines[i].includes("|")) {
+        items.push(lines[i].trim().replace(/^[-*]\s+/, ""));
+        i++;
+      }
+      blocks.push({ type: "bullets", items });
+      continue;
+    }
+
+    if (isNumberedLine(line)) {
+      const items = [];
+      while (i < lines.length && isNumberedLine(lines[i])) {
+        items.push(lines[i].trim().replace(/^\d+[.)]\s+/, ""));
+        i++;
+      }
+      blocks.push({ type: "numbered", items });
+      continue;
+    }
+
+    const paraLines = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !lines[i].includes("|") &&
+      !isBulletLine(lines[i]) &&
+      !isNumberedLine(lines[i]) &&
+      !/^```/.test(lines[i])
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+    blocks.push({ type: "paragraph", text: paraLines.join("\n") });
+  }
+  return blocks;
+}
+
+function renderAsciiTable(rows) {
+  // Plain ASCII (+/-/|) rather than Unicode box-drawing: it's what "ASCII
+  // art" actually means, and unlike box-drawing glyphs it renders
+  // identically on every font/platform instead of going invisible when a
+  // monospace fallback lacks full glyph coverage.
+  const colCount = Math.max(...rows.map((row) => row.length));
+  const widths = Array.from({ length: colCount }, (_, col) =>
+    Math.max(3, ...rows.map((row) => (row[col] ?? "").length))
+  );
+  const hr = () => "+" + widths.map((w) => "-".repeat(w + 2)).join("+") + "+";
+  const rowLine = (cells) =>
+    "| " + widths.map((w, idx) => (cells[idx] ?? "").padEnd(w, " ")).join(" | ") + " |";
+
+  const lines = [hr()];
+  rows.forEach((row, idx) => {
+    lines.push(rowLine(row));
+    if (idx === 0 && rows.length > 1) lines.push(hr());
+  });
+  lines.push(hr());
+  return `<pre class="response-ascii-table">${escapeHtml(lines.join("\n"))}</pre>`;
+}
+
+// Matches TERSE_DATA's documented convention for describing one or more
+// named things: "entity | key=value | key=value ...", with no header row.
+// The first cell is a bare label (not itself key=value); every cell after
+// it is. This is distinct from a facts line where *every* cell is k=v.
+function parseEntityRow(cells) {
+  if (cells.length < 2) return null;
+  const fields = [];
+  for (const cell of cells.slice(1)) {
+    const match = cell.match(/^([^:=]{1,40})[:=]\s*(.+)$/);
+    if (!match) return null;
+    fields.push([match[1].trim(), match[2].trim()]);
+  }
+  return { entity: cells[0], fields };
+}
+
+function renderPipeBlock(rows) {
+  if (!rows.length) return "";
+  const arity = rows[0].length;
+  const consistent = rows.every((row) => row.length === arity);
+  if (!consistent) {
+    // Ragged pipe counts mean we can't confidently infer columns — still
+    // guarantee a readable, aligned table instead of a wall of raw pipes.
+    return renderAsciiTable(rows);
+  }
+
+  if (rows.length === 1) {
+    const cells = rows[0];
+    const asFacts = cells.map((cell) => cell.match(/^([^:=]{1,40})[:=]\s*(.+)$/));
+    if (asFacts.every(Boolean)) {
+      return `<dl class="response-facts">${asFacts.map((match) => `
+        <div class="response-fact"><dt>${escapeHtml(match[1].trim())}</dt><dd>${renderInlineText(match[2].trim())}</dd></div>
+      `).join("")}</dl>`;
+    }
+  }
+
+  const entityRows = rows.map(parseEntityRow);
+  if (entityRows.every(Boolean)) {
+    const keyOrder = [];
+    entityRows.forEach((row) => row.fields.forEach(([key]) => {
+      if (!keyOrder.includes(key)) keyOrder.push(key);
+    }));
+    const columns = [{ key: "entity", label: "Entity" }, ...keyOrder.map((key) => ({ key, label: key }))];
+    const records = entityRows.map((row) => {
+      const record = { entity: row.entity };
+      row.fields.forEach(([key, value]) => { record[key] = value; });
+      return record;
+    });
+    return renderTable(records, columns);
+  }
+
+  if (rows.length >= 2) {
+    const [header, ...body] = rows;
+    const columns = header.map((label, idx) => ({ key: String(idx), label }));
+    const records = body.map((row) => Object.fromEntries(row.map((cell, idx) => [String(idx), cell])));
+    return renderTable(records, columns);
+  }
+
+  // Bare positional values with no header, no "key=value", and no shared
+  // entity label ("piholelab | running | yin") — a vertical bullet list
+  // reads as an unordered list of unrelated facts when these are really one
+  // short, ordered tuple. Compact inline chips keep it scannable in one line.
+  return `<div class="response-value-chips">${rows[0].map((cell) => `<span class="response-value-chip">${renderInlineText(cell)}</span>`).join("")}</div>`;
+}
+
+export function renderTextBlock(text) {
+  const blocks = groupTextLines(text);
+  if (!blocks.length) return "";
+  return blocks.map((block) => {
+    if (block.type === "code") {
+      return `<pre class="response-code-block"><code>${escapeHtml(block.code)}</code></pre>`;
+    }
+    if (block.type === "pipe") return renderPipeBlock(block.rows);
+    if (block.type === "bullets") {
+      return `<ul class="response-list">${block.items.map((item) => `<li>${renderInlineText(item)}</li>`).join("")}</ul>`;
+    }
+    if (block.type === "numbered") {
+      return `<ol class="response-list">${block.items.map((item) => `<li>${renderInlineText(item)}</li>`).join("")}</ol>`;
+    }
+    return `<p class="response-paragraph">${renderInlineText(block.text)}</p>`;
   }).join("");
 }
 
@@ -49,6 +276,38 @@ function sharedRecordKeys(values) {
   return keys.length && values.every((value) => keys.every((key) => key in value)) ? keys : [];
 }
 
+// Splits "local: 93.93GB total (51.29GB used), local-lvm: 348.82GB total
+// (47.19GB used)" into its two top-level items without also splitting the
+// "2 QEMU, 3 LXC" inside "5 VMs (2 QEMU, 3 LXC)" — commas nested inside
+// (), [], or {} don't count as separators.
+function splitTopLevelCommas(text) {
+  const segments = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of text) {
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") depth = Math.max(0, depth - 1);
+    if (ch === "," && depth === 0) {
+      segments.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  segments.push(current);
+  return segments.map((segment) => segment.trim()).filter(Boolean);
+}
+
+function renderTableCellValue(value) {
+  if (typeof value === "string") {
+    const segments = splitTopLevelCommas(value);
+    if (segments.length > 1) {
+      return segments.map((segment) => `<div class="response-table-cell-line">${renderInlineText(segment)}</div>`).join("");
+    }
+  }
+  return renderAdaptiveValue(value, { compact: true });
+}
+
 function renderTable(rows, columns) {
   if (!rows.length || !columns.length) return "";
   const headers = columns
@@ -56,7 +315,7 @@ function renderTable(rows, columns) {
     .join("");
   const body = rows.map((row) => {
     const cells = columns.map((column) =>
-      `<td>${renderAdaptiveValue(row[column.key], { compact: true })}</td>`
+      `<td>${renderTableCellValue(row[column.key])}</td>`
     ).join("");
     return `<tr>${cells}</tr>`;
   }).join("");
@@ -165,6 +424,8 @@ function renderSection(section) {
     ? renderAdaptiveValue(section.data, { ordered: true })
     : type === "connections"
       ? renderConnectionEndpoints(section.data)
+    : (type === "text" || type === "alert") && typeof section.data === "string"
+      ? renderTextBlock(section.data)
     : renderAdaptiveValue(section.data);
 
   if (type === "details") {
@@ -176,8 +437,8 @@ function renderSection(section) {
 
 export function renderRawTextFallback(text) {
   const cleanText = String(text ?? "").replace(/\u001b\[[0-9;]*m/g, "");
-  return cleanText
-    ? `<div class="response-raw-text">${renderInlineText(cleanText)}</div>`
+  return cleanText.trim()
+    ? `<div class="response-raw-text">${renderTextBlock(cleanText)}</div>`
     : "";
 }
 

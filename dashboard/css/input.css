@@ -328,6 +328,14 @@
     border-bottom: 0;
   }
 
+  .response-table-cell-line {
+    line-height: 1.4;
+  }
+
+  .response-table-cell-line + .response-table-cell-line {
+    margin-top: 4px;
+  }
+
   .response-list {
     display: grid;
     gap: 6px;
@@ -342,6 +350,22 @@
   .response-list li {
     min-width: 0;
     padding-left: 2px;
+    overflow-wrap: anywhere;
+  }
+
+  .response-value-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .response-value-chip {
+    padding: 3px 10px;
+    border: 1px solid rgba(71, 85, 105, 0.6);
+    border-radius: 999px;
+    background: rgba(51, 65, 85, 0.45);
+    color: #e2e8f0;
+    font-size: 0.85em;
     overflow-wrap: anywhere;
   }
 
@@ -368,10 +392,41 @@
   }
 
   .response-raw-text {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    display: grid;
+    gap: 10px;
     color: #cbd5e1;
     line-height: 1.55;
+  }
+
+  .response-paragraph {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .response-code-block {
+    margin: 0;
+    padding: 12px;
+    overflow-x: auto;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(51, 65, 85, 0.6);
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85em;
+  }
+
+  .response-ascii-table {
+    margin: 0;
+    padding: 10px 12px;
+    overflow-x: auto;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(51, 65, 85, 0.6);
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.78em;
+    line-height: 1.4;
+    white-space: pre;
   }
 
   .response-null,

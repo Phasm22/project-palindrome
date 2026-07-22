@@ -5,6 +5,7 @@ import {
   escapeHtml,
 } from './utils.js';
 import { createSkeletonLoader } from './skeletons.js';
+import { renderTextBlock } from './response-renderer.js';
 
 function formatDurationMs(ms) {
   if (!ms && ms !== 0) return '0s';
@@ -125,33 +126,14 @@ function formatToolResult(dataPreview, toolName) {
   }
 }
 
+// Shares the pipe-table/ASCII-fallback/list/code formatting used by the
+// chat view (response-renderer.js) instead of maintaining a second, weaker
+// regex-only formatter here — this is what previously left TERSE_DATA
+// answers like "homebridge | Status=running | Node=YANG" as raw pipes in
+// the Reasoning tab even after the chat view was fixed.
 function formatFinalResponse(text) {
   if (!text) return '';
-  
-  let formatted = escapeHtml(text);
-  
-  // Format code blocks
-  formatted = formatted.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre style="background: #0f172a; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 10px 0; border: 1px solid #334155;"><code>${code.trim()}</code></pre>`;
-  });
-  
-  // Format inline code
-  formatted = formatted.replace(/`([^`]+)`/g, '<code style="background: #1e293b; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 0.9em;">$1</code>');
-  
-  // Format bold
-  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #e2e8f0;">$1</strong>');
-  
-  // Format lists
-  formatted = formatted.replace(/^(\d+)\.\s+(.+)$/gm, '<li style="margin-left: 20px; margin-bottom: 4px;">$2</li>');
-  formatted = formatted.replace(/^[-*]\s+(.+)$/gm, '<li style="margin-left: 20px; margin-bottom: 4px;">$1</li>');
-  
-  // Wrap consecutive list items
-  formatted = formatted.replace(/(<li[^>]*>.*<\/li>\n?)+/g, '<ul style="margin: 10px 0; padding-left: 20px;">$&</ul>');
-  
-  // Format line breaks
-  formatted = formatted.replace(/\n/g, '<br>');
-  
-  return formatted;
+  return renderTextBlock(text);
 }
 
 /**
