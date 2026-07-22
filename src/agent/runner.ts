@@ -25,6 +25,7 @@ import {
 import { AgentEventBus } from "./event-bus";
 import { createTextAgentResponse } from "./schemas/agent-response";
 import type { BaseTool } from "../tools/BaseTool";
+import { formatToolGuidance, type ToolSchema } from "../tools/tool-schema";
 import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-intents";
 import {
   describeClusterChain,
@@ -430,23 +431,32 @@ export function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
       // Use getSchema() if available (for tools like OPNsense that use getSchema)
       // Otherwise fall back to metadata.parameters
       let parameters: Record<string, any> | undefined;
-      
+      let schema: ToolSchema | undefined;
+
       if (typeof (tool as any).getSchema === "function") {
-        const schema = (tool as any).getSchema();
-        parameters = schema.parameters;
+        schema = (tool as any).getSchema();
+        parameters = schema?.parameters;
       } else if (tool.metadata.parameters) {
         parameters = tool.metadata.parameters as Record<string, any>;
       }
-      
+
       if (!parameters) {
         return null;
       }
-      
+
+      // getSchema() often carries examples/notes that metadata.description
+      // doesn't — surface them so the model actually sees tool-specific
+      // usage guidance instead of just the one-line summary.
+      const guidance = schema ? formatToolGuidance(schema) : "";
+      const description = guidance
+        ? `${tool.metadata.description}\n\n${guidance}`
+        : tool.metadata.description;
+
       return {
         type: "function" as const,
         function: {
           name: tool.metadata.name,
-          description: tool.metadata.description,
+          description,
           parameters,
         },
       };

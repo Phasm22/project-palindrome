@@ -267,36 +267,51 @@ export function isDescribableTool(tool: BaseTool): tool is DescribableTool {
 }
 
 /**
+ * Formats a tool's examples/notes only — no name/description/parameters.
+ * Used to enrich an LLM function-calling `description` field, where
+ * `parameters` is already sent separately as structured JSON Schema and
+ * doesn't need to be duplicated as text.
+ */
+export function formatToolGuidance(schema: ToolSchema): string {
+  let desc = "";
+
+  if (schema.examples && schema.examples.length > 0) {
+    desc += `Examples:\n`;
+    for (const example of schema.examples) {
+      if (example.description) {
+        desc += `  - ${example.description}: ${JSON.stringify({ tool: schema.name, parameters: example.parameters })}\n`;
+      } else {
+        desc += `  - ${JSON.stringify({ tool: schema.name, parameters: example.parameters })}\n`;
+      }
+    }
+  }
+
+  if (schema.notes && schema.notes.length > 0) {
+    desc += `Notes:\n`;
+    for (const note of schema.notes) {
+      desc += `  - ${note}\n`;
+    }
+  }
+
+  return desc.trim();
+}
+
+/**
  * Generates a tool description string from a ToolSchema
  * This is used in the system prompt
  */
 export function formatToolDescription(schema: ToolSchema): string {
   let desc = `- ${schema.name}: ${schema.description}\n`;
-  
+
   // Parameters
   const paramDesc = formatJsonSchema(schema.parameters);
   desc += `  Parameters: ${paramDesc}\n`;
-  
-  // Examples
-  if (schema.examples && schema.examples.length > 0) {
-    desc += `  Examples:\n`;
-    for (const example of schema.examples) {
-      if (example.description) {
-        desc += `    - ${example.description}: ${JSON.stringify({ tool: schema.name, parameters: example.parameters })}\n`;
-      } else {
-        desc += `    - ${JSON.stringify({ tool: schema.name, parameters: example.parameters })}\n`;
-      }
-    }
+
+  const guidance = formatToolGuidance(schema);
+  if (guidance) {
+    desc += guidance.split("\n").map((line) => `  ${line}`).join("\n") + "\n";
   }
-  
-  // Notes
-  if (schema.notes && schema.notes.length > 0) {
-    desc += `  Notes:\n`;
-    for (const note of schema.notes) {
-      desc += `    - ${note}\n`;
-    }
-  }
-  
+
   return desc;
 }
 
