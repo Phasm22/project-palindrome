@@ -119,7 +119,7 @@ let openaiClient: OpenAI | null = null;
 const ASSISTANT_NAME = "Pally";
 const PROMPT_HASH = createHash("sha256").update(SYSTEM_PROMPT).digest("hex");
 const PROMPT_VERSION = process.env.PROMPT_VERSION ?? PROMPT_HASH.slice(0, 8);
-const MODEL_ID = "gpt-4o-mini";
+const MODEL_ID = process.env.AGENT_CHAT_MODEL || "gpt-4o";
 let cachedAgentVersion: string | null = null;
 
 export function getOpenAIClient(): OpenAI {

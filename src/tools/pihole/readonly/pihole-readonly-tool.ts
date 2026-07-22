@@ -98,6 +98,7 @@ export class PiholeReadOnlyTool extends PiholeReadOnlyBase {
         "DNS is served by Pi-hole, not OPNsense — use this tool, not opnsense_readonly or ssh_execute, for DNS/blocklist/query-log questions.",
         "dns_top_domains/dns_top_clients return pre-aggregated data in one call — do not fetch dns_query_log_search and count client-side.",
         "dns_top_blocked_domains is dns_top_domains restricted to blocked queries only — pass blocked implicitly via this action, not a separate flag.",
+        "dns_top_domains/dns_top_blocked_domains/dns_top_clients return total_queries and blocked_queries as lab-wide totals across ALL domains/clients, sibling fields next to the domains/clients array — they are NOT attributes of any single listed domain/client. Report them separately (e.g. 'lab-wide: N total, M blocked') rather than alongside a specific domain's count, or it reads as if that one domain accounted for the whole total.",
         "There is no standalone 'is domain X on the blocklist' check — that would only cover custom lists, not the full external gravity blocklist. " +
           "To answer 'is domain X blocked', use dns_query_log_search with that domain and inspect the returned status field: " +
           "GRAVITY/DENYLIST/REGEX/EXTERNAL_BLOCKED_* means it was blocked; FORWARDED/CACHE/etc. means it was allowed. " +

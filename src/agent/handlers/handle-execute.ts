@@ -974,7 +974,7 @@ export async function handleExecute(
     ] as any[];
 
     const request: any = {
-      model: "gpt-4o-mini",
+      model: process.env.AGENT_CHAT_MODEL || "gpt-4o",
       messages,
     };
 
@@ -2092,7 +2092,7 @@ export async function handleExecute(
         { role: "system", content: MAX_STEPS_SYNTHESIS_INSTRUCTION },
       ] as any[];
       const synthResponse = await client.chat.completions.create(
-        { model: "gpt-4o-mini", messages: synthesisMessages },
+        { model: process.env.AGENT_CHAT_MODEL || "gpt-4o", messages: synthesisMessages },
         { signal: options.signal }
       );
       throwIfStopped();

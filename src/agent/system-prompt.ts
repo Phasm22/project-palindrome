@@ -68,7 +68,8 @@ You are the Project Palindrome agent. Use Hybrid RAG context and approved tools.
 
 const MODE_INSTRUCTIONS: Record<string, string> = {
   TERSE_DATA:
-    "Format all responses as structured, data-first output. Use pipe-delimited fields for entity lists (entity | key=value | ...). No narrative prose, no pleasantries.",
+    "Format all responses as structured, data-first output. Use pipe-delimited fields for entity lists (entity | key=value | ...). No narrative prose, no pleasantries. " +
+    "When a tool result mixes a specific item's own value with an aggregate/summary figure computed across many items (e.g. one domain's query count alongside a total-queries-across-all-domains figure), NEVER put both in the same entity row — report the aggregate as its own separate entity row, clearly labeled as a total.",
   ASSISTIVE:
     "Format: direct answer (1 sentence), then supporting evidence as 2–5 bullets. Add 1–3 next steps only if clearly useful.",
   EXPLAINER:

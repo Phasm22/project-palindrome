@@ -133,6 +133,12 @@ OPNSENSE_API_SECRET=
 
 # LLM intent classification is always on (generateObject); flag no longer gates the path
 INTENT_CLASSIFIER_MODEL=gpt-4o-mini # Model for intent classification
+
+# Main tool-calling/reasoning loop model (default gpt-4o as of 2026-07-22 —
+# an eval found gpt-4o-mini reliably merges tool-result aggregate totals
+# (e.g. total_queries) into a specific entity's row in TERSE_DATA answers;
+# plain gpt-4o avoided this without any prompt change, at similar latency)
+AGENT_CHAT_MODEL=gpt-4o
 ```
 Composite queries (e.g. "VMs on yang exposed to internet", "nodes and their exposure level") are detected via `isLikelyCompositeQuery()` and classification metadata `composite: true`. For those, the runner skips twin-first chains and uses the EXECUTE path so the LLM can coordinate multiple tools. For composite queries, RAG is allowed (tool_first_domain is not applied) and a multi-step system instruction is injected so the agent uses multiple tools and synthesizes one answer.
 
