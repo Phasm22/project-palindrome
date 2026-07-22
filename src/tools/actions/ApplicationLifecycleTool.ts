@@ -29,6 +29,12 @@ export class ApplicationLifecycleTool extends BaseTool {
       allowedAcls: ["admin", "ops"],
       risk: "high",
       requiresConfirmation: true,
+      classification: [
+        { domain: "compute", compositeEligible: true },
+        { domain: "network", compositeEligible: true },
+        { domain: "firewall", compositeEligible: true },
+        { domain: "dns", compositeEligible: true },
+      ],
     });
   }
 

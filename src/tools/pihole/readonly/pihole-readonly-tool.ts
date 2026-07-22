@@ -51,6 +51,19 @@ export class PiholeReadOnlyTool extends PiholeReadOnlyBase {
       categories: ["pihole", "dns", "networking"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
+      classification: [
+        {
+          domain: "dns",
+          triggerPatterns: [
+            /\b(dns|pi-?hole|blocklist|block\s?list|blocked\s?domains?|top\s+domains|top\s+clients|dns\s?record|query\s?log|gravity)\b/i,
+          ],
+          classificationExamples: ["show me all DNS records"],
+          retrievalKeywords: ["dns", "pihole", "pi-hole", "blocklist", "query log", "gravity"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 100,
+        },
+      ],
     });
   }
 

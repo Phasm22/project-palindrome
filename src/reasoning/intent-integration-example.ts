@@ -6,6 +6,8 @@
  */
 
 import { classifyAndRoute, type RoutingDecision } from "./intent-router";
+import type { IntentClassification } from "./intent-classifier";
+import { DOMAIN_CLARIFICATION_SUGGESTIONS } from "./domain-consumers";
 import { logger } from "../utils/logger";
 
 /**
@@ -75,25 +77,18 @@ export async function handleUserInput(userInput: string): Promise<{
  */
 function generateClarificationPrompt(
   userInput: string,
-  classification: any
+  classification: IntentClassification
 ): string {
   if (classification.confidence < 0.2) {
     return "I'm not sure what you're asking. Could you rephrase your question?";
   }
   
-  // Could provide suggestions based on classification metadata
-  const suggestions: string[] = [];
-  
-  if (classification.metadata?.domain === "metrics") {
-    suggestions.push("Are you asking about temperature, CPU, memory, or status?");
-  }
-  
-  if (classification.metadata?.domain === "compute") {
-    suggestions.push("Are you asking about VMs, containers, or nodes?");
-  }
+  const domain = classification.metadata?.domain;
+  const suggestion = domain ? DOMAIN_CLARIFICATION_SUGGESTIONS[domain] : null;
+  const suggestions = suggestion ? [suggestion] : [];
   
   if (suggestions.length > 0) {
-    return `I understand you're asking about ${classification.metadata.domain}, but could you be more specific?\n\n${suggestions.join("\n")}`;
+    return `I understand you're asking about ${domain}, but could you be more specific?\n\n${suggestions.join("\n")}`;
   }
   
   return "Could you clarify what you'd like to know or do?";
@@ -104,7 +99,7 @@ function generateClarificationPrompt(
  */
 export function enhanceSystemPromptWithIntent(
   basePrompt: string,
-  classification: any,
+  classification: IntentClassification,
   routing: RoutingDecision
 ): string {
   let intentContext = "";
@@ -131,4 +126,3 @@ export function enhanceSystemPromptWithIntent(
   
   return basePrompt + intentContext;
 }
-

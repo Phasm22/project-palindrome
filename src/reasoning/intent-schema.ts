@@ -7,6 +7,7 @@
 
 import { z } from "zod";
 import type { IntentClassification, IntentType, RiskLevel } from "./intent-classifier";
+import { DOMAINS } from "./domain-taxonomy";
 
 export const IntentClassificationSchema = z.object({
   intent: z
@@ -21,7 +22,7 @@ export const IntentClassificationSchema = z.object({
       "READ=no changes; WRITE_LOW=config edits; WRITE_HIGH=infra changes; DESTRUCTIVE=delete/destroy"
     ),
   domain: z
-    .enum(["compute", "network", "firewall", "metrics", "general"])
+    .enum(DOMAINS)
     .optional()
     .describe("Infrastructure domain most relevant to the query"),
   actionType: z
@@ -69,6 +70,7 @@ export function mapLLMResultToIntentClassification(llm: IntentClassificationLLM)
     type: intent,
     intent,
     confidence: llm.confidence,
+    classificationMethod: "llm",
     entities: {
       hosts: llm.entities.hosts ?? [],
       services: llm.entities.services ?? [],

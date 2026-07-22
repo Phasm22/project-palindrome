@@ -66,6 +66,10 @@ export class InfrastructureDiagnosticTool extends BaseTool {
       allowedAcls: ["admin", "ops"],
       risk: "low", // Read-only diagnostic operations
       requiresConfirmation: false,
+      classification: [
+        { domain: "compute", compositeEligible: true },
+        { domain: "network", compositeEligible: true },
+      ],
     });
   }
 

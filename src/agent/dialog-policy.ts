@@ -99,6 +99,9 @@ export function selectResponseMode(
 }
 
 export function evaluateDialogPolicy(input: DialogPolicyInput): DialogPolicyDecision {
+  // Dialog-act policy is stage 3 of the classification pipeline. It consumes
+  // the stage-2 RoutingDecision plus explicit slots/risk/confirmation state;
+  // it does not interpret or calibrate classifier confidence itself.
   const { intent, routing, userPreferences, confirmation, pendingActionId, pendingActionCreatedAt, score, scorer } = input;
 
   const needsClarification =
@@ -157,7 +160,7 @@ export function evaluateDialogPolicy(input: DialogPolicyInput): DialogPolicyDeci
     shouldExecute,
     decision,
     reason: needsClarification
-      ? "Missing slots or low confidence"
+      ? "Classifier requested clarification, slots are missing, or routing requested clarification"
       : requiresConfirmation && !confirmationAllowed
         ? "Awaiting explicit confirmation"
         : frictionReducedReason ?? "Ready",

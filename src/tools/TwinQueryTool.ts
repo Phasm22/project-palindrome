@@ -83,6 +83,12 @@ export class TwinQueryTool extends BaseTool {
       categories: ["twin", "compute", "graph", "read"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
+      classification: [
+        { domain: "compute", compositeEligible: true },
+        { domain: "network", compositeEligible: true },
+        { domain: "firewall", compositeEligible: true },
+        { domain: "metrics", compositeEligible: true },
+      ],
     });
     this.service = service;
   }

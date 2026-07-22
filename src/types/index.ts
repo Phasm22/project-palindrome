@@ -1,4 +1,4 @@
-export type { ToolCall, ToolMetadata } from "./tool";
+export type { ToolCall, ToolMetadata, ToolDomainClassification } from "./tool";
 export type {
   ConversationState,
   ConversationContext,

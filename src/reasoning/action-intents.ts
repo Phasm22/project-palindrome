@@ -36,62 +36,6 @@ export function extractCreateVmParameters(text: string): {
   };
 }
 
-function isLikelyQuestion(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (normalized.endsWith("?")) return true;
-  return /^(what|which|who|where|when|why|how|is|are|do|does|can|could|would|will)\b/.test(normalized);
-}
-
-/** Real VM/hostnames are always short, single-token identifiers (see MIN_PLAUSIBLE_NAME_LENGTH usage below). */
-const MIN_PLAUSIBLE_NAME_LENGTH = 3;
-
-/**
- * Rejects candidates too short/implausible to be a real VM name. Adversarial
- * or garbled input (e.g. injected Cypher/SQL text) can coincidentally leave
- * a single stray character right after a verb like "delete", which would
- * otherwise be extracted as if it were a legitimate resolved target name.
- */
-function isPlausibleNameCandidate(candidate: string | null): candidate is string {
-  return !!candidate && candidate.trim().length >= MIN_PLAUSIBLE_NAME_LENGTH;
-}
-
-/**
- * Common, unambiguous imperative-command openers ("please destroy X", "can
- * you delete X", "I need to remove X"). Used to decide whether a leading
- * destroy/delete/remove verb is genuinely the user's command, not a verb
- * that merely occurs somewhere inside a longer sentence, a rhetorical/
- * hypothetical mention ("hypothetically, delete pihole..."), or a quoted /
- * injected payload (e.g. "find the vm named '... DETACH DELETE n //").
- */
-const COMMAND_OPENER_WORDS = new Set([
-  "please", "can", "could", "would", "will", "you", "i", "we", "want",
-  "need", "have", "to", "go", "ahead", "and", "kindly", "just", "now",
-  "let's", "let", "us", "should", "gonna",
-]);
-const DESTRUCTIVE_VERB_LEAD_WORDS = 6;
-
-function stripWordPunctuation(word: string): string {
-  return word.replace(/^[.,!?;:'"]+|[.,!?;:'"]+$/g, "");
-}
-
-/**
- * True only if destroy/delete/remove appears as the leading verb of an
- * imperative command — i.e. every word before it (within a short lead
- * window) is a recognized command-opener. Anything else preceding the verb
- * (a query verb like "find", a hedge like "hypothetically", injected text,
- * etc.) fails this check, so the caller falls through to the slower but
- * more accurate LLM-classification path instead of this regex fast path.
- */
-function hasLeadingDestructiveVerb(text: string): boolean {
-  const rawWords = text.trim().toLowerCase().split(/\s+/).slice(0, DESTRUCTIVE_VERB_LEAD_WORDS);
-  for (const rawWord of rawWords) {
-    const word = stripWordPunctuation(rawWord);
-    if (word === "destroy" || word === "delete" || word === "remove") return true;
-    if (!COMMAND_OPENER_WORDS.has(word)) return false;
-  }
-  return false;
-}
-
 function normalizeVmNameCandidate(candidate: string | null | undefined): string | null {
   if (!candidate) return null;
   const cleaned = candidate
@@ -185,37 +129,7 @@ function extractVmName(text: string): string | null {
 }
 
 function extractVmId(text: string): number | null {
-  // Match patterns like "vm 104", "vmid 104", "vm id 104", "virtual machine 104"
-  const vmIdMatch = text.match(/\b(?:vm|vmid|vm\s+id|virtual\s+machine)\s+(\d+)/i);
-  if (vmIdMatch?.[1]) {
-    return parseInt(vmIdMatch[1], 10);
-  }
-
-  // Match standalone numbers after destroy/delete/remove
-  const destroyIdMatch = text.match(
-    /\b(?:destroy|delete|remove)\s+(?:(?:the|a|an)\s+)?(?:(?:vm|virtual\s+machine|container|lxc)\s+)?(\d+)/i
-  );
-  if (destroyIdMatch?.[1]) {
-    return parseInt(destroyIdMatch[1], 10);
-  }
-
-  return null;
-}
-
-function extractNodeName(text: string): string | null {
-  // Match patterns like "on node X", "on X", "in X", "node X"
-  const onMatch = text.match(/\b(?:on|in)\s+(?:node\s+)?([a-z0-9\-_]+)/i);
-  if (onMatch) {
-    return onMatch[1] ?? null;
-  }
-
-  // Also try "node X" pattern
-  const nodeMatch = text.match(/\bnode\s+([a-z0-9\-_]+)/i);
-  if (nodeMatch) {
-    return nodeMatch[1] ?? null;
-  }
-
-  return null;
+  return extractVmReference(text, { allowBareIdAfterDestructiveVerb: true })?.numericId ?? null;
 }
 
 /**
@@ -379,3 +293,10 @@ function extractVmNameFromContext(text: string): string | null {
   }
   return null;
 }
+import {
+  extractNodeName,
+  extractVmReference,
+  hasLeadingDestructiveVerb,
+  isLikelyQuestion,
+  isPlausibleNameCandidate,
+} from "./detector-toolkit";

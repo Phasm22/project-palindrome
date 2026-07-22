@@ -89,10 +89,12 @@ The `ai@5.0.93` package is installed but the OpenAI adapter is not. This is the 
 
 **`src/reasoning/intent-schema.ts`**
 ```typescript
+import { DOMAINS } from "./domain-taxonomy";
+
 export const IntentClassificationSchema = z.object({
   intent: z.enum(["QUERY", "ACTION", "CHAT_SOCIAL", "CHAT_REASONING", "CLARIFICATION"]),
   confidence: z.number().min(0).max(1),
-  domain: z.enum(["compute", "network", "firewall", "metrics", "general"]).optional(),
+  domain: z.enum(DOMAINS).optional(),
   actionType: z.enum(["create","destroy","start","stop","restart","install","configure"]).optional(),
   risk: z.enum(["READ", "WRITE_LOW", "WRITE_HIGH", "DESTRUCTIVE"]),
   missingSlots: z.array(z.string()),
@@ -103,6 +105,8 @@ export const IntentClassificationSchema = z.object({
   }),
 });
 ```
+Implemented with `domain-taxonomy.ts` as the canonical domain source; never copy a
+domain enum into this historical implementation journal.
 Must be compatible with the existing `IntentClassification` interface that `evaluateDialogPolicy()` consumes.
 
 **`src/agent/schemas/agent-response-v1.ts`**

@@ -129,6 +129,7 @@ export class ProxmoxWriteTool extends ProxmoxWriteBase {
       allowedAcls: ["admin", "ops"], // Write operations restricted to admin/ops
       requiresConfirmation: false, // HIL disabled - safe write operations with dry-run and pre-write state capture
       risk: "medium", // Controlled write operations (destroy_vm handled separately)
+      classification: [{ domain: "compute", compositeEligible: true }],
     });
   }
 

@@ -42,6 +42,12 @@ export class ActionTool extends BaseTool {
       allowedAcls: ["admin", "ops"],
       risk: "medium", // Actions modify infrastructure but are safe and deterministic
       requiresConfirmation: false, // No HITL approval needed - actions are safe and deterministic
+      classification: [
+        { domain: "compute", compositeEligible: true },
+        { domain: "network", compositeEligible: true },
+        { domain: "firewall", compositeEligible: true },
+        { domain: "dns", compositeEligible: true },
+      ],
     });
   }
 

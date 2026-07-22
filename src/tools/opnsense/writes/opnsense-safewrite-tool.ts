@@ -54,6 +54,10 @@ export class OpnsenseSafeWriteTool extends OpnsenseWriteBase {
       allowedAcls: ["admin", "ops"], // Only admin and ops can write
       risk: "medium", // Medium risk - requires confirmation
       requiresConfirmation: true, // All write operations require confirmation
+      classification: [
+        { domain: "network", compositeEligible: true },
+        { domain: "firewall", compositeEligible: true },
+      ],
     });
   }
 

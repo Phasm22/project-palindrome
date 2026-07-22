@@ -36,6 +36,7 @@ export class RunDiagnosticTool extends BaseTool {
       parameters: RunDiagnosticJSONSchema,
       allowedAcls: ["admin", "ops", "sre"],
       risk: "medium",
+      classification: [{ domain: "network", compositeEligible: true }],
     });
   }
 

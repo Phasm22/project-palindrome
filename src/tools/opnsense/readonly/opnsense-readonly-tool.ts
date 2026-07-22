@@ -63,6 +63,26 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       categories: ["opnsense", "networking", "firewall", "system"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
+      classification: [
+        {
+          domain: "firewall",
+          triggerPatterns: [/\b(firewall|rule|allow|block|port|nat)\b/i],
+          classificationExamples: ["show firewall rules"],
+          retrievalKeywords: ["firewall", "opnsense", "rules"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 80,
+        },
+        {
+          domain: "network",
+          triggerPatterns: [/\b(network|interface|vlan|subnet|routing|ip|gateway)\b/i],
+          classificationExamples: ["show network interfaces"],
+          retrievalKeywords: ["network", "subnet", "interface", "vlan", "opnsense"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 70,
+        },
+      ],
     });
   }
 

@@ -4,11 +4,15 @@
  * tool_first_domain so they get RAG context and can plan multiple tool steps.
  */
 
-export const TOOL_FIRST_DOMAINS = ["compute", "network", "firewall", "metrics", "dns"] as const;
+import { getToolFirstDomains } from "../reasoning/classifier-registry";
+import type { Domain } from "../reasoning/domain-taxonomy";
+
+/** Derived from loaded tools' classification metadata. */
+export const TOOL_FIRST_DOMAINS = getToolFirstDomains();
 
 export interface GetRetrievalEligibilityParams {
   intent: string;
-  domain?: string;
+  domain?: Domain;
   isTrivialQuery: boolean;
   isActionIntent: boolean;
   isRealTimeMetricQuery: boolean;

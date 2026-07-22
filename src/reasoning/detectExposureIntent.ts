@@ -13,25 +13,7 @@ export type ExposureIntent =
  * Extract VM ID from text (e.g., "vm-101", "compute-vm:yin:101").
  */
 function extractVmId(text: string): string | null {
-  // Match compute-vm:node:vmid format
-  const vmIdMatch = text.match(/compute-vm:[\w-]+:\d+/i);
-  if (vmIdMatch) {
-    return vmIdMatch[0];
-  }
-
-  // Match vm-{vmid} or vm {vmid}
-  const vmMatch = text.match(/vm[- ]?(\d+)/i);
-  if (vmMatch) {
-    return vmMatch[1] ?? null; // Return just the number, caller can construct full ID
-  }
-
-  // Match quoted VM names
-  const quotedMatch = text.match(/"([^"]+)"/);
-  if (quotedMatch) {
-    return quotedMatch[1] ?? null;
-  }
-
-  return null;
+  return extractVmReference(text, { allowQuotedName: true })?.raw ?? null;
 }
 
 /**
@@ -57,6 +39,7 @@ function extractSubnetCidr(text: string): string | null {
  * Detect exposure-related intent from user input.
  */
 export function detectExposureIntent(userInput: string): ExposureIntent | null {
+  if (isActionRequest(userInput)) return null;
   const lower = userInput.toLowerCase();
 
   // Check for VM exposure analysis
@@ -126,3 +109,4 @@ export function detectExposureIntent(userInput: string): ExposureIntent | null {
 
   return null;
 }
+import { extractVmReference, isActionRequest } from "./detector-toolkit";

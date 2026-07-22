@@ -14,7 +14,6 @@ export type FirewallIntent =
   | { type: "rule_impact"; ruleId: string };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
-const VM_ID_REGEX = /(?:vm|vm-)(\d+)|compute-vm:[\w:-]+/i;
 const RULE_ID_REGEX = /\bfw-rule:[a-z0-9:._-]+/i;
 const WIREGUARD_PATTERN = /\b(?:wireguard|wg)\b/i;
 const PORT_NUMBER_REGEX = /\bport\s+(\d{1,5})\b/i;
@@ -25,27 +24,11 @@ function extractSubnet(text: string): string | null {
 }
 
 function extractVmId(text: string): string | null {
-  const match = text.match(VM_ID_REGEX);
-  if (match) {
-    if (match[1]) {
-      return `compute-vm:proxbig:${match[1]}`;
-    }
-    return match[0];
-  }
-  // Bare VM display name, e.g. "is windowsVM exposed?" or "the opnsense VM" —
-  // extractVmId previously only handled the "vm123"/"compute-vm:..." id
-  // conventions, so a real display name like "windowsVM" (no digits, no
-  // prefix) fell through and every exposure question about a *named* VM
-  // came back unscoped (the whole-cluster exposure map). See A-TQ-21/A-TQ-23.
-  const camelCaseVmSuffix = text.match(/\b([A-Za-z][\w-]*[a-z])VM\b/);
-  if (camelCaseVmSuffix) {
-    return `${camelCaseVmSuffix[1]}VM`;
-  }
-  const theNameVm = text.match(/\bthe\s+([A-Za-z][\w-]*)\s+VM\b/);
-  if (theNameVm?.[1]) {
-    return theNameVm[1];
-  }
-  return null;
+  const reference = extractVmReference(text, { allowDisplayName: true });
+  if (!reference) return null;
+  if (reference.canonicalId) return reference.canonicalId;
+  if (reference.numericId) return `compute-vm:proxbig:${reference.numericId}`;
+  return reference.raw;
 }
 
 function extractRuleId(text: string): string | null {
@@ -171,25 +154,7 @@ function extractChain(text: string): string | null {
 export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   const normalized = userInput.toLowerCase();
   const trimmed = normalized.trim();
-  const isQuestion = trimmed.endsWith("?") || /^(what|which|how|is|are|do|does|can|could|would|will)\b/.test(trimmed);
-
-  // Skip if this looks like an action request (configure/setup/allow port on VM)
-  // Action intents are handled separately and take priority
-  const hasActionKeywords = 
-    (normalized.includes("configure") || normalized.includes("setup") || normalized.includes("set")) &&
-    (normalized.includes("firewall") || normalized.includes("port"));
-
-  const vmTargetMatch = normalized.match(/\b(?:on|for|to)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
-  const vmTarget = vmTargetMatch?.[1]?.toLowerCase() ?? "";
-  const nonVmTargets = new Set(["the", "a", "an", "home", "lab", "network", "subnet"]);
-  const hasAllowPortOnVm =
-    !isQuestion &&
-    normalized.includes("allow") &&
-    normalized.includes("port") &&
-    vmTarget.length > 0 &&
-    !nonVmTargets.has(vmTarget);
-
-  if ((hasActionKeywords && !isQuestion) || hasAllowPortOnVm) {
+  if (isActionRequest(userInput)) {
     // This is an action, not a query - let action intent detection handle it
     return null;
   }
@@ -348,3 +313,7 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
 
   return null;
 }
+import {
+  extractVmReference,
+  isActionRequest,
+} from "./detector-toolkit";

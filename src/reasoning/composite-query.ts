@@ -5,6 +5,11 @@
  */
 
 import type { IntentClassification } from "./intent-classifier";
+import {
+  getCompositeEligibleDomains,
+  getToolClassificationRegistry,
+} from "./classifier-registry";
+import { extractNodeName } from "./detector-toolkit";
 
 /** Conjunction + second concept: "and their exposure level", "with temperature", etc. */
 const COMPOSITE_CONJUNCTION_PATTERNS = [
@@ -16,7 +21,6 @@ const COMPOSITE_CONJUNCTION_PATTERNS = [
 
 /** Node/subnet filter presence (narrows scope). */
 const NODE_OR_SUBNET_FILTER = [
-  /\b(on|in)\s+(yang|yin|proxbig|node)\b/i,
   /\bwhich\s+nodes\b/i,
   /\bin\s+172\.\d+\.\d+\.\d+\/\d+/i,
   /\bsubnet\s+172\.\d+/i,
@@ -50,7 +54,9 @@ export function isLikelyCompositeQuery(
   if (COMPOSITE_CONJUNCTION_PATTERNS.some((p) => p.test(normalized))) return true;
 
   // Node/subnet filter + exposure or no-agent: "VMs on yang exposed to internet", "in 172.16 and their exposure"
-  const hasNodeOrSubnetFilter = NODE_OR_SUBNET_FILTER.some((p) => p.test(normalized));
+  const hasNodeOrSubnetFilter =
+    extractNodeName(normalized, { allowKnownBare: true }) !== null ||
+    NODE_OR_SUBNET_FILTER.some((p) => p.test(normalized));
   const hasExposureOrAgentDimension = EXPOSURE_OR_AGENT_DIMENSION.some((p) => p.test(normalized));
   if (hasNodeOrSubnetFilter && hasExposureOrAgentDimension) return true;
 
@@ -58,10 +64,16 @@ export function isLikelyCompositeQuery(
   if (lower.includes("subnet") && lower.includes("exposure")) return true;
   if (lower.includes("no ") && lower.includes("agent") && (lower.includes("temperature") || lower.includes(" temp") || lower.includes("nodes"))) return true;
 
-  // DNS + a second dimension (exposure, VM, or node) — e.g. "which client makes
-  // the most DNS queries, and is that host exposed to the internet". Needs
-  // pihole_readonly plus a compute/exposure tool across steps.
-  if (lower.includes("dns") && (lower.includes("expos") || lower.includes("vm") || lower.includes("node"))) return true;
+  // Tool metadata declares which domains can participate in composite plans.
+  // Two independently matched eligible domains require multi-tool execution.
+  const registry = getToolClassificationRegistry();
+  const matchedDomains = getCompositeEligibleDomains(registry).filter((domain) =>
+    registry[domain].triggerPatterns.some((pattern) => {
+      pattern.lastIndex = 0;
+      return pattern.test(normalized);
+    })
+  );
+  if (matchedDomains.length >= 2) return true;
 
   return false;
 }

@@ -89,6 +89,26 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
       categories: ["proxmox", "virtualization", "infrastructure", "cluster"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
+      classification: [
+        {
+          domain: "compute",
+          triggerPatterns: [/\b(vm|container|qemu|lxc|virtual machine|host|node|containers|vms)\b/i],
+          classificationExamples: ["list all VMs"],
+          retrievalKeywords: ["proxmox", "vm", "lxc", "cluster", "compute"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 60,
+        },
+        {
+          domain: "metrics",
+          triggerPatterns: [/\b(temperature|temp|cpu|memory|ram|disk|status|uptime|metrics|load)\b/i],
+          classificationExamples: ["show cluster temperature"],
+          retrievalKeywords: ["metrics", "temperature", "sensors", "cpu", "memory"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 40,
+        },
+      ],
     });
   }
 

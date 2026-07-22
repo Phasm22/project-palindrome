@@ -88,6 +88,9 @@ import {
 import { classifyAndRouteWithLLM, classifyIntentWithLLM } from "../reasoning/intent-router";
 import { isLikelyCompositeQuery } from "../reasoning/composite-query";
 import { getRetrievalEligibility, TOOL_FIRST_DOMAINS } from "./retrieval-eligibility";
+import { getToolClassificationRegistry } from "../reasoning/classifier-registry";
+import type { Domain } from "../reasoning/domain-taxonomy";
+import { DOMAIN_CLARIFICATION_SUGGESTIONS } from "../reasoning/domain-consumers";
 import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../reasoning/failure-reclassification";
 import { formatResponseForBot, detectResponseIntent, type FormatContext, type ResponseMode } from "./response-formatter";
 import { planConversation } from "./conversation-orchestrator";
@@ -257,19 +260,13 @@ export const RETRIEVAL_MIN_SCORE = 0.35;
 export const COMPOSITE_MULTI_STEP_INSTRUCTION =
   "The user's question has multiple parts (e.g. list items in a scope AND a property like exposure level). You MUST use multiple tool calls to satisfy each part (e.g. first list VMs in the subnet, then get exposure/level for those VMs), then synthesize one answer. Do not answer from only one tool if the question asks for multiple dimensions.";
 
-export function hasDomainMatch(domain: string | undefined, rag: HybridApiContext): boolean {
+export function hasDomainMatch(domain: Domain | undefined, rag: HybridApiContext): boolean {
   if (!domain || domain === "general") return true;
   const paths: string[] = [];
   if (rag.sources) {
     paths.push(...rag.sources.map((source) => source.sourcePath || ""));
   }
-  const keywords: Record<string, string[]> = {
-    compute: ["proxmox", "vm", "lxc", "cluster", "compute"],
-    network: ["network", "subnet", "interface", "vlan"],
-    firewall: ["firewall", "opnsense", "rules"],
-    metrics: ["metrics", "temperature", "sensors", "cpu", "memory"],
-  };
-  const tokens = keywords[domain] ?? [];
+  const tokens = getToolClassificationRegistry()[domain].retrievalKeywords;
   if (tokens.length === 0) return true;
   const haystack = paths.join(" ").toLowerCase();
   return tokens.some((token) => haystack.includes(token));
@@ -288,7 +285,7 @@ export function hasDomainMatch(domain: string | undefined, rag: HybridApiContext
  * an absent or exact "network" domain, same as before.
  */
 export function networkDomainGateAllows(
-  domain: string | undefined,
+  domain: Domain | undefined,
   networkIntentMatch: unknown | null
 ): boolean {
   return !domain || domain === "network" || networkIntentMatch !== null;
@@ -1435,17 +1432,8 @@ export async function runAgent(
       clarificationMessage = "I'm not sure what you're asking. Could you rephrase your question?";
     } else if (state.classification.metadata?.domain) {
       const domain = state.classification.metadata.domain;
-      const suggestions: string[] = [];
-      
-      if (domain === "metrics") {
-        suggestions.push("Are you asking about temperature, CPU, memory, or status?");
-      } else if (domain === "compute") {
-        suggestions.push("Are you asking about VMs, containers, or nodes?");
-      } else if (domain === "firewall") {
-        suggestions.push("Are you asking about firewall rules, chains, or exposure?");
-      } else if (domain === "network") {
-        suggestions.push("Are you asking about network interfaces, subnets, or connectivity?");
-      }
+      const suggestion = DOMAIN_CLARIFICATION_SUGGESTIONS[domain];
+      const suggestions = suggestion ? [suggestion] : [];
       
       if (suggestions.length > 0) {
         clarificationMessage = `I understand you're asking about ${domain}, but could you be more specific?\n\n${suggestions.join("\n")}`;
