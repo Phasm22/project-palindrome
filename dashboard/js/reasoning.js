@@ -5,7 +5,7 @@ import {
   escapeHtml,
 } from './utils.js';
 import { createSkeletonLoader } from './skeletons.js';
-import { renderTextBlock } from './response-renderer.js';
+import { renderTextBlock, renderAdaptiveValue } from './response-renderer.js';
 
 function formatDurationMs(ms) {
   if (!ms && ms !== 0) return '0s';
@@ -114,12 +114,10 @@ function formatToolResult(dataPreview, toolName) {
       `;
     }
     
-    // Default: pretty print JSON with truncation
-    const jsonStr = JSON.stringify(data, null, 2);
-    if (jsonStr.length > 500) {
-      return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.7rem; overflow-x: auto; margin: 0; max-height: 150px; overflow-y: auto;">${jsonStr.substring(0, 500)}...\n<span style="color: #94a3b8;">[${jsonStr.length - 500} more chars]</span></pre>`;
-    }
-    return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.7rem; overflow-x: auto; margin: 0;">${jsonStr}</pre>`;
+    // Default: shape-driven adaptive rendering (same renderer the chat view
+    // uses) instead of a raw JSON dump — generalizes to any tool's result
+    // shape without hand-written per-tool cases.
+    return `<div class="trace-tool-result">${renderAdaptiveValue(data)}</div>`;
   } catch (error) {
     // If parsing fails, return as-is
     return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.7rem; overflow-x: auto; margin: 0;">${typeof dataPreview === 'string' ? dataPreview : JSON.stringify(dataPreview)}</pre>`;
@@ -326,6 +324,7 @@ function formatTraceHtml(trace, isLast = false) {
                         ${escapeHtml(tc.result.error.length > 180 ? `${tc.result.error.substring(0, 180)}...` : tc.result.error)}
                       </div>
                     ` : ''}
+                    ${success && tc.result?.dataPreview ? formatToolResult(tc.result.dataPreview, tc.toolName) : ''}
                   </div>
                 `;
                 }).join('')}

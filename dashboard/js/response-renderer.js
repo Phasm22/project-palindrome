@@ -178,6 +178,15 @@ function renderAsciiTable(rows) {
   return `<pre class="response-ascii-table">${escapeHtml(lines.join("\n"))}</pre>`;
 }
 
+// Bounds the "key" side of a key=value cell match. DNS domain names —
+// including long mDNS reverse-PTR names like
+// "lb._dns-sd._udp.0.68.168.192.in-addr.arpa" (41 chars) — legitimately
+// exceed a short cap when they end up standing in as the "key" text (e.g.
+// TERSE_DATA emitting "domain=count" pairs). 100 comfortably covers real
+// DNS names (max 253, individual labels max 63) while each match is still
+// bounded to one already-pipe-split cell, not free-running prose.
+const KEY_VALUE_RE = /^([^:=]{1,100})[:=]\s*(.+)$/;
+
 // Matches TERSE_DATA's documented convention for describing one or more
 // named things: "entity | key=value | key=value ...", with no header row.
 // The first cell is a bare label (not itself key=value); every cell after
@@ -186,26 +195,69 @@ function parseEntityRow(cells) {
   if (cells.length < 2) return null;
   const fields = [];
   for (const cell of cells.slice(1)) {
-    const match = cell.match(/^([^:=]{1,40})[:=]\s*(.+)$/);
+    const match = cell.match(KEY_VALUE_RE);
     if (!match) return null;
     fields.push([match[1].trim(), match[2].trim()]);
   }
   return { entity: cells[0], fields };
 }
 
+// Entity rows tolerate a different field count per row by design (a VM with
+// only "status" and a VM with "status/node/uptime" are still the same kind
+// of thing) — so this checks whether rows share a common vocabulary, not
+// identical arity. Two rows sharing zero keys (e.g. a "top_domains" facts
+// blob next to an unrelated "dns_blocking_enabled" facts blob, both TERSE_DATA
+// pipe rows but describing different things) aren't the same table.
+function hasSharedSchema(entityRows) {
+  if (entityRows.length < 2) return true;
+  const keyCounts = new Map();
+  for (const row of entityRows) {
+    for (const key of new Set(row.fields.map(([k]) => k))) {
+      keyCounts.set(key, (keyCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const threshold = Math.max(2, Math.ceil(entityRows.length / 2));
+  for (const count of keyCounts.values()) {
+    if (count >= threshold) return true;
+  }
+  return false;
+}
+
+// A repeated key within one row ("top_domains | domain=a.com | count=10 |
+// domain=b.com | count=20") means the row is really a flattened list of
+// tuples, not a set of distinct attributes — folding it into
+// { [key]: value } in the union-table builder below would silently
+// overwrite every earlier occurrence and drop data. Route these to
+// renderFactGroups instead, which keeps every field entry.
+function hasDuplicateKeys(fields) {
+  const seen = new Set();
+  for (const [key] of fields) {
+    if (seen.has(key)) return true;
+    seen.add(key);
+  }
+  return false;
+}
+
+// Renders heterogeneous entity rows (no shared field vocabulary) as
+// independent labeled fact panels instead of one table with mostly-empty
+// cells — readable per-entity, not a sparse grid.
+function renderFactGroups(entityRows) {
+  return `<div class="response-fact-groups">${entityRows.map((row) => `
+    <div class="response-fact-group">
+      <div class="response-fact-group-title">${escapeHtml(row.entity)}</div>
+      <dl class="response-facts">${row.fields.map(([key, value]) => `
+        <div class="response-fact"><dt>${escapeHtml(key)}</dt><dd>${renderInlineText(value)}</dd></div>
+      `).join("")}</dl>
+    </div>
+  `).join("")}</div>`;
+}
+
 function renderPipeBlock(rows) {
   if (!rows.length) return "";
-  const arity = rows[0].length;
-  const consistent = rows.every((row) => row.length === arity);
-  if (!consistent) {
-    // Ragged pipe counts mean we can't confidently infer columns — still
-    // guarantee a readable, aligned table instead of a wall of raw pipes.
-    return renderAsciiTable(rows);
-  }
 
   if (rows.length === 1) {
     const cells = rows[0];
-    const asFacts = cells.map((cell) => cell.match(/^([^:=]{1,40})[:=]\s*(.+)$/));
+    const asFacts = cells.map((cell) => cell.match(KEY_VALUE_RE));
     if (asFacts.every(Boolean)) {
       return `<dl class="response-facts">${asFacts.map((match) => `
         <div class="response-fact"><dt>${escapeHtml(match[1].trim())}</dt><dd>${renderInlineText(match[2].trim())}</dd></div>
@@ -213,19 +265,34 @@ function renderPipeBlock(rows) {
     }
   }
 
+  // Entity rows ("entity | key=value | ...") are tried before requiring
+  // uniform cell counts across rows — see hasSharedSchema above for why
+  // ragged arity alone isn't a reason to give up on a real table.
   const entityRows = rows.map(parseEntityRow);
   if (entityRows.every(Boolean)) {
-    const keyOrder = [];
-    entityRows.forEach((row) => row.fields.forEach(([key]) => {
-      if (!keyOrder.includes(key)) keyOrder.push(key);
-    }));
-    const columns = [{ key: "entity", label: "Entity" }, ...keyOrder.map((key) => ({ key, label: key }))];
-    const records = entityRows.map((row) => {
-      const record = { entity: row.entity };
-      row.fields.forEach(([key, value]) => { record[key] = value; });
-      return record;
-    });
-    return renderTable(records, columns);
+    if (hasSharedSchema(entityRows) && !entityRows.some((row) => hasDuplicateKeys(row.fields))) {
+      const keyOrder = [];
+      entityRows.forEach((row) => row.fields.forEach(([key]) => {
+        if (!keyOrder.includes(key)) keyOrder.push(key);
+      }));
+      const columns = [{ key: "entity", label: "Entity" }, ...keyOrder.map((key) => ({ key, label: key }))];
+      const records = entityRows.map((row) => {
+        const record = { entity: row.entity };
+        row.fields.forEach(([key, value]) => { record[key] = value; });
+        return record;
+      });
+      return renderTable(records, columns);
+    }
+    return renderFactGroups(entityRows);
+  }
+
+  const arity = rows[0].length;
+  const consistent = rows.every((row) => row.length === arity);
+  if (!consistent) {
+    // Ragged pipe counts with no key=value structure to fall back on mean
+    // we can't confidently infer columns — still guarantee a readable,
+    // aligned table instead of a wall of raw pipes.
+    return renderAsciiTable(rows);
   }
 
   if (rows.length >= 2) {
