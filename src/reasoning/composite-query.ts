@@ -58,5 +58,10 @@ export function isLikelyCompositeQuery(
   if (lower.includes("subnet") && lower.includes("exposure")) return true;
   if (lower.includes("no ") && lower.includes("agent") && (lower.includes("temperature") || lower.includes(" temp") || lower.includes("nodes"))) return true;
 
+  // DNS + a second dimension (exposure, VM, or node) — e.g. "which client makes
+  // the most DNS queries, and is that host exposed to the internet". Needs
+  // pihole_readonly plus a compute/exposure tool across steps.
+  if (lower.includes("dns") && (lower.includes("expos") || lower.includes("vm") || lower.includes("node"))) return true;
+
   return false;
 }

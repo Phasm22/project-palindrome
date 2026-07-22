@@ -15,6 +15,70 @@ export interface DnsRecord {
   ip: string;
 }
 
+export interface TopDomainEntry {
+  domain: string;
+  count: number;
+}
+
+export interface TopDomainsResult {
+  domains: TopDomainEntry[];
+  total_queries: number;
+  blocked_queries: number;
+}
+
+export interface TopClientEntry {
+  name: string;
+  ip: string;
+  count: number;
+}
+
+export interface TopClientsResult {
+  clients: TopClientEntry[];
+  total_queries: number;
+  blocked_queries: number;
+}
+
+export interface QueryTypesResult {
+  types: Record<string, number>;
+}
+
+export interface QueryLogEntry {
+  id: number;
+  time: number;
+  type: string;
+  status: string;
+  dnssec: string;
+  domain: string;
+  upstream: string | null;
+  reply: { type: string; time: number };
+  client: { ip: string; name: string | null };
+  cname: string | null;
+}
+
+export interface QueryLogResult {
+  queries: QueryLogEntry[];
+}
+
+export interface BlockingStatusResult {
+  blocking: "enabled" | "disabled";
+  timer: number | null;
+}
+
+export interface PiholeSummary {
+  queries: {
+    total: number;
+    blocked: number;
+    percent_blocked: number;
+    unique_domains: number;
+    forwarded: number;
+    cached: number;
+    types: Record<string, number>;
+    status: Record<string, number>;
+  };
+  clients: { active: number; total: number };
+  gravity: { domains_being_blocked: number; last_update: number };
+}
+
 export interface PiholeApiResponse<T = any> {
   success: boolean;
   data?: T;
@@ -532,19 +596,110 @@ export class PiholeClient {
   }
 
   /**
-   * Get Pi-hole statistics
+   * Get overall Pi-hole query/client/gravity summary.
+   * Pi-hole v6+ REST API: GET /api/stats/summary
+   * (This previously called the legacy pre-v6 `/api?summary=` shape, which
+   * 404s against a real v6 instance — confirmed live before fixing.)
    */
-  async getStatistics(): Promise<any> {
+  async getStatistics(): Promise<PiholeSummary> {
     try {
-      const response = await (await this.getApiClient()).get("/api", {
-        params: {
-          summary: "",
-        },
-      });
+      const response = await (await this.getApiClient()).get("/api/stats/summary");
       return response.data;
     } catch (error: any) {
       logger.error("Failed to get Pi-hole statistics", { error: error.message });
       throw new Error(`Failed to get statistics: ${error.message}`);
+    }
+  }
+
+  /**
+   * Most-queried domains, optionally restricted to blocked-only.
+   * GET /api/stats/top_domains
+   */
+  async getTopDomains(opts?: { blocked?: boolean; count?: number }): Promise<TopDomainsResult> {
+    try {
+      const response = await (await this.getApiClient()).get("/api/stats/top_domains", {
+        params: { blocked: opts?.blocked, count: opts?.count },
+      });
+      return response.data;
+    } catch (error: any) {
+      logger.error("Failed to get Pi-hole top domains", { error: error.message });
+      throw new Error(`Failed to get top domains: ${error.message}`);
+    }
+  }
+
+  /**
+   * Clients generating the most DNS queries, optionally restricted to
+   * clients whose queries were most often blocked.
+   * GET /api/stats/top_clients
+   */
+  async getTopClients(opts?: { blocked?: boolean; count?: number }): Promise<TopClientsResult> {
+    try {
+      const response = await (await this.getApiClient()).get("/api/stats/top_clients", {
+        params: { blocked: opts?.blocked, count: opts?.count },
+      });
+      return response.data;
+    } catch (error: any) {
+      logger.error("Failed to get Pi-hole top clients", { error: error.message });
+      throw new Error(`Failed to get top clients: ${error.message}`);
+    }
+  }
+
+  /**
+   * Query-type breakdown (A, AAAA, PTR, HTTPS, etc.) for the current stats window.
+   * GET /api/stats/query_types
+   */
+  async getQueryTypes(): Promise<QueryTypesResult> {
+    try {
+      const response = await (await this.getApiClient()).get("/api/stats/query_types");
+      return response.data;
+    } catch (error: any) {
+      logger.error("Failed to get Pi-hole query types", { error: error.message });
+      throw new Error(`Failed to get query types: ${error.message}`);
+    }
+  }
+
+  /**
+   * Search the raw DNS query log, optionally filtered by domain, client IP,
+   * record type, or a unix-timestamp time window.
+   * GET /api/queries
+   */
+  async searchQueries(opts?: {
+    domain?: string;
+    clientIp?: string;
+    type?: string;
+    from?: number;
+    until?: number;
+    length?: number;
+  }): Promise<QueryLogResult> {
+    try {
+      const response = await (await this.getApiClient()).get("/api/queries", {
+        params: {
+          domain: opts?.domain,
+          client_ip: opts?.clientIp,
+          type: opts?.type,
+          from: opts?.from,
+          until: opts?.until,
+          length: opts?.length,
+        },
+      });
+      return response.data;
+    } catch (error: any) {
+      logger.error("Failed to search Pi-hole query log", { error: error.message });
+      throw new Error(`Failed to search query log: ${error.message}`);
+    }
+  }
+
+  /**
+   * Whether DNS blocking (gravity) is currently enabled.
+   * GET /api/dns/blocking
+   */
+  async getBlockingStatus(): Promise<BlockingStatusResult> {
+    try {
+      const response = await (await this.getApiClient()).get("/api/dns/blocking");
+      return response.data;
+    } catch (error: any) {
+      logger.error("Failed to get Pi-hole blocking status", { error: error.message });
+      throw new Error(`Failed to get blocking status: ${error.message}`);
     }
   }
 

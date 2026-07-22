@@ -5,6 +5,7 @@ import { CreateIncidentTicketTool } from "../tools/CreateIncidentTicketTool";
 import { LookupUserProfileTool } from "../tools/LookupUserProfileTool";
 import { OpnsenseReadOnlyTool } from "../tools/opnsense/readonly";
 import { OpnsenseSafeWriteTool } from "../tools/opnsense/writes";
+import { PiholeReadOnlyTool } from "../tools/pihole/readonly";
 import { ProxmoxReadOnlyTool } from "../tools/proxmox/readonly";
 import { ProxmoxWriteTool } from "../tools/proxmox/writes";
 import { SSHTool } from "../tools/SSHTool";
@@ -27,6 +28,7 @@ export function loadTools(): BaseTool[] {
     new CreateIncidentTicketTool(),
     new OpnsenseReadOnlyTool(),
     new OpnsenseSafeWriteTool(),
+    new PiholeReadOnlyTool(),
     new ProxmoxReadOnlyTool(),
     new ProxmoxWriteTool(),
     new SSHTool(),

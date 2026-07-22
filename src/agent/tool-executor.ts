@@ -10,6 +10,7 @@ export interface ToolExecutionContext {
   node?: string; // For Proxmox operations
   vmid?: number; // For VM operations
   sessionId?: string;
+  traceId?: string; // Links this call back to its parent reasoning trace
 }
 
 export async function executeToolCall(
@@ -73,6 +74,7 @@ export async function executeToolCall(
         node: executionContext.node,
         vmid: executionContext.vmid,
         error: storedError,
+        traceId: executionContext.traceId,
       });
     } catch (error: any) {
       // Don't fail tool execution if audit logging fails

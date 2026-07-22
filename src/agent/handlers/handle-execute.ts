@@ -246,6 +246,13 @@ export async function handleExecute(
 
   const throwIfStopped = () => options.signal?.throwIfAborted();
   throwIfStopped();
+  // Generated upfront (not inside recordTrace) so every tool_executions row
+  // written during this run can be stamped with the trace it belongs to,
+  // enabling a reliable join instead of fuzzy timestamp/toolName matching.
+  // Named distinctly from the several local `traceId` variables below
+  // (each holds recordTrace()'s return value for its own code path) to
+  // avoid confusing shadowing — this is the one value both sides agree on.
+  const runTraceId = crypto.randomUUID();
   let connectionEndpoints: ConnectionEndpoint[] = [];
 
   const emitConnectionUpdate = (
@@ -327,7 +334,7 @@ export async function handleExecute(
           parameters: { observations: cappedObservations, intent: intentLabel },
         },
         tools,
-        { userId: session.userId, aclGroup: session.aclGroup }
+        { userId: session.userId, aclGroup: session.aclGroup, traceId: runTraceId }
       );
       const summaryText = (summaryResult as any)?.data?.summary;
       if (typeof summaryText === "string" && summaryText.trim().length > 0) {
@@ -344,7 +351,7 @@ export async function handleExecute(
           parameters: { intent: intentLabel, observations: cappedObservations },
         },
         tools,
-        { userId: session.userId, aclGroup: session.aclGroup }
+        { userId: session.userId, aclGroup: session.aclGroup, traceId: runTraceId }
       );
       const steps = (nextStepsResult as any)?.data?.steps;
       if (Array.isArray(steps) && steps.length > 0) {
@@ -487,7 +494,7 @@ export async function handleExecute(
     const resolveResult = await executeToolCall(
       { toolName: "twin_query", parameters: resolveParams },
       tools,
-      { userId: session.userId, aclGroup: session.aclGroup }
+      { userId: session.userId, aclGroup: session.aclGroup, traceId: runTraceId }
     );
     appendToolTrace(reasoningStep, "twin_query", resolveParams, resolveResult);
     const resolution = resolveResult.error
@@ -520,6 +527,7 @@ export async function handleExecute(
             aclGroup: session.aclGroup,
             node: resolution.node,
             vmid: resolution.vmid,
+            traceId: runTraceId,
           }
         ),
         executeToolCall(
@@ -530,6 +538,7 @@ export async function handleExecute(
             aclGroup: session.aclGroup,
             node: resolution.node,
             vmid: resolution.vmid,
+            traceId: runTraceId,
           }
         ),
       ]);
@@ -554,6 +563,7 @@ export async function handleExecute(
     let traceId: string | undefined;
     try {
       traceId = await getReasoningTraceStore().recordTrace({
+        id: runTraceId,
         userId: session.userId,
         aclGroup: session.aclGroup,
         userInput,
@@ -607,7 +617,7 @@ export async function handleExecute(
     const getResult = await executeToolCall(
       { toolName: "opnsense_readonly", parameters: getParams },
       tools,
-      { userId: session.userId, aclGroup: session.aclGroup }
+      { userId: session.userId, aclGroup: session.aclGroup, traceId: runTraceId }
     );
     appendToolTrace(reasoningStep, "opnsense_readonly", getParams, getResult);
 
@@ -623,7 +633,7 @@ export async function handleExecute(
       const listResult = await executeToolCall(
         { toolName: "opnsense_readonly", parameters: listParams },
         tools,
-        { userId: session.userId, aclGroup: session.aclGroup }
+        { userId: session.userId, aclGroup: session.aclGroup, traceId: runTraceId }
       );
       appendToolTrace(reasoningStep, "opnsense_readonly", listParams, listResult);
       if (!listResult.error) {
@@ -658,6 +668,7 @@ export async function handleExecute(
     try {
       const traceStore = getReasoningTraceStore();
       traceId = await traceStore.recordTrace({
+        id: runTraceId,
         userId: session.userId,
         aclGroup: session.aclGroup,
         userInput,
@@ -1070,6 +1081,7 @@ export async function handleExecute(
             aclGroup: session.aclGroup,
             node,
             sessionId,
+            traceId: runTraceId,
           };
 
           // Emit tool:start
@@ -1369,7 +1381,7 @@ export async function handleExecute(
                 },
               },
               tools,
-              { userId: session.userId, aclGroup: session.aclGroup }
+              { userId: session.userId, aclGroup: session.aclGroup, traceId: runTraceId }
             );
             const question = (askMissingResult as any)?.data?.question;
             if (typeof question === "string" && question.trim().length > 0) {
@@ -1924,6 +1936,7 @@ export async function handleExecute(
       try {
         const traceStore = getReasoningTraceStore();
         traceId = await traceStore.recordTrace({
+          id: runTraceId,
           userId: session.userId,
           aclGroup: session.aclGroup,
           userInput,
@@ -2115,6 +2128,7 @@ export async function handleExecute(
   try {
     const traceStore = getReasoningTraceStore();
     traceId = await traceStore.recordTrace({
+      id: runTraceId,
       userId: session.userId,
       aclGroup: session.aclGroup,
       userInput,

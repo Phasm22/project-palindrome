@@ -47,7 +47,7 @@ export interface IntentClassification {
   risk: RiskLevel;
   missing: string[];
   metadata?: {
-    domain?: "compute" | "network" | "firewall" | "metrics" | "general";
+    domain?: "compute" | "network" | "firewall" | "metrics" | "dns" | "general";
     actionType?: string;
     queryType?: string;
     /** When true, query has multiple dimensions (e.g. node + exposure, subnet + level); route to EXECUTE path. */
@@ -343,6 +343,9 @@ export function classifyIntent(userInput: string): IntentClassification {
   
   // Detect domain
   const domainKeywords = {
+    // Checked first: DNS-flavored queries ("dns record", "pihole", "blocked domain")
+    // would otherwise fall into network's broader ip/gateway/subnet match.
+    dns: /\b(dns|pi-?hole|blocklist|block\s?list|blocked\s?domains?|top\s+domains|top\s+clients|dns\s?record|query\s?log|gravity)\b/i,
     compute: /\b(vm|container|qemu|lxc|virtual machine|host|node|containers|vms)\b/i,
     network: /\b(network|interface|vlan|subnet|routing|ip|gateway)\b/i,
     firewall: /\b(firewall|rule|allow|block|port|nat)\b/i,

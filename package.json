@@ -12,6 +12,7 @@
     "agent": "bun run src/cli.ts",
     "export-tools": "bun run src/utils/export-tool-schemas.ts",
     "pce:verify-dod": "bun run src/pce/verify-dod.ts",
+    "pce:eval-traces": "bun run src/pce/eval-traces.ts",
     "pce:test-redaction": "bun run src/pce/cli.ts test-redaction",
     "pce:api": "bun run src/pce/api/main.ts",
     "pce:gold-path": "bun run scripts/run-gold-path.ts",

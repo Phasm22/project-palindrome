@@ -4,7 +4,7 @@
  * tool_first_domain so they get RAG context and can plan multiple tool steps.
  */
 
-export const TOOL_FIRST_DOMAINS = ["compute", "network", "firewall", "metrics"] as const;
+export const TOOL_FIRST_DOMAINS = ["compute", "network", "firewall", "metrics", "dns"] as const;
 
 export interface GetRetrievalEligibilityParams {
   intent: string;

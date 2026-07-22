@@ -1,7 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, afterEach } from "bun:test";
 import { executeToolCall } from "../../src/agent/tool-executor";
 import { BaseTool } from "../../src/tools/BaseTool";
 import type { ExecutionContext, ExecutionResult } from "../../src/types";
+import {
+  ToolExecutionStore,
+  getToolExecutionStore,
+  setToolExecutionStoreForTests,
+  resetToolExecutionStoreForTests,
+} from "../../src/pce/api/tool-execution-store";
 
 class ThrowingTool extends BaseTool {
   constructor() {
@@ -77,5 +83,45 @@ describe("executeToolCall", () => {
   test("returns an error for unknown tools without throwing", async () => {
     const result = await executeToolCall({ toolName: "does_not_exist", parameters: {} }, []);
     expect(result.error).toBe("Unknown tool: does_not_exist");
+  });
+});
+
+describe("executeToolCall traceId persistence", () => {
+  afterEach(() => {
+    resetToolExecutionStoreForTests();
+  });
+
+  test("a traceId passed via executionContext round-trips into the recorded tool_executions row", async () => {
+    setToolExecutionStoreForTests(new ToolExecutionStore(":memory:"));
+    const tools = [new HealthyTool()];
+    const traceId = "test-trace-12345";
+
+    await executeToolCall(
+      { toolName: "healthy_tool", parameters: {} },
+      tools,
+      { userId: "test-user", aclGroup: "admin", traceId }
+    );
+
+    const store = getToolExecutionStore();
+    const { executions } = await store.getExecutions({ traceId });
+    expect(executions.length).toBe(1);
+    expect(executions[0].toolName).toBe("healthy_tool");
+    expect(executions[0].traceId).toBe(traceId);
+  });
+
+  test("omitting traceId still records the execution, with traceId left undefined", async () => {
+    setToolExecutionStoreForTests(new ToolExecutionStore(":memory:"));
+    const tools = [new HealthyTool()];
+
+    await executeToolCall(
+      { toolName: "healthy_tool", parameters: {} },
+      tools,
+      { userId: "test-user", aclGroup: "admin" }
+    );
+
+    const store = getToolExecutionStore();
+    const { executions } = await store.getExecutions({ userId: "test-user" });
+    expect(executions.length).toBe(1);
+    expect(executions[0].traceId).toBeUndefined();
   });
 });

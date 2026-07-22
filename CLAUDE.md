@@ -82,7 +82,8 @@ User Query
 **Tools** (`src/tools/`)
 - `proxmox/readonly/` — Read VMs, nodes, cluster state
 - `proxmox/writes/` — VM lifecycle operations
-- `opnsense/readonly/` and `opnsense/writes/` — Firewall rules, DNS
+- `opnsense/readonly/` and `opnsense/writes/` — Firewall rules
+- `pihole/readonly/` — DNS reads (Pi-hole serves DNS, not OPNsense): records, top domains/clients, query log, blocking status
 - `SSHTool.ts` — OS-level commands on VMs
 - `TwinQueryTool.ts` — Query the digital twin (prefer this over live proxmox reads)
 - `ActionTool.ts` — Automation layer for infrastructure changes

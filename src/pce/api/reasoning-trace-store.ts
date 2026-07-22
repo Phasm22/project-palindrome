@@ -156,9 +156,9 @@ export class ReasoningTraceStore {
   }
 
   async recordTrace(
-    trace: Omit<ReasoningTrace, "id" | "artifacts"> & { artifacts?: ReasoningTraceArtifactInput[] }
+    trace: Omit<ReasoningTrace, "id" | "artifacts"> & { id?: string; artifacts?: ReasoningTraceArtifactInput[] }
   ): Promise<string> {
-    const id = crypto.randomUUID();
+    const id = trace.id ?? crypto.randomUUID();
     const stmt = this.db.prepare(`
       INSERT INTO reasoning_traces 
       (id, user_id, acl_group, user_input, final_response, steps_json, provenance_json, total_steps, total_tool_calls, max_steps_reached, timestamp, duration_ms)
