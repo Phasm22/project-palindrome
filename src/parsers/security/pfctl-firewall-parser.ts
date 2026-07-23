@@ -324,23 +324,18 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
     let target: string | null = null;
     if (idx < tokens.length && tokens[idx] === "->") {
       idx++;
-      if (idx < tokens.length) {
-        target = tokens[idx] ?? null;
-        idx++;
-      }
-      if (target !== null) {
-        // Remove parentheses if present: (em0) -> em0
-        target = target.replace(/^\(|\)$/g, "");
-      }
+      const parsed = this.parseAddressSpec(tokens, idx);
+      target = parsed.spec;
+      idx = parsed.nextIdx;
     }
 
     // Parse target port (for rdr)
+    let translationPort: string | null = null;
     if (idx < tokens.length && tokens[idx] === "port") {
       idx++;
-      if (idx < tokens.length) {
-        // This is the target port, not destination port
-        // We'll store it in metadata or a separate field
-      }
+      const parsedPort = this.parsePortSpec(tokens, idx);
+      translationPort = parsedPort.port;
+      idx = parsedPort.nextIdx;
     }
 
     const ruleId = this.normalizeRuleId(
@@ -368,8 +363,10 @@ export class PfctlFirewallParser implements Parser<PfctlInput> {
         interface: interfaceName,
         protocol,
         source,
-        destination: destination || target,
+        destination,
         destinationPort,
+        translationTarget: target,
+        translationPort,
         ruleType: ruleType === "nat" ? "nat" : "rdr",
         chain,
         enabled: true,
