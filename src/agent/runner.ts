@@ -14,7 +14,13 @@ import { SYSTEM_PROMPT, buildSystemPrompt, buildStructuredResponsePrompt } from 
 import { generateObject } from "ai";
 import { openai as aiSdkOpenai } from "@ai-sdk/openai";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
-import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
+import {
+  getToolRisk,
+  isToolAuthorized,
+  requiresConfirmation,
+  runWithToolAcl,
+  type ToolSession,
+} from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
 import {
   getReasoningTraceStore,
@@ -828,6 +834,16 @@ export async function runAgent(
   const options: AgentRunOptions =
     typeof optionsOrStream === "boolean" ? { stream: optionsOrStream } : optionsOrStream ?? {};
 
+  return runWithToolAcl(
+    options.aclGroup ?? "admin",
+    () => runAgentWithAcl(userInput, options)
+  );
+}
+
+async function runAgentWithAcl(
+  userInput: string,
+  options: AgentRunOptions
+): Promise<AgentRunResponse> {
   options.signal?.throwIfAborted();
 
   if (options.stream) {

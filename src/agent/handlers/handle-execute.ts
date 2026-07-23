@@ -20,7 +20,13 @@ import {
   verifyConnectionEndpoints,
 } from "../../connections/verifier";
 import { fetchHybridContext, type HybridApiContext } from "../rag-client";
-import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "../tool-policy";
+import {
+  getToolRisk,
+  isToolAuthorized,
+  requiresConfirmation,
+  runWithToolAcl,
+  type ToolSession,
+} from "../tool-policy";
 import { sanitizeToolPayload } from "../tool-sanitizer";
 import {
   getReasoningTraceStore,
@@ -213,6 +219,12 @@ export interface HandleExecuteInput {
 }
 
 export async function handleExecute(
+  input: HandleExecuteInput
+): Promise<{ text: string; entityCacheUpdate?: Record<string, string> }> {
+  return runWithToolAcl(input.session.aclGroup, () => handleExecuteWithAcl(input));
+}
+
+async function handleExecuteWithAcl(
   input: HandleExecuteInput
 ): Promise<{ text: string; entityCacheUpdate?: Record<string, string> }> {
   const {
@@ -1070,7 +1082,7 @@ export async function handleExecute(
           seenToolCalls.add(callSignature);
 
           const targetTool = tools.find((t) => t.metadata.name === toolName);
-          if (!targetTool || !isToolAuthorized(targetTool, session)) {
+          if (!targetTool || !isToolAuthorized(targetTool, session, parsedArgs)) {
             return null;
           }
 
@@ -1332,7 +1344,7 @@ export async function handleExecute(
           continue;
         }
 
-        if (!isToolAuthorized(targetTool, session)) {
+        if (!isToolAuthorized(targetTool, session, parsedArgs)) {
           const errorMsg = `ACL group ${session.aclGroup} is not authorized to run ${toolName}`;
           logger.error(errorMsg);
           context.addToolResult(toolCall.id, toolName, {

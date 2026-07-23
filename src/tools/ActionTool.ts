@@ -8,6 +8,7 @@ import type { ExecutionContext, ExecutionResult } from "../types/execution";
 import type { ToolSchema } from "./tool-schema";
 import { createToolSchema } from "./tool-helpers";
 import { emitToolProgress } from "../agent/event-bus";
+import { getActiveToolAcl } from "../agent/tool-policy";
 
 // Use z.any() wrapped in z.object() instead of z.record() to avoid schema issues
 const ActionParams = z.object({
@@ -282,6 +283,21 @@ export class ActionTool extends BaseTool {
         const availableActions = actionRegistry.list().map(a => a.name).join(", ");
         return {
           error: `Action "${action}" not found. Available actions: ${availableActions}`,
+          durationMs: Date.now() - started,
+        };
+      }
+
+      const aclGroup = getActiveToolAcl();
+      if (
+        actionDef.acl &&
+        actionDef.acl.length > 0 &&
+        (!aclGroup || !actionDef.acl.includes(aclGroup))
+      ) {
+        return {
+          error: aclGroup
+            ? `ACL group ${aclGroup} is not authorized to run ${action}`
+            : `Action ${action} requires an authenticated ACL context`,
+          success: false,
           durationMs: Date.now() - started,
         };
       }

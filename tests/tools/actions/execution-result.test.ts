@@ -3,6 +3,11 @@ import { z } from "zod";
 import { toExecutionResult } from "../../../src/types/execution";
 import { ActionTool } from "../../../src/tools/ActionTool";
 import { actionRegistry } from "../../../src/actions/registry";
+import {
+  isToolAuthorized,
+  runWithToolAcl,
+} from "../../../src/agent/tool-policy";
+import { loadTools } from "../../../src/agent/tool-loader";
 import type { ExecutionContext } from "../../../src/types/execution";
 
 /**
@@ -125,5 +130,79 @@ describe("ActionTool.execute — failed action does not report success (RM-04)",
     expect(result.success).toBe(true);
     expect(!result.error).toBe(true);
     expect(result.data).toMatchObject({ success: true, detail: "ok" });
+  });
+});
+
+describe("ActionTool.execute — per-action ACL enforcement (RM-06)", () => {
+  const context: ExecutionContext = { toolName: "action", startedAt: Date.now() };
+  let executionCount = 0;
+
+  beforeAll(() => {
+    if (!actionRegistry.get("test.fake_admin_action")) {
+      actionRegistry.register({
+        name: "test.fake_admin_action",
+        description: "Fake admin-only action",
+        schema: z.object({}).passthrough(),
+        acl: ["admin"],
+        risk: "high",
+        requiresConfirmation: false,
+        execute: async () => {
+          executionCount++;
+          return { success: true };
+        },
+      });
+    }
+  });
+
+  it("denies an ops caller before the admin-only action executes", async () => {
+    executionCount = 0;
+    const tool = new ActionTool();
+    const result = await runWithToolAcl("ops", () =>
+      tool.execute(
+        { action: "test.fake_admin_action", params: {} },
+        context
+      )
+    );
+
+    expect(result.error).toBe(
+      "ACL group ops is not authorized to run test.fake_admin_action"
+    );
+    expect(result.success).toBe(false);
+    expect(executionCount).toBe(0);
+  });
+
+  it("enforces the registered action ACL through the loaded generic tool policy", () => {
+    const tool = loadTools().find((candidate) => candidate.metadata.name === "action");
+    expect(tool).toBeDefined();
+
+    expect(
+      isToolAuthorized(
+        tool!,
+        { userId: "ops-user", aclGroup: "ops" },
+        { action: "compute.destroy_vm", params: { name: "test-vm" } }
+      )
+    ).toBe(false);
+    expect(
+      isToolAuthorized(
+        tool!,
+        { userId: "admin-user", aclGroup: "admin" },
+        { action: "compute.destroy_vm", params: { name: "test-vm" } }
+      )
+    ).toBe(true);
+  });
+
+  it("allows an admin caller to execute the admin-only action", async () => {
+    executionCount = 0;
+    const tool = new ActionTool();
+    const result = await runWithToolAcl("admin", () =>
+      tool.execute(
+        { action: "test.fake_admin_action", params: {} },
+        context
+      )
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.success).toBe(true);
+    expect(executionCount).toBe(1);
   });
 });
