@@ -62,8 +62,8 @@ User Query
 
 **Agent** (`src/agent/`)
 - `runner.ts` — main LLM loop; loads tools, handles tool calls, streams events
-- `tool-loader.ts` — registers the ~13 available tools into agent context
-- `tool-policy.ts` — ACL groups (viewer/admin/full) and risk stratification; high-risk ops require confirmation
+- `tool-loader.ts` — registers the 17 available tools into agent context
+- `tool-policy.ts` — ACL groups (`admin`, `ops`, `viewer`, `sre`, `security`, `helpdesk`) and risk stratification; high-risk ops require confirmation
 - `system-prompt.ts` — agent constitutional principles
 - `event-bus.ts` — SSE event streaming for real-time feedback
 

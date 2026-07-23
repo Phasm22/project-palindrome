@@ -17,46 +17,44 @@
       },
       "dryRun": {
         "type": "boolean",
-        "default": false,
-        "description": "If true, return diff preview without executing"
+        "description": "If true, return diff preview without executing",
+        "default": false
       },
       "alias_name": {
-        "type": "string",
-        "description": "Alias name (required for create_disabled_alias)"
+        "type": "string"
       },
       "alias_type": {
         "type": "string",
-        "enum": ["host", "network", "port"],
-        "description": "Alias type (required for create_disabled_alias)"
+        "enum": [
+          "host",
+          "network",
+          "port"
+        ]
       },
       "alias_content": {
-        "type": "string",
-        "description": "Alias content (required for create_disabled_alias)"
+        "type": "string"
       },
       "alias_description": {
-        "type": "string",
-        "description": "Alias description"
+        "type": "string"
       },
       "rule_uuid": {
-        "type": "string",
-        "description": "Rule UUID (required for enable_rule_with_confirmation)"
+        "type": "string"
       },
       "target_type": {
         "type": "string",
-        "enum": ["rule", "alias"],
-        "description": "Target type (required for update_description_field)"
+        "enum": [
+          "rule",
+          "alias"
+        ]
       },
       "target_uuid": {
-        "type": "string",
-        "description": "Target UUID (required for update_description_field)"
+        "type": "string"
       },
       "description": {
-        "type": "string",
-        "description": "New description (required for update_description_field)"
+        "type": "string"
       },
       "enabled": {
-        "type": "boolean",
-        "description": "Enable/disable state (required for toggle_rule_enabled)"
+        "type": "boolean"
       }
     },
     "required": [
@@ -124,6 +122,5 @@
   ],
   "actionCount": 5,
   "version": "1.0.0",
-  "generatedAt": "2025-01-27T00:00:00.000Z"
+  "generatedAt": "2026-07-23T14:56:18.085Z"
 }
-

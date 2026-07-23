@@ -1,6 +1,6 @@
 {
   "name": "opnsense_readonly",
-  "description": "Comprehensive read-only access to OPNsense state (Firewall, Interfaces, System, Diagnostics, DHCP). All operations return structured JSON data.",
+  "description": "OPNsense read-only tool. Supports firewall_rules_list (uses SSH internally with pfctl commands), firewall aliases (REST API), and other read-only operations. Note: OPNsense REST API is intentionally incomplete (~20-30% coverage). For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
   "parameters": {
     "type": "object",
     "properties": {
@@ -47,32 +47,35 @@
   },
   "examples": [
     {
-      "description": "List all firewall rules",
+      "description": "List firewall rules (uses SSH internally with pfctl commands)",
       "parameters": {
         "action": "firewall_rules_list"
       }
     },
     {
-      "description": "Get system status",
+      "description": "List firewall aliases (REST API works well for aliases)",
       "parameters": {
-        "action": "system_status"
+        "action": "firewall_aliases_list"
       }
     },
     {
-      "description": "Get interface status",
+      "description": "Get a specific firewall alias",
       "parameters": {
-        "action": "interface_status",
-        "interface_name": "wan"
+        "action": "firewall_aliases_get",
+        "alias_name": "allowed_guest"
       }
     },
     {
-      "description": "List DHCP leases",
+      "description": "List firewall categories",
       "parameters": {
-        "action": "dhcp_leases_list"
+        "action": "firewall_categories_list"
       }
     }
   ],
   "notes": [
+    "firewall_rules_list action uses SSH internally with approved pfctl commands (parallelized for performance).",
+    "Firewall aliases use REST API (good coverage).",
+    "For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
     "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
     "All responses are structured JSON objects for easy parsing and dashboarding.",
     "Internal IP addresses and credentials are automatically sanitized from responses."
@@ -115,5 +118,5 @@
   ],
   "actionCount": 20,
   "version": "1.0.0",
-  "generatedAt": "2025-11-17T21:22:24.065Z"
+  "generatedAt": "2026-07-23T14:56:18.112Z"
 }
