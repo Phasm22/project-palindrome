@@ -542,8 +542,12 @@ export class FirewallIngestionOrchestrator {
   }
 
   /**
-   * Create ALLOWS/BLOCKS relationships from filter rules to governed subnets.
-   * Canonical rule CIDRs and overlapping interface subnet IDs are both linked.
+   * Create filter-policy and address-translation relationships.
+   *
+   * ALLOWS/BLOCKS point from a filter rule to each governed subnet.
+   * TRANSLATES_TO points from the address matched before NAT/rdr to the
+   * translated address. Translation metadata retains the owning rule because
+   * the endpoints are subnet entities rather than rule entities.
    */
   private async createRuleRelationships(
     entities: TwinEntity[],
@@ -563,6 +567,57 @@ export class FirewallIngestionOrchestrator {
       if (entity.type !== TwinEntityType.FIREWALL_RULE) continue;
 
       const data = entity.data || {};
+      if (data.action === "nat" || data.action === "rdr") {
+        const matchedValue =
+          data.action === "rdr" ? data.destination : data.source;
+        const matchedIds = this.resolveTranslationEndpointIds(
+          matchedValue,
+          aliasMap,
+          interfaceSubnetMap,
+          subnetTargets
+        );
+        const translatedIds = this.resolveTranslationEndpointIds(
+          data.translationTarget,
+          aliasMap,
+          interfaceSubnetMap,
+          subnetTargets
+        );
+
+        if (matchedIds.length === 0 || translatedIds.length === 0) {
+          pceLogger.debug(
+            `Skipping translation edge for ${entity.id}: concrete matched and translated endpoints are required`
+          );
+          continue;
+        }
+
+        for (const fromId of matchedIds) {
+          for (const toId of translatedIds) {
+            if (fromId === toId) continue;
+            const key = `${TwinRelationshipType.TRANSLATES_TO}|${fromId}|${toId}|${entity.id}`;
+            if (relationshipKeys.has(key)) continue;
+            relationshipKeys.add(key);
+            relationships.push({
+              type: TwinRelationshipType.TRANSLATES_TO,
+              fromId,
+              toId,
+              metadata: {
+                ruleId: entity.id,
+                ruleType: data.action,
+                interface: data.interface,
+                protocol: data.protocol,
+                sourceMatch: data.source,
+                originalDestination: data.destination,
+                originalPort: data.destinationPort,
+                translatedTarget: data.translationTarget,
+                translatedPort: data.translationPort,
+              },
+              collectedAt: entity.collectedAt,
+            });
+          }
+        }
+        continue;
+      }
+
       const relationshipType =
         data.action === "pass"
           ? TwinRelationshipType.ALLOWS
@@ -672,6 +727,41 @@ export class FirewallIngestionOrchestrator {
     return relationships;
   }
 
+  private resolveTranslationEndpointIds(
+    value: unknown,
+    aliasMap: Map<string, string[]>,
+    interfaceSubnetMap: Map<string, string[]>,
+    subnetTargets: SubnetTarget[]
+  ): string[] {
+    if (typeof value !== "string") return [];
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.toLowerCase() === "any") return [];
+
+    const resolved = this.resolveCidrs(trimmed, aliasMap, interfaceSubnetMap);
+    const cidrs = [...resolved.cidrs];
+
+    // Dynamic NAT targets such as "(em0)" refer to the current address of an
+    // interface rather than its network macro. The interface/subnet snapshot
+    // is the best concrete offline representation available during ingestion.
+    const dynamicInterface = trimmed.match(/^\(([^():]+)\)$/)?.[1];
+    if (dynamicInterface) {
+      cidrs.push(
+        ...(interfaceSubnetMap.get(dynamicInterface.toLowerCase()) ?? [])
+      );
+    }
+
+    const targetIds = new Set<string>();
+    for (const cidr of this.dedupeCidrs(cidrs)) {
+      targetIds.add(`network-subnet:${cidr.toLowerCase()}`);
+      for (const target of subnetTargets) {
+        if (cidrOverlaps(cidr, target.cidr)) {
+          targetIds.add(target.id);
+        }
+      }
+    }
+    return Array.from(targetIds);
+  }
+
   /**
    * Ensure subnet entities exist for any CIDRs referenced in relationships.
    * Creates subnet entities on-the-fly if they don't exist.
@@ -683,8 +773,14 @@ export class FirewallIngestionOrchestrator {
   ): Promise<void> {
     const subnetIds = new Set<string>();
     
-    // Extract all subnet IDs from relationships
+    // Extract all subnet IDs from relationships. Translation edges have a
+    // subnet at both ends, unlike rule-to-subnet policy edges.
     for (const rel of relationships) {
+      if (rel.fromId && rel.fromId.startsWith("network-subnet:")) {
+        if (!existingSubnetIds.has(rel.fromId)) {
+          subnetIds.add(rel.fromId);
+        }
+      }
       if (rel.toId && rel.toId.startsWith("network-subnet:")) {
         if (!existingSubnetIds.has(rel.toId)) {
           subnetIds.add(rel.toId);
@@ -703,6 +799,12 @@ export class FirewallIngestionOrchestrator {
         }
       }
       for (const cidr of this.extractCidrs(data.destination)) {
+        const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+        if (!existingSubnetIds.has(subnetId)) {
+          subnetIds.add(subnetId);
+        }
+      }
+      for (const cidr of this.extractCidrs(data.translationTarget)) {
         const subnetId = `network-subnet:${cidr.toLowerCase()}`;
         if (!existingSubnetIds.has(subnetId)) {
           subnetIds.add(subnetId);

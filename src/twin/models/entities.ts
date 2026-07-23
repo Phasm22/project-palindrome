@@ -103,6 +103,8 @@ export const FirewallRuleEntitySchema = BaseTwinEntitySchema.extend({
     destination: z.string().nullable().optional(), // IP/CIDR or "any"
     sourcePort: z.string().nullable().optional(), // port or port range
     destinationPort: z.string().nullable().optional(), // port or port range
+    translationTarget: z.string().nullable().optional(), // NAT/rdr address after translation
+    translationPort: z.string().nullable().optional(), // rdr port after translation
     flags: z.string().nullable().optional(), // quick, keep state, etc.
     ruleType: z.enum(["filter", "nat", "rdr"]).default("filter"),
     chain: z.string().nullable().optional(), // interface-based grouping
@@ -189,4 +191,3 @@ export type FirewallAliasEntity = z.infer<typeof FirewallAliasEntitySchema>;
 export type StorageEntity = z.infer<typeof StorageEntitySchema>;
 export type SwitchEntity = z.infer<typeof SwitchEntitySchema>;
 export type SwitchPortEntity = z.infer<typeof SwitchPortEntitySchema>;
-

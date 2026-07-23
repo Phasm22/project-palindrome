@@ -264,29 +264,230 @@ export class TwinQueryService {
       .filter((row) => cidrOverlaps(row.subnet, subnetCidr));
   }
 
+  /**
+   * Evaluate materialized L2, firewall-policy, and rdr evidence.
+   *
+   * This is intentionally bounded: the twin does not yet retain PF rule
+   * ordinals/state-table behavior or a complete route table, so protocol/port
+   * ordering and multi-hop route simulation remain follow-up work. Conflicting
+   * materialized policy is therefore resolved with conservative block
+   * precedence rather than pretending to reproduce PF evaluation order.
+   */
   async reachability(fromId: string): Promise<
-    Array<{ id: string; name: string; type: string; viaSubnet: string }>
+    Array<{
+      id: string;
+      name: string;
+      type: string;
+      viaSubnet: string;
+      verdict: "reachable" | "blocked";
+      path: "same_subnet" | "firewall" | "rdr";
+      viaNat: boolean;
+      translatedFrom?: string;
+      translationRules: string[];
+      allowedBy: string[];
+      blockedBy: string[];
+    }>
   > {
     const result = await this.runQuery(
       `
-        MATCH (src:TwinEntity {id: $fromId})-[:CONNECTS_TO]->(s:TwinEntity {type: $subnetType})
-        MATCH (dst:TwinEntity)-[:CONNECTS_TO]->(s)
+        MATCH (src:TwinEntity {id: $fromId})-[:CONNECTS_TO]->(sourceSubnet:TwinEntity {type: $subnetType})
+        MATCH (dst:TwinEntity)-[:CONNECTS_TO]->(destinationSubnet:TwinEntity {type: $subnetType})
         WHERE dst.id <> src.id
+        OPTIONAL MATCH (translationSource:TwinEntity {type: $subnetType})
+          -[translation:TRANSLATES_TO]->(destinationSubnet)
+        WITH src, sourceSubnet, dst, destinationSubnet,
+             collect(DISTINCT CASE
+               WHEN translation IS NULL THEN NULL
+               ELSE {
+                 translatedFrom: translationSource.id,
+                 metadataJson: translation.metadataJson
+               }
+             END) AS translations
+        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(destinationSubnet)
+        WITH src, sourceSubnet, dst, destinationSubnet, translations,
+             collect(DISTINCT CASE
+               WHEN allowRule IS NULL THEN NULL
+               ELSE {id: allowRule.id, source: allowRule.source}
+             END) AS allowRules
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(destinationSubnet)
+        WITH src, sourceSubnet, dst, destinationSubnet, translations, allowRules,
+             collect(DISTINCT CASE
+               WHEN blockRule IS NULL THEN NULL
+               ELSE {id: blockRule.id, source: blockRule.source}
+             END) AS blockRules
+        WHERE sourceSubnet.id = destinationSubnet.id
+           OR size(translations) > 0
+           OR size(allowRules) > 0
+           OR size(blockRules) > 0
         RETURN dst.id AS id,
                coalesce(dst.displayName, dst.id) AS name,
                dst.type AS type,
-               s.displayName AS subnet
+               destinationSubnet.displayName AS subnet,
+               destinationSubnet.id AS subnetId,
+               coalesce(destinationSubnet.cidr, destinationSubnet.displayName) AS destinationSubnetCidr,
+               sourceSubnet.id AS sourceSubnetId,
+               coalesce(sourceSubnet.cidr, sourceSubnet.displayName) AS sourceSubnetCidr,
+               translations,
+               allowRules,
+               blockRules
         ORDER BY name
       `,
-      { fromId, subnetType: "network_subnet" }
+      {
+        fromId,
+        subnetType: "network_subnet",
+        ruleType: "firewall_rule",
+      }
     );
 
-    return result.records.map((record) => ({
-      id: record.get("id") as string,
-      name: record.get("name") as string,
-      type: record.get("type") as string,
-      viaSubnet: record.get("subnet") as string,
-    }));
+    const rows: Array<{
+      id: string;
+      name: string;
+      type: string;
+      viaSubnet: string;
+      verdict: "reachable" | "blocked";
+      path: "same_subnet" | "firewall" | "rdr";
+      viaNat: boolean;
+      translatedFrom?: string;
+      translationRules: string[];
+      allowedBy: string[];
+      blockedBy: string[];
+    }> = [];
+
+    for (const record of result.records) {
+      const sourceSubnetId = record.get("sourceSubnetId") as string;
+      const destinationSubnetId = record.get("subnetId") as string;
+      const sourceSubnetCidr = record.get("sourceSubnetCidr");
+
+      const allowRules = this.toNativeArray(record.get("allowRules"))
+        .filter((rule): rule is Record<string, unknown> => this.isObject(rule))
+        .filter((rule) =>
+          this.sourceMatchApplies(rule.source, sourceSubnetCidr, false)
+        );
+      const blockRules = this.toNativeArray(record.get("blockRules"))
+        .filter((rule): rule is Record<string, unknown> => this.isObject(rule))
+        // An unresolved block source is treated conservatively as applicable;
+        // an unresolved allow source above is not treated as permission.
+        .filter((rule) =>
+          this.sourceMatchApplies(rule.source, sourceSubnetCidr, true)
+        );
+      const translations = this.toNativeArray(record.get("translations"))
+        .filter((item): item is Record<string, unknown> => this.isObject(item))
+        .map((item) => ({
+          translatedFrom:
+            typeof item.translatedFrom === "string"
+              ? item.translatedFrom
+              : undefined,
+          metadata: this.parseJsonObject(item.metadataJson),
+        }))
+        .filter(
+          (translation) =>
+            translation.metadata.ruleType === "rdr" &&
+            this.sourceMatchApplies(
+              translation.metadata.sourceMatch,
+              sourceSubnetCidr,
+              false
+            )
+        );
+
+      const sameSubnet = sourceSubnetId === destinationSubnetId;
+      const viaRdr = translations.length > 0;
+      const allowedBy = allowRules
+        .map((rule) => rule.id)
+        .filter((id): id is string => typeof id === "string");
+      const blockedBy = blockRules
+        .map((rule) => rule.id)
+        .filter((id): id is string => typeof id === "string");
+
+      // Same-L2 peers do not traverse the firewall. Cross-subnet candidates
+      // require an ALLOWS edge; rdr also requires that its source selector
+      // applies. In the absence of parsed PF rule ordinals, BLOCKS wins to
+      // avoid reporting a false-positive reachability path.
+      if (!sameSubnet && !viaRdr && allowedBy.length === 0 && blockedBy.length === 0) {
+        continue;
+      }
+
+      const verdict =
+        sameSubnet || (allowedBy.length > 0 && blockedBy.length === 0)
+          ? "reachable"
+          : "blocked";
+      const path = sameSubnet ? "same_subnet" : viaRdr ? "rdr" : "firewall";
+      const translationRules = translations
+        .map((translation) => translation.metadata.ruleId)
+        .filter((id): id is string => typeof id === "string");
+
+      rows.push({
+        id: record.get("id") as string,
+        name: record.get("name") as string,
+        type: record.get("type") as string,
+        viaSubnet: record.get("subnet") as string,
+        verdict,
+        path,
+        viaNat: viaRdr,
+        translatedFrom: translations[0]?.translatedFrom,
+        translationRules,
+        allowedBy,
+        blockedBy,
+      });
+    }
+
+    return rows;
+  }
+
+  private toNativeArray(value: unknown): unknown[] {
+    if (Array.isArray(value)) return value;
+    if (
+      value &&
+      typeof value === "object" &&
+      "toArray" in value &&
+      typeof value.toArray === "function"
+    ) {
+      return value.toArray();
+    }
+    return [];
+  }
+
+  private isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+
+  private parseJsonObject(value: unknown): Record<string, unknown> {
+    if (this.isObject(value)) return value;
+    if (typeof value !== "string") return {};
+    try {
+      const parsed = JSON.parse(value);
+      return this.isObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private sourceMatchApplies(
+    sourceMatch: unknown,
+    sourceSubnetCidr: unknown,
+    unresolvedResult: boolean
+  ): boolean {
+    if (
+      typeof sourceSubnetCidr !== "string" ||
+      sourceSubnetCidr.trim().length === 0
+    ) {
+      return unresolvedResult;
+    }
+    if (sourceMatch === null || sourceMatch === undefined) return true;
+    if (typeof sourceMatch !== "string") return unresolvedResult;
+
+    const normalized = sourceMatch.trim().toLowerCase();
+    if (!normalized || normalized === "any") return true;
+
+    const candidates =
+      sourceMatch.match(/\b(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?\b/g) ?? [];
+    if (candidates.length === 0) return unresolvedResult;
+
+    return candidates.some((candidate) =>
+      cidrOverlaps(
+        candidate.includes("/") ? candidate : `${candidate}/32`,
+        sourceSubnetCidr
+      )
+    );
   }
 
   async vmReachabilitySummary(vmId: string): Promise<{
