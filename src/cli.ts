@@ -10,7 +10,7 @@ if (typeof process !== "undefined" && process.env) {
   }
 }
 
-import { runAgent } from "./agent/runner";
+import { runAgent, type AgentRunResponse } from "./agent/runner";
 import { loadTools } from "./agent/tool-loader";
 import type { ExecutionResult } from "./types/execution";
 import { queryPCE } from "./agent/pce-client";
@@ -151,6 +151,25 @@ function handleStreamEvent(event: any): void {
   }
 }
 
+function renderAgentResponse(response: AgentRunResponse): string {
+  const structured = response.structuredResponse;
+  if (!structured) return response.text ?? "";
+
+  const parts = [structured.answer.summary.trim()];
+  for (const section of structured.answer.sections) {
+    const data = typeof section.data === "string"
+      ? section.data
+      : JSON.stringify(section.data, null, 2);
+    if (!data) continue;
+    parts.push(section.title ? `${section.title}\n${data}` : data);
+  }
+
+  return parts.filter(Boolean).join("\n\n")
+    || structured.rawTextFallback
+    || response.text
+    || "";
+}
+
 function createEventSource(url: string): EventSource {
   const EventSourceCtor = globalThis.EventSource as unknown as {
     new (sourceUrl: string): EventSource;
@@ -281,8 +300,9 @@ if (args[0] === "hello") {
       await new Promise(resolve => setTimeout(resolve, 500));
       eventSource.close();
       
-      if (response.text) {
-        console.log("\n" + response.text);
+      const output = renderAgentResponse(response);
+      if (output) {
+        console.log("\n" + output);
       }
     } else {
       const response = await runAgent(prompt, {
@@ -292,7 +312,7 @@ if (args[0] === "hello") {
         confirmHighRisk,
       });
       
-      console.log(response.text);
+      console.log(renderAgentResponse(response));
     }
     
     process.exit(0);
@@ -381,8 +401,9 @@ if (args[0] === "hello") {
       await new Promise(resolve => setTimeout(resolve, 500));
       eventSource.close();
       
-      if (response.text) {
-        console.log("\n" + response.text);
+      const output = renderAgentResponse(response);
+      if (output) {
+        console.log("\n" + output);
       }
     } else {
       // Non-streaming mode: traditional execution
@@ -393,7 +414,7 @@ if (args[0] === "hello") {
         confirmHighRisk,
       });
       
-      console.log(response.text);
+      console.log(renderAgentResponse(response));
     }
     
     process.exit(0);
