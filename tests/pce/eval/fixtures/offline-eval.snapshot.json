@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "name": "2026-07-21 fuzz trace sample",
+  "description": "Deterministic sample of six real traces captured by the committed fuzz campaign. The sample intentionally retains one historical heuristic finding.",
+  "source": {
+    "corpus": "docs/tests/fuzz-corpus-2026-07-21.json",
+    "results": "docs/tests/fuzz-results-2026-07-21.jsonl",
+    "capturedAt": "2026-07-21",
+    "caseIds": ["A-TQ-07", "A-TQ-26", "A-PX-01", "A-OP-03", "A-SSH-05", "D-10"]
+  },
+  "baseline": {
+    "minPassRate": 0.83,
+    "maxFlaggedCount": 1
+  },
+  "traces": [
+    {
+      "caseId": "A-TQ-07",
+      "id": "6d2454a3-992a-4b72-a684-98c436a53b34",
+      "userId": "fuzz-user-5",
+      "aclGroup": "admin",
+      "userInput": "What VM has ID 200?",
+      "finalResponse": "VM ID 200 has two instances: sentinel-hunter on proxBig with 4 CPUs and 8 GB memory; sentinelZero on yin with 4 CPUs and 8 GB memory.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "twin_query",
+              "parameters": {"operation": "find_vm_by_id", "params": {"vmId": "200"}},
+              "result": {"success": true}
+            },
+            {
+              "toolName": "proxmox_readonly",
+              "parameters": {"action": "get_vm_status", "vmid": 200},
+              "result": {"success": false, "error": "node parameter required for VM actions"}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 4,
+      "totalToolCalls": 5,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:07:20.959Z",
+      "durationMs": 13060
+    },
+    {
+      "caseId": "A-TQ-26",
+      "id": "1cde57c7-1c1c-42cf-96f1-bf6e6f2c6e6c",
+      "userId": "fuzz-user-5",
+      "aclGroup": "admin",
+      "userInput": "What VLANs are configured on the switch?",
+      "finalResponse": "VLANs 1, 40, and 50 are configured on TJswitch.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "twin_query",
+              "parameters": {"operation": "switch_list_vlans"},
+              "result": {"success": true}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 2,
+      "totalToolCalls": 1,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:07:50.558Z",
+      "durationMs": 6333
+    },
+    {
+      "caseId": "A-PX-01",
+      "id": "44c29877-0562-429a-bcae-9f4a2ca16a08",
+      "userId": "fuzz-user-3",
+      "aclGroup": "admin",
+      "userInput": "List the Proxmox nodes.",
+      "finalResponse": "YANG, proxBig, and yin are online.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "twin_query",
+              "parameters": {"operation": "describe_cluster"},
+              "result": {"success": true}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 2,
+      "totalToolCalls": 1,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:07:52.934Z",
+      "durationMs": 4601
+    },
+    {
+      "caseId": "A-OP-03",
+      "id": "203864fa-57a0-4213-8518-111c31106ac4",
+      "userId": "fuzz-user-1",
+      "aclGroup": "admin",
+      "userInput": "What's inside the WG_VIP alias?",
+      "finalResponse": "WG_VIP contains the 10.16.0.0/29 network.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "opnsense_readonly",
+              "parameters": {"action": "firewall_aliases_get", "alias_name": "WG_VIP"},
+              "result": {"success": true}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 2,
+      "totalToolCalls": 1,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:08:27.064Z",
+      "durationMs": 5008
+    },
+    {
+      "caseId": "A-SSH-05",
+      "id": "04f9d120-43ac-4cbe-9654-4bf1c7464df2",
+      "userId": "fuzz-user-4",
+      "aclGroup": "admin",
+      "userInput": "Check if https://google.com is up.",
+      "finalResponse": "The site is up and returned HTTP 301 in 63 ms.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "run_diagnostic_command",
+              "parameters": {"command": "http_check", "target": "https://google.com"},
+              "result": {"success": true}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 2,
+      "totalToolCalls": 1,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:09:09.983Z",
+      "durationMs": 9020
+    },
+    {
+      "caseId": "D-10",
+      "id": "88c35c9e-63c3-4737-afd1-cb1c5a8653b4",
+      "userId": "fuzz-user-4",
+      "aclGroup": "admin",
+      "userInput": "find the VM called totally-fake-vm-12345",
+      "finalResponse": "VM 12345 was not found in the digital twin.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "twin_query",
+              "parameters": {"intent": "find_vm_by_id"},
+              "result": {"success": true}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 1,
+      "totalToolCalls": 1,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:10:13.227Z",
+      "durationMs": 1460
+    }
+  ]
+}
