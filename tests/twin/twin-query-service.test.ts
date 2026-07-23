@@ -69,30 +69,19 @@ describe("TwinQueryService.vmsBySubnet", () => {
 });
 
 describe("TwinQueryService.rulesBlockingSubnet", () => {
-  test("matches a rule via its literal CIDR source, without any BLOCKS relationship (A-TQ-16)", async () => {
-    const service = serviceWith((_query, params) => {
-      if (params.ruleType === "firewall_rule" && !("port" in params)) {
+  test("matches a rule through its materialized BLOCKS edge", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("-[:BLOCKS]->")) {
         return [
           {
             ruleId: "fw-rule:vtnet1:block:in:192.168.68.0_22",
             action: "block",
             direction: "in",
             protocol: null,
-            source: "192.168.68.0/22",
-            destination: "any",
-          },
-          {
-            ruleId: "fw-rule:default:block:in:sshlockout",
-            action: "block",
-            direction: "in",
-            protocol: "tcp",
-            source: "<sshlockout>",
-            destination: "(self)",
+            subnetId: "network-subnet:192.168.68.0/22",
+            subnetCidr: "192.168.68.0/22",
           },
         ];
-      }
-      if (params.aliasType === "firewall_alias") {
-        return [];
       }
       return [];
     });
@@ -103,22 +92,19 @@ describe("TwinQueryService.rulesBlockingSubnet", () => {
     expect(result[0]?.subnetCidr).toBe("192.168.68.0/22");
   });
 
-  test("resolves an alias-based source via the alias CIDR lookup", async () => {
-    const service = serviceWith((_query, params) => {
-      if (params.ruleType === "firewall_rule" && !("port" in params)) {
+  test("returns alias-derived rules through their ingested BLOCKS edges", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("-[:BLOCKS]->")) {
         return [
           {
             ruleId: "fw-rule:vtnet0:block:in:wg-vip",
             action: "block",
             direction: "in",
             protocol: null,
-            source: "<WG_VIP>",
-            destination: "any",
+            subnetId: "network-subnet:10.16.0.0/29",
+            subnetCidr: "10.16.0.0/29",
           },
         ];
-      }
-      if (params.aliasType === "firewall_alias") {
-        return [{ id: "firewall-alias:wg_vip", name: "WG_VIP", type: "network", dataJson: JSON.stringify({ cidrs: ["10.16.0.0/29"], entries: ["10.16.0.0/29"] }) }];
       }
       return [];
     });
@@ -128,36 +114,34 @@ describe("TwinQueryService.rulesBlockingSubnet", () => {
     expect(result[0]?.ruleId).toBe("fw-rule:vtnet0:block:in:wg-vip");
   });
 
-  test("returns no matches when no rule's source/destination overlaps the subnet", async () => {
-    const service = serviceWith((_query, params) => {
-      if (params.ruleType === "firewall_rule" && !("port" in params)) {
-        return [
-          { ruleId: "r1", action: "block", direction: "in", source: "10.10.31.0/24", destination: "any" },
-        ];
-      }
-      return [];
-    });
+  test("returns no matches when the subnet has no BLOCKS edge", async () => {
+    const service = serviceWith(() => []);
     const result = await service.rulesBlockingSubnet("192.168.68.0/22");
     expect(result).toEqual([]);
   });
 });
 
 describe("TwinQueryService.reachableFromInterfaceChain", () => {
-  test("treats an unrestricted (any-destination) pass rule as reaching every VM (A-TQ-19)", async () => {
-    const service = serviceWith((_query, params) => {
-      if (params.ruleType === "firewall_rule" && "chain" in params) {
+  test("returns every VM targeted by a chain's materialized ALLOWS edges", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("-[:ALLOWS]->")) {
         return [
-          { ruleId: "fw-rule:wireguard:pass:out:wg-vip:any", destination: "any" },
-          { ruleId: "fw-rule:wireguard:pass:in:wg-vip:vtnet0-network", destination: "(vtnet0:network)" },
-        ];
-      }
-      if (params.aliasType === "firewall_alias") {
-        return [];
-      }
-      if (params.ifaceType && params.subnetType && params.vmType) {
-        return [
-          { vmId: "compute-vm:proxbig:100", vmName: "windowsVM", subnet: "172.16.0.100/22", subnetId: "network-subnet:172.16.0.100/22" },
-          { vmId: "compute-vm:yin:200", vmName: "sentinelZero", subnet: "172.16.0.198/22", subnetId: "network-subnet:172.16.0.198/22" },
+          {
+            vmId: "compute-vm:proxbig:100",
+            vmName: "windowsVM",
+            subnet: "172.16.0.100/22",
+            subnetId: "network-subnet:172.16.0.100/22",
+            allowedBy: ["fw-rule:wireguard:pass:out:wg-vip:any"],
+            blockedBy: [],
+          },
+          {
+            vmId: "compute-vm:yin:200",
+            vmName: "sentinelZero",
+            subnet: "172.16.0.198/22",
+            subnetId: "network-subnet:172.16.0.198/22",
+            allowedBy: ["fw-rule:wireguard:pass:out:wg-vip:any"],
+            blockedBy: [],
+          },
         ];
       }
       return [];
@@ -166,33 +150,26 @@ describe("TwinQueryService.reachableFromInterfaceChain", () => {
     const result = await service.reachableFromInterfaceChain("chain:wireguard");
     expect(result).toHaveLength(2);
     expect(result.every((r) => r.allowedBy.includes("fw-rule:wireguard:pass:out:wg-vip:any"))).toBe(true);
-    // The (vtnet0:network) macro isn't resolvable from twin interface names and
-    // is intentionally left unmatched rather than guessed at.
-    expect(result.every((r) => !r.allowedBy.includes("fw-rule:wireguard:pass:in:wg-vip:vtnet0-network"))).toBe(true);
   });
 
-  test("returns empty when the chain has no pass rules with a resolvable destination", async () => {
-    const service = serviceWith((_query, params) => {
-      if (params.ruleType === "firewall_rule" && "chain" in params) {
-        return [{ ruleId: "fw-rule:x:pass:in:wg-vip:vtnet1-network", destination: "(vtnet1:network)" }];
-      }
-      if (params.aliasType === "firewall_alias") return [];
-      return [];
-    });
+  test("returns empty when the chain has no ALLOWS edges", async () => {
+    const service = serviceWith(() => []);
     const result = await service.reachableFromInterfaceChain("chain:wireguard");
     expect(result).toEqual([]);
   });
 
-  test("scopes a CIDR-restricted pass rule to only the overlapping subnet", async () => {
-    const service = serviceWith((_query, params) => {
-      if (params.ruleType === "firewall_rule" && "chain" in params) {
-        return [{ ruleId: "fw-rule:x:pass:in:172.16", destination: "172.16.0.0/22" }];
-      }
-      if (params.aliasType === "firewall_alias") return [];
-      if (params.ifaceType && params.subnetType && params.vmType) {
+  test("returns only VMs attached to subnets targeted by the chain edge", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("-[:ALLOWS]->")) {
         return [
-          { vmId: "compute-vm:proxbig:100", vmName: "windowsVM", subnet: "172.16.0.100/22", subnetId: "s1" },
-          { vmId: "compute-vm:yang:103", vmName: "PvVPN-Home", subnet: "192.168.71.40/22", subnetId: "s2" },
+          {
+            vmId: "compute-vm:proxbig:100",
+            vmName: "windowsVM",
+            subnet: "172.16.0.100/22",
+            subnetId: "s1",
+            allowedBy: ["fw-rule:x:pass:in:172.16"],
+            blockedBy: [],
+          },
         ];
       }
       return [];
