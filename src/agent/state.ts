@@ -27,7 +27,6 @@ export interface AgentStateV1 {
   postExecutionState: ConversationState;
   responseMode: ResponseMode | undefined;
   ragPayload: HybridApiContext | null;
-  executionPlan?: import("./schemas/action-step").ActionPlan;
 }
 
 export interface BuildAgentStateInput {

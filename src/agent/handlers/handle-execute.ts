@@ -68,7 +68,6 @@ import {
   cleanupAfterProxmoxDestroy,
 } from "./tool-helpers";
 import { isMetaIdentityQuery } from "./identity-helpers";
-import { generateActionPlan } from "./plan-generator";
 import {
   extractResolvedVmEntity,
   hydrateProxmoxReadArgs,
@@ -569,6 +568,7 @@ async function handleExecuteWithAcl(
       });
     }
 
+    finalText = sanitizeToolPayload(finalText);
     reasoningStep.llmResponse = finalText;
     reasoningSteps.push(reasoningStep);
     const durationMs = Date.now() - startTime;
@@ -667,11 +667,12 @@ async function handleExecuteWithAcl(
     const rawAnswer = aliasPayload
       ? formatAliasContentsPayload(aliasIntent.aliasName, aliasPayload)
       : `Answer: No. No alias named \`${aliasIntent.aliasName}\` was found in the current firewall alias list.`;
-    const finalText = applyAdaptivePackaging(rawAnswer, {
+    let finalText = applyAdaptivePackaging(rawAnswer, {
       userQuery: userInput,
       intentType: "firewall_rules",
       mode: state.responseMode,
     }) ?? rawAnswer;
+    finalText = sanitizeToolPayload(finalText);
     reasoningStep.llmResponse = finalText;
     reasoningSteps.push(reasoningStep);
 
@@ -877,39 +878,6 @@ async function handleExecuteWithAcl(
           },
         ]
       : [];
-
-  // P3.3: Plan-before-execute for multi-step ACTION intents.
-  // When the classifier identifies an ACTION intent and actionIntent has keys (meaning
-  // specific action-layer actions are involved), generate a structured plan first.
-  // If the plan has 2+ steps, stream it to the UI and enter AWAITING_CONFIRMATION
-  // before any tool executes. Single-step plans fall through to the normal loop.
-  if (state.classification.intent === "ACTION" && actionIntent != null && Object.keys(actionIntent).length > 0) {
-    const plan = await generateActionPlan({ userInput, sessionId });
-    throwIfStopped();
-    if (plan !== null && plan.steps.length > 1) {
-      // Persist plan on state so callers (runner.ts) can inspect it later
-      state.executionPlan = plan;
-
-      // Emit plan event so the UI can render it before confirmation
-      eventBus.emit({
-        type: "agent:plan",
-        sessionId,
-        timestamp: Date.now(),
-        data: {
-          type: "agent:plan",
-          plan,
-          pendingConfirmationId: sessionId,
-        },
-      });
-
-      // Return early — the runner will set conversationState to AWAITING_CONFIRMATION
-      // using the existing confirmation flow. No tools have executed yet.
-      return {
-        text: `I've prepared a ${plan.steps.length}-step plan: ${plan.summary}\n\nPlease confirm to proceed.`,
-        entityCacheUpdate: {},
-      };
-    }
-  }
 
   for (let step = 0; step < MAX_STEPS; step++) {
     throwIfStopped();
@@ -1941,6 +1909,8 @@ async function handleExecuteWithAcl(
         }
       }
 
+      finalText = sanitizeToolPayload(finalText);
+      reasoningStep.llmResponse = finalText;
       context.addAssistantMessage(finalText);
 
       // Record reasoning trace first to get trace ID
@@ -2034,6 +2004,7 @@ async function handleExecuteWithAcl(
           data: connectionEndpoints,
         });
       }
+      structuredResponse = sanitizeToolPayload(structuredResponse);
 
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
@@ -2112,7 +2083,6 @@ async function handleExecuteWithAcl(
       if (synthText) {
         boundaryText = prettifyRawPfctlText(synthText);
         boundarySynthesized = true;
-        context.addAssistantMessage(boundaryText);
         logger.info("Boundary synthesis produced an answer from gathered tool results", {
           succeededToolCallCount,
           totalSteps: reasoningSteps.length,
@@ -2124,6 +2094,10 @@ async function handleExecuteWithAcl(
         error: error?.message,
       });
     }
+  }
+  boundaryText = sanitizeToolPayload(boundaryText);
+  if (boundarySynthesized) {
+    context.addAssistantMessage(boundaryText);
   }
   const lastReasoningStep = reasoningSteps[reasoningSteps.length - 1];
   if (lastReasoningStep) {
