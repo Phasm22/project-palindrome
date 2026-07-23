@@ -29,6 +29,10 @@ import type { GraphNode, GraphRelationship } from "../kg/schema/ontology";
 import { NodeType, RelationshipType } from "../kg/schema/ontology";
 import { Neo4jGraphStore } from "../kg/indexation/neo4j-client";
 import {
+  pruneStaleProxmoxVmEntities,
+  type ProxmoxVmSnapshot,
+} from "../kg/indexation/graph-indexer";
+import {
   ParserRegistry,
   ProxmoxNodeParser,
   ProxmoxVmParser,
@@ -235,6 +239,7 @@ export class ProxmoxIngestionOrchestrator {
     const nodes: GraphNode[] = [];
     const relationships: GraphRelationship[] = [];
     const versionHashes: string[] = [];
+    const vmSnapshots: ProxmoxVmSnapshot[] = [];
 
     // Extract structured data from documents
     for (const doc of documents) {
@@ -270,9 +275,11 @@ export class ProxmoxIngestionOrchestrator {
       } else if (doc.metadata.documentType === "vm_inventory" && doc.metadata.node) {
         // Parse VM inventory and create VM_INSTANCE nodes and RUNS_ON relationships
         const vmData = this.parseVmInventory(doc.content, doc.metadata.node);
+        const keepIds: string[] = [];
         
         for (const vm of vmData) {
           const vmId = `vm_instance:${vm.vmid}`;
+          keepIds.push(vmId);
           const vmPayload = {
             vmid: vm.vmid,
             name: vm.name,
@@ -314,6 +321,10 @@ export class ProxmoxIngestionOrchestrator {
             createdAt: new Date(),
           });
         }
+        vmSnapshots.push({
+          nodeName: doc.metadata.node,
+          keepIds,
+        });
       }
     }
 
@@ -326,6 +337,20 @@ export class ProxmoxIngestionOrchestrator {
     if (relationships.length > 0) {
       await this.graphStore.writeRelationships(relationships);
       pceLogger.info(`Wrote ${relationships.length} relationships to graph`);
+    }
+
+    // A successfully generated VM-inventory document is a complete snapshot
+    // for that node, including when it contains zero VMs. Node-profile absence
+    // is not safe to reconcile here because per-node profile fetch failures are
+    // currently swallowed by the document generator.
+    const prunedVmIds = await pruneStaleProxmoxVmEntities(
+      this.graphStore,
+      vmSnapshots
+    );
+    if (prunedVmIds.length > 0) {
+      pceLogger.info("Pruned stale Proxmox VM entities from RAG graph", {
+        ids: prunedVmIds,
+      });
     }
 
     return {

@@ -704,9 +704,13 @@ export class StaleNodeCleaner {
       // Types we delete when not seen since threshold. Intentionally EXCLUDE:
       // - firewall_alias: keep so agent responses can show "Alias definitions" (WG_VIP, etc.)
       // - compute_node / compute_vm: use source verification instead
+      // Switches and ports are refreshed by both declared and observed switch
+      // ingestion, so last-seen expiry owns their lifecycle.
       const STALE_LASTSEEN_TYPES = [
         "network_interface",
         "firewall_rule",
+        "switch",
+        "switch_port",
       ];
 
       const staleEntitiesResult = await session.run(

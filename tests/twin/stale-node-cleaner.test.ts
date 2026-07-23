@@ -114,3 +114,24 @@ describe("StaleNodeCleaner.cleanStaleVms — endpoint-attribution fix", () => {
     expect(result.deleted).toBe(1);
   });
 });
+
+describe("StaleNodeCleaner.cleanStaleByLastSeen — switch lifecycle", () => {
+  it("includes switch and switch-port entities in last-seen cleanup", async () => {
+    const run = vi.fn(async () => ({ records: [] }));
+    const close = vi.fn(async () => {});
+    const graphStore = {
+      getDriver: () => ({
+        session: () => ({ run, close }),
+      }),
+    } as unknown as Neo4jGraphStore;
+    const cleaner = new StaleNodeCleaner(graphStore);
+
+    await cleaner.cleanStaleByLastSeen({ dryRun: true });
+
+    expect(run).toHaveBeenCalledTimes(1);
+    const params = run.mock.calls[0]?.[1] as { types: string[] };
+    expect(params.types).toContain("switch");
+    expect(params.types).toContain("switch_port");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});

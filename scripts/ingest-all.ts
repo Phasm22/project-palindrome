@@ -4,6 +4,7 @@ import { $ } from "bun";
 import { NetworkIngestionOrchestrator } from "../src/pce/ingestion/network-ingestion";
 import { FirewallIngestionOrchestrator } from "../src/pce/ingestion/firewall-ingestion";
 import { SwitchIngestionOrchestrator } from "../src/pce/ingestion/switch-ingestion";
+import { runIngestionStaleCleanup } from "../src/pce/ingestion/stale-cleanup";
 
 async function main() {
   let networkOrchestrator: NetworkIngestionOrchestrator | null = null;
@@ -23,6 +24,9 @@ async function main() {
     await switchOrchestrator.ingestSwitches();
     console.log("\n=== Running Topology ingestion ===");
     await $`bun run scripts/ingest-topology.ts`;
+    console.log("\n=== Running stale entity cleanup ===");
+    const cleanup = await runIngestionStaleCleanup({ maxAgeMinutes: 10 });
+    console.log(`Stale entity cleanup removed ${cleanup.deleted} entities.`);
     console.log("\nIngest-all complete.");
   } catch (error: any) {
     console.error("ingest-all failed:", error?.message || error);
@@ -35,4 +39,3 @@ async function main() {
 }
 
 main();
-

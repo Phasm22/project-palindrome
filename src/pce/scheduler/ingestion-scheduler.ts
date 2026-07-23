@@ -1,9 +1,9 @@
 import { NetworkIngestionOrchestrator } from "../ingestion/network-ingestion";
 import { FirewallIngestionOrchestrator } from "../ingestion/firewall-ingestion";
 import { SwitchIngestionOrchestrator } from "../ingestion/switch-ingestion";
+import { runIngestionStaleCleanup } from "../ingestion/stale-cleanup";
 import { pceLogger as logger } from "../utils/logger";
 import { MetricsCollector } from "../metrics/collector";
-import { StaleNodeCleaner } from "../../twin/cleanup/stale-node-cleaner";
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -340,16 +340,15 @@ export class IngestionScheduler {
       let cleanupError: string | undefined;
       try {
         logger.info("Running stale node cleanup...");
-        const cleaner = new StaleNodeCleaner();
-        const cleanupResults = await cleaner.cleanAll({ maxAgeMinutes: 10 });
+        const cleanup = await runIngestionStaleCleanup({ maxAgeMinutes: 10 });
         const cleanupDuration = Date.now() - cleanupStart;
         
-        cleanupDeleted = cleanupResults.reduce((sum, r) => sum + r.deleted, 0);
+        cleanupDeleted = cleanup.deleted;
         if (cleanupDeleted > 0) {
           logger.info("Stale node cleanup completed", {
             durationMs: cleanupDuration,
             deleted: cleanupDeleted,
-            results: cleanupResults.map(r => ({ type: r.entityType, deleted: r.deleted })),
+            results: cleanup.results.map(r => ({ type: r.entityType, deleted: r.deleted })),
           });
           this.metricsCollector.record("ingestion_scheduler_cleanup_deleted", cleanupDeleted);
         } else {
