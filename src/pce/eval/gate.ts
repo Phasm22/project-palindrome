@@ -99,6 +99,10 @@ function hydrateTrace(trace: SerializedTrace): JoinedTrace {
   } as JoinedTrace;
 }
 
+export function hydrateEvalTrace(serialized: unknown): JoinedTrace {
+  return hydrateTrace(SerializedTraceSchema.parse(serialized));
+}
+
 export async function loadEvalGateSnapshot(path: string): Promise<EvalGateSnapshot> {
   const serialized = JSON.parse(await readFile(path, "utf-8"));
   const parsed = EvalGateSnapshotSchema.parse(serialized);
