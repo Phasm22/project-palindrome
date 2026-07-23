@@ -194,6 +194,8 @@ Split `runAgent()` into composable handlers keyed to conversation state transiti
 
 ## 5. Bottleneck 2 — Intent Routing Has Zero LLM Involvement
 
+> **RESOLVED 2026-03-05:** The classifier is now LLM-primary: `runner.ts` calls `classifyAndRouteWithLLM`, with the synchronous Jaccard/regex classifier retained only as the API-failure fallback. See §14.2. The original analysis remains below for historical context.
+
 This is the most surprising finding of the review.
 
 ### The intent classifier does not use an LLM
