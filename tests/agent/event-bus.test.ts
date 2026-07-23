@@ -1,7 +1,11 @@
 import { test, expect } from "bun:test";
+import { z } from "zod";
 import { AgentEventBus, emitToolProgress, runWithAgentSession } from "../../src/agent/event-bus";
 import { AgentEventDataSchema } from "../../src/agent/event-payloads";
 import { emitFinalEvent, emitStepEvent } from "../../src/agent/handlers/emit-helpers";
+import { executeToolCall } from "../../src/agent/tool-executor";
+import { actionRegistry } from "../../src/actions/registry";
+import { ActionTool } from "../../src/tools/ActionTool";
 
 test("emitStepEvent emits a discriminator-typed payload", () => {
   const eventBus = AgentEventBus.getInstance();
@@ -69,6 +73,50 @@ test("tool progress inherits the active agent session", async () => {
   }
 
   expect(received?.sessionId).toBe("scoped-session");
+});
+
+test("concurrent ActionTool progress stays scoped to its originating session", async () => {
+  const actionName = "test.session_scoped_progress";
+  if (!actionRegistry.get(actionName)) {
+    actionRegistry.register({
+      name: actionName,
+      description: "Fake action for session-scoped progress tests",
+      schema: z.object({}).passthrough(),
+      execute: async () => {
+        await Promise.resolve();
+        return { success: true };
+      },
+    });
+  }
+
+  const eventBus = AgentEventBus.getInstance();
+  const sessionIds: Array<string | undefined> = [];
+  const unsubscribe = eventBus.onType("tool:progress", (event) => {
+    if (event.data.action === actionName) {
+      sessionIds.push(event.sessionId);
+    }
+  });
+
+  try {
+    await Promise.all([
+      executeToolCall(
+        { toolName: "action", parameters: { action: actionName, params: {} } },
+        [new ActionTool()],
+        { sessionId: "action-session-a" }
+      ),
+      executeToolCall(
+        { toolName: "action", parameters: { action: actionName, params: {} } },
+        [new ActionTool()],
+        { sessionId: "action-session-b" }
+      ),
+    ]);
+  } finally {
+    unsubscribe();
+  }
+
+  expect(sessionIds).toHaveLength(6);
+  expect(sessionIds.filter((sessionId) => sessionId === "action-session-a")).toHaveLength(3);
+  expect(sessionIds.filter((sessionId) => sessionId === "action-session-b")).toHaveLength(3);
 });
 
 test("connection updates validate as structured agent events", () => {

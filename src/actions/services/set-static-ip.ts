@@ -174,6 +174,7 @@ ${dns.map(d => `          - ${d}`).join("\n")}
       const results: string[] = [];
       const errors: string[] = [];
       let changed = false;
+      let attemptFailed = false;
 
       for (const cmd of commands) {
         try {
@@ -183,6 +184,7 @@ ${dns.map(d => `          - ${d}`).join("\n")}
             cmd.args,
             "inventory.ini"
           );
+          lastResult = result;
           
           results.push(`[${cmd.description}] ${result.stdout}`);
           if (result.stderr) {
@@ -193,12 +195,24 @@ ${dns.map(d => `          - ${d}`).join("\n")}
             changed = true;
           }
           if (!result.success) {
-            throw new Error(`Failed to execute: ${cmd.description}`);
+            const errorDetails = result.stderr || result.stdout || "Unknown error";
+            errors.push(`[${cmd.description}] ${errorDetails}`);
+            attemptFailed = true;
+            break;
           }
         } catch (error: any) {
+          lastResult = { success: false, stdout: "", stderr: error.message };
           errors.push(`[${cmd.description}] ${error.message}`);
-          throw error;
+          attemptFailed = true;
+          break;
         }
+      }
+
+      if (attemptFailed) {
+        if (!retryOnFailure || attempt > maxRetries) {
+          break;
+        }
+        continue;
       }
 
       success = true;
@@ -269,5 +283,4 @@ ${dns.map(d => `          - ${d}`).join("\n")}
     };
   }
 }
-
 
