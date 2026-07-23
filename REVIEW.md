@@ -610,7 +610,7 @@ This alone would eliminate the Jaccard classifier and give structured, validated
 
 ### vs. Open Policy Agent (OPA)
 
-The current action ACL model uses `tool-policy.ts` with hardcoded group assignments (viewer/admin/full). This works for static environments but doesn't scale to dynamic capability enablement without code changes. OPA externalizes policy decisions into `.rego` files that can be updated without deploying application code:
+The current action ACL model uses `tool-policy.ts` with hardcoded group assignments (`admin`, `ops`, `viewer`, `sre`, `security`, `helpdesk`). This works for static environments but doesn't scale to dynamic capability enablement without code changes. OPA externalizes policy decisions into `.rego` files that can be updated without deploying application code:
 
 ```
 # opnsense-writes.rego
