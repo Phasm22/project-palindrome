@@ -1,6 +1,6 @@
 {
   "name": "proxmox_write",
-  "description": "Execute safe write operations on Proxmox VMs: start, stop, shutdown, reboot, reset, snapshot, rollback, clone, and migrate. All operations support dry-run mode and require confirmation.",
+  "description": "Execute safe write operations on Proxmox VMs: start, stop, shutdown, reboot, reset, snapshot, rollback, clone, migrate, and destroy. All operations support dry-run mode and require confirmation. WARNING: destroy_vm is a destructive operation.",
   "parameters": {
     "type": "object",
     "properties": {
@@ -15,7 +15,8 @@
           "create_snapshot",
           "rollback_snapshot",
           "clone_vm",
-          "migrate_vm"
+          "migrate_vm",
+          "destroy_vm"
         ]
       },
       "node": {
@@ -23,6 +24,15 @@
       },
       "vmid": {
         "type": "number"
+      },
+      "type": {
+        "type": "string",
+        "enum": [
+          "qemu",
+          "lxc"
+        ],
+        "description": "VM type (qemu or lxc, default: qemu)",
+        "default": "qemu"
       },
       "targetNode": {
         "type": "string"
@@ -42,7 +52,9 @@
       }
     },
     "required": [
-      "action"
+      "action",
+      "node",
+      "vmid"
     ],
     "additionalProperties": false
   },
@@ -53,7 +65,7 @@
       "ops"
     ],
     "risk": "medium",
-    "requiresConfirmation": true
+    "requiresConfirmation": false
   },
   "actions": [
     "start_vm",
@@ -68,5 +80,5 @@
   ],
   "actionCount": 9,
   "version": "1.0.0",
-  "generatedAt": "2025-11-18T04:33:18.683Z"
+  "generatedAt": "2026-07-23T14:56:18.087Z"
 }

@@ -2,7 +2,7 @@
 
 ## Current State
 
-- **50 test files** (~5,753 lines)
+- **Approximately 137 test files** (137 on 2026-07-23; auto-count with `find tests -name "*.test.ts" | wc -l`)
 - **Bun test runner** (fast, native)
 - **Graceful skipping** - tests check for env vars and skip if missing
 - **Mixed syntax** - some use `test()`, some use `describe/it` (both work with Bun)
@@ -70,7 +70,7 @@ bun test                    # all tests
 - ✅ Minimal refactoring
 
 **Cons:**
-- ⚠️ Need to tag ~50 test files
+- ⚠️ Need to tag the full test set (~137 files as of 2026-07-23)
 - ⚠️ Bun's tag support might need checking
 
 ### Option 3: Organize by Directory (Medium Friction)
@@ -167,4 +167,3 @@ Add coverage reporting:
 2. ⏭️ Test it on a PR
 3. ⏭️ Adjust timeouts if needed
 4. ⏭️ Add tags later if you want faster feedback
-

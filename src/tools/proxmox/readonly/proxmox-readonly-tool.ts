@@ -178,7 +178,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         "get_vm_ip requires guest agent enabled in VM config and API token with VM.Monitor + VM.Audit permissions. Returns 403 if permissions insufficient or guest agent unavailable.",
         "node_temperature fetches temperature data via SSH sensors command. Requires SSH access to the node.",
         "For provenance and recent-change questions, resolve the VM once, call get_vm_config with its node/VMID/type, and call node_tasks with the same node and VMID. Only report no recent changes when the filtered node_tasks result succeeds with count 0.",
-        "Internal IP addresses, MAC addresses, and credentials are automatically sanitized from responses.",
+        "Credentials and secrets are automatically sanitized from responses. Infrastructure identifiers such as internal IP and MAC addresses are preserved because they are primary diagnostic data.",
       ],
     });
   }

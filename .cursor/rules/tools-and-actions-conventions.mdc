@@ -37,9 +37,9 @@ Every new tool (read or write) must satisfy **all** of the following:
 - **Deterministic output shape + typed result**:
   - Define a typed result (e.g. TypeScript type/interface or zod schema).
   - Avoid ad-hoc shape changes based on branches; if variants are needed, use tagged unions.
-- **Registered in the tool registry**:
-  - Ensure `tools.json` (and any `tool_definition_*.json` registries) include the tool.
-  - Registry entries should reference the schema and output type where applicable.
+- **Registered in the runtime loader**:
+  - Ensure `loadTools()` in `src/agent/tool-loader.ts` returns the tool. The loader and tool classes (`getSchema()`) are authoritative.
+  - `tools.json` and `tool_definition_*.json` are generated schema snapshots, not registries. Regenerate them with their Bun exporters after changing tool schemas; do not hand-edit them.
 
 ```ts
 // ✅ GOOD: schema + typed result
@@ -107,4 +107,3 @@ executeDiskCheck({ target }: { target: 'root' | 'data' }) {
   return ssh.run(cmd); // via approved allowlist path
 }
 ```
-

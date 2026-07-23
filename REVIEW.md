@@ -194,6 +194,8 @@ Split `runAgent()` into composable handlers keyed to conversation state transiti
 
 ## 5. Bottleneck 2 — Intent Routing Has Zero LLM Involvement
 
+> **RESOLVED 2026-03-05:** The classifier is now LLM-primary: `runner.ts` calls `classifyAndRouteWithLLM`, with the synchronous Jaccard/regex classifier retained only as the API-failure fallback. See §14.2. The original analysis remains below for historical context.
+
 This is the most surprising finding of the review.
 
 ### The intent classifier does not use an LLM
@@ -608,7 +610,7 @@ This alone would eliminate the Jaccard classifier and give structured, validated
 
 ### vs. Open Policy Agent (OPA)
 
-The current action ACL model uses `tool-policy.ts` with hardcoded group assignments (viewer/admin/full). This works for static environments but doesn't scale to dynamic capability enablement without code changes. OPA externalizes policy decisions into `.rego` files that can be updated without deploying application code:
+The current action ACL model uses `tool-policy.ts` with hardcoded group assignments (`admin`, `ops`, `viewer`, `sre`, `security`, `helpdesk`). This works for static environments but doesn't scale to dynamic capability enablement without code changes. OPA externalizes policy decisions into `.rego` files that can be updated without deploying application code:
 
 ```
 # opnsense-writes.rego
