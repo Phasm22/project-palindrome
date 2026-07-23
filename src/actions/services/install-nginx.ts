@@ -149,6 +149,7 @@ export async function installNginx(params: InstallNginxParams): Promise<InstallN
       const results: string[] = [];
       const errors: string[] = [];
       let changed = false;
+      let attemptFailed = false;
 
       for (const cmd of commands) {
         try {
@@ -158,6 +159,7 @@ export async function installNginx(params: InstallNginxParams): Promise<InstallN
             cmd.args,
             "inventory.ini"
           );
+          lastResult = result;
           
           results.push(`[${cmd.description}] ${result.stdout}`);
           if (result.stderr) {
@@ -175,12 +177,23 @@ export async function installNginx(params: InstallNginxParams): Promise<InstallN
               stdout: result.stdout,
               stderr: result.stderr,
             });
-            throw new Error(`Failed to execute: ${cmd.description}\nAnsible output:\n${errorDetails}`);
+            errors.push(`[${cmd.description}] ${errorDetails}`);
+            attemptFailed = true;
+            break;
           }
         } catch (error: any) {
+          lastResult = { success: false, stdout: "", stderr: error.message };
           errors.push(`[${cmd.description}] ${error.message}`);
-          throw error;
+          attemptFailed = true;
+          break;
         }
+      }
+
+      if (attemptFailed) {
+        if (!retryOnFailure || attempt > maxRetries) {
+          break;
+        }
+        continue;
       }
 
       success = true;

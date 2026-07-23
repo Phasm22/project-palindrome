@@ -205,6 +205,7 @@ export async function configureFirewall(params: ConfigureFirewallParams): Promis
       const results: string[] = [];
       const errors: string[] = [];
       let changed = false;
+      let attemptFailed = false;
 
       for (const cmd of commands) {
         try {
@@ -214,6 +215,7 @@ export async function configureFirewall(params: ConfigureFirewallParams): Promis
             cmd.args,
             "inventory.ini"
           );
+          lastResult = result;
           
           results.push(`[${cmd.description}] ${result.stdout}`);
           if (result.stderr) {
@@ -236,7 +238,9 @@ export async function configureFirewall(params: ConfigureFirewallParams): Promis
               stdout: result.stdout,
               stderr: result.stderr,
             });
-            throw new Error(`Failed to execute: ${cmd.description}\nAnsible output:\n${errorDetails}`);
+            errors.push(`[${cmd.description}] ${errorDetails}`);
+            attemptFailed = true;
+            break;
           }
         } catch (error: any) {
           // UFW may return errors for duplicate rules, but that's okay
@@ -244,9 +248,18 @@ export async function configureFirewall(params: ConfigureFirewallParams): Promis
             logger.info("UFW rule already exists, continuing", { cmd: cmd.description });
             continue;
           }
+          lastResult = { success: false, stdout: "", stderr: error.message };
           errors.push(`[${cmd.description}] ${error.message}`);
-          throw error;
+          attemptFailed = true;
+          break;
         }
+      }
+
+      if (attemptFailed) {
+        if (!retryOnFailure || attempt > maxRetries) {
+          break;
+        }
+        continue;
       }
 
       success = true;
