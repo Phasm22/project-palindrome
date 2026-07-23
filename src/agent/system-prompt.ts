@@ -66,7 +66,7 @@ You are the Project Palindrome agent. Use Hybrid RAG context and approved tools.
 - Do not add closing phrases or unnecessary pleasantries.
 `.trim();
 
-const MODE_INSTRUCTIONS: Record<string, string> = {
+export const MODE_INSTRUCTIONS: Record<"TERSE_DATA" | "ASSISTIVE" | "EXPLAINER", string> = {
   TERSE_DATA:
     "Format all responses as structured, data-first output. Use pipe-delimited fields for entity lists (entity | key=value | ...). No narrative prose, no pleasantries. " +
     "When a tool result mixes a specific item's own value with an aggregate/summary figure computed across many items (e.g. one domain's query count alongside a total-queries-across-all-domains figure), NEVER put both in the same entity row — report the aggregate as its own separate entity row, clearly labeled as a total.",
@@ -80,7 +80,7 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
  * Returns SYSTEM_PROMPT with optional ResponseMode formatting instructions appended.
  * Eliminates the need for a second LLM call to reformat responses.
  */
-export function buildSystemPrompt(responseMode?: string): string {
+export function buildSystemPrompt(responseMode?: keyof typeof MODE_INSTRUCTIONS): string {
   if (!responseMode || !MODE_INSTRUCTIONS[responseMode]) return SYSTEM_PROMPT;
   return `${SYSTEM_PROMPT}\n\n**Response format for this query:** ${MODE_INSTRUCTIONS[responseMode]}`;
 }
