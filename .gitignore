@@ -70,6 +70,8 @@ Thumbs.db
 # pce folders (local state and test/audit artifacts)
 .pce/
 .pce-dashboard/
+.pce-dod-test/
+.pce-dod-verify/
 .pce-eval/
 .pce-ia-dod-test/
 .pce-ib-dod-test/
@@ -80,6 +82,7 @@ Thumbs.db
 .pce-tl-1b-dod-test/
 .pce-tl-1c-dod-test/
 .pce-tl-2a-dod-test/
+.pce-test/
 .gold-path/
 .provenance-audit/
 
