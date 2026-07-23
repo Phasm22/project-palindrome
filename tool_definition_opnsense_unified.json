@@ -161,7 +161,7 @@
     "For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
     "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
     "All responses are structured JSON objects for easy parsing and dashboarding.",
-    "Internal IP addresses and credentials are automatically sanitized from responses.",
+    "Credentials and secrets are automatically sanitized from responses. Internal IP addresses are preserved because they are primary diagnostic data.",
     "All write operations require human confirmation before execution.",
     "Use dryRun: true to preview changes without executing.",
     "Only admin and ops ACL groups can execute write operations.",
@@ -259,5 +259,5 @@
     "total": 25
   },
   "version": "1.0.0",
-  "generatedAt": "2026-07-23T14:56:18.112Z"
+  "generatedAt": "2026-07-23T14:59:41.413Z"
 }
