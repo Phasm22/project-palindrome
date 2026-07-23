@@ -29,6 +29,8 @@ import { TwinQueryService } from "../../twin/api/twin-query-service";
 
 type BunServer = ReturnType<typeof Bun.serve>;
 
+let warnedMissingApiToken = false;
+
 type ActiveAgentRun = {
   sessionId: string;
   conversationId: string | null;
@@ -101,6 +103,7 @@ export class PceApiServer {
   private activeAgentRuns = new Map<string, ActiveAgentRun>();
   private activeRunByConversation = new Map<string, string>();
   private activeRunByUser = new Map<string, string>();
+  private apiToken: string | null;
 
   constructor(deps: PceApiServerDependencies, options: PceApiServerOptions = {}) {
     this.options = {
@@ -129,11 +132,19 @@ export class PceApiServer {
       this.options.perIpRateLimit
     );
     this.redactor = new Redactor();
+    this.apiToken = process.env.PALINDROME_API_TOKEN?.trim() || null;
   }
 
   async start(): Promise<void> {
     if (this.server) {
       throw new Error("PCE API server is already running");
+    }
+
+    if (!this.apiToken && !warnedMissingApiToken) {
+      warnedMissingApiToken = true;
+      pceLogger.warn(
+        "PALINDROME_API_TOKEN is not configured; agent and mutation endpoints are unauthenticated"
+      );
     }
 
     // Start ingestion scheduler only when explicitly enabled (off by default for on-demand stacks)
@@ -238,9 +249,13 @@ export class PceApiServer {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Token",
         },
       });
+    }
+
+    if (this.requiresApiToken(req, url) && !this.hasValidApiToken(req)) {
+      return this.jsonResponse(401, { error: "Unauthorized" });
     }
 
     if (req.method === "POST" && url.pathname === "/query") {
@@ -424,6 +439,24 @@ export class PceApiServer {
     }
 
     return this.jsonResponse(404, { error: "Not Found" });
+  }
+
+  private requiresApiToken(req: Request, url: URL): boolean {
+    if (!this.apiToken) return false;
+    if (url.pathname.startsWith("/api/agent/")) return true;
+    if (["PUT", "PATCH", "DELETE"].includes(req.method)) return true;
+    return req.method === "POST" && (
+      url.pathname.startsWith("/api/chat/") ||
+      url.pathname === "/api/dashboard/query/cypher"
+    );
+  }
+
+  private hasValidApiToken(req: Request): boolean {
+    if (!this.apiToken) return true;
+    const authorization = req.headers.get("authorization");
+    const bearerToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    const headerToken = req.headers.get("x-api-token");
+    return bearerToken === this.apiToken || headerToken === this.apiToken;
   }
 
   private async handleQuery(req: Request, server: BunServer): Promise<Response> {
@@ -1817,7 +1850,7 @@ export class PceApiServer {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Token",
       },
     });
   }
@@ -1869,7 +1902,11 @@ export class PceApiServer {
 
       const userId = body.userId || "dashboard-user";
       const profileUserId = body.profileUserId || userId;
-      const aclGroup = (body.aclGroup || "admin") as ACLGroup;
+      const aclGroup = (
+        typeof body.aclGroup === "string" && body.aclGroup.trim()
+          ? body.aclGroup.trim()
+          : "viewer"
+      ) as ACLGroup;
       const sessionId = body.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const conversationId = body.conversationId || null;
 
