@@ -20,7 +20,6 @@ try {
 }
 
 const liveHybridTestsEnabled = process.env.PCE_LIVE_TESTS === "true";
-const runLiveTest = liveHybridTestsEnabled ? test : test.skip;
 
 /**
  * TL-2A.7: Hybrid Reasoning Gold Path Validation
@@ -79,7 +78,9 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     expect(actions).toContain("list_vms");
   });
 
-  runLiveTest("should execute hybrid reasoning gold path query", async () => {
+  // TODO(RM-17): Replace the live OpenAI and Proxmox dependencies with
+  // injected deterministic clients before promoting these to offline fixtures.
+  test.skipIf(!liveHybridTestsEnabled)("should execute hybrid reasoning gold path query", async () => {
 
     // Gold Path Scenario:
     // Query: "Is VM-101 running at high CPU? Should we reboot it based on Infrastructure team policies?"
@@ -195,11 +196,12 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     expect(response).toBeDefined();
     expect(response.text).toBeDefined();
     expect(typeof response.text).toBe("string");
-    expect(response.text.length).toBeGreaterThan(0);
+    expect(response.text).toMatch(/vm[- ]?101/i);
+    expect(response.text).toMatch(/90\s*%|90 percent/i);
     expect(proxmoxExecuteCount).toBeGreaterThan(0);
   }, 30000); // 30 second timeout for LLM calls
 
-  runLiveTest("should handle query requiring all three data sources", async () => {
+  test.skipIf(!liveHybridTestsEnabled)("should handle query requiring all three data sources", async () => {
 
     // Complex query that requires:
     // 1. Live tool: Current VM status and resource usage
@@ -263,14 +265,14 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     expect(response).toBeDefined();
     expect(response.text).toBeDefined();
     expect(typeof response.text).toBe("string");
-    // Agent must return a non-empty response even if tool calls fail due to missing infra
-    expect(response.text.length).toBeGreaterThan(0);
+    expect(response.text).toMatch(/vm[- ]?101/i);
+    expect(response.text).toMatch(/pve3/i);
 
     // Restore original fetch
     global.fetch = originalFetch;
   }, 30000); // 30 second timeout for LLM calls
 
-  runLiveTest("should validate provenance chain across all data sources", async () => {
+  test.skipIf(!liveHybridTestsEnabled)("should validate provenance chain across all data sources", async () => {
 
     const query = "What is the status of VM-101 and which node is it running on?";
 
@@ -318,16 +320,8 @@ describe("TL-2A.7: Hybrid Reasoning Gold Path Validation", () => {
     expect(response).toBeDefined();
     expect(response.text).toBeDefined();
     
-    // The agent should have attempted to use Proxmox tools
-    // Provenance is tracked internally in the tool execution
-    // The response text should indicate tool usage (even if it failed)
-    const message = response.text.toLowerCase();
-    const attemptedToolUse = 
-      message.includes("vm") || 
-      message.includes("proxmox") || 
-      message.includes("error") ||
-      message.includes("unable");
-    expect(attemptedToolUse).toBe(true);
+    expect(response.text).toMatch(/vm[- ]?101/i);
+    expect(response.text).toMatch(/pve3/i);
     
     // Restore original fetch
     global.fetch = originalFetch;
