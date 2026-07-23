@@ -7,6 +7,26 @@ on:
     branches: [main]
 
 jobs:
+  # Deterministic semantic regression gate: committed fixtures only, no live services.
+  eval-gate:
+    name: Offline Eval Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Enforce eval baseline
+        run: bun test tests/pce/eval/offline-gate.test.ts
+
   # Run all tests - tests skip gracefully if services/env vars missing
   test:
     name: Tests
@@ -95,4 +115,3 @@ jobs:
           echo "## Type Check Complete" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "- Note: Type errors are non-blocking. Fix gradually." >> $GITHUB_STEP_SUMMARY
-

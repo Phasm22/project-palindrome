@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "name": "deliberately regressed trace sample",
+  "description": "Negative-control fixture: a second failed tool call is paired with a substantive answer, exceeding both committed baselines.",
+  "source": {
+    "derivedFrom": "offline-eval.snapshot.json",
+    "purpose": "gate failure test only"
+  },
+  "baseline": {
+    "minPassRate": 0.83,
+    "maxFlaggedCount": 1
+  },
+  "traces": [
+    {
+      "caseId": "A-TQ-07",
+      "id": "6d2454a3-992a-4b72-a684-98c436a53b34",
+      "userId": "fuzz-user-5",
+      "aclGroup": "admin",
+      "userInput": "What VM has ID 200?",
+      "finalResponse": "VM ID 200 has two instances on proxBig and yin, each with 4 CPUs and 8 GB memory.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "proxmox_readonly",
+              "parameters": {"action": "get_vm_status", "vmid": 200},
+              "result": {"success": false, "error": "node parameter required"}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 1,
+      "totalToolCalls": 1,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:07:20.959Z",
+      "durationMs": 13060
+    },
+    {
+      "caseId": "A-TQ-26-REGRESSION",
+      "id": "regressed-switch-vlan-trace",
+      "userId": "fuzz-user-5",
+      "aclGroup": "admin",
+      "userInput": "What VLANs are configured on the switch?",
+      "finalResponse": "VLANs 1, 40, and 50 are configured on TJswitch at 172.16.0.2.",
+      "steps": [
+        {
+          "step": 1,
+          "toolCalls": [
+            {
+              "toolName": "twin_query",
+              "parameters": {"operation": "switch_list_vlans"},
+              "result": {"success": false, "error": "simulated offline regression"}
+            }
+          ],
+          "decisions": []
+        }
+      ],
+      "totalSteps": 1,
+      "totalToolCalls": 1,
+      "maxStepsReached": false,
+      "timestamp": "2026-07-21T16:07:50.558Z",
+      "durationMs": 6333
+    }
+  ]
+}
