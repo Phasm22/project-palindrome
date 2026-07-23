@@ -3,6 +3,48 @@ import { createPortal, removeFromPortal } from './portal.js';
 
 let activeModal = null;
 let focusableElements = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+let scrollLockState = null;
+
+function lockPageScroll() {
+  if (scrollLockState) return;
+
+  const scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  scrollLockState = {
+    scrollY,
+    bodyPosition: document.body.style.position,
+    bodyTop: document.body.style.top,
+    bodyLeft: document.body.style.left,
+    bodyRight: document.body.style.right,
+    bodyWidth: document.body.style.width,
+    bodyOverflow: document.body.style.overflow,
+    htmlOverflow: document.documentElement.style.overflow,
+  };
+
+  document.documentElement.style.overflow = 'hidden';
+  document.body.style.position = 'fixed';
+  document.body.style.top = `-${scrollY}px`;
+  document.body.style.left = '0';
+  document.body.style.right = '0';
+  document.body.style.width = '100%';
+  document.body.style.overflow = 'hidden';
+  document.body.classList.add('overflow-hidden');
+}
+
+function unlockPageScroll() {
+  if (!scrollLockState) return;
+
+  const { scrollY } = scrollLockState;
+  document.body.style.position = scrollLockState.bodyPosition;
+  document.body.style.top = scrollLockState.bodyTop;
+  document.body.style.left = scrollLockState.bodyLeft;
+  document.body.style.right = scrollLockState.bodyRight;
+  document.body.style.width = scrollLockState.bodyWidth;
+  document.body.style.overflow = scrollLockState.bodyOverflow;
+  document.documentElement.style.overflow = scrollLockState.htmlOverflow;
+  document.body.classList.remove('overflow-hidden');
+  scrollLockState = null;
+  window.scrollTo(0, scrollY);
+}
 
 /**
  * Trap focus within modal
@@ -42,7 +84,8 @@ export function showModal(options = {}) {
     onClose = null,
     closeOnBackdrop = true,
     closeOnEscape = true,
-    ariaLabel = title || 'Dialog'
+    ariaLabel = title || 'Dialog',
+    maxWidth = null
   } = options;
   
   // Close existing modal
@@ -65,6 +108,9 @@ export function showModal(options = {}) {
   
   const dialog = document.createElement('div');
   dialog.className = 'bg-gradient-to-br from-slate-900 to-slate-800 border-2 border-slate-700 rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-hidden flex flex-col backdrop-blur-sm';
+  if (maxWidth) {
+    dialog.style.maxWidth = maxWidth;
+  }
   
   // Header
   const header = document.createElement('div');
@@ -103,7 +149,7 @@ export function showModal(options = {}) {
   createPortal(modal);
   
   // Lock scroll
-  document.body.classList.add('overflow-hidden');
+  lockPageScroll();
   
   // Focus management
   const firstFocusable = modal.querySelector(focusableElements);
@@ -162,7 +208,7 @@ export function closeModal() {
   removeFromPortal(modal);
   
   // Unlock scroll
-  document.body.classList.remove('overflow-hidden');
+  unlockPageScroll();
   
   // Callback
   if (onClose) {

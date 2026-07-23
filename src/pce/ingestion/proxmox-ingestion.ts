@@ -246,7 +246,9 @@ export class ProxmoxIngestionOrchestrator {
 
       if (doc.metadata.documentType === "node_profile" && doc.metadata.node) {
         // Create PVE_NODE
-        const nodeId = `pve_node:${doc.metadata.node}`;
+        // Lowercased for consistency with the Twin graph's normalizeNodeId() scheme
+        // (src/parsers/compute/helpers.ts) — see twinId below.
+        const nodeId = `pve_node:${doc.metadata.node.toLowerCase()}`;
         const nodePayload = this.parseNodeProfile(doc.content, doc.metadata.node);
         const nodeVersionHash = computeVersionHash(nodePayload);
 
@@ -257,6 +259,7 @@ export class ProxmoxIngestionOrchestrator {
             ...nodePayload,
             // Ensure temperature is included if present
             temperature: nodePayload.temperature,
+            twinId: `compute-node:${doc.metadata.node.toLowerCase()}`,
           },
           versionHash: nodeVersionHash,
           sourcePath: `proxmox://node/${doc.metadata.node}`,
@@ -280,6 +283,9 @@ export class ProxmoxIngestionOrchestrator {
             memory: vm.memory,
             maxmem: vm.maxmem,
             uptime: vm.uptime,
+            // Resolvable reference to the Twin graph's normalizeVmId() scheme
+            // (src/parsers/compute/helpers.ts).
+            twinId: `compute-vm:${doc.metadata.node.toLowerCase()}:${vm.vmid}`,
           };
           const vmVersionHash = computeVersionHash(vmPayload);
 
@@ -295,7 +301,8 @@ export class ProxmoxIngestionOrchestrator {
           });
 
           // Create HOSTS_ON relationship: VM -> Node (VM is hosted on Node)
-          const nodeId = `pve_node:${doc.metadata.node}`;
+          // Lowercased to match the PVE_NODE id created above.
+          const nodeId = `pve_node:${doc.metadata.node.toLowerCase()}`;
           relationships.push({
             id: `${vmId}-HOSTS_ON-${nodeId}`,
             from: vmId,

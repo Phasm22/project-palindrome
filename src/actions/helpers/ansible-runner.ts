@@ -1,9 +1,12 @@
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import { promisify } from "util";
+import { mkdtemp, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
 import { join } from "path";
 import { pceLogger as logger } from "../../pce/utils/logger";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface AnsiblePlaybookResult {
   success: boolean;
@@ -123,6 +126,88 @@ export class AnsibleRunner {
   }
 
   /**
+   * Run a playbook using an on-disk JSON extra-vars document.
+   * This preserves arrays/objects and avoids interpolating values into a shell.
+   */
+  async runPlaybookWithJson(
+    playbook: string,
+    inventory: string,
+    extraVars: Record<string, unknown>,
+    limit?: string
+  ): Promise<AnsiblePlaybookResult> {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "palindrome-ansible-")
+    );
+    const extraVarsPath = join(temporaryDirectory, "extra-vars.json");
+    await writeFile(extraVarsPath, JSON.stringify(extraVars), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+
+    const playbookPath = playbook.startsWith("/")
+      ? playbook
+      : join(this.ansibleDir, "playbooks", playbook);
+    const inventoryPath = inventory.startsWith("/")
+      ? inventory
+      : join(this.ansibleDir, inventory);
+    const args = [
+      "-i",
+      inventoryPath,
+      playbookPath,
+      "--extra-vars",
+      `@${extraVarsPath}`,
+      ...(limit ? ["--limit", limit] : []),
+    ];
+
+    logger.info("Executing ansible playbook with JSON variables", {
+      playbook,
+      inventory: inventoryPath,
+      limit,
+    });
+
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        "ansible-playbook",
+        args,
+        {
+          cwd: this.ansibleDir,
+          maxBuffer: 10 * 1024 * 1024,
+        }
+      );
+      const changed =
+        stdout.includes("changed=") &&
+        stdout.match(/changed=(\d+)/)?.[1] !== "0";
+      const failed =
+        stdout.includes("failed=") &&
+        stdout.match(/failed=(\d+)/)?.[1] !== "0";
+      return {
+        success: !failed,
+        stdout,
+        stderr,
+        changed: changed || false,
+        failed: failed || false,
+      };
+    } catch (error: any) {
+      logger.error("Ansible JSON playbook execution failed", {
+        playbook,
+        inventory: inventoryPath,
+        error: error.message,
+        stdout: error.stdout,
+        stderr: error.stderr,
+      });
+      return {
+        success: false,
+        stdout: error.stdout || "",
+        stderr: error.stderr || error.message || "",
+        changed: false,
+        failed: true,
+      };
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+
+  /**
    * Run ansible ad-hoc command
    */
   async runAdHoc(
@@ -212,4 +297,3 @@ export class AnsibleRunner {
     }
   }
 }
-

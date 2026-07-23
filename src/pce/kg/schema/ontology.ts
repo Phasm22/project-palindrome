@@ -110,6 +110,10 @@ export interface EntityAttributes {
     memory?: number;
     maxmem?: number;
     uptime?: number;
+    // Resolvable reference to the corresponding :TwinEntity node id (see
+    // normalizeNodeId in src/parsers/compute/helpers.ts), so the ontology
+    // graph and the Twin graph can be cross-queried without merging them.
+    twinId?: string;
   };
   [NodeType.VM_INSTANCE]: {
     vmid: number;
@@ -121,6 +125,9 @@ export interface EntityAttributes {
     memory?: number;
     maxmem?: number;
     uptime?: number;
+    // Resolvable reference to the corresponding :TwinEntity node id (see
+    // normalizeVmId in src/parsers/compute/helpers.ts).
+    twinId?: string;
   };
   [NodeType.PVE_STORAGE]: {
     storage: string; // Storage name

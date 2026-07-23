@@ -1,5 +1,18 @@
+import { test, expect, beforeEach, afterEach } from "bun:test";
 import { executeToolCall } from "../src/agent/tool-executor";
 import { RunDiagnosticTool } from "../src/tools/RunDiagnosticTool";
+import { installIsolatedObservabilityStores } from "./helpers/isolated-observability";
+
+let cleanupObservability: (() => void) | null = null;
+
+beforeEach(() => {
+  cleanupObservability = installIsolatedObservabilityStores("tool-executor").cleanup;
+});
+
+afterEach(() => {
+  cleanupObservability?.();
+  cleanupObservability = null;
+});
 
 test("executeToolCall finds and executes tool", async () => {
   const tools = [new RunDiagnosticTool()];
@@ -22,4 +35,3 @@ test("executeToolCall returns error for unknown tool", async () => {
   expect(result.error).toBeDefined();
   expect(result.error).toContain("Unknown tool");
 });
-

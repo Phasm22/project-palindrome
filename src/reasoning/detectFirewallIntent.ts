@@ -1,18 +1,22 @@
 export type FirewallIntent =
   | { type: "list_rules" }
   | { type: "count_rules"; direction?: "in" | "out" }
+  | { type: "alias_contents"; aliasName: string }
+  | { type: "alias_list" }
   | { type: "allowed_ports_between"; from: string; to: string }
   | { type: "rules_by_chain"; chain: string }
+  | { type: "sources_accessing_network"; chain: string; target: string }
   | { type: "rules_allowing_subnet"; subnet: string }
   | { type: "rules_blocking_subnet"; subnet: string }
+  | { type: "rules_by_port"; port: string }
   | { type: "exposure_map"; vmId?: string }
   | { type: "reachability_from_chain"; chain: string }
   | { type: "rule_impact"; ruleId: string };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
-const VM_ID_REGEX = /(?:vm|vm-)(\d+)|compute-vm:[\w:-]+/i;
 const RULE_ID_REGEX = /\bfw-rule:[a-z0-9:._-]+/i;
 const WIREGUARD_PATTERN = /\b(?:wireguard|wg)\b/i;
+const PORT_NUMBER_REGEX = /\bport\s+(\d{1,5})\b/i;
 
 function extractSubnet(text: string): string | null {
   const match = text.match(CIDR_REGEX);
@@ -20,14 +24,11 @@ function extractSubnet(text: string): string | null {
 }
 
 function extractVmId(text: string): string | null {
-  const match = text.match(VM_ID_REGEX);
-  if (match) {
-    if (match[1]) {
-      return `compute-vm:proxbig:${match[1]}`;
-    }
-    return match[0];
-  }
-  return null;
+  const reference = extractVmReference(text, { allowDisplayName: true });
+  if (!reference) return null;
+  if (reference.canonicalId) return reference.canonicalId;
+  if (reference.numericId) return `compute-vm:proxbig:${reference.numericId}`;
+  return reference.raw;
 }
 
 function extractRuleId(text: string): string | null {
@@ -54,6 +55,70 @@ function extractAllowedPortsScope(text: string): { from: string; to: string } | 
   const fromToMatch = text.match(/\bfrom\s+(?:the\s+)?(.+?)\s+(?:to|into)\s+(?:the\s+)?(.+?)(?:\?|$)/i);
   if (fromToMatch?.[1] && fromToMatch?.[2]) {
     return { from: fromToMatch[1].trim(), to: fromToMatch[2].trim() };
+  }
+
+  return null;
+}
+
+// Words that can never be part of an alias name — used to stop a greedy capture
+// from running on into the rest of the sentence (e.g. "the WG_VIP alias were
+// removed, and are any of them internet-exposed?" previously captured the alias
+// name as "were removed, and are any of them internet-exposed").
+const ALIAS_NAME_STOPWORDS = new Set([
+  "the", "a", "an", "this", "that", "which", "who", "were", "was", "is", "are",
+  "has", "have", "had", "would", "could", "should", "will", "and", "or", "but",
+  "if", "when", "then", "removed", "deleted", "gone", "named", "called",
+  "contents", "members", "entries", "for", "of", "in",
+]);
+
+function cleanAliasName(value: string | undefined): string | null {
+  if (!value) return null;
+  const cleaned = value
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/[.?!]+$/g, "")
+    .trim();
+  return cleaned || null;
+}
+
+/** Truncates a greedily-captured candidate at the first stopword so trailing
+ * sentence text (e.g. "were removed, and are any of them...") never leaks in. */
+function truncateAliasCandidate(candidate: string): string | null {
+  const words = candidate.trim().split(/\s+/).filter(Boolean);
+  const kept: string[] = [];
+  for (const word of words) {
+    const bare = word.replace(/[.,;:!?"'`]+$/g, "");
+    if (ALIAS_NAME_STOPWORDS.has(bare.toLowerCase())) break;
+    kept.push(word);
+  }
+  return kept.length > 0 ? kept.join(" ") : null;
+}
+
+function extractAliasName(text: string): string | null {
+  // "the WG_VIP alias", "WG_VIP alias were removed" — name precedes the word
+  // "alias", which is the more natural English ordering and was previously
+  // unhandled outside of quoted names.
+  const precedingTokenMatch = text.match(/\b([A-Za-z][A-Za-z0-9_.-]{1,40})\s+alias\b/i);
+  if (precedingTokenMatch?.[1] && !ALIAS_NAME_STOPWORDS.has(precedingTokenMatch[1].toLowerCase())) {
+    const cleaned = cleanAliasName(precedingTokenMatch[1]);
+    if (cleaned) return cleaned;
+  }
+
+  const aliasAfterMatch = text.match(/\balias\s+["'`]?(.+?)(?:["'`]?\s*(?:contents?|members?|entries?)\b|[.?!]|$)/i);
+  if (aliasAfterMatch?.[1]) {
+    const truncated = truncateAliasCandidate(aliasAfterMatch[1]);
+    if (truncated) return cleanAliasName(truncated);
+  }
+
+  const aliasBeforeMatch = text.match(/\b(?:contents?|members?|entries?)\s+(?:of|in|for)\s+(?:the\s+)?alias\s+["'`]?(.+?)(?:["'`]?[.?!]|$)/i);
+  if (aliasBeforeMatch?.[1]) {
+    const truncated = truncateAliasCandidate(aliasBeforeMatch[1]);
+    if (truncated) return cleanAliasName(truncated);
+  }
+
+  const quotedAliasMatch = text.match(/["'`]([^"'`]+)["'`]\s+alias\b/i);
+  if (quotedAliasMatch?.[1]) {
+    return cleanAliasName(quotedAliasMatch[1]);
   }
 
   return null;
@@ -89,25 +154,7 @@ function extractChain(text: string): string | null {
 export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   const normalized = userInput.toLowerCase();
   const trimmed = normalized.trim();
-  const isQuestion = trimmed.endsWith("?") || /^(what|which|how|is|are|do|does|can|could|would|will)\b/.test(trimmed);
-
-  // Skip if this looks like an action request (configure/setup/allow port on VM)
-  // Action intents are handled separately and take priority
-  const hasActionKeywords = 
-    (normalized.includes("configure") || normalized.includes("setup") || normalized.includes("set")) &&
-    (normalized.includes("firewall") || normalized.includes("port"));
-
-  const vmTargetMatch = normalized.match(/\b(?:on|for|to)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
-  const vmTarget = vmTargetMatch?.[1]?.toLowerCase() ?? "";
-  const nonVmTargets = new Set(["the", "a", "an", "home", "lab", "network", "subnet"]);
-  const hasAllowPortOnVm =
-    !isQuestion &&
-    normalized.includes("allow") &&
-    normalized.includes("port") &&
-    vmTarget.length > 0 &&
-    !nonVmTargets.has(vmTarget);
-
-  if ((hasActionKeywords && !isQuestion) || hasAllowPortOnVm) {
+  if (isActionRequest(userInput)) {
     // This is an action, not a query - let action intent detection handle it
     return null;
   }
@@ -122,11 +169,41 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
     normalized.includes("exposure") ||
     normalized.includes("port") ||
     normalized.includes("nat") ||
+    normalized.includes("alias") ||
     normalized.includes("wireguard") ||
     /\bwg\b/i.test(normalized);
 
   if (!hasFirewallKeywords) {
     return null;
+  }
+
+  // Alias queries: "list ALL the aliases" (no specific name to extract, and
+  // extractAliasName was never meant to find one) vs. "what's in the WG_VIP
+  // alias" (contents of one named alias). Previously only the latter had a
+  // dedicated intent, so "List all OPNsense firewall aliases." fell through
+  // every other branch and landed on the generic list_rules fallback,
+  // dumping firewall *rules* instead of aliases. See A-OP-02.
+  const looksLikeAliasImpactQuestion =
+    /\b(break|breaks|breaking|remov(?:e|ed|ing)|delet(?:e|ed|ing)|affect(?:s|ed|ing)?|impact)\b/.test(normalized);
+  if (normalized.includes("alias") && !looksLikeAliasImpactQuestion) {
+    // "aliases" (plural) with no specific name extractable reads as "list ALL
+    // of them"; a specific name (singular "alias X", regardless of "all" used
+    // loosely elsewhere in the sentence, e.g. "what ALL is in THE alias X")
+    // always takes priority when extractAliasName finds one.
+    const specificAliasName = extractAliasName(userInput);
+    const mentionsAliasesPlural = /\baliases\b/.test(normalized);
+    if (
+      mentionsAliasesPlural &&
+      !specificAliasName &&
+      /\b(what|which|show|list|all|every)\b/.test(normalized)
+    ) {
+      return { type: "alias_list" };
+    }
+
+    // Alias content queries, e.g. "what all is in the alias tjs computers".
+    if (specificAliasName && /\b(what|which|show|list|contents?|members?|entries?|in)\b/.test(normalized)) {
+      return { type: "alias_contents", aliasName: specificAliasName };
+    }
   }
 
   // Exposure map queries
@@ -138,8 +215,32 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
   // Reachability from interface/chain (e.g. WireGuard)
   const reachabilityKeywords = normalized.includes("reachable") || normalized.includes("reach") || normalized.includes("accessible");
   const chain = extractChain(userInput);
+  const asksForSources =
+    /\b(?:what|which)\b.*\b(?:ips?|addresses?|sources?|subnets?)\b/.test(normalized) &&
+    /\b(?:access|reach|connect|allowed|permit)\b/.test(normalized);
+  if (asksForSources && chain) {
+    const targetMatch = userInput.match(/\b(?:access|reach|connect\s+to)\s+(?:the\s+)?(.+?)(?:\?|$)/i);
+    return {
+      type: "sources_accessing_network",
+      chain,
+      target: targetMatch?.[1]?.trim() || "network",
+    };
+  }
   if (reachabilityKeywords && chain) {
     return { type: "reachability_from_chain", chain };
+  }
+
+  // Rule-attribution-by-port: "which firewall rule permits access to port 8006?",
+  // "what rule blocks port 22?" — distinct from the "ports allowed from X to Y"
+  // scope question below. Previously had no dedicated intent at all, so these
+  // fell all the way through to the generic list_rules fallback (matched by
+  // "rule" itself) — a full unfiltered rule dump instead of the one rule the
+  // question was actually about, even though the port IS already present on
+  // the ingested rule's dataJson. See C-03.
+  const portNumberMatch = userInput.match(PORT_NUMBER_REGEX);
+  const asksWhichRule = /\brule/.test(normalized) && /\b(which|what)\b/.test(normalized);
+  if (portNumberMatch?.[1] && asksWhichRule) {
+    return { type: "rules_by_port", port: portNumberMatch[1] };
   }
 
   // Port/service reachability: "what ports from X to Y?", "can port 22 come from home to lab?",
@@ -212,3 +313,7 @@ export function detectFirewallIntent(userInput: string): FirewallIntent | null {
 
   return null;
 }
+import {
+  extractVmReference,
+  isActionRequest,
+} from "./detector-toolkit";

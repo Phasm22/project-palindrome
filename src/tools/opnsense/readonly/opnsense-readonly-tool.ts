@@ -63,6 +63,26 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       categories: ["opnsense", "networking", "firewall", "system"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
+      classification: [
+        {
+          domain: "firewall",
+          triggerPatterns: [/\b(firewall|rule|allow|block|port|nat)\b/i],
+          classificationExamples: ["show firewall rules"],
+          retrievalKeywords: ["firewall", "opnsense", "rules"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 80,
+        },
+        {
+          domain: "network",
+          triggerPatterns: [/\b(network|interface|vlan|subnet|routing|ip|gateway)\b/i],
+          classificationExamples: ["show network interfaces"],
+          retrievalKeywords: ["network", "subnet", "interface", "vlan", "opnsense"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 70,
+        },
+      ],
     });
   }
 
@@ -349,12 +369,47 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
     }
   }
 
+  private normalizeAliasLookupName(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  private findAliasInRows(aliases: any[], aliasName: string): any | null {
+    const requested = this.normalizeAliasLookupName(aliasName);
+    if (!requested) return null;
+    return aliases.find((alias) => {
+      const name = typeof alias?.name === "string" ? alias.name : "";
+      const uuid = typeof alias?.uuid === "string" ? alias.uuid : "";
+      return (
+        this.normalizeAliasLookupName(name) === requested ||
+        this.normalizeAliasLookupName(uuid) === requested
+      );
+    }) ?? null;
+  }
+
   private async getFirewallAlias(client: any, aliasName: string): Promise<any> {
-    const response = await client.get(`/api/firewall/alias/getItem/${aliasName}`);
+    try {
+      const aliasesResponse = await this.getFirewallAliases(client);
+      const matchedAlias = this.findAliasInRows(aliasesResponse.aliases ?? [], aliasName);
+      if (matchedAlias) {
+        return {
+          action: "firewall_aliases_get",
+          alias_name: aliasName,
+          resolved_alias_name: matchedAlias.name ?? aliasName,
+          data: matchedAlias,
+          source: "firewall_aliases_list",
+          timestamp: new Date().toISOString(),
+        };
+      }
+    } catch {
+      // Fall back to the item endpoint below; some OPNsense installs restrict searchItem.
+    }
+
+    const response = await client.get(`/api/firewall/alias/getItem/${encodeURIComponent(aliasName)}`);
     return {
       action: "firewall_aliases_get",
       alias_name: aliasName,
       data: response.data || {},
+      source: "firewall_aliases_get",
       timestamp: new Date().toISOString(),
     };
   }
@@ -662,15 +717,23 @@ export class OpnsenseReadOnlyTool extends OpnsenseReadOnlyBase {
       { command: "pfctl -sa", key: "summary" },
     ];
 
-    // Execute all SSH commands in parallel for better performance
-    const results = await Promise.all(
-      commands.map(({ command, key }) =>
-        sshTool.execute({ host, command }, context).then(
-          (result) => ({ key, result }),
-          (error) => ({ key, result: { error: error.message || String(error) } })
-        )
-      )
-    );
+    // OPNsense exposes a forced interactive menu. Reuse one pooled SSH
+    // connection sequentially instead of opening competing shell channels for
+    // the same host key.
+    const results = [];
+    for (const { command, key } of commands) {
+      try {
+        const result = await sshTool.execute({ host, command }, context);
+        results.push({ key, result });
+      } catch (error: unknown) {
+        results.push({
+          key,
+          result: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    }
 
     const sections: Record<string, any> = {};
     for (const { key, result } of results) {

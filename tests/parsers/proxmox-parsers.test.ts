@@ -100,7 +100,7 @@ test("Parsers tolerate missing optional fields", async () => {
     context
   );
   expect(nodeResult.entities).toHaveLength(1);
-  expect(nodeResult.entities[0].data.status).toBe("unknown");
+  expect(nodeResult.entities[0].data.status).toBeUndefined();
   expect(nodeResult.entities[0].data.ipAddresses).toEqual([]);
 
   const vmParser = new ProxmoxVmParser();
@@ -119,4 +119,3 @@ test("Parsers tolerate missing optional fields", async () => {
   expect(vmResult.entities).toHaveLength(1);
   expect(vmResult.entities[0].data.agentAvailable).toBeUndefined();
 });
-

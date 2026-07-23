@@ -23,10 +23,12 @@ export interface ReasoningStep {
   fusionContextId?: string;
   decisions: Array<{
     type:
+      | "conversation_path"
       | "duplicate_detected"
       | "limit_reached"
       | "fallback"
       | "tool_choice"
+      | "parameter_hydration"
       | "rag_used"
       | "graph_used"
       | "fusion_used"
@@ -37,7 +39,9 @@ export interface ReasoningStep {
       | "clarification_requested"
       | "validation_failed"
       | "failure_limit_reached"
-      | "failure_reclassification";
+      | "failure_reclassification"
+      | "empty_step"
+      | "boundary_synthesis";
     description: string;
     metadata?: Record<string, any>;
   }>;
@@ -152,9 +156,9 @@ export class ReasoningTraceStore {
   }
 
   async recordTrace(
-    trace: Omit<ReasoningTrace, "id" | "artifacts"> & { artifacts?: ReasoningTraceArtifactInput[] }
+    trace: Omit<ReasoningTrace, "id" | "artifacts"> & { id?: string; artifacts?: ReasoningTraceArtifactInput[] }
   ): Promise<string> {
-    const id = crypto.randomUUID();
+    const id = trace.id ?? crypto.randomUUID();
     const stmt = this.db.prepare(`
       INSERT INTO reasoning_traces 
       (id, user_id, acl_group, user_input, final_response, steps_json, provenance_json, total_steps, total_tool_calls, max_steps_reached, timestamp, duration_ms)
@@ -334,3 +338,16 @@ export function getReasoningTraceStore(): ReasoningTraceStore {
   return storeInstance;
 }
 
+export function setReasoningTraceStoreForTests(store: ReasoningTraceStore | null): void {
+  if (storeInstance && storeInstance !== store) {
+    storeInstance.close();
+  }
+  storeInstance = store;
+}
+
+export function resetReasoningTraceStoreForTests(): void {
+  if (storeInstance) {
+    storeInstance.close();
+    storeInstance = null;
+  }
+}

@@ -7,11 +7,11 @@ import { ProxmoxClient } from "../../tools/proxmox/client";
  * Set Interface VLAN Action Schema
  */
 export const SetInterfaceVlanSchema = z.object({
-  vmid: z.number().int().positive(),
-  node: z.string().min(1, "Node name is required"),
-  vlanId: z.number().int().min(1).max(4094, "VLAN ID must be between 1 and 4094"),
-  bridge: z.string().default("vmbr0"), // Bridge to use (e.g., vmbr0, vmbr2)
-  dryRun: z.boolean().default(false),
+  vmid: z.number().int().positive().describe("Proxmox VM ID of the target VM"),
+  node: z.string().min(1, "Node name is required").describe("Proxmox node where the VM resides (e.g. YANG, yin)"),
+  vlanId: z.number().int().min(1).max(4094, "VLAN ID must be between 1 and 4094").describe("VLAN ID 1–4094 to assign to the VM's network interface"),
+  bridge: z.string().default("vmbr0").describe("Network bridge to use (default: 'vmbr0'); use 'vmbr2' for pre-configured VLAN bridges"),
+  dryRun: z.boolean().default(false).describe("Preview the network config change without applying it (default: false)"),
 });
 
 export type SetInterfaceVlanParams = z.infer<typeof SetInterfaceVlanSchema>;

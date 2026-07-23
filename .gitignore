@@ -67,8 +67,10 @@ Thumbs.db
 .cursor/*
 !.cursor/rules/
 
-# pce folders
+# pce folders (local state and test/audit artifacts)
 .pce/
+.pce-dashboard/
+.pce-eval/
 .pce-ia-dod-test/
 .pce-ib-dod-test/
 .pce-ic-dod-test/
@@ -78,6 +80,8 @@ Thumbs.db
 .pce-tl-1b-dod-test/
 .pce-tl-1c-dod-test/
 .pce-tl-2a-dod-test/
+.gold-path/
+.provenance-audit/
 
 # Service files
 .palindrome-service.pid

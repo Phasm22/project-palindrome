@@ -1,4 +1,9 @@
-import { API_URL } from './utils.js';
+import {
+  API_URL,
+  beginContentRefresh,
+  endContentRefresh,
+  escapeHtml,
+} from './utils.js';
 
 // Color palette - burnt orange theme with soft, distinct colors
 const colorPalette = {
@@ -34,6 +39,7 @@ let currentTooltip = null;
 let tooltipUpdateHandler = null;
 let hoveredNode = null;
 let originalNodeColor = null;
+let graphLoading = false;
 
 // Cleanup function to remove all tooltips
 function cleanupAllTooltips() {
@@ -48,12 +54,39 @@ function cleanupAllTooltips() {
   originalNodeColor = null;
 }
 
+async function renderEmptyGraphState(container) {
+  container.innerHTML = `
+    <div class="flex min-h-[400px] items-center justify-center px-6 py-12">
+      <div class="flex max-w-md flex-col items-center text-center">
+        <span id="graph-empty-icon" class="mb-5 text-primary-400" aria-hidden="true"></span>
+        <h3 class="mb-2 text-lg font-semibold text-slate-100">No graph entities found</h3>
+        <p class="mb-6 text-sm leading-6 text-slate-400">
+          Neo4j is connected, but the ontology query returned no nodes. This view will retry automatically.
+        </p>
+        <button id="graph-empty-retry" type="button" class="quiet-action">
+          <span id="graph-empty-retry-icon" aria-hidden="true"></span>
+          <span>Retry now</span>
+        </button>
+      </div>
+    </div>
+  `;
+
+  const { createIcon } = await import('./icons.js');
+  container.querySelector('#graph-empty-icon')
+    ?.appendChild(createIcon('Network', { size: 36, color: 'currentColor' }));
+  container.querySelector('#graph-empty-retry-icon')
+    ?.appendChild(createIcon('RefreshCw', { size: 16, color: 'currentColor' }));
+  container.querySelector('#graph-empty-retry')
+    ?.addEventListener('click', () => loadGraph());
+}
+
 export async function loadGraph() {
   const container = document.getElementById('graph-container');
-  if (!container) return;
-  
-  // Cleanup any existing tooltips before loading new graph
-  cleanupAllTooltips();
+  if (!container || graphLoading) return;
+
+  graphLoading = true;
+  const isRefresh = Boolean(sigma && container.querySelector('#sigma-container'));
+  beginContentRefresh(container, isRefresh, 'Updating graph');
   
   // Check if libraries are loaded - try multiple possible global names
   // Graphology is exposed as window.graphology (from our UMD build)
@@ -72,34 +105,46 @@ export async function loadGraph() {
       windowSigma: !!window.sigma,
       windowSigmaUpper: !!window.Sigma
     });
-    container.innerHTML = '<div class="error p-4 bg-red-900/20 border border-red-500 rounded text-red-300">Sigma.js or Graphology not loaded. Please refresh the page.<br>Graph: ' + (Graph ? 'loaded' : 'missing') + ', Sigma: ' + (Sigma ? 'loaded' : 'missing') + '</div>';
+    if (!isRefresh) {
+      container.innerHTML = '<div class="error p-4 bg-red-900/20 border border-red-500 rounded text-red-300">Sigma.js or Graphology not loaded. Please refresh the page.<br>Graph: ' + (Graph ? 'loaded' : 'missing') + ', Sigma: ' + (Sigma ? 'loaded' : 'missing') + '</div>';
+    }
+    endContentRefresh(container);
+    graphLoading = false;
     return;
   }
   
-  // Show skeleton loader
-  container.innerHTML = '';
-  const loader = document.createElement('div');
-  loader.className = 'flex flex-col items-center justify-center h-full gap-4';
-  loader.innerHTML = `
-    <div class="relative w-16 h-16">
-      <div class="absolute inset-0 border-2 border-slate-700 rounded-full"></div>
-      <div class="absolute inset-0 border-2 border-transparent border-t-primary-500 rounded-full"></div>
-    </div>
-    <div class="text-slate-400 text-sm">Loading graph...</div>
-  `;
-  container.appendChild(loader);
+  // Skeletons are useful on first load, but replacing a live canvas with one
+  // during refresh creates a conspicuous flash.
+  if (!isRefresh) {
+    container.innerHTML = '';
+    const loader = document.createElement('div');
+    loader.className = 'flex flex-col items-center justify-center h-full gap-4';
+    loader.innerHTML = `
+      <div class="relative w-16 h-16">
+        <div class="absolute inset-0 border-2 border-slate-700 rounded-full"></div>
+        <div class="absolute inset-0 border-2 border-transparent border-t-primary-500 rounded-full"></div>
+      </div>
+      <div class="text-slate-400 text-sm">Loading graph...</div>
+    `;
+    container.appendChild(loader);
+  }
   
   try {
-    const response = await fetch(`${API_URL}/api/dashboard/ontology-graph?limit=200`);
+    const response = await fetch(`${API_URL}/api/dashboard/twin-graph?limit=200`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     const data = await response.json();
     
     if (!data.nodes || data.nodes.length === 0) {
-      container.innerHTML = '<p class="text-slate-400 text-center py-10">No graph data available. The ontology graph may be empty.</p>';
+      await renderEmptyGraphState(container);
+      endContentRefresh(container);
+      graphLoading = false;
       return;
     }
+
+    // Keep the old graph fully visible until replacement data is ready.
+    cleanupAllTooltips();
     
     // Calculate node degrees for sizing
     const nodeDegrees = {};
@@ -110,9 +155,15 @@ export async function loadGraph() {
     
     const maxDegree = Math.max(...Object.values(nodeDegrees), 1);
     
-    // Create Graphology graph
-    // Graph is the constructor class from the exports
-    graph = new Graph();
+    const previousGraph = isRefresh ? graph : null;
+    const previousPositions = new Map();
+    previousGraph?.forEachNode((node, attrs) => {
+      previousPositions.set(node, { x: attrs.x, y: attrs.y });
+    });
+
+    // Build the replacement data separately so the live Sigma canvas never
+    // observes a half-empty graph.
+    const nextGraph = new Graph();
     
     // Add nodes
     data.nodes.forEach(n => {
@@ -124,19 +175,20 @@ export async function loadGraph() {
       const size = Math.max(8, Math.min(30, 8 + (degree / maxDegree) * 22)); // Size by degree: 8-30px
       
       const color = nodeTypeColors[nodeType] || nodeTypeColors['unknown'];
+      const previousPosition = previousPositions.get(nodeId);
       
       // Use displayName or name for label
       const label = n.displayName || n.name || n.properties?.displayName || n.properties?.name || nodeId || 'Unknown';
       
-      graph.addNode(nodeId, {
+      nextGraph.addNode(nodeId, {
         label: label,
         size: size,
         color: color,
         nodeType: nodeType, // Normalized lowercase type for filtering
         entityType: nodeType, // Also store as entityType for consistency
         degree: degree,
-        x: Math.random() * 1000,
-        y: Math.random() * 1000,
+        x: previousPosition?.x ?? Math.random() * 1000,
+        y: previousPosition?.y ?? Math.random() * 1000,
         // Store all node data for tooltip
         ...n,
         ...n.properties,
@@ -161,11 +213,11 @@ export async function loadGraph() {
     data.relationships.forEach(r => {
       const from = r.from || r.start;
       const to = r.to || r.end;
-      if (graph.hasNode(from) && graph.hasNode(to)) {
+      if (nextGraph.hasNode(from) && nextGraph.hasNode(to)) {
         try {
           const edgeType = r.type || 'unknown';
           const edgeColor = edgeTypeColors[edgeType] || colorPalette.textMuted;
-          graph.addEdge(from, to, {
+          nextGraph.addEdge(from, to, {
             label: edgeType,
             type: edgeType,
             color: edgeColor,
@@ -180,20 +232,20 @@ export async function loadGraph() {
     // Calculate statistics
     const nodeTypes = {};
     const edgeTypes = {};
-    graph.forEachNode((node, attrs) => {
+    nextGraph.forEachNode((node, attrs) => {
       // Get the actual entity type (prioritize entityType, then nodeType, then type)
       const type = (attrs.entityType || attrs.nodeType || attrs.type || 'unknown').toLowerCase();
       nodeTypes[type] = (nodeTypes[type] || 0) + 1;
     });
-    graph.forEachEdge((edge, attrs) => {
+    nextGraph.forEachEdge((edge, attrs) => {
       const type = attrs.type || attrs.label || 'unknown';
       if (type && type !== 'unknown' && type !== '') {
         edgeTypes[type] = (edgeTypes[type] || 0) + 1;
       }
     });
     
-    const totalNodes = graph.order;
-    const totalEdges = graph.size;
+    const totalNodes = nextGraph.order;
+    const totalEdges = nextGraph.size;
     const uniqueNodeTypes = Object.keys(nodeTypes).length;
     const uniqueEdgeTypes = Object.keys(edgeTypes).length;
     
@@ -204,16 +256,16 @@ export async function loadGraph() {
         <div class="flex-1 bg-slate-950 border border-slate-700 rounded-lg relative min-h-[400px] md:h-[600px] lg:h-[800px] overflow-hidden" style="position: relative;">
           <!-- Zoom Controls -->
           <div class="absolute top-4 right-4 z-10 flex flex-col gap-2">
-            <button id="zoom-in" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Zoom In">
+            <button id="zoom-in" class="quiet-icon-action" title="Zoom In">
               <span class="zoom-icon-in"></span>
             </button>
-            <button id="zoom-out" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Zoom Out">
+            <button id="zoom-out" class="quiet-icon-action" title="Zoom Out">
               <span class="zoom-icon-out"></span>
             </button>
-            <button id="zoom-fit" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Fit to Screen">
+            <button id="zoom-fit" class="quiet-icon-action" title="Fit to Screen">
               <span class="zoom-icon-fit"></span>
             </button>
-            <button id="zoom-reset" class="bg-gradient-to-br from-slate-800 to-slate-700 border-2 border-slate-600 text-slate-200 px-3 py-2 rounded-xl text-sm font-semibold shadow-lg" title="Reset View">
+            <button id="zoom-reset" class="quiet-icon-action" title="Reset View">
               <span class="zoom-icon-reset"></span>
             </button>
           </div>
@@ -267,10 +319,10 @@ export async function loadGraph() {
                 // Format type for display (replace underscores, capitalize)
                 const displayType = type.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
                 return `
-                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-type="${type}">
+                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-type="${escapeHtml(type)}">
                   <div class="w-4 h-4 rounded-full" style="background: ${color}; border: 2px solid #334155;"></div>
-                  <div class="flex-1 text-slate-200 text-sm">${displayType}</div>
-                  <div class="text-slate-400 text-xs font-semibold">${count}</div>
+                  <div class="flex-1 text-slate-200 text-sm">${escapeHtml(displayType)}</div>
+                  <div class="text-slate-400 text-xs font-semibold">${escapeHtml(String(count))}</div>
                 </div>
               `;
               }).join('')}
@@ -283,10 +335,10 @@ export async function loadGraph() {
             <summary class="cursor-pointer text-slate-200 font-semibold mb-3 text-base">Relationship Types</summary>
             <div class="flex flex-col gap-2">
               ${Object.entries(edgeTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => `
-                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-edge="${type}">
+                <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-edge="${escapeHtml(type)}">
                   <div class="w-5 h-0.5" style="background: ${colorPalette.primary};"></div>
-                  <div class="flex-1 text-slate-200 text-sm">${type || 'unnamed'}</div>
-                  <div class="text-slate-400 text-xs font-semibold">${count}</div>
+                  <div class="flex-1 text-slate-200 text-sm">${escapeHtml(type || 'unnamed')}</div>
+                  <div class="text-slate-400 text-xs font-semibold">${escapeHtml(String(count))}</div>
                 </div>
               `).join('')}
             </div>
@@ -314,6 +366,40 @@ export async function loadGraph() {
       </div>
     `;
     
+    if (isRefresh && previousGraph && sigma) {
+      // Reconcile in one JavaScript task; the browser paints only after the
+      // complete graph is restored, so there is no empty-canvas frame.
+      previousGraph.clear();
+      nextGraph.forEachNode((node, attrs) => {
+        previousGraph.addNode(node, { ...attrs });
+      });
+      nextGraph.forEachEdge((_edge, attrs, source, target) => {
+        try {
+          previousGraph.addEdge(source, target, { ...attrs });
+        } catch (_error) {
+          // Duplicate relationships are already collapsed by the source graph.
+        }
+      });
+      graph = previousGraph;
+      sigma.refresh();
+
+      // Statistics and legends can swap independently without disturbing the
+      // canvas, camera, search field, or zoom controls.
+      const template = document.createElement('template');
+      template.innerHTML = html.trim();
+      const currentSidebar = container.firstElementChild?.children[1];
+      const nextSidebar = template.content.firstElementChild?.children[1];
+      if (currentSidebar && nextSidebar) {
+        currentSidebar.replaceWith(nextSidebar);
+        setupFilters();
+      }
+
+      graphLoading = false;
+      endContentRefresh(container);
+      return;
+    }
+
+    graph = nextGraph;
     container.innerHTML = html;
     
     // Initialize Sigma after DOM is ready and measured
@@ -387,8 +473,9 @@ export async function loadGraph() {
         }, 100);
       });
       
-      // Animate nodes in
-      if (graph) {
+      // Entrance animation is useful once, but replaying it on every refresh
+      // makes a populated graph appear to blink out and rebuild.
+      if (graph && !isRefresh) {
         graph.forEachNode((node, attrs) => {
           const originalSize = attrs.size || 8;
           graph.setNodeAttribute(node, 'size', 0);
@@ -404,11 +491,24 @@ export async function loadGraph() {
     
     // Use requestAnimationFrame for better timing
     requestAnimationFrame(() => {
-      initGraph();
+      initGraph()
+        .catch((error) => {
+          console.error('Failed to initialize graph:', error);
+        })
+        .finally(() => {
+          graphLoading = false;
+          endContentRefresh(container);
+        });
     });
   } catch (error) {
-    container.innerHTML = 
-      `<div class="error">Failed to load graph: ${error.message}</div>`;
+    if (isRefresh) {
+      console.error('Failed to refresh graph:', error);
+    } else {
+      container.innerHTML =
+        `<div class="error">Failed to load graph: ${escapeHtml(error.message)}</div>`;
+    }
+    endContentRefresh(container);
+    graphLoading = false;
   }
 }
 
@@ -654,39 +754,40 @@ function initSigma() {
     // Build accessible tooltip content with meaningful data
     const label = nodeData.label || nodeData.displayName || node;
     const entityType = nodeData.entityType || nodeData.type || nodeData.nodeType || 'unknown';
+    const tooltipValue = (value) => escapeHtml(String(value));
     
-    let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${label}</strong><br>`;
+    let tooltipContent = `<strong style="color: ${colorPalette.primary}; font-size: 14px;">${tooltipValue(label)}</strong><br>`;
     
     // Show meaningful data based on entity type
     if (entityType === 'compute_node') {
-      if (nodeData.status) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Status:</span> <span style="color: ${nodeData.status === 'online' ? colorPalette.success : colorPalette.error}">${nodeData.status}</span><br>`;
-      if (nodeData.data?.cpuTotalCores) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CPU Cores:</span> <span style="color: ${colorPalette.text}">${nodeData.data.cpuTotalCores}</span><br>`;
+      if (nodeData.status) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Status:</span> <span style="color: ${nodeData.status === 'online' ? colorPalette.success : colorPalette.error}">${tooltipValue(nodeData.status)}</span><br>`;
+      if (nodeData.data?.cpuTotalCores) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CPU Cores:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.data.cpuTotalCores)}</span><br>`;
       if (nodeData.data?.memoryTotalBytes) {
         const memGB = (nodeData.data.memoryTotalBytes / (1024 ** 3)).toFixed(1);
         tooltipContent += `<span style="color: ${colorPalette.textMuted}">Memory:</span> <span style="color: ${colorPalette.text}">${memGB} GB</span><br>`;
       }
     } else if (entityType === 'compute_vm') {
-      if (nodeData.state) tooltipContent += `<span style="color: ${colorPalette.textMuted}">State:</span> <span style="color: ${nodeData.state === 'running' ? colorPalette.success : colorPalette.error}">${nodeData.state}</span><br>`;
-      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
-      if (nodeData.vmKind) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Kind:</span> <span style="color: ${colorPalette.text}">${nodeData.vmKind.toUpperCase()}</span><br>`;
+      if (nodeData.state) tooltipContent += `<span style="color: ${colorPalette.textMuted}">State:</span> <span style="color: ${nodeData.state === 'running' ? colorPalette.success : colorPalette.error}">${tooltipValue(nodeData.state)}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.nodeName)}</span><br>`;
+      if (nodeData.vmKind) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Kind:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.vmKind.toUpperCase())}</span><br>`;
       if (nodeData.data?.agentAvailable !== undefined) {
         tooltipContent += `<span style="color: ${colorPalette.textMuted}">Agent:</span> <span style="color: ${nodeData.data.agentAvailable ? colorPalette.success : colorPalette.warning}">${nodeData.data.agentAvailable ? 'Available' : 'Missing'}</span><br>`;
       }
     } else if (entityType === 'network_interface') {
-      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
-      if (nodeData.primaryIp) tooltipContent += `<span style="color: ${colorPalette.textMuted}">IP:</span> <span style="color: ${colorPalette.text}">${nodeData.primaryIp}</span><br>`;
-      if (nodeData.data?.vlan) tooltipContent += `<span style="color: ${colorPalette.textMuted}">VLAN:</span> <span style="color: ${colorPalette.text}">${nodeData.data.vlan}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.nodeName)}</span><br>`;
+      if (nodeData.primaryIp) tooltipContent += `<span style="color: ${colorPalette.textMuted}">IP:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.primaryIp)}</span><br>`;
+      if (nodeData.data?.vlan) tooltipContent += `<span style="color: ${colorPalette.textMuted}">VLAN:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.data.vlan)}</span><br>`;
     } else if (entityType === 'network_subnet') {
-      if (nodeData.cidr) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CIDR:</span> <span style="color: ${colorPalette.text}">${nodeData.cidr}</span><br>`;
-      if (nodeData.gateway) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Gateway:</span> <span style="color: ${colorPalette.text}">${nodeData.gateway}</span><br>`;
+      if (nodeData.cidr) tooltipContent += `<span style="color: ${colorPalette.textMuted}">CIDR:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.cidr)}</span><br>`;
+      if (nodeData.gateway) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Gateway:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.gateway)}</span><br>`;
     } else if (entityType === 'firewall_rule') {
-      if (nodeData.action) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Action:</span> <span style="color: ${nodeData.action === 'pass' ? colorPalette.success : colorPalette.error}">${nodeData.action}</span><br>`;
-      if (nodeData.source) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Source:</span> <span style="color: ${colorPalette.text}">${nodeData.source}</span><br>`;
-      if (nodeData.destination) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Destination:</span> <span style="color: ${colorPalette.text}">${nodeData.destination}</span><br>`;
-      if (nodeData.protocol) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Protocol:</span> <span style="color: ${colorPalette.text}">${nodeData.protocol.toUpperCase()}</span><br>`;
+      if (nodeData.action) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Action:</span> <span style="color: ${nodeData.action === 'pass' ? colorPalette.success : colorPalette.error}">${tooltipValue(nodeData.action)}</span><br>`;
+      if (nodeData.source) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Source:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.source)}</span><br>`;
+      if (nodeData.destination) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Destination:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.destination)}</span><br>`;
+      if (nodeData.protocol) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Protocol:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.protocol.toUpperCase())}</span><br>`;
     } else if (entityType === 'storage') {
-      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${nodeData.nodeName}</span><br>`;
-      if (nodeData.data?.storageType) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${nodeData.data.storageType}</span><br>`;
+      if (nodeData.nodeName) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Node:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.nodeName)}</span><br>`;
+      if (nodeData.data?.storageType) tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${tooltipValue(nodeData.data.storageType)}</span><br>`;
       if (nodeData.data?.totalBytes) {
         const totalGB = (nodeData.data.totalBytes / (1024 ** 3)).toFixed(1);
         const usedGB = nodeData.data.usedBytes ? (nodeData.data.usedBytes / (1024 ** 3)).toFixed(1) : '0';
@@ -694,11 +795,11 @@ function initSigma() {
       }
     } else {
       // Fallback for other node types - show type but not degree
-      tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${entityType}</span><br>`;
+      tooltipContent += `<span style="color: ${colorPalette.textMuted}">Type:</span> <span style="color: ${colorPalette.text}">${tooltipValue(entityType)}</span><br>`;
     }
     
     // Always show ID for reference
-    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}; font-size: 10px;">${nodeData.id}</span><br>`;
+    if (nodeData.id) tooltipContent += `<span style="color: ${colorPalette.textMuted}">ID:</span> <span style="color: ${colorPalette.text}; font-size: 10px;">${tooltipValue(nodeData.id)}</span><br>`;
     
     tooltip.innerHTML = tooltipContent;
     document.body.appendChild(tooltip);

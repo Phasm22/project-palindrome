@@ -3,6 +3,7 @@ import { join } from "path";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
 import { AnsibleRunner } from "./ansible-runner";
+import { isPlausibleVmIdentifier } from "./identifier-validation";
 import { exec } from "child_process";
 import { promisify } from "util";
 
@@ -16,6 +17,16 @@ export async function resolveVmToHostname(vmName: string): Promise<{ hostname: s
   // If already a hostname (contains .prox), use it directly
   if (vmName.includes(".prox")) {
     return { hostname: vmName, vmName: vmName.replace(".prox", "") };
+  }
+
+  // Reject implausible names before the fuzzy twin lookup below, which
+  // matches by substring and would otherwise silently resolve a garbled or
+  // adversarial "name" to an unrelated real VM (shared choke point for
+  // bootstrap/install_docker/install_nginx/configure_firewall/set_static_ip).
+  if (!isPlausibleVmIdentifier(vmName)) {
+    throw new Error(
+      `"${vmName}" does not look like a valid VM name (expected a short hostname-like identifier). Refusing to resolve it against the digital twin — please provide the exact VM name.`
+    );
   }
 
   // Otherwise, query twin to find VM and construct hostname

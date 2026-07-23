@@ -11,6 +11,12 @@ export enum TwinRelationshipType {
   ALIAS_RESOLVES_TO = "ALIAS_RESOLVES_TO",
   EXPOSES = "EXPOSES",
   REACHABLE = "REACHABLE",
+  HAS_PORT = "HAS_PORT", // Switch -> SwitchPort
+  // SwitchPort <-> NetworkInterface/ComputeNode physical/logical link. Requires
+  // MAC-address-table or LLDP/CDP neighbor data to populate with confidence;
+  // not yet backfilled (see docs/network/2960g-running-config note on scope).
+  LINKED_TO = "LINKED_TO",
+  ROUTES_FOR = "ROUTES_FOR", // Switch (via a routed SVI) -> NetworkSubnet
 }
 
 const BaseRelationshipSchema = z.object({
@@ -62,6 +68,18 @@ export const ReachableRelationshipSchema = BaseRelationshipSchema.extend({
   type: z.literal(TwinRelationshipType.REACHABLE),
 });
 
+export const HasPortRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.HAS_PORT),
+});
+
+export const LinkedToRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.LINKED_TO),
+});
+
+export const RoutesForRelationshipSchema = BaseRelationshipSchema.extend({
+  type: z.literal(TwinRelationshipType.ROUTES_FOR),
+});
+
 export const TwinRelationshipSchema = z.union([
   HostsRelationshipSchema,
   RunsOnRelationshipSchema,
@@ -73,6 +91,9 @@ export const TwinRelationshipSchema = z.union([
   AliasResolvesToRelationshipSchema,
   ExposesRelationshipSchema,
   ReachableRelationshipSchema,
+  HasPortRelationshipSchema,
+  LinkedToRelationshipSchema,
+  RoutesForRelationshipSchema,
 ]);
 
 export type TwinRelationship = z.infer<typeof TwinRelationshipSchema>;

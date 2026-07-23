@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ACLGroup, FusionConfig, HybridRAGResponse, QueryType } from "../types";
 import type { ConversationState } from "../../types";
 import { pceLogger } from "../utils/logger";
+import { emitUsageEvent } from "../utils/usage-events";
 import { Redactor } from "../redaction/redactor";
 import { AccessDeniedError } from "../errors";
 import { MetricsCollector, QueryMetrics, ErrorMetrics } from "../metrics";
@@ -20,12 +21,23 @@ import { IngestionSummaryStore } from "./ingestion-summary-store";
 import { transformHybridContext } from "./context-transformer";
 import { AgentEventBus, type AgentEvent } from "../../agent/event-bus";
 import { runAgent } from "../../agent/runner";
+import { emitFinalEvent } from "../../agent/handlers/emit-helpers";
 import { IngestionScheduler } from "../scheduler/ingestion-scheduler";
 import { normalizeProxmoxResponse } from "../../tools/proxmox/readonly/normalization";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
 
 type BunServer = ReturnType<typeof Bun.serve>;
+
+type ActiveAgentRun = {
+  sessionId: string;
+  conversationId: string | null;
+  userId: string;
+  startedAt: number;
+  status: "running" | "stopping";
+  controller: AbortController;
+  finalEventSeen: boolean;
+};
 
 const QueryRequestSchema = z.object({
   query: z.string().min(1),
@@ -46,12 +58,14 @@ export interface PceApiServerOptions {
   historyLimit?: number;
   globalRateLimit?: RateLimitConfig;
   perIpRateLimit?: RateLimitConfig;
+  enableIngestionScheduler?: boolean;
 }
 
 export interface PceApiServerDependencies {
   orchestrator: {
     query: (query: string, aclGroup: ACLGroup) => Promise<HybridRAGResponse>;
   };
+  agentRunner?: typeof runAgent;
   historyStore?: ContextHistoryStore;
   chatHistoryStore?: ChatHistoryStore;
   profileStore?: ProfileStore;
@@ -68,6 +82,7 @@ export class PceApiServer {
   private server: BunServer | null = null;
   private options: Required<PceApiServerOptions>;
   private orchestrator: PceApiServerDependencies["orchestrator"];
+  private agentRunner: typeof runAgent;
   private historyStore: ContextHistoryStore;
   private chatHistoryStore: ChatHistoryStore;
   private profileStore: ProfileStore;
@@ -83,6 +98,9 @@ export class PceApiServer {
   private startTime = Date.now();
   private redactor: Redactor;
   private ingestionScheduler: IngestionScheduler | null = null;
+  private activeAgentRuns = new Map<string, ActiveAgentRun>();
+  private activeRunByConversation = new Map<string, string>();
+  private activeRunByUser = new Map<string, string>();
 
   constructor(deps: PceApiServerDependencies, options: PceApiServerOptions = {}) {
     this.options = {
@@ -90,9 +108,11 @@ export class PceApiServer {
       historyLimit: options.historyLimit ?? DEFAULT_OPTIONS.historyLimit,
       globalRateLimit: options.globalRateLimit ?? DEFAULT_OPTIONS.globalRateLimit,
       perIpRateLimit: options.perIpRateLimit ?? DEFAULT_OPTIONS.perIpRateLimit,
+      enableIngestionScheduler: options.enableIngestionScheduler ?? true,
     };
 
     this.orchestrator = deps.orchestrator;
+    this.agentRunner = deps.agentRunner ?? runAgent;
     this.historyStore = deps.historyStore ?? new ContextHistoryStore(this.options.historyLimit);
     this.chatHistoryStore = deps.chatHistoryStore ?? new ChatHistoryStore();
     this.profileStore = deps.profileStore ?? new ProfileStore();
@@ -116,8 +136,8 @@ export class PceApiServer {
       throw new Error("PCE API server is already running");
     }
 
-    // Start ingestion scheduler (runs every 5 minutes)
-    if (!this.ingestionScheduler) {
+    // Start ingestion scheduler only when explicitly enabled (off by default for on-demand stacks)
+    if (process.env.PCE_INGESTION_ENABLED === "1" && this.options.enableIngestionScheduler !== false && !this.ingestionScheduler) {
       this.ingestionScheduler = new IngestionScheduler(5, this.metricsCollector); // 5 minutes, pass metrics collector
       this.ingestionScheduler.start();
       pceLogger.info("Ingestion scheduler started (every 5 minutes)");
@@ -165,6 +185,11 @@ export class PceApiServer {
   }
 
   async stop(): Promise<void> {
+    for (const run of this.activeAgentRuns.values()) {
+      run.status = "stopping";
+      run.controller.abort(new DOMException("Server stopping", "AbortError"));
+    }
+
     // Stop ingestion scheduler
     if (this.ingestionScheduler) {
       this.ingestionScheduler.stop();
@@ -256,8 +281,8 @@ export class PceApiServer {
       return await this.handleClusterStatus(req);
     }
 
-    if (req.method === "GET" && url.pathname === "/api/dashboard/ontology-graph") {
-      return await this.handleOntologyGraph(req);
+    if (req.method === "GET" && url.pathname === "/api/dashboard/twin-graph") {
+      return await this.handleTwinGraph(req);
     }
 
     if (req.method === "GET" && url.pathname === "/api/dashboard/prompt-suggestions") {
@@ -317,6 +342,14 @@ export class PceApiServer {
     // Agent query endpoint (triggers agent with tool calling)
     if (req.method === "POST" && url.pathname === "/api/agent/query") {
       return await this.handleAgentQuery(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/agent/status") {
+      return this.handleAgentStatus(url);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/agent/stop") {
+      return await this.handleAgentStop(req);
     }
 
     // Chat history endpoints
@@ -382,6 +415,14 @@ export class PceApiServer {
       return await this.handleDeleteProfile(req);
     }
 
+    if (req.method === "GET" && url.pathname === "/api/operator-memory/profile") {
+      return await this.handleOperatorMemoryProfile(req);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/operator-memory/outcomes") {
+      return await this.handleOperatorMemoryOutcomes(req);
+    }
+
     return this.jsonResponse(404, { error: "Not Found" });
   }
 
@@ -397,6 +438,12 @@ export class PceApiServer {
       pceLogger.incrementCounter(
         rateResult.scope === "global" ? "api_rate_limit_global" : "api_rate_limit_ip"
       );
+
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "429",
+      });
 
       return this.jsonResponse(429, {
         success: false,
@@ -415,6 +462,12 @@ export class PceApiServer {
       };
       payload = QueryRequestSchema.parse(body);
     } catch (error: any) {
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "400",
+      });
+
       return this.jsonResponse(400, {
         success: false,
         error: "Invalid request body",
@@ -465,6 +518,17 @@ export class PceApiServer {
         sTotalScore: apiResponse.sTotalScore,
       });
 
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "200",
+      });
+      this.metricsCollector.record("api_http_request_duration_ms", duration, {
+        route: "/query",
+        method: "POST",
+        status: "200",
+      });
+
       return this.jsonResponse(200, {
         success: true,
         data: safeResponse,
@@ -486,6 +550,18 @@ export class PceApiServer {
 
       pceLogger.error("Hybrid query failed", { error: error.message });
 
+      const errorDuration = Date.now() - start;
+      this.metricsCollector.record("api_http_requests_total", 1, {
+        route: "/query",
+        method: "POST",
+        status: "500",
+      });
+      this.metricsCollector.record("api_http_request_duration_ms", errorDuration, {
+        route: "/query",
+        method: "POST",
+        status: "500",
+      });
+
       return this.jsonResponse(500, {
         success: false,
         error: "Query execution failed",
@@ -495,12 +571,26 @@ export class PceApiServer {
   }
 
   private handleMetrics(): Response {
+    const requestStart = Date.now();
+    this.metricsCollector.record("api_http_requests_total", 1, {
+      route: "/metrics",
+      method: "GET",
+      format: "json",
+      status: "200",
+    });
+
     const snapshot = this.metricsCollector.getSnapshot(60_000);
     const payload: MetricsPayload = {
       snapshot: snapshot.metrics,
       counters: pceLogger.getAllCounters(),
       timestamp: snapshot.timestamp.toISOString(),
     };
+    this.metricsCollector.record("api_http_request_duration_ms", Date.now() - requestStart, {
+      route: "/metrics",
+      method: "GET",
+      format: "json",
+      status: "200",
+    });
 
     return this.jsonResponse(200, {
       success: true,
@@ -513,6 +603,14 @@ export class PceApiServer {
    * Returns metrics in Prometheus text format
    */
   private handlePrometheusMetrics(): Response {
+    const requestStart = Date.now();
+    this.metricsCollector.record("api_http_requests_total", 1, {
+      route: "/metrics",
+      method: "GET",
+      format: "prometheus",
+      status: "200",
+    });
+
     const snapshot = this.metricsCollector.getSnapshot();
     const lines: string[] = [];
     
@@ -566,14 +664,42 @@ export class PceApiServer {
     
     // Add system metrics
     const uptime = (Date.now() - this.startTime) / 1000;
+    const memoryUsage = process.memoryUsage();
+    const cpuUsage = process.cpuUsage();
+    const seriesCount = Object.keys(snapshot.metrics).length;
+    const exportTimestampSeconds = Math.floor(Date.now() / 1000);
     lines.push(`# HELP pce_api_uptime_seconds Uptime of PCE API server in seconds`);
     lines.push(`# TYPE pce_api_uptime_seconds gauge`);
     lines.push(`pce_api_uptime_seconds ${uptime}`);
+    lines.push(`# HELP pce_metrics_series_count Number of metric series currently present in the in-memory collector snapshot`);
+    lines.push(`# TYPE pce_metrics_series_count gauge`);
+    lines.push(`pce_metrics_series_count ${seriesCount}`);
+    lines.push(`# HELP pce_metrics_export_timestamp_seconds Unix timestamp when metrics were exported`);
+    lines.push(`# TYPE pce_metrics_export_timestamp_seconds gauge`);
+    lines.push(`pce_metrics_export_timestamp_seconds ${exportTimestampSeconds}`);
+    lines.push(`# HELP pce_process_resident_memory_bytes Resident set size of the PCE API process`);
+    lines.push(`# TYPE pce_process_resident_memory_bytes gauge`);
+    lines.push(`pce_process_resident_memory_bytes ${memoryUsage.rss}`);
+    lines.push(`# HELP pce_process_heap_total_bytes Total V8 heap size for the PCE API process`);
+    lines.push(`# TYPE pce_process_heap_total_bytes gauge`);
+    lines.push(`pce_process_heap_total_bytes ${memoryUsage.heapTotal}`);
+    lines.push(`# HELP pce_process_heap_used_bytes Used V8 heap size for the PCE API process`);
+    lines.push(`# TYPE pce_process_heap_used_bytes gauge`);
+    lines.push(`pce_process_heap_used_bytes ${memoryUsage.heapUsed}`);
+    lines.push(`# HELP pce_process_cpu_user_seconds_total Total user CPU time consumed by the PCE API process`);
+    lines.push(`# TYPE pce_process_cpu_user_seconds_total counter`);
+    lines.push(`pce_process_cpu_user_seconds_total ${cpuUsage.user / 1_000_000}`);
+    lines.push(`# HELP pce_process_cpu_system_seconds_total Total system CPU time consumed by the PCE API process`);
+    lines.push(`# TYPE pce_process_cpu_system_seconds_total counter`);
+    lines.push(`pce_process_cpu_system_seconds_total ${cpuUsage.system / 1_000_000}`);
     
     // Add log counters
     const counters = pceLogger.getAllCounters();
     for (const [counterName, value] of Object.entries(counters)) {
-      const promName = `pce_log_${counterName.toLowerCase().replace(/[^a-z0-9_]/g, "_")}_total`;
+      const sanitizedCounter = counterName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+      const promName = sanitizedCounter.endsWith("_total")
+        ? `pce_log_${sanitizedCounter}`
+        : `pce_log_${sanitizedCounter}_total`;
       if (!seenMetrics.has(promName)) {
         lines.push(`# HELP ${promName} Total count of ${counterName} log events`);
         lines.push(`# TYPE ${promName} counter`);
@@ -583,6 +709,12 @@ export class PceApiServer {
     }
     
     const prometheusText = lines.join("\n") + "\n";
+    this.metricsCollector.record("api_http_request_duration_ms", Date.now() - requestStart, {
+      route: "/metrics",
+      method: "GET",
+      format: "prometheus",
+      status: "200",
+    });
     
     return new Response(prometheusText, {
       status: 200,
@@ -593,6 +725,7 @@ export class PceApiServer {
   }
 
   private async handleHealth(): Promise<Response> {
+    const healthRequestStart = Date.now();
     const checks = await Promise.all(
       this.dependencyChecks.map(async (dep) => {
         try {
@@ -621,6 +754,17 @@ export class PceApiServer {
       dependencies: checks,
       proxmoxEndpoints: { count: configs.length, labels: configs.map((c) => c.label) },
     };
+
+    this.metricsCollector.record("api_http_requests_total", 1, {
+      route: "/health",
+      method: "GET",
+      status: overallHealthy ? "200" : "503",
+    });
+    this.metricsCollector.record("api_http_request_duration_ms", Date.now() - healthRequestStart, {
+      route: "/health",
+      method: "GET",
+      status: overallHealthy ? "200" : "503",
+    });
 
     return this.jsonResponse(overallHealthy ? 200 : 503, {
       success: overallHealthy,
@@ -959,7 +1103,11 @@ export class PceApiServer {
     }
   }
 
-  private async handleOntologyGraph(req: Request): Promise<Response> {
+  // Named after the Twin graph (:TwinEntity) it actually queries below — this route
+  // was previously misnamed "/api/dashboard/ontology-graph", which collided in name
+  // (but not in data) with the separate legacy ontology graph (:Entity) served by
+  // /api/dashboard/query/graph.
+  private async handleTwinGraph(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
       const limitParam = url.searchParams.get("limit") || "300";
@@ -1425,6 +1573,8 @@ export class PceApiServer {
           proxmox: lastRunDetails.proxmox,
           network: lastRunDetails.network,
           firewall: lastRunDetails.firewall,
+          switch: lastRunDetails.switch,
+          topology: lastRunDetails.topology,
           cleanup: lastRunDetails.cleanup,
           temperature: lastRunDetails.temperature,
         } : null,
@@ -1433,19 +1583,31 @@ export class PceApiServer {
           duration: run.duration,
           success: run.success,
           proxmox: { success: run.proxmox.success, duration: run.proxmox.duration, error: run.proxmox.error },
-          network: { 
-            success: run.network.success, 
-            duration: run.network.duration, 
+          network: {
+            success: run.network.success,
+            duration: run.network.duration,
             entities: run.network.entities,
             relationships: run.network.relationships,
-            error: run.network.error 
+            error: run.network.error
           },
-          firewall: { 
-            success: run.firewall.success, 
-            duration: run.firewall.duration, 
+          firewall: {
+            success: run.firewall.success,
+            duration: run.firewall.duration,
             entities: run.firewall.entities,
             relationships: run.firewall.relationships,
-            error: run.firewall.error 
+            error: run.firewall.error
+          },
+          switch: {
+            success: run.switch?.success ?? false,
+            duration: run.switch?.duration ?? 0,
+            entities: run.switch?.entities,
+            relationships: run.switch?.relationships,
+            error: run.switch?.error,
+          },
+          topology: {
+            success: run.topology?.success ?? false,
+            duration: run.topology?.duration ?? 0,
+            error: run.topology?.error,
           },
           cleanup: run.cleanup,
           temperature: run.temperature,
@@ -1611,6 +1773,43 @@ export class PceApiServer {
     return "hybrid";
   }
 
+  private async handleOperatorMemoryProfile(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId");
+      const intentType = url.searchParams.get("intentType");
+      if (!userId || !intentType) {
+        return this.jsonResponse(400, { error: "userId and intentType are required" });
+      }
+      const actionName = url.searchParams.get("actionName") ?? undefined;
+      const { getOperatorMemoryStore } = await import("./operator-memory-store");
+      const store = getOperatorMemoryStore();
+      const profile = store.getUserProfile(userId, intentType, actionName);
+      return this.jsonResponse(200, { data: profile });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch operator memory profile", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
+  private async handleOperatorMemoryOutcomes(req: Request): Promise<Response> {
+    try {
+      const url = new URL(req.url);
+      const userId = url.searchParams.get("userId");
+      if (!userId) {
+        return this.jsonResponse(400, { error: "userId is required" });
+      }
+      const limit = parseInt(url.searchParams.get("limit") || "20", 10);
+      const { getOperatorMemoryStore } = await import("./operator-memory-store");
+      const store = getOperatorMemoryStore();
+      const outcomes = store.getRecentOutcomes(userId, limit);
+      return this.jsonResponse(200, { data: outcomes });
+    } catch (error: any) {
+      pceLogger.error("Failed to fetch operator memory outcomes", { error: error.message });
+      return this.jsonResponse(500, { error: error.message });
+    }
+  }
+
   private jsonResponse(status: number, body: Record<string, any>): Response {
     return new Response(JSON.stringify(body), {
       status,
@@ -1658,6 +1857,7 @@ export class PceApiServer {
       const body = await req.json() as {
         query?: string;
         userId?: string;
+        profileUserId?: string;
         aclGroup?: string;
         sessionId?: string;
         conversationId?: string;
@@ -1668,9 +1868,21 @@ export class PceApiServer {
       }
 
       const userId = body.userId || "dashboard-user";
+      const profileUserId = body.profileUserId || userId;
       const aclGroup = (body.aclGroup || "admin") as ACLGroup;
       const sessionId = body.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const conversationId = body.conversationId || null;
+
+      const activeUserSessionId = this.activeRunByUser.get(userId);
+      const activeUserRun = activeUserSessionId ? this.activeAgentRuns.get(activeUserSessionId) : undefined;
+      if (activeUserRun) {
+        return this.jsonResponse(409, {
+          error: "Another chat already has an active agent run.",
+          sessionId: activeUserRun.sessionId,
+          conversationId: activeUserRun.conversationId,
+          status: activeUserRun.status,
+        });
+      }
 
       // Get or create conversation
       let activeConversationId = conversationId;
@@ -1681,6 +1893,26 @@ export class PceApiServer {
         } catch (error: any) {
           pceLogger.warn("Failed to create conversation", { error: error.message });
         }
+      }
+
+      if (activeConversationId) {
+        const activeSessionId = this.activeRunByConversation.get(activeConversationId);
+        const activeRun = activeSessionId ? this.activeAgentRuns.get(activeSessionId) : undefined;
+        if (activeRun) {
+          return this.jsonResponse(409, {
+            error: "This conversation already has an active agent run.",
+            sessionId: activeRun.sessionId,
+            conversationId: activeConversationId,
+            status: activeRun.status,
+          });
+        }
+      }
+      if (this.activeAgentRuns.has(sessionId)) {
+        return this.jsonResponse(409, {
+          error: "This agent session is already active.",
+          sessionId,
+          status: this.activeAgentRuns.get(sessionId)?.status,
+        });
       }
 
       // Load conversation history for context
@@ -1731,38 +1963,45 @@ export class PceApiServer {
       // Subscribe to agent:final event to save assistant response
       const eventBus = AgentEventBus.getInstance();
       const unsubscribe = eventBus.onType("agent:final", async (event: AgentEvent) => {
-        if (event.sessionId === sessionId && event.data?.text && activeConversationId) {
+        const finalData = event.data;
+        if (finalData.type !== "agent:final") {
+          return;
+        }
+        if (event.sessionId === sessionId && finalData.text && activeConversationId) {
+          const activeRun = this.activeAgentRuns.get(sessionId);
+          if (activeRun) activeRun.finalEventSeen = true;
           try {
             await this.chatHistoryStore.saveMessage({
               conversationId: activeConversationId,
               userId,
               aclGroup,
               role: "assistant",
-              content: event.data.text,
+              content: finalData.text,
+              structuredResponse: finalData.structuredResponse,
               timestamp: new Date(event.timestamp),
-              reasoningTraceId: event.data.traceId,
+              reasoningTraceId: finalData.traceId,
             });
 
-            if (event.data.conversationState) {
+            if (finalData.conversationState) {
               await this.chatHistoryStore.updateConversationState(
                 activeConversationId,
-                event.data.conversationState,
+                finalData.conversationState as ConversationState,
                 userId
               );
             }
-            if (event.data.conversationContext) {
-              const rawSource = event.data.memorySource as string | undefined;
+            if (finalData.conversationContext) {
+              const rawSource = finalData.memorySource as string | undefined;
               const allowedSources = new Set(["user_explicit", "policy_inference", "tool_verified"]);
               const memorySource = allowedSources.has(rawSource ?? "")
                 ? (rawSource as "user_explicit" | "policy_inference" | "tool_verified")
                 : "policy_inference";
-              const rawConfidence = event.data.memoryConfidence as number | undefined;
+              const rawConfidence = finalData.memoryConfidence as number | undefined;
               const memoryConfidence = Number.isFinite(rawConfidence)
                 ? Math.min(1, Math.max(0, rawConfidence as number))
                 : 0.7;
               await this.chatHistoryStore.setConversationContext(
                 activeConversationId,
-                event.data.conversationContext,
+                finalData.conversationContext,
                 memorySource,
                 memoryConfidence,
                 userId
@@ -1794,7 +2033,24 @@ export class PceApiServer {
 
       // Start agent execution in background (non-blocking)
       // Pass conversation history as context
-      runAgent(body.query, {
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const activeRun: ActiveAgentRun = {
+        sessionId,
+        conversationId: activeConversationId,
+        userId,
+        startedAt,
+        status: "running",
+        controller,
+        finalEventSeen: false,
+      };
+      this.activeAgentRuns.set(sessionId, activeRun);
+      this.activeRunByUser.set(userId, sessionId);
+      if (activeConversationId) {
+        this.activeRunByConversation.set(activeConversationId, sessionId);
+      }
+
+      this.agentRunner(body.query, {
         userId,
         aclGroup,
         ragBaseUrl: `http://localhost:${this.options.port}`,
@@ -1804,10 +2060,39 @@ export class PceApiServer {
         conversationContext,
         userPreferences,
         conversationHistory, // Pass history to agent
-        getProfilePublicKey: (uid: string) => this.profileStore.get(uid)?.publicKey ?? null,
+        signal: controller.signal,
+        getProfilePublicKey: (_uid: string) => this.profileStore.get(profileUserId)?.publicKey ?? null,
+        getProfileSshUsername: (_uid: string) => this.profileStore.get(profileUserId)?.sshUsername ?? null,
+      }).then(() => {
+        if (controller.signal.aborted && !activeRun.finalEventSeen) {
+          emitFinalEvent(eventBus, sessionId, startedAt, "Stopped by user.", {
+            stopped: true,
+            conversationState: "IDLE",
+          });
+        }
       }).catch((error: any) => {
-        pceLogger.error("Agent execution error", { error: error.message, sessionId });
+        const stopped = controller.signal.aborted || error?.name === "AbortError";
+        if (!activeRun.finalEventSeen) {
+          emitFinalEvent(
+            eventBus,
+            sessionId,
+            startedAt,
+            stopped ? "Stopped by user." : "The agent run failed before it completed.",
+            { stopped, failed: !stopped, conversationState: "IDLE" }
+          );
+        }
+        if (!stopped) {
+          pceLogger.error("Agent execution error", { error: error.message, sessionId });
+        }
+      }).finally(() => {
         unsubscribe();
+        this.activeAgentRuns.delete(sessionId);
+        if (this.activeRunByUser.get(userId) === sessionId) {
+          this.activeRunByUser.delete(userId);
+        }
+        if (activeConversationId && this.activeRunByConversation.get(activeConversationId) === sessionId) {
+          this.activeRunByConversation.delete(activeConversationId);
+        }
       });
 
       // Return immediately with sessionId and conversationId so client can connect to SSE stream
@@ -1815,12 +2100,58 @@ export class PceApiServer {
         success: true,
         sessionId,
         conversationId: activeConversationId,
+        status: "running",
         message: "Agent query started. Connect to /api/agent/stream?sessionId=" + sessionId + " to receive events.",
       });
     } catch (error: any) {
       pceLogger.error("Agent query endpoint error", { error: error.message });
       return this.jsonResponse(500, { error: error.message });
     }
+  }
+
+  private handleAgentStatus(url: URL): Response {
+    const sessionId = url.searchParams.get("sessionId");
+    const conversationId = url.searchParams.get("conversationId");
+    const userId = url.searchParams.get("userId");
+    const directRun = sessionId ? this.activeAgentRuns.get(sessionId) : undefined;
+    const conversationSessionId = conversationId ? this.activeRunByConversation.get(conversationId) : undefined;
+    const conversationRun = conversationSessionId ? this.activeAgentRuns.get(conversationSessionId) : undefined;
+    const userSessionId = userId ? this.activeRunByUser.get(userId) : undefined;
+    const userRun = userSessionId ? this.activeAgentRuns.get(userSessionId) : undefined;
+    const run = directRun ?? conversationRun ?? userRun;
+
+    return this.jsonResponse(200, {
+      success: true,
+      active: !!run,
+      status: run?.status ?? "idle",
+      sessionId: run?.sessionId ?? null,
+      conversationId: run?.conversationId ?? conversationId ?? null,
+      startedAt: run?.startedAt ?? null,
+    });
+  }
+
+  private async handleAgentStop(req: Request): Promise<Response> {
+    const body = await req.json().catch(() => ({})) as { sessionId?: string; conversationId?: string };
+    const resolvedSessionId = body.sessionId || (body.conversationId ? this.activeRunByConversation.get(body.conversationId) : undefined);
+    const run = resolvedSessionId ? this.activeAgentRuns.get(resolvedSessionId) : undefined;
+
+    if (!run) {
+      return this.jsonResponse(409, {
+        error: "No active agent run was found.",
+        active: false,
+        status: "idle",
+      });
+    }
+
+    run.status = "stopping";
+    run.controller.abort(new DOMException("Stopped by user", "AbortError"));
+    return this.jsonResponse(202, {
+      success: true,
+      active: true,
+      status: "stopping",
+      sessionId: run.sessionId,
+      conversationId: run.conversationId,
+    });
   }
 
   /**
@@ -1858,9 +2189,7 @@ export class PceApiServer {
         const eventBus = AgentEventBus.getInstance();
         const unsubscribe = eventBus.onEvent((event: AgentEvent) => {
           // Filter by sessionId if provided
-          // Allow tool:progress events through even without matching sessionId
-          // (tools emit progress without session context)
-          if (sessionId && event.sessionId !== sessionId && event.type !== "tool:progress") {
+          if (sessionId && event.sessionId !== sessionId) {
             return;
           }
 
@@ -1996,6 +2325,9 @@ export class PceApiServer {
 
       const conversationId = await this.chatHistoryStore.createConversation(userId, body.title);
 
+      emitUsageEvent("usage.palindrome.chat_created", { conversationId, userId });
+      this.metricsCollector.record("usage_chat_created", 1);
+
       return this.jsonResponse(200, {
         success: true,
         data: { id: conversationId },
@@ -2083,6 +2415,9 @@ export class PceApiServer {
         limit,
         offset,
       });
+
+      emitUsageEvent("usage.palindrome.chat_opened", { conversationId, userId });
+      this.metricsCollector.record("usage_chat_opened", 1);
 
       return this.jsonResponse(200, {
         success: true,

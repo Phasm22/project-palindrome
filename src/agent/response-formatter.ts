@@ -10,12 +10,79 @@
 
 import OpenAI from "openai";
 import { logger } from "../utils/logger";
-import {
-  buildEntityListSection,
-  parseEntityLine,
-  parseEntityListSection,
-  type EntityListEntry,
-} from "./canonical-response-format";
+import { parseFilterRule } from "../reasoning/chains/firewall";
+
+interface EntityListEntry {
+  label: string;
+  attributes: Record<string, string>;
+}
+
+function buildEntityLine(label: string, attributes: Record<string, string>): string {
+  const pairs = Object.entries(attributes)
+    .filter(([, v]) => v != null && String(v).trim() !== "")
+    .map(([k, v]) => `${k}=${String(v).trim()}`);
+  if (pairs.length === 0) return `- ${label}`;
+  return `- ${label} | ${pairs.join(" | ")}`;
+}
+
+function buildEntityListSection(title: string, entries: EntityListEntry[]): string {
+  const lines = [title.trim().replace(/:$/, "")];
+  for (const e of entries) {
+    lines.push(buildEntityLine(e.label, e.attributes));
+  }
+  return lines.join("\n");
+}
+
+function parseEntityLine(line: string): EntityListEntry | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("- ") || !trimmed.includes("|")) return null;
+  const rest = trimmed.slice(2).trim();
+  const segments = rest.split("|").map((s) => s.trim()).filter(Boolean);
+  if (segments.length < 2) return null;
+  const label = segments[0] ?? "";
+  const attributes: Record<string, string> = {};
+  for (const segment of segments.slice(1)) {
+    const eqIdx = segment.indexOf("=");
+    const colonIdx = segment.indexOf(":");
+    if (eqIdx > 0) {
+      const key = segment.slice(0, eqIdx).trim();
+      let value = segment.slice(eqIdx + 1).trim();
+      value = value.replace(/^"(.*)"$/, "$1").replace(/\\"/g, '"');
+      if (key) attributes[key] = value;
+    } else if (colonIdx > 0) {
+      const key = segment.slice(0, colonIdx).trim();
+      const value = segment.slice(colonIdx + 1).trim();
+      if (key) attributes[key] = value;
+    }
+  }
+  return { label, attributes };
+}
+
+function parseEntityListSection(text: string): { title: string; entries: EntityListEntry[] } | null {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+  let title = "";
+  const entries: EntityListEntry[] = [];
+  let firstEntityIndex = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const entry = parseEntityLine(lines[i]!);
+    if (entry) {
+      if (firstEntityIndex < 0) firstEntityIndex = i;
+      entries.push(entry);
+    } else if (firstEntityIndex < 0 && !lines[i]!.startsWith("- ")) {
+      title = lines[i]!.replace(/:$/, "").trim();
+    }
+  }
+  if (entries.length === 0) return null;
+  if (!title && firstEntityIndex > 0) title = lines[0]!.replace(/:$/, "").trim();
+  if (!title) title = "Results";
+  return { title, entries };
+}
+
+function formatCountAnswer(count: number, unit: string, qualifier?: string): string {
+  const q = qualifier?.trim() ? ` ${qualifier}` : "";
+  return `Count: ${count} ${unit}${q}`.trim();
+}
 
 let openaiClient: OpenAI | null = null;
 
@@ -120,11 +187,26 @@ interface FirewallRuleEntry {
   protocol?: string;
   iface?: string;
   hasPort: boolean;
+  rawLine: string;
 }
 
 interface PathScope {
   from?: string;
   to?: string;
+}
+
+interface FirewallAliasDefinition {
+  name: string;
+  values: string[];
+  rawLine: string;
+}
+
+interface AliasContentSummary {
+  name: string;
+  entries: string[];
+  type?: string;
+  enabled?: string;
+  iface?: string;
 }
 
 function isVmInventoryQuery(userQuery: string): boolean {
@@ -140,6 +222,48 @@ function isStatusListQuery(userQuery: string): boolean {
   const asksStatus = /\b(status|uptime|metrics?)\b/.test(query);
   const hasTarget = /\b(of|for)\s+\S+/.test(query) || /\b(on)\s+\S+/.test(query);
   return asksStatus && (hasTarget || /\b(node|host|prox|vm|container)\b/.test(query));
+}
+
+/** True when query asks for a count (e.g. "how many vms have uptime > 20 days"). Count answers use canonical count format, not entity-list. */
+function isCountQuery(userQuery: string): boolean {
+  return /\bhow\s+many\b/i.test(userQuery.trim());
+}
+
+/**
+ * Canonical count packaging: for "how many X" queries, return a single-line count answer
+ * so we never feed count responses into entity-list parsing (which would produce fake rows like "None | Uptime=0 days").
+ */
+function normalizeCountPackaging(responseText: string, context: FormatContext): string | null {
+  if (!isCountQuery(context.userQuery) || !responseText?.trim()) return null;
+  const trimmed = responseText.trim();
+  // Already a single short line → keep as-is (canonical count shape)
+  const lines = trimmed.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 1 && lines[0]!.length < 120) return lines[0]!;
+  // Extract numeric count: "None" / "no VMs" → 0; "N VMs" / "N nodes" / "Count: N" → N
+  let count: number | null = null;
+  if (/none\s+of\s+the|no\s+vms?|zero\s+vms?|0\s+vms?/i.test(trimmed)) count = 0;
+  const countMatch = trimmed.match(/(?:count\s*:\s*)?(\d+)\s*(vms?|nodes?|containers?|lxcs?|rules?|aliases?)/i)
+    ?? trimmed.match(/(\d+)\s+(?:vms?|nodes?|containers?|lxcs?|rules?|aliases?)\s+(?:have|with)/i);
+  if (countMatch) count = parseInt(countMatch[1]!, 10);
+  if (count === null && lines.length > 0) {
+    const first = lines[0]!;
+    const numInFirst = first.match(/\b(\d+)\s+(?:vms?|nodes?|containers?)/i);
+    if (numInFirst) count = parseInt(numInFirst[1]!, 10);
+  }
+  const unit = /\b(vms?|nodes?|containers?|lxcs?)\b/i.test(context.userQuery)
+    ? (context.userQuery.match(/\b(vms?|nodes?|containers?|lxcs?)\b/i)?.[1] ?? "VMs")
+    : "items";
+  if (count !== null && !Number.isNaN(count)) {
+    const qualifier = lines[0]?.replace(/^\D*\d+\s*(vms?|nodes?|containers?|lxcs?)\s*/i, "").replace(/\.$/, "").trim();
+    return formatCountAnswer(count, unit, qualifier && qualifier.length < 80 ? qualifier : undefined);
+  }
+  // Couldn't confidently extract a single count. The response may be a
+  // multi-line, data-bearing answer in a shape this function doesn't recognize
+  // (e.g. a chain's "Firewall Rule Count\n- total | Count=104" line, or a
+  // per-item breakdown for "how many X does each Y have"). Collapsing that to
+  // just `lines[0]` silently throws the real answer away, so leave the
+  // response untouched instead and let later packaging/formatting handle it.
+  return null;
 }
 
 function normalizeVmInventoryPackaging(
@@ -256,10 +380,13 @@ function normalizeEntityListPackaging(
   context: FormatContext
 ): string | null {
   const intent = context.intentType;
+  if (!responseText) return null;
+  // Count queries are handled by normalizeCountPackaging; skip entity-list as a safeguard
+  if (isCountQuery(context.userQuery)) return null;
   const useEntityList =
     intent === "status" || intent === "compute_status" || intent === "compute_list" ||
     isStatusListQuery(context.userQuery);
-  if (!useEntityList || !responseText) return null;
+  if (!useEntityList) return null;
 
   const lines = responseText.split("\n").map((l) => l.trim()).filter(Boolean);
   if (lines.length < 2) return null;
@@ -504,9 +631,389 @@ function parseFirewallRuleEntries(lines: string[]): FirewallRuleEntry[] {
       protocol: fieldMap.get("proto"),
       iface: fieldMap.get("if"),
       hasPort: fieldMap.has("port"),
+      rawLine: line,
     });
   }
   return entries;
+}
+
+// A bare two-word phrase like "pass the salt" or "block him" parses as a
+// technically-valid ParsedPfRule (action-only, per parseFilterRule's own
+// contract for other callers) but isn't a real firewall rule. Only treat a
+// parse as a genuine pf rule here if it carries at least one other field a
+// real rule would have.
+function isConfidentPfRule(rule: ReturnType<typeof parseFilterRule>): rule is NonNullable<typeof rule> {
+  if (!rule) return false;
+  return Boolean(rule.direction || rule.iface || rule.source || rule.destination || rule.port || rule.protocol);
+}
+
+function formatParsedPfRule(rule: ReturnType<typeof parseFilterRule>): string | null {
+  if (!isConfidentPfRule(rule)) return null;
+  const parts = [
+    rule.action.toUpperCase(),
+    rule.direction ? `dir=${rule.direction}` : null,
+    rule.iface ? `if=${rule.ifaceNegated ? "!" : ""}${rule.iface}` : null,
+    rule.protocol ? `proto=${rule.protocol}` : null,
+    rule.source ? `src=${rule.source}` : null,
+    rule.destination ? `dst=${rule.destination}` : null,
+    rule.port ? `port=${rule.port}` : null,
+  ].filter(Boolean);
+  return parts.join(" | ");
+}
+
+/**
+ * Rewrites raw pfctl rule syntax embedded in an otherwise free-form response
+ * into the same readable `ACTION | dir=... | src=... | dst=...` pipe format
+ * the rest of this module already produces for twin-sourced firewall data.
+ *
+ * The EXECUTE-path LLM loop sometimes echoes opnsense_readonly's live
+ * `firewall_rules_list` output (an array of raw pfctl lines, e.g.
+ * `"block drop in log on ! vtnet1 inet from 192.168.68.0/22 to any"`) verbatim
+ * into its final answer instead of summarizing it — see fuzz-campaign F-06.
+ * Observed live re-verification shapes vary: sometimes each raw rule is its
+ * own quoted, pipe-joined string; sometimes the model dumps the *entire*
+ * pipe-joined rule array as one giant quoted blob (with pf rule "label"
+ * values' embedded quotes left escaped, e.g. `label \"abc123\"`, un-unescaped
+ * from whatever the tool JSON originally looked like). Both are handled by
+ * finding the true quoted span first (honoring escaped characters so it
+ * isn't truncated at the first escaped inner quote), then splitting on the
+ * model's own " | " join convention and prettifying each pf-rule-shaped
+ * segment independently. This only rewrites substrings that actually parse
+ * as a pf pass/block rule with real rule fields (via the same parser the
+ * twin-first firewall chain uses); anything else (prose, housekeeping
+ * directives like `scrub in all fragment reassemble`, already-formatted pipe
+ * rules, incidental English sentences containing the words "pass"/"block")
+ * passes through untouched.
+ */
+export function prettifyRawPfctlText(text: string): string {
+  if (!text) return text;
+
+  // Case 1: raw rule(s) inside a double-quoted span — either one rule per
+  // quoted string, or an entire pipe-joined rule array quoted as a single
+  // string. `(?:\\.|[^"\\])*` matches standard JSON-string-body semantics so
+  // an escaped inner quote (from a rule's `label \"...\"`) doesn't end the
+  // span early.
+  let result = text.replace(/"((?:\\.|[^"\\])*)"/g, (whole, inner: string) => {
+    if (!/\b(?:pass|block)\b/i.test(inner)) return whole;
+    let rewroteAny = false;
+    const segments = inner.split(/\s*\|\s*/).map((segment) => {
+      const pretty = formatParsedPfRule(parseFilterRule(segment));
+      if (pretty) rewroteAny = true;
+      return pretty ?? segment;
+    });
+    return rewroteAny ? segments.join(" | ") : whole;
+  });
+
+  // Case 2: a raw rule appears bare, one per line (optionally bulleted),
+  // without quoting.
+  result = result
+    .split("\n")
+    .map((line) => {
+      const bulletMatch = line.match(/^(\s*(?:[-*]\s+)?)((?:pass|block)\b.*)$/i);
+      if (!bulletMatch) return line;
+      const [, prefix, candidate] = bulletMatch;
+      const pretty = formatParsedPfRule(parseFilterRule(candidate ?? ""));
+      return pretty ? `${prefix}${pretty}` : line;
+    })
+    .join("\n");
+
+  return result;
+}
+
+function stripAliasWrapper(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim().replace(/^`|`$/g, "");
+  const wrapped = trimmed.match(/^<([^>]+)>$/);
+  return (wrapped?.[1] ?? trimmed).trim();
+}
+
+function parseFirewallAliasDefinitions(lines: string[]): FirewallAliasDefinition[] {
+  const aliases: FirewallAliasDefinition[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.includes("| dir=") || line.includes("| src=") || line.includes("| dst=")) {
+      continue;
+    }
+
+    const definitionMatch = line.match(/^Definition\s*\|\s*term=([^|]+)\|\s*meaning=([^|]+)(?:\||$)/i);
+    if (definitionMatch?.[1]) {
+      const name = definitionMatch[1].trim();
+      const values = (definitionMatch[2] ?? "")
+        .trim()
+        .replace(/^"(.*)"$/, "$1")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      aliases.push({ name, values, rawLine: line });
+      continue;
+    }
+
+    const kvMatch = line.match(/^-?\s*([a-z0-9_:-]+)\s*=\s*(.+)$/i);
+    if (!kvMatch?.[1]) {
+      continue;
+    }
+    const valueText = (kvMatch[2] ?? "").trim();
+    const values = /^(?:\(empty\)|empty)$/i.test(valueText)
+      ? []
+      : valueText.split(",").map((value) => value.trim()).filter(Boolean);
+    aliases.push({
+      name: kvMatch[1].trim(),
+      values,
+      rawLine: line,
+    });
+  }
+  return aliases;
+}
+
+function normalizePolicyTerm(value: string): string {
+  return stripAliasWrapper(value)?.toUpperCase() ?? value.toUpperCase();
+}
+
+function extractFirewallPolicyTargets(userQuery: string, aliases: FirewallAliasDefinition[]): string[] {
+  const query = userQuery.trim();
+  if (!query) return [];
+
+  const aliasValueTerms = new Set(
+    aliases.flatMap((alias) => alias.values.map((value) => normalizePolicyTerm(value)))
+  );
+  const targets = new Set<string>();
+  const commonTwoLetterWords = new Set([
+    "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "IF", "IN", "IS", "IT", "ME", "MY",
+    "NO", "OF", "ON", "OR", "SO", "TO", "UP", "WE",
+  ]);
+
+  for (const match of query.matchAll(/\b([A-Za-z]{2})\b/g)) {
+    const token = match[1] ?? "";
+    const normalized = token.toUpperCase();
+    const wasUppercase = token === normalized;
+    if (wasUppercase || aliasValueTerms.has(normalized) || !commonTwoLetterWords.has(normalized)) {
+      targets.add(normalized);
+    }
+  }
+
+  for (const alias of aliases) {
+    const aliasName = alias.name.toLowerCase();
+    if (new RegExp(`\\b${aliasName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(query)) {
+      targets.add(normalizePolicyTerm(alias.name));
+    }
+  }
+
+  return Array.from(targets);
+}
+
+function detectFirewallPolicyAction(userQuery: string): "block" | "allow" | null {
+  const query = userQuery.toLowerCase();
+  if (/\b(block|blocking|blocked|deny|denying|denied|reject|rejecting|rejected)\b/.test(query)) {
+    return "block";
+  }
+  if (/\b(allow|allowing|allowed|permit|permitting|permitted|pass|passing|open)\b/.test(query)) {
+    return "allow";
+  }
+  return null;
+}
+
+function isFirewallPolicyQuestion(userQuery: string): boolean {
+  const query = userQuery.toLowerCase();
+  const asksYesNo =
+    /^(?:is|are|does|do)\b/.test(query.trim()) ||
+    /\b(?:is|are)\s+there\b/.test(query) ||
+    /\bany\b.*\b(firewall|rules?|policy)\b/.test(query) ||
+    /\bwhether\b/.test(query);
+  return asksYesNo && /\b(firewall|rules?|policy|blocked|allowed|blocking|allowing)\b/.test(query);
+}
+
+function formatTargetList(targets: string[]): string {
+  if (targets.length === 0) return "the requested scope";
+  if (targets.length === 1) return targets[0]!;
+  if (targets.length === 2) return `${targets[0]} and ${targets[1]}`;
+  return `${targets.slice(0, -1).join(", ")}, and ${targets[targets.length - 1]}`;
+}
+
+function ruleMatchesPolicyAction(rule: FirewallRuleEntry, action: "block" | "allow"): boolean {
+  const blockActions = new Set(["BLOCK", "DENY", "REJECT"]);
+  const allowActions = new Set(["ALLOW", "PASS"]);
+  return action === "block" ? blockActions.has(rule.action) : allowActions.has(rule.action);
+}
+
+function matchRulePolicyTargets(
+  rule: FirewallRuleEntry,
+  targets: string[],
+  aliases: FirewallAliasDefinition[]
+): { matchedTargets: string[]; matchedAliases: FirewallAliasDefinition[] } {
+  const endpointNames = [rule.source, rule.destination].map(stripAliasWrapper).filter(Boolean) as string[];
+  const endpointTerms = new Set(endpointNames.map((value) => normalizePolicyTerm(value)));
+  const aliasesByName = new Map(aliases.map((alias) => [alias.name.toLowerCase(), alias]));
+  const endpointAliases = endpointNames
+    .map((name) => aliasesByName.get(name.toLowerCase()))
+    .filter(Boolean) as FirewallAliasDefinition[];
+  const expandedTerms = new Set([
+    ...Array.from(endpointTerms),
+    ...endpointAliases.flatMap((alias) => alias.values.map((value) => normalizePolicyTerm(value))),
+  ]);
+
+  const normalizedTargets = targets.map(normalizePolicyTerm);
+  const matchedTargets = normalizedTargets.length === 0
+    ? []
+    : normalizedTargets.filter((target) => expandedTerms.has(target));
+  const matchedAliases = endpointAliases.filter((alias) => {
+    const aliasName = normalizePolicyTerm(alias.name);
+    return matchedTargets.length > 0 || normalizedTargets.includes(aliasName);
+  });
+
+  return { matchedTargets, matchedAliases };
+}
+
+function formatFirewallPolicyQuestionAnswer(
+  rules: FirewallRuleEntry[],
+  aliases: FirewallAliasDefinition[],
+  context: FormatContext
+): string | null {
+  if (rules.length === 0 || !isFirewallPolicyQuestion(context.userQuery)) {
+    return null;
+  }
+  const action = detectFirewallPolicyAction(context.userQuery);
+  if (!action) {
+    return null;
+  }
+
+  const targets = extractFirewallPolicyTargets(context.userQuery, aliases);
+  const actionRules = rules.filter((rule) => ruleMatchesPolicyAction(rule, action));
+  const matches = actionRules
+    .map((rule) => ({ rule, ...matchRulePolicyTargets(rule, targets, aliases) }))
+    .filter((match) => targets.length === 0 || match.matchedTargets.length > 0 || match.matchedAliases.length > 0);
+  const targetText = formatTargetList(targets);
+
+  if (matches.length === 0) {
+    const lines = [
+      `Answer: No. No matching firewall rule was found for ${targetText} in the current firewall data.`,
+      "",
+      "Evidence:",
+      `- Checked ${rules.length} firewall rule(s).`,
+    ];
+    if (aliases.length > 0) {
+      lines.push(`- Alias definitions checked: ${aliases.map((alias) => alias.name).slice(0, 6).join(", ")}.`);
+    }
+    return lines.join("\n");
+  }
+
+  const bestMatch = matches[0]!;
+  const matchedTargets = bestMatch.matchedTargets.length > 0 ? bestMatch.matchedTargets : targets;
+  const matchedTargetText = formatTargetList(matchedTargets);
+  const primaryAlias = bestMatch.matchedAliases[0];
+  const direction = (bestMatch.rule.direction ?? "").toLowerCase() === "in" ? "Inbound " : "";
+  const actionVerb = action === "block" ? "blocked" : "allowed";
+  const aliasPhrase = primaryAlias ? ` by the \`${primaryAlias.name}\` alias` : "";
+  const lines = [
+    `Answer: Yes. ${direction}traffic from ${matchedTargetText} is ${actionVerb}${aliasPhrase}.`,
+    "",
+    "Evidence:",
+    `- Rule: ${bestMatch.rule.rawLine}`,
+  ];
+  if (primaryAlias) {
+    lines.push(`- Alias: ${primaryAlias.rawLine}`);
+  }
+  lines.push("", "Details:", "```text");
+  for (const match of matches.slice(0, 5)) {
+    lines.push(match.rule.rawLine);
+  }
+  lines.push("```");
+  return lines.join("\n");
+}
+
+function cleanAliasContentEntry(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+\(selected\)$/i, "")
+    .trim();
+}
+
+function parseAliasContentSummary(lines: string[]): AliasContentSummary | null {
+  let name = "";
+  const titleLine = lines.find((line) => /^Alias\s+".+"\s+Contents\b/i.test(line));
+  const titleMatch = titleLine?.match(/^Alias\s+"(.+)"\s+Contents\b/i);
+  if (titleMatch?.[1]) {
+    name = titleMatch[1].trim();
+  }
+
+  let contentIndex = -1;
+  const entries: string[] = [];
+  const metadata: Record<string, string> = {};
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const aliasNameMatch = line.match(/^Alias Name:\s*(.+)$/i);
+    if (aliasNameMatch?.[1]) {
+      name = aliasNameMatch[1].trim();
+      continue;
+    }
+    const inlineContentMatch = line.match(/^Content:\s*(.+)$/i);
+    if (inlineContentMatch?.[1]) {
+      const cleaned = cleanAliasContentEntry(inlineContentMatch[1]);
+      if (cleaned) entries.push(cleaned);
+      contentIndex = i;
+      continue;
+    }
+    if (/^Content:\s*$/i.test(line)) {
+      contentIndex = i;
+      continue;
+    }
+    const metadataMatch = line.match(/^(Type|Enabled|Interface):\s*(.+)$/i);
+    if (metadataMatch?.[1]) {
+      metadata[metadataMatch[1].toLowerCase()] = (metadataMatch[2] ?? "").trim();
+    }
+  }
+
+  if (contentIndex >= 0) {
+    for (const line of lines.slice(contentIndex + 1)) {
+      if (/^(Type|Enabled|Interface|Additional Details|GeoIP URL):/i.test(line)) {
+        break;
+      }
+      const cleaned = cleanAliasContentEntry(line);
+      if (cleaned) entries.push(cleaned);
+    }
+  }
+
+  if (!name || (contentIndex < 0 && entries.length === 0)) {
+    return null;
+  }
+  return {
+    name,
+    entries,
+    type: metadata.type,
+    enabled: metadata.enabled,
+    iface: metadata.interface,
+  };
+}
+
+function formatAliasContentAnswer(responseText: string, context: FormatContext): string | null {
+  const query = context.userQuery.toLowerCase();
+  if (!/\balias\b/.test(query) && !/^Alias\s+".+"\s+Contents\b/im.test(responseText)) {
+    return null;
+  }
+
+  const lines = responseText.split("\n").map((line) => line.trim()).filter(Boolean);
+  const summary = parseAliasContentSummary(lines);
+  if (!summary) {
+    return null;
+  }
+
+  const entryText = summary.entries.length === 0
+    ? "no entries"
+    : summary.entries.length === 1
+      ? `one entry: \`${summary.entries[0]}\``
+      : `${summary.entries.length} entries: ${summary.entries.map((entry) => `\`${entry}\``).join(", ")}`;
+  const linesOut = [
+    `Answer: Alias \`${summary.name}\` contains ${entryText}.`,
+  ];
+
+  const evidence: string[] = [];
+  if (summary.type) evidence.push(`- Type: ${summary.type}`);
+  if (summary.enabled) evidence.push(`- Enabled: ${summary.enabled}`);
+  if (summary.iface) evidence.push(`- Interface: ${summary.iface}`);
+  if (evidence.length > 0) {
+    linesOut.push("", "Evidence:", ...evidence);
+  }
+
+  return linesOut.join("\n");
 }
 
 function extractAnomaly(lines: string[]): string | null {
@@ -623,11 +1130,92 @@ function formatAllowedPortsPolicySummary(
   return lines.join("\n");
 }
 
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+
+  for (const char of trimmed) {
+    if (escaped) {
+      cell += char;
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+      cell += char;
+    } else if (char === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function normalizeWideSingleRecordTable(responseText: string): string | null {
+  const lines = responseText.split("\n");
+  for (let index = 0; index < lines.length - 2; index++) {
+    const headerLine = lines[index];
+    const separatorLine = lines[index + 1];
+    const valueLine = lines[index + 2];
+    if (headerLine === undefined || separatorLine === undefined || valueLine === undefined) {
+      continue;
+    }
+    const headers = splitMarkdownTableRow(headerLine);
+    const separators = splitMarkdownTableRow(separatorLine);
+    if (
+      headers.length < 8 ||
+      headers.length !== separators.length ||
+      !separators.every((cell) => /^:?-{3,}:?$/.test(cell))
+    ) {
+      continue;
+    }
+
+    const values = splitMarkdownTableRow(valueLine);
+    if (values.length !== headers.length) continue;
+
+    const nextLine = lines[index + 3]?.trim();
+    if (nextLine?.includes("|")) continue;
+
+    const nameIndex = headers.findIndex((header) => /^name$/i.test(header));
+    const title = nameIndex >= 0 && values[nameIndex]
+      ? `${values[nameIndex]} details`
+      : "Entity details";
+    const facts = headers
+      .map((header, cellIndex) => {
+        const label = header
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (char) => char.toUpperCase());
+        return `- ${label}: ${values[cellIndex] || "Not available"}`;
+      })
+      .join("\n");
+
+    const before = lines.slice(0, index).filter((line) => line.trim()).join("\n");
+    const after = lines.slice(index + 3).filter((line) => line.trim()).join("\n");
+    return [before, title, facts, after].filter(Boolean).join("\n");
+  }
+
+  return null;
+}
+
 export function applyAdaptivePackaging(
   responseText: string,
   context: FormatContext
 ): string | null {
   if (!responseText) return null;
+
+  const wideRecordPackaging = normalizeWideSingleRecordTable(responseText);
+  if (wideRecordPackaging) {
+    return wideRecordPackaging;
+  }
+
+  // Count queries: canonical one-line count format only (never entity-list)
+  const countPackaging = normalizeCountPackaging(responseText, context);
+  if (countPackaging) {
+    return countPackaging;
+  }
 
   const vmInventoryPackaging = normalizeVmInventoryPackaging(responseText, context);
   if (vmInventoryPackaging) {
@@ -642,12 +1230,29 @@ export function applyAdaptivePackaging(
   const normalizedQuery = context.userQuery.toLowerCase();
   const wantsFullList =
     /\bshow\b.*\b(full|complete|entire)\b.*\b(list|ports?|rules?)\b/i.test(normalizedQuery) ||
-    /\blist\b.*\b(all|every)\b.*\bports?\b/i.test(normalizedQuery);
+    /\blist\b.*\b(all|every)\b.*\b(ports?|rules?)\b/i.test(normalizedQuery);
   if (wantsFullList) {
     return null;
   }
 
+  const aliasContentAnswer = formatAliasContentAnswer(responseText, context);
+  if (aliasContentAnswer) {
+    return aliasContentAnswer;
+  }
+
   const lines = responseText.split("\n").map((line) => line.trim()).filter(Boolean);
+  const firewallRules = parseFirewallRuleEntries(lines);
+  const hasFirewallRulesHeading = lines.some((line) => /^firewall rules\b/i.test(line));
+  const canPackageFirewallPolicy =
+    context.intentType === "firewall_rules" || hasFirewallRulesHeading || firewallRules.length > 0;
+  if (canPackageFirewallPolicy) {
+    const aliases = parseFirewallAliasDefinitions(lines);
+    const firewallPolicyAnswer = formatFirewallPolicyQuestionAnswer(firewallRules, aliases, context);
+    if (firewallPolicyAnswer) {
+      return firewallPolicyAnswer;
+    }
+  }
+
   const hasAllowedPortsHeading = lines.some((line) => /^allowed ports\b/i.test(line));
   const asksAboutAllowedPorts =
     normalizedQuery.includes("port") &&
@@ -678,7 +1283,6 @@ export function applyAdaptivePackaging(
     );
   }
 
-  const firewallRules = parseFirewallRuleEntries(lines);
   if (asksAboutAllowedPorts && firewallRules.length >= 2) {
     const anomaly = extractAnomaly(lines);
     return formatAllowedPortsPolicySummary(firewallRules, anomaly, queryScope);

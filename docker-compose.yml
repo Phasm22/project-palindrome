@@ -124,7 +124,7 @@ services:
       - OLLAMA_FLASH_ATTENTION=1
       # Keep models in GPU memory for faster inference
       # 16GB allows: embeddings (274MB) + mistral:7b (4.4GB) + llama3.1:8b (4.9GB) = ~9.5GB
-      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_KEEP_ALIVE=5m
       # NVMe optimization: use fast storage for model cache
       - OLLAMA_MODELS=/root/.ollama/models
     restart: unless-stopped
@@ -154,6 +154,7 @@ services:
     #   - 1x 7B + 1x 3B models
 
   prometheus:
+    profiles: ["monitoring"]
     image: prom/prometheus:latest
     container_name: prometheus
     network_mode: host  # Use host network to access localhost:4000 directly
@@ -194,12 +195,14 @@ services:
     # Alternative without host mode: use ports + extra_hosts for host.docker.internal
 
   grafana:
+    profiles: ["monitoring"]
     image: grafana/grafana:latest
     container_name: grafana
     network_mode: host  # Use host network to access Prometheus at localhost:9090
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Rotated off the hardcoded admin/admin default — set in .env (gitignored)
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       - GF_INSTALL_PLUGINS=
       - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
       - GF_PATHS_DATA=/var/lib/grafana
@@ -212,6 +215,10 @@ services:
       # Performance tuning for NVMe storage
       - GF_DATABASE_CACHE_TTL=3600
       - GF_DATABASE_MAX_IDLE_CONN=10
+      # Allow the usage dashboard (argus/otto Usage tab) to iframe Grafana panels
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/dashboards:ro

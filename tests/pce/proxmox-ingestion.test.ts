@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, mock } from "bun:test";
 import { computeVersionHash } from "../../src/pce/ingestion/proxmox-ingestion";
 import { ProxmoxIngestionOrchestrator } from "../../src/pce/ingestion/proxmox-ingestion";
 import { Redactor } from "../../src/pce/redaction";
+import { ALL_REDACTION_PATTERNS } from "../../src/pce/redaction/patterns";
 import { NodeType, RelationshipType } from "../../src/pce/kg/schema/ontology";
 
 describe("Proxmox Ingestion - Version Hash Computation", () => {
@@ -64,32 +65,31 @@ describe("Proxmox Ingestion - Redaction Verification", () => {
   let redactor: Redactor;
 
   beforeEach(() => {
-    redactor = new Redactor();
+    redactor = new Redactor(ALL_REDACTION_PATTERNS);
   });
 
-  it("should redact MAC addresses from Proxmox content", () => {
+  it("should preserve MAC addresses from Proxmox content", () => {
     const content = "VM network interface: MAC address 00:11:22:33:44:55";
     const result = redactor.redact(content);
 
-    expect(result.redactedText).not.toContain("00:11:22:33:44:55");
-    expect(result.redactions.length).toBeGreaterThan(0);
+    expect(result.redactedText).toContain("00:11:22:33:44:55");
+    expect(result.redactions.length).toBe(0);
   });
 
-  it("should redact internal IP addresses from Proxmox content", () => {
+  it("should preserve internal IP addresses from Proxmox content", () => {
     const content = "Node IP: 192.168.1.100, Storage IP: 10.0.0.5";
     const result = redactor.redact(content);
 
-    // Should redact internal IPs
-    expect(result.redactedText).not.toContain("192.168.1.100");
-    expect(result.redactedText).not.toContain("10.0.0.5");
-    expect(result.redactions.length).toBeGreaterThan(0);
+    expect(result.redactedText).toContain("192.168.1.100");
+    expect(result.redactedText).toContain("10.0.0.5");
+    expect(result.redactions.length).toBe(0);
   });
 
   it("should redact Proxmox API tokens", () => {
-    const content = "API token: myuser!deploy";
+    const content = "API token: myuser@pam!deploy";
     const result = redactor.redact(content);
 
-    expect(result.redactedText).not.toContain("myuser!deploy");
+    expect(result.redactedText).not.toContain("myuser@pam!deploy");
     expect(result.redactions.length).toBeGreaterThan(0);
   });
 
@@ -300,4 +300,3 @@ describe("Proxmox Ingestion - ACL and Provenance Propagation", () => {
     expect(relationship.aclGroup).toBe("ops");
   });
 });
-

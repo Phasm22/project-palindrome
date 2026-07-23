@@ -8,6 +8,10 @@ import { loadYaml } from "../utils/config";
 import { Client } from "ssh2";
 import path from "path";
 import { fileURLToPath } from "url";
+import { execFile, spawn as spawnChild } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +27,11 @@ interface ApprovedCommands {
         [category: string]: string[];
       };
       read_only?: boolean;
+      // Some older network gear (e.g. Cisco IOS switches from ~2010s) only
+      // offers SSH KEX/cipher algorithms modern clients disable by default.
+      // Set true to opt that specific host into a legacy-compatible algorithm
+      // list instead of weakening defaults for every host.
+      legacy_ssh?: boolean;
     };
   };
 }
@@ -40,8 +49,13 @@ class SSHConnectionPool {
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor() {
-    // Clean up idle connections every 10 seconds
+    // Clean up idle connections every 10 seconds. unref() so this recurring
+    // timer never keeps a process alive on its own — a one-shot script
+    // (ingest-all, ingest-switches, ...) that only ever touches SSHTool
+    // should still be able to exit naturally once its real work is done,
+    // instead of hanging forever waiting on housekeeping.
     this.cleanupInterval = setInterval(() => this.cleanupIdle(), 10000);
+    this.cleanupInterval.unref?.();
   }
 
   private isClientDestroyed(client: Client): boolean {
@@ -126,6 +140,11 @@ class SSHConnectionPool {
 
       client.on("ready", () => {
         this.connections.set(key, newConn);
+        // Same reasoning as the cleanup interval's unref() above: a pooled
+        // connection sitting idle (up to maxIdleTime) shouldn't by itself
+        // keep a one-shot script alive. _sock is undocumented but this file
+        // already reaches into it elsewhere (see isClientDestroyed above).
+        (client as unknown as { _sock?: { unref?: () => void } })._sock?.unref?.();
         resolve(client);
       });
 
@@ -487,17 +506,183 @@ export class SSHTool extends BaseTool {
     };
   }
 
+  /**
+   * Cisco IOS's non-interactive SSH exec ("ssh user@host 'command'") only
+   * accepts a limited set of commands on this switch — anything requiring
+   * privileged EXEC (show running-config, dir flash:, show boot, ...) fails
+   * with "Line has invalid autocommand" because there's no way to answer
+   * the `enable` password prompt inside a single one-shot request. This
+   * drives a real interactive session instead: login (via sshpass), send
+   * `enable`, answer its password prompt, disable pagination, then run the
+   * actual command and capture output up to the next prompt.
+   *
+   * IMPORTANT: send bare `\r`, not `\r\n`, for each line. Sending `\r\n` on
+   * this device's PTY was observed to register as two Enter presses — the
+   * second one silently submits an empty response to whatever prompt comes
+   * next (e.g. an empty enable password), which reads exactly like a wrong
+   * password ("% Access denied") even though the real password was never
+   * actually sent yet. Cost real time to track down; don't reintroduce it.
+   */
+  private async executeLegacyInteractiveSSHCommand(
+    host: string,
+    command: string,
+    username: string,
+    password: string,
+    enablePassword: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const DEBOUNCE_MS = 600;
+    const PRE_WRITE_DELAY_MS = 400;
+    const OVERALL_TIMEOUT_MS = 30_000;
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    return new Promise((resolve, reject) => {
+      const child = spawnChild("sshpass", [
+        "-e", "ssh", "-tt",
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "KexAlgorithms=+diffie-hellman-group1-sha1",
+        "-o", "HostKeyAlgorithms=+ssh-rsa",
+        "-o", "Ciphers=+aes128-cbc",
+        `${username}@${host}`,
+      ], { env: { ...process.env, SSHPASS: password } });
+
+      let buffer = "";
+      let stage: "login" | "enable-sent" | "password-sent" | "unpaginating" | "command-sent" = "login";
+      let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+      let settled = false;
+
+      const finish = (result: { stdout: string; stderr: string; exitCode: number } | null, error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(overallTimeout);
+        child.kill();
+        if (error) reject(error);
+        else resolve(result!);
+      };
+
+      const overallTimeout = setTimeout(
+        () => finish(null, new Error(`Interactive SSH session to ${host} timed out (last buffer: ${JSON.stringify(buffer.slice(-200))})`)),
+        OVERALL_TIMEOUT_MS
+      );
+
+      const onSettled = () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(async () => {
+          try {
+            if (stage === "login" && /[>#]\s*$/.test(buffer)) {
+              stage = "enable-sent";
+              buffer = "";
+              await sleep(PRE_WRITE_DELAY_MS);
+              child.stdin.write("enable\r");
+            } else if (stage === "enable-sent" && /password:\s*$/i.test(buffer)) {
+              stage = "password-sent";
+              buffer = "";
+              await sleep(PRE_WRITE_DELAY_MS);
+              child.stdin.write(`${enablePassword}\r`);
+            } else if (stage === "password-sent") {
+              if (/#\s*$/.test(buffer)) {
+                stage = "unpaginating";
+                buffer = "";
+                await sleep(PRE_WRITE_DELAY_MS);
+                child.stdin.write("terminal length 0\r");
+              } else if (/access denied/i.test(buffer)) {
+                finish(null, new Error(`Enable authentication failed on ${host}`));
+              }
+            } else if (stage === "unpaginating" && /#\s*$/.test(buffer)) {
+              stage = "command-sent";
+              buffer = "";
+              await sleep(PRE_WRITE_DELAY_MS);
+              child.stdin.write(`${command}\r`);
+            } else if (stage === "command-sent" && /#\s*$/.test(buffer)) {
+              // Strip the echoed command line and the trailing prompt line.
+              const lines = buffer.replace(/\r/g, "").split("\n");
+              const firstRealLine = lines[0]?.trim() === command.trim() ? 1 : 0;
+              const withoutPrompt = lines.slice(firstRealLine, -1).join("\n");
+              finish({ stdout: withoutPrompt, stderr: "", exitCode: 0 });
+            }
+          } catch (error: any) {
+            finish(null, error);
+          }
+        }, DEBOUNCE_MS);
+      };
+
+      child.stdout.on("data", (data: Buffer) => {
+        buffer += data.toString();
+        onSettled();
+      });
+      child.on("error", (error) => finish(null, error));
+      child.on("close", (code) => {
+        if (!settled) finish(null, new Error(`Interactive SSH session to ${host} closed unexpectedly (exit ${code})`));
+      });
+    });
+  }
+
+  /**
+   * ssh2 (the pure-JS library the connection pool uses) lists
+   * diffie-hellman-group1-sha1 in its own default KEX constants but throws
+   * "Unknown DH group" if it's actually negotiated — this library appears
+   * unable to complete that exchange even though it recognizes the name.
+   * The system OpenSSH client handles it fine, so old gear that only offers
+   * this KEX (e.g. this repo's Cisco 2960G) is routed through the real
+   * `ssh` binary via sshpass instead of the ssh2 connection pool.
+   */
+  private async executeLegacySSHCommand(
+    host: string,
+    command: string,
+    username: string,
+    password: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        "sshpass",
+        [
+          "-e", "ssh",
+          "-o", "ConnectTimeout=10",
+          "-o", "StrictHostKeyChecking=accept-new",
+          "-o", "KexAlgorithms=+diffie-hellman-group1-sha1",
+          "-o", "HostKeyAlgorithms=+ssh-rsa",
+          "-o", "Ciphers=+aes128-cbc",
+          `${username}@${host}`,
+          command,
+        ],
+        { env: { ...process.env, SSHPASS: password }, timeout: 20000, maxBuffer: 10 * 1024 * 1024 }
+      );
+      return { stdout, stderr, exitCode: 0 };
+    } catch (error: any) {
+      // execFile rejects on non-zero exit; surface stdout/stderr if present
+      // instead of just the generic "Command failed" message.
+      return {
+        stdout: error?.stdout || "",
+        stderr: error?.stderr || error?.message || "sshpass/ssh execution failed",
+        exitCode: typeof error?.code === "number" ? error.code : 1,
+      };
+    }
+  }
+
   private async executeSSHCommand(
     host: string,
     command: string,
     username?: string,
     privateKey?: string,
     password?: string,
-    resolvedHost?: string
+    resolvedHost?: string,
+    legacyCompat?: boolean,
+    enablePassword?: string
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const targetHost = resolvedHost || host;
+
+    if (legacyCompat) {
+      if (!password) {
+        throw new Error(`Legacy SSH host ${targetHost} requires a password (key auth is not supported for this path)`);
+      }
+      if (enablePassword) {
+        return this.executeLegacyInteractiveSSHCommand(targetHost, command, username || "root", password, enablePassword);
+      }
+      return this.executeLegacySSHCommand(targetHost, command, username || "root", password);
+    }
+
     let conn: Client;
-    
+
     try {
       // Get connection from pool
       conn = await sshPool.getConnection(targetHost, username, privateKey, password);
@@ -515,7 +700,16 @@ export class SSHTool extends BaseTool {
       const executeCommand = () => {
         // For Proxmox nodes, use exec for cleaner output
         // For OPNsense, we need shell to navigate the menu
-        const useShell = targetHost.includes("172.16.0.1") || 
+        // NOTE: targetHost is the resolved IP by this point, not the alias
+        // that was requested — "opnsense"/"radar"/"firewall" are kept for
+        // safety but rarely if ever match here. This must be an exact IP
+        // match: .includes("172.16.0.1") also matches "172.16.0.10",
+        // "172.16.0.11", and "172.16.0.12" (proxBig/yin/yang) as substrings,
+        // which incorrectly routed all three Proxmox nodes through
+        // OPNsense's menu-navigation shell logic instead of plain exec —
+        // that's what caused "SSH command timeout before completion
+        // marker" on commands like `sensors`/`sensors -j` against them.
+        const useShell = targetHost === "172.16.0.1" ||
                         targetHost.includes("opnsense") ||
                         targetHost.includes("radar") ||
                         targetHost.includes("firewall");
@@ -535,12 +729,14 @@ export class SSHTool extends BaseTool {
           let shellReady = false;
           let promptDetected = false;
           let rawOutput = ""; // Collect ALL raw output for debugging
-          let lastDataTime = Date.now();
+          let completionMarker = "";
+          let commandExitCode = 0;
+          let commandCompleted = false;
+          let closeTimer: NodeJS.Timeout | null = null;
 
           stream.on("data", (data: Buffer) => {
             const text = data.toString();
             rawOutput += text; // Keep raw output for debugging
-            lastDataTime = Date.now();
             menuBuffer += text;
 
             // Check if we're at the OPNsense menu (look for menu indicators)
@@ -573,43 +769,17 @@ export class SSHTool extends BaseTool {
               if (promptDetected || text.match(/[~#\$]\s*$/m)) {
                 commandExecuted = true;
                 logger.info(`Executing command in shell: ${command}`);
-                // Execute command directly (no bash -c wrapper for cleaner output)
-                stream.write(`${command}\n`);
-                // Set a timeout to exit if no more output
-                // For commands that might take time (like guest agent), wait longer
-                const outputTimeout = command.includes("guest") || command.includes("pvesh") || command.includes("qm") ? 10000 : 5000;
-                
-                // Track if we've seen any useful output (not just errors)
-                let hasUsefulOutput = false;
-                const checkOutput = setInterval(() => {
-                  if (stdout.length > 0 && !stdout.match(/^ipcc_send_rec|^Unable to load/)) {
-                    hasUsefulOutput = true;
-                  }
-                }, 500);
-                
-                setTimeout(() => {
-                  clearInterval(checkOutput);
-                  // Check if we got output recently
-                  const timeSinceLastData = Date.now() - lastDataTime;
-                  // Wait longer if we haven't seen useful output yet
-                  const waitTime = hasUsefulOutput ? 1000 : 3000;
-                  
-                  if (timeSinceLastData > waitTime) {
-                    // No output for waitTime, safe to exit
-                    stream.write("exit\n");
-                    setTimeout(() => {
-                      stream.end();
-                    }, 500);
-                  } else {
-                    // Still getting output, wait a bit more
-                    setTimeout(() => {
-                      stream.write("exit\n");
-                      setTimeout(() => {
-                        stream.end();
-                      }, 500);
-                    }, waitTime);
-                  }
-                }, outputTimeout);
+                completionMarker =
+                  `__PALINDROME_COMMAND_DONE_${Date.now()}_${Math.random()
+                    .toString(16)
+                    .slice(2)}__`;
+                // The marker provides deterministic command completion and the
+                // real remote exit code. OPNsense's interactive menu otherwise
+                // offers no reliable channel-close event for individual commands.
+                // Its root shell is tcsh, where the last exit code is $status.
+                stream.write(
+                  `${command}; echo ${completionMarker}:$status\n`
+                );
                 return;
               }
             }
@@ -617,6 +787,19 @@ export class SSHTool extends BaseTool {
             // Collect command output - collect everything, filter later
             if (commandExecuted) {
               stdout += text; // Collect raw output first
+              if (!commandCompleted && completionMarker) {
+                const completionPattern = new RegExp(
+                  `${completionMarker}:(\\d+)`
+                );
+                const completion = stdout.match(completionPattern);
+                if (completion) {
+                  commandCompleted = true;
+                  commandExitCode = Number.parseInt(completion[1] ?? "1", 10);
+                  stdout = stdout.replace(completionPattern, "");
+                  stream.write("exit\n");
+                  closeTimer = setTimeout(() => stream.close(), 100);
+                }
+              }
             }
           });
 
@@ -626,23 +809,27 @@ export class SSHTool extends BaseTool {
 
           // Add timeout to prevent hanging
           const timeout = setTimeout(() => {
-            // If we have output, the command likely succeeded - just close cleanly
-            if (stdout.trim().length > 0) {
-              logger.info("SSH command completed (timeout reached but output received)");
-            } else {
-              logger.error("SSH command timeout - no output received");
-            }
-            stream.end();
-            sshPool.releaseConnection(targetHost, username);
-            resolve({ 
-              stdout: stdout || "Command executed but no output received", 
-              stderr, 
-              exitCode: 0 
+            commandExitCode = 124;
+            stderr +=
+              `${stderr.endsWith("\n") || stderr.length === 0 ? "" : "\n"}` +
+              "SSH command timed out before receiving its completion marker";
+            logger.error("SSH command timeout before completion marker", {
+              command,
+              host: targetHost,
+              outputLength: stdout.length,
             });
-          }, 10000); // 10 second timeout
+            stream.close();
+          }, 15000);
 
           stream.on("close", () => {
             clearTimeout(timeout);
+            if (closeTimer) clearTimeout(closeTimer);
+            if (commandExecuted && !commandCompleted && commandExitCode === 0) {
+              commandExitCode = 1;
+              stderr +=
+                `${stderr.endsWith("\n") || stderr.length === 0 ? "" : "\n"}` +
+                "SSH channel closed before receiving its completion marker";
+            }
             // Don't close connection, release it back to pool
             sshPool.releaseConnection(targetHost, username);
             
@@ -684,6 +871,12 @@ export class SSHTool extends BaseTool {
               if (cleanLine === command.trim() || 
                   cleanLine === `$ ${command.trim()}` ||
                   cleanLine === `# ${command.trim()}`) {
+                continue;
+              }
+
+              // Skip the decorated command echo and completion marker used to
+              // detect the end of an interactive OPNsense command.
+              if (cleanLine.includes("__PALINDROME_COMMAND_DONE_")) {
                 continue;
               }
               
@@ -733,7 +926,7 @@ export class SSHTool extends BaseTool {
             resolve({ 
               stdout: commandOutput || stdout, 
               stderr, 
-              exitCode: 0 
+              exitCode: commandExitCode
             });
           });
         });
@@ -898,6 +1091,10 @@ export class SSHTool extends BaseTool {
       let username = hostConfig?.username || process.env[`SSH_USER_${envHostKey}`] || process.env.SSH_USER || "root";
       let password = process.env[`SSH_PASSWORD_${envHostKey}`] || process.env.SSH_PASSWORD;
       let privateKey = process.env[`SSH_KEY_${envHostKey}`];
+      // Only meaningful for legacy_ssh hosts — enables privileged-EXEC
+      // commands via an interactive `enable` handshake. See
+      // executeLegacyInteractiveSSHCommand.
+      const enablePassword = process.env[`SSH_ENABLE_PASSWORD_${envHostKey}`];
       
       // If no key specified, try to use default SSH keys for passwordless auth
       if (!privateKey && !password) {
@@ -929,7 +1126,9 @@ export class SSHTool extends BaseTool {
 
       logger.info(`SSH auth: user=${username}, hasPassword=${!!password}, hasKey=${!!privateKey}`);
 
-      const result = await this.executeSSHCommand(resolvedHost, finalCommand, username, privateKey, password, resolvedHost);
+      const result = await this.executeSSHCommand(
+        resolvedHost, finalCommand, username, privateKey, password, resolvedHost, hostConfig?.legacy_ssh === true, enablePassword
+      );
 
       if (result.exitCode !== 0) {
         return {

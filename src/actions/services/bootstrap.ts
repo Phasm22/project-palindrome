@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ConnectionTarget } from "../../types/connections";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { AnsibleRunner } from "../helpers/ansible-runner";
 import {
@@ -12,14 +13,14 @@ import {
  * Bootstrap Action Schema
  */
 export const BootstrapSchema = z.object({
-  vmName: z.string().min(1, "VM name is required"),
-  playbook: z.string().default("common.yml"), // Default to common.yml
-  waitForVm: z.boolean().default(true), // Wait for SSH accessibility
-  timeout: z.number().int().positive().default(300), // SSH wait timeout in seconds
-  extraVars: z.record(z.string(), z.any()).optional(), // Additional Ansible variables
-  retryOnFailure: z.boolean().default(false), // Retry on failure
-  maxRetries: z.number().int().positive().default(1), // Max retry attempts
-  dryRun: z.boolean().default(false),
+  vmName: z.string().min(1, "VM name is required").describe("VM name to bootstrap (resolved via digital twin to obtain the SSH hostname)"),
+  playbook: z.string().default("common.yml").describe("Ansible playbook filename to run (default: 'common.yml')"),
+  waitForVm: z.boolean().default(true).describe("Wait for SSH to become accessible before running the playbook (default: true)"),
+  timeout: z.number().int().positive().default(300).describe("SSH wait timeout in seconds (default: 300)"),
+  extraVars: z.record(z.string(), z.any()).optional().describe("Additional Ansible extra-vars to pass to the playbook (optional)"),
+  retryOnFailure: z.boolean().default(false).describe("Retry the playbook on failure (default: false)"),
+  maxRetries: z.number().int().positive().default(1).describe("Maximum number of retry attempts when retryOnFailure is true (default: 1)"),
+  dryRun: z.boolean().default(false).describe("Preview without executing the playbook (default: false)"),
 });
 
 export type BootstrapParams = z.infer<typeof BootstrapSchema>;
@@ -38,6 +39,7 @@ export interface BootstrapResult {
   duration: number;
   message: string;
   errors?: string[];
+  connectionTarget?: ConnectionTarget;
 }
 
 /**
@@ -183,6 +185,16 @@ export async function bootstrap(params: BootstrapParams): Promise<BootstrapResul
           stdout: result.stdout,
           stderr: result.stderr,
           duration,
+          connectionTarget: {
+            hostname,
+            ipAddresses: [],
+            hints: [
+              { service: "SSH", protocol: "ssh", port: 22, username: "ops" },
+              ...(["common.yml", "docker.yml"].includes(playbook)
+                ? [{ service: "Portainer", protocol: "http" as const, port: 9000, path: "/" }]
+                : []),
+            ],
+          },
           message: `Bootstrap completed successfully on ${hostname}. ` +
             `${tasksChanged} task(s) changed, ${tasksFailed} task(s) failed.`,
         };

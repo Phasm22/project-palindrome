@@ -16,6 +16,7 @@ export interface ToolExecution {
   error?: string;
   node?: string; // For Proxmox operations
   vmid?: number; // For VM operations
+  traceId?: string; // Links back to the parent reasoning_traces row
 }
 
 export interface ToolExecutionFilters {
@@ -25,6 +26,7 @@ export interface ToolExecutionFilters {
   since?: Date;
   limit?: number;
   offset?: number;
+  traceId?: string;
 }
 
 export interface ToolExecutionStats {
@@ -78,16 +80,29 @@ export class ToolExecutionStore {
       CREATE INDEX IF NOT EXISTS idx_node ON tool_executions(node);
       CREATE INDEX IF NOT EXISTS idx_vmid ON tool_executions(vmid);
     `);
+
+    try {
+      const tableInfo = this.db.prepare("PRAGMA table_info(tool_executions)").all() as any[];
+      const hasTraceId = tableInfo.some((col) => col.name === "trace_id");
+      if (!hasTraceId) {
+        this.db.exec("ALTER TABLE tool_executions ADD COLUMN trace_id TEXT;");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_trace_id ON tool_executions(trace_id);");
+      }
+    } catch (error: any) {
+      if (!error.message.includes("duplicate column")) {
+        pceLogger.error("Failed to migrate tool_executions schema", { error: error.message });
+      }
+    }
   }
 
   async recordExecution(execution: Omit<ToolExecution, "id">): Promise<void> {
     const id = crypto.randomUUID();
     const stmt = this.db.prepare(`
-      INSERT INTO tool_executions 
-      (id, tool_name, parameters, result_data, result_error, user_id, acl_group, duration_ms, timestamp, node, vmid)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tool_executions
+      (id, tool_name, parameters, result_data, result_error, user_id, acl_group, duration_ms, timestamp, node, vmid, trace_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    
+
     try {
       stmt.run(
         id,
@@ -100,7 +115,8 @@ export class ToolExecutionStore {
         execution.durationMs,
         execution.timestamp.getTime(),
         execution.node || null,
-        execution.vmid || null
+        execution.vmid || null,
+        execution.traceId || null
       );
       
       pceLogger.debug("Recorded tool execution", {
@@ -152,6 +168,13 @@ export class ToolExecutionStore {
       queryParams.push(filters.since.getTime());
     }
 
+    if (filters.traceId) {
+      query += " AND trace_id = ?";
+      countQuery += " AND trace_id = ?";
+      countParams.push(filters.traceId);
+      queryParams.push(filters.traceId);
+    }
+
     // Get total count (without pagination params)
     const countStmt = this.db.prepare(countQuery);
     const countResult = countStmt.get(...countParams) as { total: number };
@@ -187,6 +210,7 @@ export class ToolExecutionStore {
       node: row.node || undefined,
       vmid: row.vmid || undefined,
       error: row.result_error || undefined,
+      traceId: row.trace_id || undefined,
     }));
 
     return { executions, total };
@@ -271,3 +295,16 @@ export function getToolExecutionStore(): ToolExecutionStore {
   return storeInstance;
 }
 
+export function setToolExecutionStoreForTests(store: ToolExecutionStore | null): void {
+  if (storeInstance && storeInstance !== store) {
+    storeInstance.close();
+  }
+  storeInstance = store;
+}
+
+export function resetToolExecutionStoreForTests(): void {
+  if (storeInstance) {
+    storeInstance.close();
+    storeInstance = null;
+  }
+}

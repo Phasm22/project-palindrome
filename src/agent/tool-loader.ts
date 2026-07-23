@@ -5,6 +5,7 @@ import { CreateIncidentTicketTool } from "../tools/CreateIncidentTicketTool";
 import { LookupUserProfileTool } from "../tools/LookupUserProfileTool";
 import { OpnsenseReadOnlyTool } from "../tools/opnsense/readonly";
 import { OpnsenseSafeWriteTool } from "../tools/opnsense/writes";
+import { PiholeReadOnlyTool } from "../tools/pihole/readonly";
 import { ProxmoxReadOnlyTool } from "../tools/proxmox/readonly";
 import { ProxmoxWriteTool } from "../tools/proxmox/writes";
 import { SSHTool } from "../tools/SSHTool";
@@ -14,6 +15,7 @@ import { ActionTool } from "../tools/ActionTool";
 import { SummarizeObservationsTool } from "../tools/SummarizeObservationsTool";
 import { NextStepsTool } from "../tools/NextStepsTool";
 import { AskMissingTool } from "../tools/AskMissingTool";
+import { ApplicationLifecycleTool } from "../tools/actions/ApplicationLifecycleTool";
 
 export function loadTools(): BaseTool[] {
   return [
@@ -26,12 +28,13 @@ export function loadTools(): BaseTool[] {
     new CreateIncidentTicketTool(),
     new OpnsenseReadOnlyTool(),
     new OpnsenseSafeWriteTool(),
+    new PiholeReadOnlyTool(),
     new ProxmoxReadOnlyTool(),
     new ProxmoxWriteTool(),
     new SSHTool(),
     new MCPOpnsenseTool(),
     new TwinQueryTool(),
+    new ApplicationLifecycleTool(),
     new ActionTool(),
   ];
 }
-

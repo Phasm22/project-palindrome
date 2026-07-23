@@ -10,6 +10,7 @@ import { RealtimeIngestionQueue, type WebhookPayload } from "./queue";
 
 export interface WebhookListenerOptions {
   port?: number;
+  hostname?: string;
   path?: string;
   secret?: string; // Optional webhook secret for validation
 }
@@ -25,7 +26,8 @@ export class WebhookListener {
   constructor(queue: RealtimeIngestionQueue, options: WebhookListenerOptions = {}) {
     this.queue = queue;
     this.options = {
-      port: options.port || 3001,
+      port: options.port ?? 3001,
+      hostname: options.hostname ?? "127.0.0.1",
       path: options.path || "/webhook",
       secret: options.secret || "",
     };
@@ -45,6 +47,7 @@ export class WebhookListener {
 
     this.server = Bun.serve({
       port: this.options.port,
+      hostname: this.options.hostname,
       async fetch(req) {
         const url = new URL(req.url);
 
@@ -101,9 +104,10 @@ export class WebhookListener {
     });
 
     pceLogger.info(`Webhook listener started`, {
-      port: this.options.port,
+      port: this.server.port,
+      hostname: this.options.hostname,
       path: this.options.path,
-      url: `http://localhost:${this.options.port}${this.options.path}`,
+      url: `http://${this.options.hostname}:${this.server.port}${this.options.path}`,
     });
   }
 
@@ -150,9 +154,10 @@ export class WebhookListener {
   /**
    * Get server info
    */
-  getInfo(): { port: number; path: string; running: boolean } {
+  getInfo(): { hostname: string; port: number; path: string; running: boolean } {
     return {
-      port: this.options.port,
+      hostname: this.options.hostname,
+      port: this.server?.port ?? this.options.port,
       path: this.options.path,
       running: this.server !== null,
     };

@@ -34,4 +34,6 @@ export interface ConversationContext {
   pendingActionPreview?: string;
   pendingActionExecuteInput?: string;
   pendingActionExpiresAt?: number;
+  // Session-scoped entity resolution cache for follow-up reference resolution
+  resolvedEntities?: Record<string, string>;
 }

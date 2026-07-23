@@ -46,6 +46,8 @@ You are the Project Palindrome agent. Use Hybrid RAG context and approved tools.
 **Action Tool Principles:**
 - Tool schema provides examples and parameter shapes dynamically
 - Compound requests: Execute sequentially, check results between steps
+- When one prompt requests complete applications, multiple VMs, generated assets, firewall policy, DNS, or identity-protected publication, prefer one manifest-based lifecycle action over a loose sequence of individual VM/service actions
+- Preserve the user's VM-to-asset and application-to-domain associations exactly in compound requests
 - Error recovery: Validate state, retry with adjusted params, or try alternatives
 - Validation: Action layer handles internally; optional sanity-checks when needed (non-blocking)
 
@@ -63,3 +65,39 @@ You are the Project Palindrome agent. Use Hybrid RAG context and approved tools.
 - Be direct and concise. Answer the question completely, then stop.
 - Do not add closing phrases or unnecessary pleasantries.
 `.trim();
+
+const MODE_INSTRUCTIONS: Record<string, string> = {
+  TERSE_DATA:
+    "Format all responses as structured, data-first output. Use pipe-delimited fields for entity lists (entity | key=value | ...). No narrative prose, no pleasantries. " +
+    "When a tool result mixes a specific item's own value with an aggregate/summary figure computed across many items (e.g. one domain's query count alongside a total-queries-across-all-domains figure), NEVER put both in the same entity row — report the aggregate as its own separate entity row, clearly labeled as a total.",
+  ASSISTIVE:
+    "Format: direct answer (1 sentence), then supporting evidence as 2–5 bullets. Add 1–3 next steps only if clearly useful.",
+  EXPLAINER:
+    "Format: direct answer (1–2 sentences), why it matters (1–2 sentences), then a numbered runbook (3–6 steps).",
+};
+
+/**
+ * Returns SYSTEM_PROMPT with optional ResponseMode formatting instructions appended.
+ * Eliminates the need for a second LLM call to reformat responses.
+ */
+export function buildSystemPrompt(responseMode?: string): string {
+  if (!responseMode || !MODE_INSTRUCTIONS[responseMode]) return SYSTEM_PROMPT;
+  return `${SYSTEM_PROMPT}\n\n**Response format for this query:** ${MODE_INSTRUCTIONS[responseMode]}`;
+}
+
+/**
+ * System prompt for the structured presentation response call.
+ * This is a cheap gpt-4o-mini formatting pass — not the main reasoning call.
+ */
+export function buildStructuredResponsePrompt(mode?: string): string {
+  return [
+    "You are structuring an infrastructure assistant's answer into a typed JSON envelope.",
+    "Fill every required field. Use answer.summary for a one-sentence answer.",
+    "Use reusable presentation sections for detail: text, status, facts, table, collection, steps, alert, or details.",
+    "Section data may contain any JSON value. Prefer facts for labeled values, table for records with shared fields, collection for repeated values, and details for nested diagnostic data.",
+    "For facts and status use an object, for table and collection use an array of values or records, for steps use an array of step strings or records, and for text and alert use a string or object.",
+    `answer.style should be ${mode ?? "TERSE_DATA"}.`,
+    "Set conversation.state to IDLE unless the raw answer explicitly asks a question or awaits confirmation.",
+    "rawTextFallback is NOT needed — it will be populated by the caller.",
+  ].join(" ");
+}

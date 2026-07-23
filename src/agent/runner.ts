@@ -3,12 +3,16 @@ import { createHash, randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import type { AgentResponse } from "../types/agent";
 import type { ExecutionResult } from "../types/execution";
+import { ConnectionTargetSchema, type ConnectionEndpoint } from "../types/connections";
+import { buildConnectionEndpoints, resolveConnectionTarget, verifyConnectionEndpoints } from "../connections/verifier";
 import type { ConversationContext, ConversationState, UserPreferences } from "../types";
 import { logger } from "../utils/logger";
 import { loadTools } from "./tool-loader";
 import { executeToolCall } from "./tool-executor";
 import { AgentContext } from "./context";
-import { SYSTEM_PROMPT } from "./system-prompt";
+import { SYSTEM_PROMPT, buildSystemPrompt, buildStructuredResponsePrompt } from "./system-prompt";
+import { generateObject } from "ai";
+import { openai as aiSdkOpenai } from "@ai-sdk/openai";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
 import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
@@ -19,7 +23,9 @@ import {
   type ReasoningTraceProvenance,
 } from "../pce/api/reasoning-trace-store";
 import { AgentEventBus } from "./event-bus";
+import { createTextAgentResponse } from "./schemas/agent-response";
 import type { BaseTool } from "../tools/BaseTool";
+import { formatToolGuidance, type ToolSchema } from "../tools/tool-schema";
 import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-intents";
 import {
   describeClusterChain,
@@ -44,13 +50,18 @@ import {
   vmIpByNameChain,
   vmNetworksFromIngestionChain,
   vmReachabilityChain,
+  switchVlansChain,
+  switchPortsByVlanChain,
+  interfaceLookupChain,
 } from "../reasoning/chains/network";
 import { detectFirewallIntent, type FirewallIntent } from "../reasoning/detectFirewallIntent";
 import {
   listFirewallRulesChain,
   countFirewallRulesChain,
+  aliasContentsChain,
   allowedPortsBetweenChain,
   firewallRulesByChainChain,
+  sourcesAccessingNetworkChain,
   rulesAllowingSubnetChain,
   rulesBlockingSubnetChain,
   exposureMapChain,
@@ -65,12 +76,21 @@ import {
   attackPathChain,
   listInternetExposedVmsChain,
 } from "../reasoning/chains/exposure";
-import { detectActionIntent } from "../reasoning/action-intents";
+import { detectActionIntent, extractCreateVmParameters } from "../reasoning/action-intents";
+import {
+  buildApplicationManifest,
+  parseCompoundApplicationRequest,
+} from "./application-request";
 import {
   loadKnownEntitiesFromIngestionSummary,
   loadKnownEntitiesFromProxmox,
 } from "../reasoning/clarification";
-import { classifyAndRoute } from "../reasoning/intent-router";
+import { classifyAndRouteWithLLM, classifyIntentWithLLM } from "../reasoning/intent-router";
+import { isLikelyCompositeQuery } from "../reasoning/composite-query";
+import { getRetrievalEligibility, TOOL_FIRST_DOMAINS } from "./retrieval-eligibility";
+import { getToolClassificationRegistry } from "../reasoning/classifier-registry";
+import type { Domain } from "../reasoning/domain-taxonomy";
+import { DOMAIN_CLARIFICATION_SUGGESTIONS } from "../reasoning/domain-consumers";
 import { reclassifyIntentWithContext, FailureTracker, type FailureContext } from "../reasoning/failure-reclassification";
 import { formatResponseForBot, detectResponseIntent, type FormatContext, type ResponseMode } from "./response-formatter";
 import { planConversation } from "./conversation-orchestrator";
@@ -79,15 +99,33 @@ import { resolveClarificationContinuationInput } from "./clarification-continuat
 import { deriveToolCallRisk, mapToolRiskToIntentRisk, maxRisk } from "./tool-risk";
 import { pceLogger } from "../pce/utils/logger";
 import { TerraformRunner } from "../actions/helpers/terraform-runner";
+import { buildAgentState } from "./state";
+import { getOperatorMemoryStore } from "../pce/api/operator-memory-store";
+import { HistoricalScorer } from "./historical-scorer";
+import { registerFeedbackObserver } from "./feedback-observer";
+import {
+  handleConfirmation,
+  handleIdentityAndSocial,
+  handleConfirmRequest,
+  handleClarifyFromPlan,
+  handleExecute,
+  emitFinalEvent,
+  emitStepEvent,
+  parseToolArgs,
+  buildPendingActionRecord,
+  summarizeToolCall,
+  inferMissingToolSlots,
+  cleanupAfterProxmoxDestroy,
+} from "./handlers";
 
 let openaiClient: OpenAI | null = null;
 const ASSISTANT_NAME = "Pally";
 const PROMPT_HASH = createHash("sha256").update(SYSTEM_PROMPT).digest("hex");
 const PROMPT_VERSION = process.env.PROMPT_VERSION ?? PROMPT_HASH.slice(0, 8);
-const MODEL_ID = "gpt-4o-mini";
+const MODEL_ID = process.env.AGENT_CHAT_MODEL || "gpt-4o";
 let cachedAgentVersion: string | null = null;
 
-function getOpenAIClient(): OpenAI {
+export function getOpenAIClient(): OpenAI {
   if (!openaiClient) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -140,7 +178,7 @@ function computeToolRegistryVersion(tools: BaseTool[]): string {
   return createHash("sha256").update(JSON.stringify(toolDigest)).digest("hex");
 }
 
-function buildProvenance(params: {
+export function buildProvenance(params: {
   toolRegistryVersion?: string;
   policyMode?: string;
   selectedMode?: ResponseMode;
@@ -216,58 +254,44 @@ function isMetaIdentityQuery(input: string): boolean {
   return /^(what do you do|what can you do)\??$/.test(normalized);
 }
 
-const RETRIEVAL_MIN_SCORE = 0.35;
+export const RETRIEVAL_MIN_SCORE = 0.35;
 
-function getRetrievalEligibility(params: {
-  intent: string;
-  isTrivialQuery: boolean;
-  isActionIntent: boolean;
-  isRealTimeMetricQuery: boolean;
-  isMetaIdentityQuery: boolean;
-}): { eligible: boolean; reason?: string } {
-  if (params.isMetaIdentityQuery) {
-    return { eligible: false, reason: "meta_identity" };
-  }
-  if (params.intent === "CHAT_SOCIAL") {
-    return { eligible: false, reason: "chat_social" };
-  }
-  if (params.intent === "CLARIFICATION") {
-    return { eligible: false, reason: "clarification" };
-  }
-  if (params.isTrivialQuery) {
-    return { eligible: false, reason: "trivial_query" };
-  }
-  if (params.isActionIntent) {
-    return { eligible: false, reason: "action_intent" };
-  }
-  if (params.isRealTimeMetricQuery) {
-    return { eligible: false, reason: "real_time_metrics" };
-  }
-  if (params.intent !== "QUERY" && params.intent !== "CHAT_REASONING") {
-    return { eligible: false, reason: "intent_not_retrieval" };
-  }
-  return { eligible: true };
-}
+/** Injected when the query is composite so the LLM uses multiple tool calls and synthesizes. */
+export const COMPOSITE_MULTI_STEP_INSTRUCTION =
+  "The user's question has multiple parts (e.g. list items in a scope AND a property like exposure level). You MUST use multiple tool calls to satisfy each part (e.g. first list VMs in the subnet, then get exposure/level for those VMs), then synthesize one answer. Do not answer from only one tool if the question asks for multiple dimensions.";
 
-function hasDomainMatch(domain: string | undefined, rag: HybridApiContext): boolean {
+export function hasDomainMatch(domain: Domain | undefined, rag: HybridApiContext): boolean {
   if (!domain || domain === "general") return true;
   const paths: string[] = [];
   if (rag.sources) {
     paths.push(...rag.sources.map((source) => source.sourcePath || ""));
   }
-  const keywords: Record<string, string[]> = {
-    compute: ["proxmox", "vm", "lxc", "cluster", "compute"],
-    network: ["network", "subnet", "interface", "vlan"],
-    firewall: ["firewall", "opnsense", "rules"],
-    metrics: ["metrics", "temperature", "sensors", "cpu", "memory"],
-  };
-  const tokens = keywords[domain] ?? [];
+  const tokens = getToolClassificationRegistry()[domain].retrievalKeywords;
   if (tokens.length === 0) return true;
   const haystack = paths.join(" ").toLowerCase();
   return tokens.some((token) => haystack.includes(token));
 }
 
-function buildRetrievalArtifacts(rag: HybridApiContext): {
+/**
+ * Gate for the twin-first network reasoning chain (see the "network domain gate" block in
+ * runAgent). Normally restricted to domain === "network" (or absent domain), but the LLM
+ * classifier doesn't reliably tag every network-shaped query with domain "network" — e.g. bare
+ * interface lookups like "what is enx000ec698587a?" sometimes come back domain: "general". A
+ * domain-only gate would silently skip detectNetworkIntent() entirely for those, letting the LLM
+ * hallucinate instead of querying the twin (B-06). A positive match from the deterministic
+ * detector is trusted at least as much as the LLM's own domain guess for routing purposes here —
+ * same spirit as the canHandleDirectlyFromRoute/ASK_CLARIFY bypass elsewhere in this file. This
+ * does NOT weaken the gate for queries the detector doesn't recognize at all: those still require
+ * an absent or exact "network" domain, same as before.
+ */
+export function networkDomainGateAllows(
+  domain: Domain | undefined,
+  networkIntentMatch: unknown | null
+): boolean {
+  return !domain || domain === "network" || networkIntentMatch !== null;
+}
+
+export function buildRetrievalArtifacts(rag: HybridApiContext): {
   artifacts: ReasoningTraceArtifactInput[];
   ragContextId?: string;
   graphContextId?: string;
@@ -325,7 +349,7 @@ function buildRetrievalArtifacts(rag: HybridApiContext): {
   return { artifacts, ragContextId, graphContextId, fusionContextId };
 }
 
-function buildRetrievalToolCalls(rag: HybridApiContext): ReasoningStep["toolCalls"] {
+export function buildRetrievalToolCalls(rag: HybridApiContext): ReasoningStep["toolCalls"] {
   const calls: ReasoningStep["toolCalls"] = [];
   const ragSummary = {
     queryType: rag.queryType,
@@ -379,37 +403,57 @@ function buildRetrievalToolCalls(rag: HybridApiContext): ReasoningStep["toolCall
   return calls;
 }
 
-function buildConversationMemoryPrompt(context?: ConversationContext): string | null {
+export function buildConversationMemoryPrompt(context?: ConversationContext): string | null {
   if (!context) return null;
-  const parts: string[] = [];
-  if (context.userName) parts.push(`user_name=${context.userName}`);
-  if (parts.length === 0) return null;
-  return `Conversation memory (chat scope only): ${parts.join(" | ")}`;
+  const lines: string[] = [];
+
+  // Session context
+  if (context.userName) lines.push(`user: ${context.userName}`);
+  if (context.activeHost) lines.push(`active_host: ${context.activeHost}`);
+  if (context.activeService) lines.push(`active_service: ${context.activeService}`);
+  if (context.lastIncidentSignature) lines.push(`last_incident: ${context.lastIncidentSignature}`);
+
+  // Pending action (human-readable fields only — skip id/digest/timestamps/raw payload)
+  if (context.pendingActionType) lines.push(`pending_action_type: ${context.pendingActionType}`);
+  if (context.pendingActionSummary) lines.push(`pending_action_summary: ${context.pendingActionSummary}`);
+  if (context.pendingActionPreview) lines.push(`pending_action_preview: ${context.pendingActionPreview}`);
+
+  if (lines.length === 0) return null;
+  return `Conversation memory (chat scope only):\n${lines.map(l => `  ${l}`).join("\n")}`;
 }
 
-function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
+export function buildToolDefinitions(tools: ReturnType<typeof loadTools>) {
   return tools
     .map((tool) => {
       // Use getSchema() if available (for tools like OPNsense that use getSchema)
       // Otherwise fall back to metadata.parameters
       let parameters: Record<string, any> | undefined;
-      
+      let schema: ToolSchema | undefined;
+
       if (typeof (tool as any).getSchema === "function") {
-        const schema = (tool as any).getSchema();
-        parameters = schema.parameters;
+        schema = (tool as any).getSchema();
+        parameters = schema?.parameters;
       } else if (tool.metadata.parameters) {
         parameters = tool.metadata.parameters as Record<string, any>;
       }
-      
+
       if (!parameters) {
         return null;
       }
-      
+
+      // getSchema() often carries examples/notes that metadata.description
+      // doesn't — surface them so the model actually sees tool-specific
+      // usage guidance instead of just the one-line summary.
+      const guidance = schema ? formatToolGuidance(schema) : "";
+      const description = guidance
+        ? `${tool.metadata.description}\n\n${guidance}`
+        : tool.metadata.description;
+
       return {
         type: "function" as const,
         function: {
           name: tool.metadata.name,
-          description: tool.metadata.description,
+          description,
           parameters,
         },
       };
@@ -605,6 +649,12 @@ async function executeNetworkIntent(
         return await vmIpByNameChain(intent.vmNameOrId, tools, session);
       case "vms_with_multiple_interfaces":
         return await vmsWithMultipleInterfacesFromIngestionChain();
+      case "switch_vlans":
+        return await switchVlansChain(tools, session);
+      case "switch_ports_by_vlan":
+        return await switchPortsByVlanChain(tools, session, intent.vlan);
+      case "interface_lookup":
+        return await interfaceLookupChain(tools, session, intent.interfaceName);
       default:
         return null;
     }
@@ -652,10 +702,14 @@ async function executeFirewallIntent(
         return await listFirewallRulesChain(tools, session);
       case "count_rules":
         return await countFirewallRulesChain(intent.direction, tools, session);
+      case "alias_contents":
+        return await aliasContentsChain(intent.aliasName, tools, session);
       case "allowed_ports_between":
         return await allowedPortsBetweenChain(intent.from, intent.to, tools, session);
       case "rules_by_chain":
         return await firewallRulesByChainChain(intent.chain, tools, session);
+      case "sources_accessing_network":
+        return await sourcesAccessingNetworkChain(intent.chain, intent.target, tools, session);
       case "rules_allowing_subnet":
         return await rulesAllowingSubnetChain(intent.subnet, tools, session);
       case "rules_blocking_subnet":
@@ -681,9 +735,16 @@ function buildFirewallToolCalls(intent: FirewallIntent): Array<{ toolName: strin
       return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
     case "count_rules":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_list_rules" } }];
+    case "alias_contents":
+      return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_aliases_get", alias_name: intent.aliasName } }];
     case "allowed_ports_between":
-      return [{ toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } }];
+      return [
+        { toolName: "opnsense_readonly", parameters: { action: "firewall_rules_list" } },
+        { toolName: "opnsense_readonly", parameters: { action: "firewall_aliases_list" } },
+      ];
     case "rules_by_chain":
+      return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_by_chain", params: { chain: intent.chain } } }];
+    case "sources_accessing_network":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_by_chain", params: { chain: intent.chain } } }];
     case "rules_allowing_subnet":
       return [{ toolName: "twin_query", parameters: { operation: "firewall_rules_allowing_subnet", params: { subnet: intent.subnet } } }];
@@ -717,11 +778,15 @@ export type AgentRunOptions = {
   conversationContext?: ConversationContext;
   userPreferences?: UserPreferences;
   conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>; // Previous messages in conversation
+  /** Cooperatively stops the run. In-flight tools finish before the run becomes idle. */
+  signal?: AbortSignal;
   /** When set (e.g. by PCE API), used to inject profile public key into create_vm params for dashboard users */
   getProfilePublicKey?: (userId: string) => string | null;
+  /** When set (e.g. by PCE API), used to inject profile SSH username into create_vm params for dashboard users */
+  getProfileSshUsername?: (userId: string) => string | null;
 };
 
-function coerceTextContent(content: any): string {
+export function coerceTextContent(content: any): string {
   if (!content) return "";
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -738,6 +803,8 @@ export async function runAgent(
 ): Promise<AgentResponse> {
   const options: AgentRunOptions =
     typeof optionsOrStream === "boolean" ? { stream: optionsOrStream } : optionsOrStream ?? {};
+
+  options.signal?.throwIfAborted();
 
   if (options.stream) {
     logger.warn("Streaming mode is not available with tool orchestration; defaulting to non-streaming mode.");
@@ -771,145 +838,66 @@ export async function runAgent(
       : (pendingActionCreatedAt ? (Date.now() - pendingActionCreatedAt) > (15 * 60 * 1000) : false);
   let usedPendingAction = false;
 
-  const emitStepEvent = (data: Record<string, any>) => {
-    eventBus.emit({
-      type: "agent:step",
-      sessionId,
-      timestamp: Date.now(),
-      data,
-    });
-  };
-
-  const emitFinalEvent = (text: string, extra: Record<string, any> = {}) => {
-    eventBus.emit({
-      type: "agent:final",
-      sessionId,
-      timestamp: Date.now(),
-      data: {
-        text,
-        totalSteps: extra.totalSteps ?? 0,
-        totalToolCalls: extra.totalToolCalls ?? 0,
+  /** Record a minimal reasoning trace for router/handler early-returns so observability matches PCE logs. */
+  const recordRouterTrace = async (
+    userInput: string,
+    finalResponse: string,
+    handler: string,
+    decision: string,
+    sessionLike: { userId: string; aclGroup: string }
+  ) => {
+    try {
+      const traceStore = getReasoningTraceStore();
+      await traceStore.recordTrace({
+        userId: sessionLike.userId,
+        aclGroup: sessionLike.aclGroup,
+        userInput,
+        finalResponse,
+        steps: [{
+          step: 1,
+          toolCalls: [],
+          decisions: [{
+            type: "conversation_path",
+            description: `Router: ${handler} (decision=${decision}). Response returned without EXECUTE.`,
+            metadata: { handler, decision, router: "runAgent" },
+          }],
+        }],
+        totalSteps: 1,
+        totalToolCalls: 0,
+        maxStepsReached: false,
+        timestamp: new Date(),
         durationMs: Date.now() - startTime,
-        ...extra,
-      },
-    });
+      });
+    } catch (error: any) {
+      logger.warn("Failed to record router trace", { error: error.message, handler, decision });
+    }
   };
 
-  if (confirmation.cancelled) {
-    const prompt = pendingActionId
-      ? "Cancelled the pending change. Nothing was applied."
-      : "There is no pending change to cancel.";
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "IDLE",
-      conversationContext: {
-        pendingAction: "",
-        pendingActionId: "",
-        pendingActionDigest: "",
-        pendingActionCreatedAt: 0,
-        pendingActionSummary: "",
-        pendingActionType: "",
-        pendingActionPreview: "",
-        pendingActionExecuteInput: "",
-        pendingActionExpiresAt: 0,
-      },
+  const confirmResult = handleConfirmation({
+    confirmation,
+    userInput,
+    pendingActionId,
+    pendingActionExecuteInput,
+    pendingAction,
+    pendingActionPreview,
+    pendingActionSummary,
+    pendingActionCreatedAt,
+    pendingActionExpiresAt,
+    pendingActionExpired,
+    conversationContext: options.conversationContext,
+    eventBus,
+    sessionId,
+    startTime,
+  });
+  if (confirmResult.handled) {
+    await recordRouterTrace(originalUserInput, confirmResult.response.text, "handleConfirmation", "CONFIRM_HANDLED", {
+      userId: options.userId ?? "agent-user",
+      aclGroup: options.aclGroup ?? "admin",
     });
-    pceLogger.incrementCounter("confirmation_rejected");
-    return { text: prompt };
+    return confirmResult.response;
   }
-
-  if (confirmation.confirmed && !pendingActionId) {
-    const prompt = "There is no pending action to confirm. Re-submit the change request first.";
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "IDLE",
-    });
-    pceLogger.incrementCounter("confirmation_mismatch");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && !confirmation.actionId && pendingActionId) {
-    const prompt = `Pending change requires explicit confirmation. Reply with CONFIRM ${pendingActionId} to apply, or CANCEL.`;
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "AWAITING_CONFIRMATION",
-      conversationContext: {
-        pendingAction,
-        pendingActionId,
-        pendingActionDigest: options.conversationContext?.pendingActionDigest,
-        pendingActionCreatedAt,
-        pendingActionSummary,
-        pendingActionPreview,
-        pendingActionExecuteInput,
-        pendingActionExpiresAt,
-      },
-      confirmationRequired: true,
-      confirmationId: pendingActionId,
-      confirmationPreview: pendingActionPreview ?? pendingActionSummary ?? pendingAction ?? "",
-      confirmationExpiresAt: pendingActionExpiresAt ?? 0,
-    });
-    pceLogger.incrementCounter("confirmation_mismatch");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && confirmation.actionId && pendingActionId && confirmation.actionId !== pendingActionId) {
-    const prompt = `Confirmation id does not match the pending action. Reply with CONFIRM ${pendingActionId} to apply, or CANCEL.`;
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "AWAITING_CONFIRMATION",
-      conversationContext: {
-        pendingAction,
-        pendingActionId,
-        pendingActionDigest: options.conversationContext?.pendingActionDigest,
-        pendingActionCreatedAt,
-        pendingActionSummary,
-        pendingActionPreview,
-        pendingActionExecuteInput,
-        pendingActionExpiresAt,
-      },
-      confirmationRequired: true,
-      confirmationId: pendingActionId,
-      confirmationPreview: pendingActionPreview ?? pendingActionSummary ?? pendingAction ?? "",
-      confirmationExpiresAt: pendingActionExpiresAt ?? 0,
-    });
-    pceLogger.incrementCounter("confirmation_mismatch");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && pendingActionExpired && pendingActionId) {
-    const prompt = "Confirmation expired. Please re-request the change.";
-    emitFinalEvent(prompt, {
-      clarification: true,
-      needsResponse: true,
-      conversationState: "IDLE",
-      conversationContext: {
-        pendingAction: "",
-        pendingActionId: "",
-        pendingActionDigest: "",
-        pendingActionCreatedAt: 0,
-        pendingActionSummary: "",
-        pendingActionType: "",
-        pendingActionPreview: "",
-        pendingActionExecuteInput: "",
-        pendingActionExpiresAt: 0,
-      },
-    });
-    pceLogger.incrementCounter("confirmation_expired");
-    return { text: prompt };
-  }
-
-  if (confirmation.confirmed && pendingActionExecuteInput && pendingActionId && confirmation.actionId === pendingActionId) {
-    userInput = pendingActionExecuteInput;
-    usedPendingAction = true;
-    pceLogger.incrementCounter("confirmation_approved");
-    // Keep confirmation intact so evaluateDialogPolicy can compute confirmationAllowed=true
-    // and set decision=EXECUTE. Resetting confirmation here causes the replayed high-risk
-    // action to loop back to ASK_CONFIRM because the policy sees no confirmation.
-  }
+  userInput = confirmResult.effectiveInput;
+  usedPendingAction = confirmResult.usedPendingAction;
 
   const clarificationContinuation = resolveClarificationContinuationInput({
     userInput,
@@ -924,6 +912,9 @@ export async function runAgent(
     userId: options.userId ?? "agent-user",
     aclGroup: options.aclGroup ?? "admin",
   };
+
+  const operatorMemoryStore = getOperatorMemoryStore();
+  const historicalScorer = new HistoricalScorer(operatorMemoryStore);
 
   const confirmHighRisk = options.confirmHighRisk ?? (async ({ toolName }) => defaultConfirmHighRisk(toolName));
 
@@ -982,7 +973,7 @@ export async function runAgent(
             metadata: { intent, mode: "twin_first" },
           }],
         }],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
         totalSteps: 1,
         totalToolCalls: toolCalls,
         maxStepsReached: false,
@@ -1047,181 +1038,12 @@ export async function runAgent(
     return parts.join("\n\n");
   };
 
-  const buildPendingActionRecord = (
-    executeInput: string,
-    summary?: string,
-    type: string = "change_request"
-  ) => {
-    const createdAt = Date.now();
-    const expiresAt = createdAt + 15 * 60 * 1000;
-    const digest = createHash("sha256").update(executeInput).digest("hex");
-    const id = digest.slice(0, 8);
-    return {
-      id,
-      digest,
-      createdAt,
-      expiresAt,
-      type,
-      preview: summary ?? executeInput,
-      executeInput,
-      summary: summary ?? executeInput,
-    };
-  };
-
-  const summarizeToolCall = (toolName: string, params: Record<string, any>): string => {
-    if (toolName === "action" && params.action) {
-      const actionName = String(params.action);
-      const actionParams =
-        params.params && typeof params.params === "object" && !Array.isArray(params.params)
-          ? params.params
-          : {};
-      const detailParts: string[] = [];
-      if (typeof actionParams.name === "string" && actionParams.name.trim().length > 0) {
-        detailParts.push(`name ${actionParams.name.trim()}`);
-      }
-      if (typeof actionParams.node === "string" && actionParams.node.trim().length > 0) {
-        detailParts.push(`node ${actionParams.node.trim()}`);
-      }
-      if (typeof actionParams.vmId === "number") {
-        detailParts.push(`vmid ${actionParams.vmId}`);
-      }
-      if (typeof actionParams.vmid === "number") {
-        detailParts.push(`vmid ${actionParams.vmid}`);
-      }
-      return detailParts.length > 0
-        ? `action ${actionName} (${detailParts.join(", ")})`
-        : `action ${actionName}`;
-    }
-    if (toolName === "proxmox_write" && params.action) {
-      const target = params.vmid ? `vmid ${params.vmid}` : params.node ? `node ${params.node}` : "";
-      return `proxmox_write ${params.action}${target ? ` ${target}` : ""}`;
-    }
-    if (toolName === "opnsense_safewrite" && params.action) {
-      return `opnsense ${params.action}`;
-    }
-    return `${toolName} change`;
-  };
-
   const formatStructuredFieldValue = (value: unknown): string => {
     return String(value ?? "")
       .replace(/[\r\n]+/g, " ")
       .replace(/\s+/g, " ")
       .replace(/\|/g, "/")
       .trim();
-  };
-
-  const inferMissingToolSlots = (toolName: string, params: Record<string, any>): string[] => {
-    const missing = new Set<string>();
-
-    if (toolName === "action" && typeof params.action === "string") {
-      const actionName = params.action;
-      const actionParams =
-        params.params && typeof params.params === "object" && !Array.isArray(params.params)
-          ? params.params
-          : {};
-
-      if (actionName === "compute.create_vm") {
-        const node =
-          typeof actionParams.node === "string" ? actionParams.node.trim() : "";
-        if (!node) {
-          missing.add("target");
-          missing.add("node");
-        }
-      }
-
-      if (actionName === "compute.destroy_vm") {
-        const hasName = typeof actionParams.name === "string" && actionParams.name.trim().length > 0;
-        const hasVmId =
-          typeof actionParams.vmId === "number" ||
-          (typeof actionParams.vmid === "number") ||
-          (typeof actionParams.vmId === "string" && actionParams.vmId.trim().length > 0) ||
-          (typeof actionParams.vmid === "string" && actionParams.vmid.trim().length > 0);
-        if (!hasName && !hasVmId) {
-          missing.add("target");
-        }
-      }
-    }
-
-    if (toolName === "proxmox_write" && typeof params.action === "string") {
-      const actionName = params.action.toLowerCase();
-      const requiresVmTarget = ["start_vm", "stop_vm", "restart_vm", "destroy_vm"].includes(actionName);
-      if (requiresVmTarget) {
-        const hasNode = typeof params.node === "string" && params.node.trim().length > 0;
-        const hasVmId =
-          typeof params.vmid === "number" ||
-          (typeof params.vmid === "string" && params.vmid.trim().length > 0);
-        if (!hasNode) missing.add("node");
-        if (!hasVmId) missing.add("vmid");
-      }
-    }
-
-    return Array.from(missing);
-  };
-
-  const cleanupAfterProxmoxDestroy = async (vmName: string): Promise<void> => {
-    const normalizedName = vmName.trim();
-    const infraName = normalizedName.replace(/\.prox$/i, "");
-    if (!infraName || infraName.toLowerCase() === "unknown") {
-      return;
-    }
-
-    try {
-      if (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY) {
-        const { getPiholeClient } = await import("../tools/pihole/client");
-        const piholeClient = getPiholeClient();
-        const dnsDomain = normalizedName.toLowerCase().endsWith(".prox")
-          ? normalizedName
-          : `${infraName}.prox`;
-        const existingRecords = await piholeClient.listDnsRecords();
-        const dnsRecord = existingRecords.find((record) => {
-          const left = record.domain.toLowerCase().replace(/\.$/, "");
-          const right = dnsDomain.toLowerCase().replace(/\.$/, "");
-          return left === right;
-        });
-        if (dnsRecord) {
-          await piholeClient.deleteDnsRecord(dnsRecord.domain, dnsRecord.ip);
-          logger.info("Deleted DNS record after proxmox_write destroy_vm", {
-            vmName: normalizedName,
-            domain: dnsRecord.domain,
-            ip: dnsRecord.ip,
-          });
-        } else {
-          logger.warn("No DNS record found after proxmox_write destroy_vm", {
-            vmName: normalizedName,
-            expectedDomain: dnsDomain,
-          });
-        }
-      }
-    } catch (error: any) {
-      logger.warn("Failed DNS cleanup after proxmox_write destroy_vm", {
-        vmName: normalizedName,
-        error: error.message,
-      });
-    }
-
-    const terraformRunner = new TerraformRunner();
-    try {
-      await terraformRunner.removeVmFromState(infraName);
-    } catch (error: any) {
-      logger.warn("Failed to clean Terraform state after proxmox_write destroy_vm", {
-        vmName: infraName,
-        error: error.message,
-      });
-    }
-
-    try {
-      const removed = await terraformRunner.removeVmFromTfvars(infraName);
-      if (!removed) {
-        logger.warn("Destroyed VM not present in tfvars during proxmox_write cleanup", {
-          vmName: infraName,
-        });
-      }
-    } catch (error: any) {
-      logger.warn("Failed to clean tfvars after proxmox_write destroy_vm", {
-        vmName: infraName,
-        error: error.message,
-      });
-    }
   };
 
   // ============================================================
@@ -1236,16 +1058,26 @@ export async function runAgent(
     return tool.execute(params, { toolName, startedAt: Date.now() });
   });
   
-  // Classify intent using probabilistic classifier
-  const { classification, routing } = classifyAndRoute(userInput);
+  // Classify intent using LLM (generateObject); falls back to regex classifier on API failure
+  const { classification, routing } = await classifyAndRouteWithLLM(userInput);
+  const compoundApplicationRequest = parseCompoundApplicationRequest(userInput);
+  if (compoundApplicationRequest && !compoundApplicationRequest.node) {
+    classification.missing = Array.from(new Set([...classification.missing, "environment"]));
+  }
+  const isCompositeQuery = isLikelyCompositeQuery(userInput, classification);
+  const actionName = classification.metadata?.actionType as string | undefined;
+  const historicalScore = historicalScorer.getScore(session.userId, classification.intent, actionName);
+  registerFeedbackObserver(eventBus, operatorMemoryStore, session.userId, session.aclGroup, classification.intent, actionName);
   const conversationPlan = planConversation({
-    userInput: originalUserInput,
+    userInput,
     intent: classification,
     routing,
     conversationState: options.conversationState,
     conversationContext: options.conversationContext,
     userPreferences: options.userPreferences,
     confirmation,
+    score: historicalScore,
+    scorer: historicalScorer,
   });
   const responseMode: ResponseMode | undefined = conversationPlan.responseMode;
   const contextUpdate: ConversationContext = {};
@@ -1271,277 +1103,99 @@ export async function runAgent(
     finalContextUpdate.pendingActionExecuteInput = "";
     finalContextUpdate.pendingActionExpiresAt = 0;
   }
+  const state = buildAgentState({
+    originalUserInput,
+    effectiveUserInput: userInput,
+    sessionId,
+    startTime,
+    session,
+    options,
+    classification,
+    routing,
+    conversationPlan,
+    confirmation,
+    clarificationContinuation,
+    tools,
+    contextUpdate,
+    finalContextUpdate,
+    postExecutionState,
+    responseMode,
+  });
   
   // Store original classification for confidence monotonicity
-  failureTracker.setOriginalClassification(userInput, classification);
+  failureTracker.setOriginalClassification(state.effectiveUserInput, state.classification);
   
   logger.info("Intent classification", {
-    input: userInput.slice(0, 100),
-    type: classification.type,
-    confidence: classification.confidence,
-    metadata: classification.metadata,
-    route: routing.route,
-    clarification_continuation: clarificationContinuation.usedContinuation,
-    clarification_anchor: clarificationContinuation.anchorUserInput,
+    input: state.effectiveUserInput.slice(0, 100),
+    type: state.classification.type,
+    confidence: state.classification.confidence,
+    metadata: state.classification.metadata,
+    route: state.routing.route,
+    clarification_continuation: state.clarificationContinuation.usedContinuation,
+    clarification_anchor: state.clarificationContinuation.anchorUserInput,
   });
   logger.info("Conversation transition", {
     conversation_state_before: options.conversationState ?? "IDLE",
-    decision: conversationPlan.decision,
+    decision: state.conversationPlan.decision,
     confirmation_id: pendingActionId ?? null,
     pending_action_source: usedPendingAction ? "pending_replay" : "user_input",
   });
 
   const policyMode = options.userPreferences?.safeMode ? "safe" : "standard";
   const memoryUserName = options.conversationContext?.userName;
-  const nameUpdate = extractUserNameUpdate(originalUserInput);
-  if (!confirmation.confirmed && nameUpdate) {
-    const text = `Got it. I'll call you ${nameUpdate}.`;
-    const traceStore = getReasoningTraceStore();
-    const traceStep: ReasoningStep = {
-      step: 1,
-      toolCalls: [],
-      decisions: [
-        {
-          type: "retrieval_skipped",
-          description: "Retrieval skipped for explicit identity update.",
-          metadata: { reason: "meta_identity" },
-        },
-      ],
-    };
-    let traceId: string | undefined;
-    try {
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [traceStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record identity update trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      conversationState: "FOLLOWUP",
-      conversationContext: { ...contextUpdate, userName: nameUpdate },
-      memorySource: "user_explicit",
-      memoryConfidence: 0.95,
-      traceId,
-    });
-    return { text };
-  }
-
-  if (!confirmation.confirmed && isUserNameQuery(originalUserInput)) {
-    const text = memoryUserName
-      ? `Your name is ${memoryUserName}.`
-      : "I don't have your name yet. Tell me with \"my name is <name>\".";
-    const traceStore = getReasoningTraceStore();
-    const traceStep: ReasoningStep = {
-      step: 1,
-      toolCalls: [],
-      decisions: [
-        {
-          type: "retrieval_skipped",
-          description: "Retrieval skipped for identity lookup.",
-          metadata: { reason: "meta_identity" },
-        },
-      ],
-    };
-    let traceId: string | undefined;
-    try {
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [traceStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record identity lookup trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-      traceId,
-    });
-    return { text };
-  }
-
-  if (!confirmation.confirmed && isAssistantNameQuery(originalUserInput)) {
-    const text = `My name is ${ASSISTANT_NAME}.`;
-    const traceStore = getReasoningTraceStore();
-    const traceStep: ReasoningStep = {
-      step: 1,
-      toolCalls: [],
-      decisions: [
-        {
-          type: "retrieval_skipped",
-          description: "Retrieval skipped for assistant identity query.",
-          metadata: { reason: "meta_identity" },
-        },
-      ],
-    };
-    let traceId: string | undefined;
-    try {
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [traceStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record assistant identity trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-      traceId,
-    });
-    return { text };
-  }
-
-  // Fast-path social chat: do not run tools/LLM formatting pipeline.
-  // This prevents "Answer/Evidence/Next steps" nonsense for greetings like "Hello".
-  if (classification.intent === "CHAT_SOCIAL" && !confirmation.confirmed) {
-    const text = "Hi — what do you want to check or change in your lab?";
-    let traceId: string | undefined;
-    try {
+  const identityResult = await handleIdentityAndSocial({
+    state,
+    memoryUserName,
+    eventBus,
+    assistantName: ASSISTANT_NAME,
+    recordIdentityTrace: async ({ finalResponse, reason }) => {
       const traceStore = getReasoningTraceStore();
-      traceId = await traceStore.recordTrace({
-        userId: session.userId,
-        aclGroup: session.aclGroup,
-        userInput,
-        finalResponse: text,
-        steps: [{
-          step: 1,
-          toolCalls: [],
-          decisions: [{
-            type: "retrieval_skipped",
-            description: "Retrieval skipped for social greeting.",
-            metadata: { reason: "chat_social" },
+      try {
+        return await traceStore.recordTrace({
+          userId: session.userId,
+          aclGroup: session.aclGroup,
+          userInput,
+          finalResponse,
+          steps: [{
+            step: 1,
+            toolCalls: [],
+            decisions: [{
+              type: "retrieval_skipped",
+              description: `Retrieval skipped for ${reason}.`,
+              metadata: { reason },
+            }],
           }],
-        }],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-        totalSteps: 1,
-        totalToolCalls: 0,
-        maxStepsReached: false,
-        timestamp: new Date(),
-        durationMs: Date.now() - startTime,
-      });
-    } catch (error: any) {
-      logger.warn("Failed to record social trace", { error: error.message });
-    }
-    emitFinalEvent(text, {
-      classification,
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-      traceId,
-    });
-    return { text };
-  }
-
-  // Fast-path subnet sizing questions (avoid falling into intent disambiguation).
-  // Example: "i need a subnet for 128 hosts" → /24 (254 usable), /25 is only 126 usable.
-  const subnetSizing = (() => {
-    const q = (originalUserInput || "").toLowerCase();
-    const match = q.match(/\bsubnet\b[\s\S]*?\b(\d+)\b[\s\S]*?\bhosts?\b/) || q.match(/\b(\d+)\b[\s\S]*?\bhosts?\b[\s\S]*?\bsubnet\b/);
-    if (!match) return null;
-    const hostsRaw = match[1];
-    if (!hostsRaw) return null;
-    const hosts = parseInt(hostsRaw, 10);
-    if (!Number.isFinite(hosts) || hosts <= 0) return null;
-    // IPv4: need 2 extra addresses for network+broadcast
-    const needed = hosts + 2;
-    let size = 1;
-    while (size < needed) size *= 2;
-    const prefix = 32 - Math.log2(size);
-    const usable = Math.max(0, size - 2);
-    // If exactly 128 was requested, call out /25 nuance explicitly.
-    const note = hosts === 128
-      ? "Note: /25 has 128 total addresses but only 126 usable host IPs; /24 is the smallest that supports 128 usable hosts."
-      : undefined;
-    return { hosts, prefix, usable, total: size, note };
-  })();
-  if (subnetSizing) {
-    const text =
-      `SubnetSizing | required_hosts=${subnetSizing.hosts} | smallest_ipv4_prefix=/${subnetSizing.prefix} | usable_hosts=${subnetSizing.usable} | total_addresses=${subnetSizing.total}` +
-      (subnetSizing.note ? ` | note="${subnetSizing.note}"` : "");
-    emitFinalEvent(text, {
-      classification,
-      conversationState: "FOLLOWUP",
-      conversationContext: contextUpdate,
-    });
-    return { text };
-  }
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
+          totalSteps: 1,
+          totalToolCalls: 0,
+          maxStepsReached: false,
+          timestamp: new Date(),
+          durationMs: Date.now() - startTime,
+        });
+      } catch (error: any) {
+        logger.warn("Failed to record identity trace", { error: error.message });
+        return undefined;
+      }
+    },
+  });
+  if (identityResult.handled) return identityResult.response;
 
   // Handle high-risk confirmation gate (bound to pending action)
-  if (conversationPlan.decision === "ASK_CONFIRM") {
-    const pendingActionExecute = userInput;
-    const pendingSummary = conversationPlan.pendingAction ?? pendingActionExecute;
-    const pendingRecord = buildPendingActionRecord(
-      pendingActionExecute,
-      pendingSummary,
-      `intent:${classification.intent.toLowerCase()}`
-    );
-    const confirmationPrompt =
-      `Review pending change: ${pendingRecord.preview}\n` +
-      `Reply with CONFIRM ${pendingRecord.id} to apply, or CANCEL.`;
-    pceLogger.incrementCounter("confirmation_requested");
-    logger.info("Conversation transition", {
-      conversation_state_before: options.conversationState ?? "IDLE",
-      decision: conversationPlan.decision,
-      confirmation_id: pendingRecord.id,
-      pending_action_source: "plan_conversation",
+  if (state.conversationPlan.decision === "ASK_CONFIRM") {
+    const confirmRequestResult = handleConfirmRequest({
+      state,
+      conversationStateBefore: options.conversationState ?? "IDLE",
+      eventBus,
     });
-
-    emitFinalEvent(confirmationPrompt, {
-      confirmationRequired: true,
-      confirmationId: pendingRecord.id,
-      confirmationPreview: pendingRecord.preview,
-      confirmationExpiresAt: pendingRecord.expiresAt,
-      classification,
-      conversationState: conversationPlan.nextState,
-      pendingAction: pendingRecord.preview,
-      conversationContext: {
-        ...contextUpdate,
-        pendingAction: pendingRecord.executeInput,
-        pendingActionId: pendingRecord.id,
-        pendingActionDigest: pendingRecord.digest,
-        pendingActionCreatedAt: pendingRecord.createdAt,
-        pendingActionSummary: pendingRecord.summary,
-        pendingActionType: pendingRecord.type,
-        pendingActionPreview: pendingRecord.preview,
-        pendingActionExecuteInput: pendingRecord.executeInput,
-        pendingActionExpiresAt: pendingRecord.expiresAt,
-      },
+    await recordRouterTrace(originalUserInput, confirmRequestResult.text, "handleConfirmRequest", "ASK_CONFIRM", {
+      userId: session.userId,
+      aclGroup: session.aclGroup,
     });
-    return { text: confirmationPrompt };
+    return confirmRequestResult;
   }
 
   // Handle clarification flow
-  if (conversationPlan.decision === "ASK_CLARIFY") {
-    // Short-circuit: if domain-specific intent detectors can confidently handle this query,
-    // skip clarification and fall through to the direct-handler section below.
-    // The semantic intent classifier can misclassify specific infra queries as ambiguous
-    // (e.g. "can port 22 reach the lab from home" or "summarize wireguard rules").
+  if (state.conversationPlan.decision === "ASK_CLARIFY") {
     const canHandleDirectly =
       detectFirewallIntent(userInput) !== null ||
       detectNetworkIntent(userInput) !== null ||
@@ -1552,74 +1206,23 @@ export async function runAgent(
       logger.info("ASK_CLARIFY bypassed: domain intent detector matched", { userInput: userInput.slice(0, 80) });
       // Fall through to domain-intent handlers below
     } else {
-
-    // If we only know that the intent itself is ambiguous, ask for intent disambiguation
-    // rather than calling ask_missing (which is slot-oriented).
-    if (classification.missing.length === 1 && classification.missing[0] === "intent") {
-      const disambiguation =
-        "What do you want to do next — observe status, diagnose a problem, make a change, or get an explanation?";
-      emitFinalEvent(disambiguation, {
-        clarification: true,
-        needsResponse: true,
-        classification,
-        conversationState: conversationPlan.nextState,
-        conversationContext: contextUpdate,
+      const clarifyResult = await handleClarifyFromPlan({
+        state,
+        execContext: { userId: session.userId, aclGroup: session.aclGroup },
+        eventBus,
       });
-      return { text: disambiguation };
-    }
-
-    if (classification.missing.length > 0) {
-      let clarificationQuestion = "Could you clarify the missing details?";
-      try {
-        const toolResult = await executeToolCall(
-          {
-            toolName: "ask_missing",
-            parameters: {
-              missing: classification.missing,
-              intent: classification.intent,
-              context: `Input: ${originalUserInput}`,
-            },
-          },
-          tools,
-          { userId: session.userId, aclGroup: session.aclGroup }
-        );
-        const question = (toolResult as any)?.data?.question;
-        if (typeof question === "string" && question.trim().length > 0) {
-          clarificationQuestion = question.trim();
-        }
-      } catch (error: any) {
-        logger.warn("ask_missing tool failed, using fallback clarification", { error: error.message });
-      }
-
-      emitFinalEvent(clarificationQuestion, {
-        clarification: true,
-        needsResponse: true,
-        classification,
-        conversationState: conversationPlan.nextState,
-        conversationContext: contextUpdate,
+      await recordRouterTrace(originalUserInput, clarifyResult.text, "handleClarifyFromPlan", "ASK_CLARIFY", {
+        userId: session.userId,
+        aclGroup: session.aclGroup,
       });
-      return { text: clarificationQuestion };
+      return clarifyResult;
     }
-
-    if (routing.route === "clarification") {
-      const disambiguation =
-        "Are you asking to observe, diagnose, change, explain, or plan? Please specify.";
-      emitFinalEvent(disambiguation, {
-        clarification: true,
-        needsResponse: true,
-        classification,
-        conversationState: conversationPlan.nextState,
-        conversationContext: contextUpdate,
-      });
-      return { text: disambiguation };
-    }
-    } // end else (canHandleDirectly was false)
   }
 
   // Handle clarification requests (low confidence or genuinely ambiguous)
   // BUT: If we have domain metadata, try RAG first - it might have the answer
   // EXCEPT: Skip RAG for real-time metric queries (uptime, memory, cpu, etc.) - these need tools
-  if (routing.route === "clarification") {
+  if (state.routing.route === "clarification") {
     // Short-circuit: if a domain-specific intent detector can handle this query directly,
     // skip clarification entirely and fall through to the direct-handler section below.
     // This catches queries like "can port 22 come into the lab from home" which score low
@@ -1637,20 +1240,21 @@ export async function runAgent(
     } else {
 
     logger.info("Input needs clarification", {
-      confidence: classification.confidence,
-      type: classification.type,
-      metadata: classification.metadata,
+      confidence: state.classification.confidence,
+      type: state.classification.type,
+      metadata: state.classification.metadata,
     });
     
     // Detect real-time metric queries that should use tools, not RAG
-    // These queries need current/live data that RAG can't provide accurately
     const realTimeMetricPatterns = [
       /\b(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
       /\b(what|what's|what is)\s+(the\s+)?(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
       /\b(how\s+much\s+)?(memory|ram|cpu|disk)\s+(does|has|is)\s+/i,
       /\b(how\s+long\s+)?(has|is)\s+.*\s+(been\s+)?(running|up)\b/i,
+      /\b(how\s+many\s+).*\b(uptime|running|up)\b/i,
+      /\b(uptime|running)\s+(higher|greater|more|over|>\s*)\s*(\d+)\s*(days?|hours?)/i,
+      /\b(uptime\s+>\s*\d+|\d+\s*\+\s*days?\s+uptime)/i,
     ];
-    
     const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
     
     const clarificationRetrievalDecisions: ReasoningStep["decisions"] = [];
@@ -1661,12 +1265,12 @@ export async function runAgent(
     let clarificationFusionContextId: string | undefined;
 
     // If we have domain metadata, try RAG first - the data might answer the question
-    // This leverages the PCE data we're collecting even when confidence is low
-    // BUT: Skip RAG for real-time metric queries - they need tools for accurate data
-    if (classification.metadata?.domain && classification.confidence >= 0.2 && !isRealTimeMetricQuery) {
+    // BUT: Skip RAG for real-time metric queries and for tool-first domains
+    const isToolFirstDomain = state.classification.metadata?.domain && (TOOL_FIRST_DOMAINS as readonly string[]).includes(state.classification.metadata.domain);
+    if (state.classification.metadata?.domain && state.classification.confidence >= 0.2 && !isRealTimeMetricQuery && !isToolFirstDomain) {
       logger.info("Low confidence but domain detected - trying RAG before clarification", {
-        domain: classification.metadata.domain,
-        confidence: classification.confidence,
+        domain: state.classification.metadata.domain,
+        confidence: state.classification.confidence,
       });
       
       // Fetch RAG to see if we can answer from collected data
@@ -1677,7 +1281,7 @@ export async function runAgent(
       });
       if (ragPayload) {
         const ragScore = ragPayload.sTotalScore ?? null;
-        const domainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
+        const domainMatch = hasDomainMatch(state.classification.metadata?.domain, ragPayload);
         const hasSources = (ragPayload.sources?.length ?? 0) > 0;
         const injected =
           hasSources &&
@@ -1735,7 +1339,7 @@ export async function runAgent(
             cleanedAnswer = await formatResponseForBot(cleanedAnswer, {
               userQuery: userInput,
               intentType,
-              mode: responseMode,
+              mode: state.responseMode,
             });
           } catch (error: any) {
             logger.warn("Failed to format RAG answer", { error: error.message });
@@ -1760,12 +1364,12 @@ export async function runAgent(
                   ...clarificationRetrievalDecisions,
                   {
                     type: "rag_used",
-                    description: `Low confidence (${classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore?.toFixed(2)})`,
-                    metadata: { classification, routing, ragScore: ragPayload.sTotalScore },
+                    description: `Low confidence (${state.classification.confidence.toFixed(2)}) but RAG provided answer (score: ${ragPayload.sTotalScore?.toFixed(2)})`,
+                    metadata: { classification: state.classification, routing: state.routing, ragScore: ragPayload.sTotalScore },
                   },
                 ],
               }],
-              provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+              provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
               artifacts: clarificationRetrievalArtifacts,
               totalSteps: 1,
               totalToolCalls: clarificationRetrievalToolCalls.length,
@@ -1780,12 +1384,12 @@ export async function runAgent(
           // Small delay to ensure SSE stream is subscribed before emitting
           await new Promise(resolve => setTimeout(resolve, 100));
           
-          emitFinalEvent(cleanedAnswer, { 
+          emitFinalEvent(eventBus, sessionId, startTime, cleanedAnswer, {
             ragAnswer: true,
             ragScore: ragPayload.sTotalScore,
-            classification,
-            conversationState: postExecutionState,
-            conversationContext: finalContextUpdate,
+            classification: state.classification,
+            conversationState: state.postExecutionState,
+            conversationContext: state.finalContextUpdate,
             traceId,
           });
           return { text: cleanedAnswer };
@@ -1807,7 +1411,7 @@ export async function runAgent(
       // Real-time metric queries should use tools, not RAG
       logger.info("Skipping RAG for real-time metric query - will use tools instead", {
         query: userInput.slice(0, 100),
-        domain: classification.metadata?.domain,
+        domain: state.classification.metadata?.domain,
       });
       clarificationRetrievalDecisions.push({
         type: "retrieval_skipped",
@@ -1824,21 +1428,12 @@ export async function runAgent(
     
     // Generate clarification message based on classification
     let clarificationMessage: string;
-    if (classification.confidence < 0.2) {
+    if (state.classification.confidence < 0.2) {
       clarificationMessage = "I'm not sure what you're asking. Could you rephrase your question?";
-    } else if (classification.metadata?.domain) {
-      const domain = classification.metadata.domain;
-      const suggestions: string[] = [];
-      
-      if (domain === "metrics") {
-        suggestions.push("Are you asking about temperature, CPU, memory, or status?");
-      } else if (domain === "compute") {
-        suggestions.push("Are you asking about VMs, containers, or nodes?");
-      } else if (domain === "firewall") {
-        suggestions.push("Are you asking about firewall rules, chains, or exposure?");
-      } else if (domain === "network") {
-        suggestions.push("Are you asking about network interfaces, subnets, or connectivity?");
-      }
+    } else if (state.classification.metadata?.domain) {
+      const domain = state.classification.metadata.domain;
+      const suggestion = DOMAIN_CLARIFICATION_SUGGESTIONS[domain];
+      const suggestions = suggestion ? [suggestion] : [];
       
       if (suggestions.length > 0) {
         clarificationMessage = `I understand you're asking about ${domain}, but could you be more specific?\n\n${suggestions.join("\n")}`;
@@ -1860,8 +1455,8 @@ export async function runAgent(
           ...clarificationRetrievalDecisions,
           {
             type: "clarification_requested",
-            description: `Confidence ${classification.confidence.toFixed(2)} below threshold for ${classification.type} intent`,
-            metadata: { classification, routing },
+            description: `Confidence ${state.classification.confidence.toFixed(2)} below threshold for ${state.classification.type} intent`,
+            metadata: { classification: state.classification, routing: state.routing },
           },
         ],
       };
@@ -1875,7 +1470,7 @@ export async function runAgent(
         userInput,
         finalResponse: clarificationMessage,
         steps: [clarificationStep],
-        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
         artifacts: clarificationRetrievalArtifacts,
         totalSteps: 1,
         totalToolCalls: clarificationRetrievalToolCalls.length,
@@ -1890,12 +1485,12 @@ export async function runAgent(
     // Small delay to ensure SSE stream is subscribed before emitting
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    emitFinalEvent(clarificationMessage, {
+    emitFinalEvent(eventBus, sessionId, startTime, clarificationMessage, {
       clarification: true,
       needsResponse: true,
-      classification,
-      conversationState: conversationPlan.nextState,
-      conversationContext: contextUpdate,
+      classification: state.classification,
+      conversationState: state.conversationPlan.nextState,
+      conversationContext: state.contextUpdate,
       traceId: clarificationTraceId,
     });
     return { text: clarificationMessage };
@@ -1904,11 +1499,158 @@ export async function runAgent(
 
   // Check action intent FIRST (before ALL query intents)
   // This prevents action requests from being treated as queries
-  const actionIntent = detectActionIntent(userInput);
+  // Compound application requests must stay intact for application_lifecycle;
+  // the legacy create_vm fast path only provisions the VM and would discard
+  // service, firewall, asset, DNS, and identity requirements.
+  const actionIntent = compoundApplicationRequest ? null : detectActionIntent(userInput);
   let resolvedVmContext: string | null = null;
   
-  if (actionIntent) {
+  if (compoundApplicationRequest) {
+    logger.info("Routing compound request to application lifecycle", {
+      vmName: compoundApplicationRequest.vmName,
+      node: compoundApplicationRequest.node,
+    });
+    const manifest = buildApplicationManifest(compoundApplicationRequest, {
+      input: userInput,
+      sshUsername: options.getProfileSshUsername?.(session.userId) ?? undefined,
+    });
+    emitStepEvent(eventBus, sessionId, {
+      step: 1,
+      maxSteps: 1,
+      userInput,
+      intent: "application_lifecycle",
+      tool: "application_lifecycle",
+    });
+    const toolCallId = `application-lifecycle-${Date.now()}`;
+    eventBus.emit({
+      type: "tool:start",
+      sessionId,
+      timestamp: Date.now(),
+      data: {
+        type: "tool:start",
+        toolName: "application_lifecycle",
+        parameters: manifest,
+        toolCallId,
+      },
+    });
+    const result = await executeToolCall(
+      { toolName: "application_lifecycle", parameters: manifest },
+      tools,
+      { userId: session.userId, aclGroup: session.aclGroup, node: compoundApplicationRequest.node }
+    );
+    eventBus.emit({
+      type: "tool:complete",
+      sessionId,
+      timestamp: Date.now(),
+      data: {
+        type: "tool:complete",
+        toolName: "application_lifecycle",
+        parameters: manifest,
+        toolCallId,
+        success: !result.error,
+        error: result.error,
+        durationMs: result.durationMs,
+      },
+    });
+    const application = manifest.applications[0]!;
+    const answer = result.error
+      ? `Application deployment failed | vm=${application.vms[0]!.name} | node=${application.vms[0]!.node} | error=${result.error}`
+      : `Application deployed | vm=${application.vms[0]!.name} | node=${application.vms[0]!.node} | domain=${application.domain}`;
+    const durationMs = Date.now() - startTime;
+    let traceId: string | undefined;
+    try {
+      traceId = await getReasoningTraceStore().recordTrace({
+        userId: session.userId,
+        aclGroup: session.aclGroup,
+        userInput,
+        finalResponse: answer,
+        steps: [{
+          step: 1,
+          toolCalls: [{
+            toolName: "application_lifecycle",
+            parameters: manifest,
+            result: { success: !result.error, error: result.error },
+            durationMs: result.durationMs ?? durationMs,
+          }],
+          decisions: [{
+            type: "tool_choice",
+            description: "Compiled the confirmed compound request into one application lifecycle manifest.",
+            metadata: { mode: "deterministic_manifest", requestId: manifest.requestId },
+          }],
+        }],
+        provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
+        totalSteps: 1,
+        totalToolCalls: 1,
+        maxStepsReached: false,
+        timestamp: new Date(),
+        durationMs,
+      });
+    } catch (error: unknown) {
+      logger.warn("Failed to record application lifecycle trace", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    emitFinalEvent(eventBus, sessionId, startTime, answer, {
+      traceId,
+      conversationState: state.postExecutionState,
+      conversationContext: state.finalContextUpdate,
+      totalSteps: 1,
+      totalToolCalls: 1,
+    });
+    return { text: answer };
+  } else if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
+
+    if (actionIntent.type === "install_service" && ["nginx", "docker"].includes(actionIntent.service)) {
+      const actionName = actionIntent.service === "nginx" ? "services.install_nginx" : "services.install_docker";
+      emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "install_service", tool: "action" });
+      const result = await executeToolCall({
+        toolName: "action",
+        parameters: { action: actionName, params: { vmName: actionIntent.vmName } },
+      }, tools, { userId: session.userId, aclGroup: session.aclGroup, sessionId });
+      const data = (result as any)?.data;
+      const ok = (result as any)?.success === true || data?.success === true;
+      const message = data?.message || (result as any)?.message || (result as any)?.error || "Action completed.";
+      let connections: ConnectionEndpoint[] = [];
+      const parsedTarget = ConnectionTargetSchema.safeParse(data?.connectionTarget);
+      if (ok && parsedTarget.success) {
+        const target = await resolveConnectionTarget(parsedTarget.data);
+        const candidates = buildConnectionEndpoints(target);
+        if (candidates.length > 0) {
+          eventBus.emit({ type: "connection:update", sessionId, timestamp: Date.now(), data: { type: "connection:update", phase: "candidates", resource: target.hostname, endpoints: candidates } });
+          connections = await verifyConnectionEndpoints(candidates, target.ipAddresses, {
+            signal: options.signal,
+            sshDeadlineMs: Number(process.env.CONNECTION_SSH_DEADLINE_MS || 300_000),
+            httpDeadlineMs: Number(process.env.CONNECTION_HTTP_DEADLINE_MS || 120_000),
+            retryIntervalMs: Number(process.env.CONNECTION_RETRY_INTERVAL_MS || 5_000),
+            onUpdate: (endpoints) => {
+              eventBus.emit({ type: "connection:update", sessionId, timestamp: Date.now(), data: {
+                type: "connection:update",
+                phase: endpoints.every((endpoint) => endpoint.status !== "pending") ? "complete" : "verifying",
+                resource: target.hostname,
+                endpoints,
+              } });
+            },
+          });
+          data.connections = connections;
+        }
+      }
+      const text = ok
+        ? `ServiceInstall | service=${actionIntent.service} | vm=${actionIntent.vmName} | message=${formatStructuredFieldValue(message)}`
+        : `Error | action=${actionName} | vm=${actionIntent.vmName} | message=${formatStructuredFieldValue(message)}`;
+      const structuredResponse = createTextAgentResponse(text, { state: "IDLE" });
+      if (connections.length > 0) structuredResponse.answer.sections.push({ type: "connections", title: "Connections", data: connections });
+      emitFinalEvent(eventBus, sessionId, startTime, text, {
+        classification: state.classification,
+        conversationState: state.postExecutionState,
+        conversationContext: state.finalContextUpdate,
+        totalSteps: 1,
+        totalToolCalls: 1,
+        structuredResponse,
+        connections,
+      });
+      return { text };
+    }
 
     // Deterministic fast-path: create VM requests must include a node; we already extracted it.
     // This avoids relying on the LLM to remember required action params (node is required by CreateVmSchema).
@@ -1918,7 +1660,7 @@ export async function runAgent(
       if (!node) {
         // Shouldn't happen (detectActionIntent requires node), but keep a safe fallback.
         const prompt = "Which node should I create the VM on? (e.g., yin, YANG, proxBig)";
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -1927,16 +1669,21 @@ export async function runAgent(
         return { text: prompt };
       }
 
-      emitStepEvent({ step: 1, maxSteps: 1, userInput, intent: "create_vm", tool: "action" });
+      emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "create_vm", tool: "action" });
 
       const params: Record<string, any> = { node };
       if (name && name.trim().length > 0) params.name = name.trim();
-      if (/\bdry\s*run\b/i.test(userInput) || /\bdryrun\b/i.test(userInput) || /\bpreview\b/i.test(userInput) || /\bplan\b/i.test(userInput)) {
+      Object.assign(params, extractCreateVmParameters(userInput));
+      if (/\bdry(?:\s|-)*run\b/i.test(userInput) || /\bpreview\b/i.test(userInput) || /\bplan\b/i.test(userInput)) {
         params.dryRun = true;
       }
       if (options.getProfilePublicKey && session.userId) {
         const profileKey = options.getProfilePublicKey(session.userId);
         if (profileKey && profileKey.trim().length > 0) params.sshPublicKey = profileKey.trim();
+      }
+      if (options.getProfileSshUsername && session.userId) {
+        const profileUser = options.getProfileSshUsername(session.userId);
+        if (profileUser && profileUser.trim().length > 0) params.sshUsername = profileUser.trim();
       }
 
       const result = await executeToolCall(
@@ -1948,7 +1695,7 @@ export async function runAgent(
           },
         },
         tools,
-        { userId: session.userId, aclGroup: session.aclGroup }
+        { userId: session.userId, aclGroup: session.aclGroup, sessionId }
       );
 
       const data = (result as any)?.data;
@@ -1956,6 +1703,56 @@ export async function runAgent(
       const message = data?.message || (result as any)?.message || (result as any)?.error || "Action completed.";
       const vmId = data?.vmId || data?.vmid || data?.id;
       const hostname = data?.hostname || data?.name;
+      let connections: ConnectionEndpoint[] = [];
+
+      const connectionTarget = ConnectionTargetSchema.safeParse(data?.connectionTarget);
+      if (ok && connectionTarget.success) {
+        const target = await resolveConnectionTarget(connectionTarget.data);
+        options.signal?.throwIfAborted();
+        const candidates = buildConnectionEndpoints(target);
+        if (candidates.length > 0) {
+          eventBus.emit({
+            type: "connection:update",
+            sessionId,
+            timestamp: Date.now(),
+            data: { type: "connection:update", phase: "candidates", resource: target.hostname, endpoints: candidates },
+          });
+          eventBus.emitProgress({
+            toolName: "connection_verifier",
+            action: "verify_connections",
+            status: "verifying",
+            message: `Verifying ${candidates.length} connection endpoint(s) for ${target.hostname}...`,
+            progress: 0.85,
+          }, sessionId);
+          connections = await verifyConnectionEndpoints(candidates, target.ipAddresses, {
+            signal: options.signal,
+            sshDeadlineMs: Number(process.env.CONNECTION_SSH_DEADLINE_MS || 300_000),
+            retryIntervalMs: Number(process.env.CONNECTION_RETRY_INTERVAL_MS || 5_000),
+            onUpdate: (endpoints) => {
+              eventBus.emit({
+                type: "connection:update",
+                sessionId,
+                timestamp: Date.now(),
+                data: {
+                  type: "connection:update",
+                  phase: endpoints.every((endpoint) => endpoint.status !== "pending") ? "complete" : "verifying",
+                  resource: target.hostname,
+                  endpoints,
+                },
+              });
+            },
+          });
+          data.connections = connections;
+          const failed = connections.some((endpoint) => endpoint.status === "failed");
+          eventBus.emitProgress({
+            toolName: "connection_verifier",
+            action: "verify_connections",
+            status: failed ? "failed" : "completed",
+            message: `${connections.filter((endpoint) => endpoint.status === "verified").length}/${connections.length} connection endpoint(s) verified for ${target.hostname}.`,
+            progress: 1,
+          }, sessionId);
+        }
+      }
 
       const text = ok
         ? `VMCreate | node=${node} | ${hostname ? `name=${hostname} | ` : ""}${vmId ? `vmid=${vmId} | ` : ""}message=${formatStructuredFieldValue(message)}`
@@ -1994,7 +1791,7 @@ export async function runAgent(
               metadata: { intent: "create_vm", node },
             }],
           }],
-          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
           totalSteps: 1,
           totalToolCalls: 1,
           maxStepsReached: false,
@@ -2005,11 +1802,20 @@ export async function runAgent(
         logger.warn("Failed to record reasoning trace for create_vm", { error: error.message });
       }
 
-      emitFinalEvent(text, {
-        classification,
-        conversationState: postExecutionState,
-        conversationContext: finalContextUpdate,
+      const structuredResponse = createTextAgentResponse(text, {
+        state: "IDLE",
         traceId: createVmTraceId,
+      });
+      if (connections.length > 0) {
+        structuredResponse.answer.sections.push({ type: "connections", title: "Connections", data: connections });
+      }
+      emitFinalEvent(eventBus, sessionId, startTime, text, {
+        classification: state.classification,
+        conversationState: state.postExecutionState,
+        conversationContext: state.finalContextUpdate,
+        traceId: createVmTraceId,
+        structuredResponse,
+        connections,
       });
       return { text };
     }
@@ -2023,7 +1829,7 @@ export async function runAgent(
       let resolvedDestroyVm: ResolvedVmDetails | null = null;
       if (!lookup) {
         const prompt = "Which VM should I destroy? Provide a VM name or VMID.";
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -2038,7 +1844,7 @@ export async function runAgent(
           const prompt = requestedVmId
             ? `I couldn't find VMID ${requestedVmId}.`
             : `I couldn't find VM "${requestedName}".`;
-          emitFinalEvent(prompt, {
+          emitFinalEvent(eventBus, sessionId, startTime, prompt, {
             clarification: true,
             needsResponse: true,
             conversationState: "NEED_CLARIFICATION",
@@ -2049,7 +1855,7 @@ export async function runAgent(
         resolvedDestroyVm = resolved;
       } catch (error: any) {
         const prompt = `I couldn't resolve the VM details: ${error.message}`;
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -2066,7 +1872,7 @@ export async function runAgent(
         const prompt =
           `VM "${resolvedDestroyVm.name}" (VMID ${resolvedDestroyVm.vmid}) is on node "${resolvedDestroyVm.node}", not "${requestedNode}". ` +
           "Confirm the correct node or VM target.";
-        emitFinalEvent(prompt, {
+        emitFinalEvent(eventBus, sessionId, startTime, prompt, {
           clarification: true,
           needsResponse: true,
           conversationState: "NEED_CLARIFICATION",
@@ -2075,7 +1881,7 @@ export async function runAgent(
         return { text: prompt };
       }
 
-      emitStepEvent({ step: 1, maxSteps: 1, userInput, intent: "destroy_vm", tool: "action" });
+      emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "destroy_vm", tool: "action" });
 
       const params: Record<string, any> = {};
       const resolvedName = resolvedDestroyVm?.name?.trim();
@@ -2150,7 +1956,7 @@ export async function runAgent(
               metadata: { intent: "destroy_vm", vmName: vmName ?? "", vmId: vmId ?? null, node: vmNode ?? null },
             }],
           }],
-          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
+          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: state.responseMode }),
           totalSteps: 1,
           totalToolCalls: 1,
           maxStepsReached: false,
@@ -2161,15 +1967,15 @@ export async function runAgent(
         logger.warn("Failed to record reasoning trace for destroy_vm", { error: error.message });
       }
 
-      emitFinalEvent(text, {
-        classification,
-        conversationState: postExecutionState,
-        conversationContext: finalContextUpdate,
+      emitFinalEvent(eventBus, sessionId, startTime, text, {
+        classification: state.classification,
+        conversationState: state.postExecutionState,
+        conversationContext: state.finalContextUpdate,
         traceId: destroyVmTraceId,
       });
       return { text };
     }
-    
+
     // For VM-related actions, resolve VM details (node, vmid, type) before letting LLM proceed
     // This ensures the LLM has the correct parameters for write operations
     const vmActionsNeedingResolution = ["destroy_vm", "start_vm", "stop_vm", "restart_vm"];
@@ -2214,15 +2020,32 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     // Skip ALL query intents (including firewall) - let the LLM handle action execution
     // The LLM will use the action tool with proper parameters
     // For compound requests (e.g., "install nginx and configure firewall"), the LLM will execute sequentially
-  } else {
-    // Only check query intents if no action intent was detected
-    // Check exposure intent first (most specific)
+  } else if (classification.intent !== "ACTION") {
+    // Only check query intents when the classifier also considers this a read.
+    // An ACTION that the deterministic parser does not recognize must continue
+    // to the LLM action path instead of being intercepted by a twin-first read.
+    // Composite queries (e.g. node + exposure, subnet + level) skip twin-first and use EXECUTE path.
+    const directFirewallIntent = detectFirewallIntent(userInput);
+    const supportsDirectFirewallComposite =
+      directFirewallIntent?.type === "allowed_ports_between";
+    if (isCompositeQuery && !supportsDirectFirewallComposite) {
+      logger.info("Composite query detected, skipping twin-first chains and using EXECUTE path", {
+        userInput: userInput.slice(0, 80),
+        compositeFromMetadata: classification?.metadata?.composite === true,
+      });
+    }
+    if (!isCompositeQuery || supportsDirectFirewallComposite) {
+    // Check exposure intent first (most specific).
+    // Exposure is cross-domain — fire when domain is "compute", "general", or absent.
+    // Suppressed for purely network/firewall/metrics queries to avoid false positives.
+    const exposureDomain = classification.metadata?.domain;
+    if (!exposureDomain || exposureDomain === "compute" || exposureDomain === "general") {
     const exposureIntent = detectExposureIntent(userInput);
     if (exposureIntent) {
       const exposureAnswer = await executeExposureIntent(exposureIntent, tools, session);
       if (exposureAnswer) {
         logger.info("Responding via twin-first exposure reasoning chain.");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: exposureIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format exposure response for bot-like style
         let formattedAnswer = exposureAnswer;
@@ -2231,26 +2054,28 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "exposure_analysis",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: exposureIntent.type } }],
-            mode: responseMode,
+            mode: state.responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format exposure answer", { error: error.message });
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, exposureIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: exposureIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
     }
+    } // end exposure domain gate
 
     // Skip compute intent if this is a diagnostic/troubleshooting request
     // Diagnostic requests should go to the LLM to use infrastructure_diagnostic tool
-    const isDiagnosticRequest = 
+    if (!classification.metadata?.domain || classification.metadata.domain === "compute") {
+    const isDiagnosticRequest =
       userInput.toLowerCase().includes("diagnose") ||
       userInput.toLowerCase().includes("why isn't") ||
       userInput.toLowerCase().includes("why is") ||
@@ -2270,7 +2095,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
       const twinAnswer = await executeComputeIntent(computeIntent, tools, session);
       if (twinAnswer) {
         logger.info("Responding via twin-first reasoning chain (no LLM needed).");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: computeIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format compute response for bot-like style
         let formattedAnswer = twinAnswer;
@@ -2279,48 +2104,61 @@ IMPORTANT: When calling proxmox_write, you MUST use:
             userQuery: userInput,
             intentType: "compute_status",
             toolCalls: [{ toolName: "twin_query", parameters: { operation: computeIntent.type } }],
-            mode: responseMode,
+            mode: state.responseMode,
           });
         } catch (error: any) {
           logger.warn("Failed to format compute answer", { error: error.message });
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, computeIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: computeIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
     }
+    } // end compute domain gate
 
     // Check firewall QUERY intent (only if no action intent detected)
     // Action intents like "configure firewall" are handled above
-    const firewallIntent = detectFirewallIntent(userInput);
-    if (firewallIntent) {
+    const firewallIntent = directFirewallIntent;
+    const firewallDomain = classification.metadata?.domain;
+    if (firewallIntent && (!firewallDomain || firewallDomain === "firewall" || firewallDomain === "network")) {
       const firewallAnswer = await executeFirewallIntent(firewallIntent, tools, session);
       if (firewallAnswer) {
         logger.info("Responding via twin-first firewall reasoning chain.");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: firewallIntent.type, mode: "twin_first", tool: "twin_query" });
         const firewallToolCalls = buildFirewallToolCalls(firewallIntent);
+        emitStepEvent(eventBus, sessionId, {
+          step: 1,
+          maxSteps: 1,
+          intent: firewallIntent.type,
+          mode: "twin_first",
+          tool: firewallToolCalls[0]?.toolName ?? "unknown",
+        });
         
         // Format firewall response — use ASSISTIVE by default so the LLM synthesizes
         // the raw chain output into a clear answer with evidence. Fall back to user's
         // responseMode if one was explicitly chosen (e.g. TERSE_DATA or EXPLAINER).
         const firewallSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
-        const firewallMode: ResponseMode = responseMode ?? (firewallSummaryWords ? "EXPLAINER" : "ASSISTIVE");
+        const firewallMode: ResponseMode = state.responseMode ?? (firewallSummaryWords ? "EXPLAINER" : "ASSISTIVE");
         let formattedAnswer = firewallAnswer;
-        try {
-          formattedAnswer = await formatResponseForBot(firewallAnswer, {
-            userQuery: userInput,
-            intentType: "firewall_rules",
-            toolCalls: firewallToolCalls,
-            mode: firewallMode,
-          });
-        } catch (error: any) {
-          logger.warn("Failed to format firewall answer", { error: error.message });
+        if (
+          firewallIntent.type !== "sources_accessing_network" &&
+          firewallIntent.type !== "allowed_ports_between"
+        ) {
+          try {
+            formattedAnswer = await formatResponseForBot(firewallAnswer, {
+              userQuery: userInput,
+              intentType: "firewall_rules",
+              toolCalls: firewallToolCalls,
+              mode: firewallMode,
+            });
+          } catch (error: any) {
+            logger.warn("Failed to format firewall answer", { error: error.message });
+          }
         }
         
         const traceId = await recordEarlyReturnTrace(
@@ -2329,22 +2167,27 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           firewallToolCalls.length,
           firewallToolCalls
         );
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: firewallIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
     }
-    // Only check network intent if no action, exposure, compute, or firewall intent was detected
-    const networkIntent = detectNetworkIntent(userInput);
+    // end firewall domain gate
+
+    // Only check network intent if no action, exposure, compute, or firewall intent was detected.
+    // See networkDomainGateAllows() for why this isn't a plain domain check (B-06).
+    const networkIntentMatch = detectNetworkIntent(userInput);
+    if (networkDomainGateAllows(classification.metadata?.domain, networkIntentMatch)) {
+    const networkIntent = networkIntentMatch;
     if (networkIntent) {
       const networkAnswer = await executeNetworkIntent(networkIntent, tools, session);
       if (networkAnswer) {
         logger.info("Responding via twin-first network reasoning chain.");
-        emitStepEvent({ step: 1, maxSteps: 1, intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
+        emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, intent: networkIntent.type, mode: "twin_first", tool: "twin_query" });
         
         // Format network response for bot-like style
         let formattedAnswer = networkAnswer;
@@ -2364,7 +2207,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
                 ? [{ toolName: "ingestion_summary_store", parameters: { snapshot: "latest" } }]
                 : [{ toolName: "twin_query", parameters: { operation: networkIntent.type } }];
           const networkSummaryWords = /\b(summarize|explain|describe|overview|why|how)\b/i.test(userInput);
-          const networkMode: ResponseMode = responseMode ?? (networkSummaryWords ? "EXPLAINER" : "ASSISTIVE");
+          const networkMode: ResponseMode = state.responseMode ?? (networkSummaryWords ? "EXPLAINER" : "ASSISTIVE");
           formattedAnswer = await formatResponseForBot(networkAnswer, {
             userQuery: userInput,
             intentType: "network_info",
@@ -2376,1175 +2219,57 @@ IMPORTANT: When calling proxmox_write, you MUST use:
         }
         
         const traceId = await recordEarlyReturnTrace(formattedAnswer, networkIntent.type, 1);
-        emitFinalEvent(formattedAnswer, { 
+        emitFinalEvent(eventBus, sessionId, startTime, formattedAnswer, {
           intent: networkIntent.type,
           traceId,
-          conversationState: postExecutionState,
-          conversationContext: finalContextUpdate,
+          conversationState: state.postExecutionState,
+          conversationContext: state.finalContextUpdate,
         });
         return { text: formattedAnswer };
       }
     }
+    } // end network domain gate
+    }
   }
 
-  const openaiTools = buildToolDefinitions(tools);
-  
-  // Initialize reasoning trace
-  const reasoningSteps: ReasoningStep[] = [];
-  let totalToolCalls = 0;
-  
-  // Determine retrieval eligibility before hitting RAG/graph/fusion.
-  const isTrivialQuery = (query: string): boolean => {
-    const normalized = query.toLowerCase().trim();
-    const trivialPatterns = [
-      /^(hi|hello|hey|greetings|good (morning|afternoon|evening))[!.]?$/i,
-      /^(thanks?|thank you|thx)[!.]?$/i,
-      /^(bye|goodbye|see you)[!.]?$/i,
-      /^(yes|no|ok|okay|sure|yep|nope)[!.]?$/i,
-      /^(help|what can you do|what do you do)[?]?$/i,
-    ];
-    return trivialPatterns.some(pattern => pattern.test(normalized));
-  };
-  
-  // Detect real-time metric queries that should use tools, not RAG
-  // These queries need current/live data that RAG can't provide accurately
-  const realTimeMetricPatterns = [
-    /\b(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
-    /\b(what|what's|what is)\s+(the\s+)?(uptime|memory|ram|cpu|disk|load|temperature|temp|status)\s+(of|for)\s+/i,
-    /\b(how\s+much\s+)?(memory|ram|cpu|disk)\s+(does|has|is)\s+/i,
-    /\b(how\s+long\s+)?(has|is)\s+.*\s+(been\s+)?(running|up)\b/i,
-  ];
-  
-  const isRealTimeMetricQuery = realTimeMetricPatterns.some(pattern => pattern.test(userInput));
-  const isMetaQuery = isMetaIdentityQuery(userInput);
-  const eligibility = getRetrievalEligibility({
-    intent: classification.intent,
-    isTrivialQuery: isTrivialQuery(userInput),
-    isActionIntent: !!actionIntent,
-    isRealTimeMetricQuery,
-    isMetaIdentityQuery: isMetaQuery,
+  // Execute path: RAG → LLM loop → tool dispatch
+  const executeResult = await handleExecute({
+    state,
+    userInput,
+    session,
+    options,
+    tools,
+    context,
+    eventBus,
+    sessionId,
+    startTime,
+    policyMode,
+    toolRegistryVersion,
+    failureTracker,
+    actionIntent,
+    resolvedVmContext,
+    isCompositeQuery,
+    confirmation,
+    pendingActionId,
+    pendingActionCreatedAt,
+    pendingActionExpiresAt,
+    pendingActionExpired,
+    pendingActionPreview,
+    pendingActionSummary,
+    pendingActionExecuteInput,
+    pendingAction,
+    usedPendingAction,
+    entityCache: options.conversationContext?.resolvedEntities ?? {},
   });
 
-  if (isRealTimeMetricQuery) {
-    logger.info("Skipping RAG for real-time metric query - will use tools instead", {
-      query: userInput.slice(0, 100),
-    });
-  }
-
-  let ragPayload: HybridApiContext | null = null;
-  let retrievalInjected = false;
-  let retrievalInjectedReason = "not_executed";
-  let retrievalDomainMatch = true;
-  let ragContextId: string | undefined;
-  let graphContextId: string | undefined;
-  let fusionContextId: string | undefined;
-  let retrievalToolCalls: ReasoningStep["toolCalls"] = [];
-  let retrievalArtifacts: ReasoningTraceArtifactInput[] = [];
-  const retrievalDecisions: ReasoningStep["decisions"] = [];
-
-  if (!eligibility.eligible) {
-    retrievalDecisions.push({
-      type: "retrieval_skipped",
-      description: "Retrieval skipped before execution.",
-      metadata: { reason: eligibility.reason },
-    });
-    logger.info("RAG retrieval skipped", { reason: eligibility.reason, query: userInput.slice(0, 80) });
-  } else {
-    ragPayload = await fetchHybridContext(userInput, {
-      baseUrl: options.ragBaseUrl,
-      userId: session.userId,
-      aclGroup: session.aclGroup,
-    });
-    if (ragPayload) {
-      retrievalDecisions.push({
-        type: "retrieval_executed",
-        description: "Retrieval executed for eligible query.",
-        metadata: {
-          queryType: ragPayload.queryType,
-          score: ragPayload.sTotalScore ?? null,
-          sourcesCount: ragPayload.sources?.length ?? 0,
-        },
-      });
-      retrievalDomainMatch = hasDomainMatch(classification.metadata?.domain, ragPayload);
-      const score = ragPayload.sTotalScore ?? null;
-      const hasSources = (ragPayload.sources?.length ?? 0) > 0;
-      if (!hasSources) {
-        retrievalInjectedReason = "no_sources";
-      } else if (score === null || score < RETRIEVAL_MIN_SCORE) {
-        retrievalInjectedReason = "score_below_threshold";
-      } else if (!retrievalDomainMatch) {
-        retrievalInjectedReason = "domain_mismatch";
-      } else {
-        retrievalInjectedReason = "accepted";
-        retrievalInjected = true;
-      }
-      retrievalDecisions.push({
-        type: retrievalInjected ? "retrieval_injected" : "retrieval_not_injected",
-        description: retrievalInjected
-          ? "Retrieval injected into prompt."
-          : "Retrieval executed but not injected into prompt.",
-        metadata: {
-          score,
-          minScore: RETRIEVAL_MIN_SCORE,
-          domainMatch: retrievalDomainMatch,
-          sourcesCount: ragPayload.sources?.length ?? 0,
-          reason: retrievalInjectedReason,
-        },
-      });
-      const artifactBundle = buildRetrievalArtifacts(ragPayload);
-      retrievalArtifacts = artifactBundle.artifacts;
-      ragContextId = artifactBundle.ragContextId;
-      graphContextId = artifactBundle.graphContextId;
-      fusionContextId = artifactBundle.fusionContextId;
-      retrievalToolCalls = buildRetrievalToolCalls(ragPayload);
-      logger.info("RAG retrieval executed", {
-        injected: retrievalInjected,
-        reason: retrievalInjectedReason,
-        hasCandidateAnswer: !!(ragPayload.answer?.trim()),
-        candidateAnswerLength: ragPayload.answer?.length ?? 0,
-        query: userInput.slice(0, 80),
-      });
-    } else {
-      retrievalInjected = false;
-      retrievalInjectedReason = "unavailable";
-      retrievalDecisions.push({
-        type: "retrieval_not_injected",
-        description: "Retrieval request failed or returned no payload.",
-        metadata: { reason: "unavailable" },
-      });
-      logger.info("RAG retrieval unavailable", { query: userInput.slice(0, 80) });
-    }
-  }
-
-  const ragMessage = retrievalInjected && ragPayload
-    ? [{ role: "system", content: formatRagSummary(ragPayload) }]
-    : [];
-  
-  // For real-time metric queries, add explicit instruction to use tools
-  const realTimeMetricInstruction = isRealTimeMetricQuery 
-    ? [{ role: "system", content: "IMPORTANT: This query asks for real-time metrics (uptime, memory, CPU, etc.). You MUST use tools (twin_query and/or proxmox_readonly) to get current data. Do not answer from memory or training data - always use tools for real-time metrics." }]
-    : [];
-  
-  const MAX_STEPS = 5;
-  const MAX_TOOL_CALLS_PER_STEP = 5; // Prevent tool call flooding (reduced from 10)
-  const seenToolCalls = new Set<string>(); // Track tool calls to prevent infinite loops
-  const client = getOpenAIClient();
-  
-  // Track if we've successfully retrieved data for real-time metric queries
-  // Once we have the data, allow text responses instead of forcing more tool calls
-  let hasRealTimeMetricData = false;
-  
-  // Track "all nodes" queries to prevent partial answers
-  // Match patterns like "all nodes", "all the nodes", "temperature of all nodes", etc.
-  const isAllNodesQuery = /\ball\s+(the\s+)?nodes?\b/i.test(userInput);
-  let discoveredNodeCount = 0;
-  let queriedNodeCount = 0;
-  let expectedProxmoxNodes: string[] = []; // Track which Proxmox nodes we expect to query
-  const queriedNodeIds = new Set<string>(); // Track unique physical nodes queried (not aliases)
-  
-  // For temperature queries, discover Proxmox nodes from SSH config (not Proxmox API)
-  // This handles the case where proxBig is standalone and yin/YANG are in a cluster
-  if (isAllNodesQuery && /\btemperature|temp\b/i.test(userInput)) {
-    try {
-      const { loadYaml } = await import("../utils/config");
-      const pathModule = await import("path");
-      const { fileURLToPath } = await import("url");
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = pathModule.dirname(__filename);
-      const configPath = pathModule.join(__dirname, "../config/approved-commands.yaml");
-      const config = loadYaml(configPath) as any;
-      
-      // Find all unique Proxmox nodes (those with "sensors" command in system category)
-      // Count unique physical nodes, not aliases - use hostname/IP as the unique identifier
-      const uniqueNodes = new Set<string>();
-      for (const [hostKey, hostConfig] of Object.entries(config.hosts || {})) {
-        const host = hostConfig as any;
-        if (host.commands?.system?.includes("sensors")) {
-          // This is a Proxmox node - use the hostname/IP as the unique identifier
-          uniqueNodes.add(host.hostname || hostKey);
-          // Also add all aliases for matching purposes
-          expectedProxmoxNodes.push(host.hostname || hostKey);
-          if (host.aliases) {
-            expectedProxmoxNodes.push(...host.aliases);
-          }
-        }
-      }
-      discoveredNodeCount = uniqueNodes.size; // Count unique physical nodes, not aliases
-      console.error(`[ALL NODES QUERY DETECTED] Found ${discoveredNodeCount} unique Proxmox nodes from SSH config: ${Array.from(uniqueNodes).join(", ")}`);
-      logger.warn(`[ALL NODES QUERY DETECTED] Found ${discoveredNodeCount} unique Proxmox nodes from SSH config: ${Array.from(uniqueNodes).join(", ")}`);
-    } catch (error: any) {
-      logger.warn(`Failed to load SSH config for node discovery: ${error.message}`);
-    }
-  } else if (isAllNodesQuery) {
-    console.error(`[ALL NODES QUERY DETECTED] Will track node discovery and queries for: "${userInput}"`);
-    logger.warn(`[ALL NODES QUERY DETECTED] Will track node discovery and queries for: "${userInput}"`);
-  } else {
-    console.error(`[NOT ALL NODES] Query: "${userInput}"`);
-  }
-
-  let confirmationAbort: { prompt: string; context: ConversationContext; state: ConversationState } | null = null;
-  let clarificationAbort: { prompt: string; context: ConversationContext; state: ConversationState } | null = null;
-
-  for (let step = 0; step < MAX_STEPS; step++) {
-    logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
-    
-    // Emit agent step event
-    eventBus.emit({
-      type: "agent:step",
-      sessionId,
-      timestamp: Date.now(),
-      data: { step: step + 1, maxSteps: MAX_STEPS, userInput },
-    });
-
-    // Initialize reasoning step
-    const reasoningStep: ReasoningStep = {
-      step: step + 1,
-      toolCalls: [],
-      decisions: [],
+  // Merge any newly resolved entities back into the final context update so
+  // the caller can persist them for the next turn.
+  if (executeResult.entityCacheUpdate && Object.keys(executeResult.entityCacheUpdate).length > 0) {
+    state.finalContextUpdate.resolvedEntities = {
+      ...options.conversationContext?.resolvedEntities,
+      ...executeResult.entityCacheUpdate,
     };
-
-    // Attach retrieval decisions + artifact references on step 1.
-    if (step === 0) {
-      if (retrievalDecisions.length > 0) {
-        reasoningStep.decisions.push(...retrievalDecisions);
-      }
-      if (retrievalToolCalls.length > 0) {
-        reasoningStep.toolCalls.push(...retrievalToolCalls);
-        totalToolCalls += retrievalToolCalls.length;
-      }
-      if (ragContextId) reasoningStep.ragContextId = ragContextId;
-      if (graphContextId) reasoningStep.graphContextId = graphContextId;
-      if (fusionContextId) reasoningStep.fusionContextId = fusionContextId;
-    }
-
-    // Build messages array with optional resolved VM context
-    const vmContextMessage = resolvedVmContext ? [
-      { role: "system", content: resolvedVmContext }
-    ] : [];
-  const memoryContext = buildConversationMemoryPrompt(options.conversationContext);
-  const memoryContextMessage = memoryContext ? [
-    { role: "system", content: memoryContext }
-  ] : [];
-    
-    const messages = [
-      { role: "system", content: SYSTEM_PROMPT },
-    ...memoryContextMessage,
-      ...ragMessage,
-      ...realTimeMetricInstruction,
-      ...vmContextMessage,
-      ...context.getMessages(),
-    ] as any[];
-
-    const request: any = {
-      model: "gpt-4o-mini",
-      messages,
-    };
-
-    if (openaiTools.length > 0) {
-      request.tools = openaiTools;
-      // For real-time metric queries, force tool usage ONLY if we haven't gotten the data yet
-      // Once we have the data (hasRealTimeMetricData), allow text responses
-      request.tool_choice = (isRealTimeMetricQuery && !hasRealTimeMetricData) ? "required" : "auto";
-    }
-
-    const response = await client.chat.completions.create(request);
-    const message = response.choices[0]?.message;
-    
-    // Capture LLM response
-    reasoningStep.llmResponse = message?.content || "";
-
-    const toolCalls = ((message?.tool_calls as any[]) ?? []) as Array<any>;
-    if (toolCalls.length) {
-      // Limit tool calls per step to prevent flooding
-      if (toolCalls.length > MAX_TOOL_CALLS_PER_STEP) {
-        logger.warn(`Too many tool calls in step ${step + 1} (${toolCalls.length}), limiting to ${MAX_TOOL_CALLS_PER_STEP}`);
-        reasoningStep.decisions.push({
-          type: "limit_reached",
-          description: `Tool call limit reached: ${toolCalls.length} calls, limiting to ${MAX_TOOL_CALLS_PER_STEP}`,
-          metadata: { originalCount: toolCalls.length, limit: MAX_TOOL_CALLS_PER_STEP },
-        });
-        toolCalls.splice(MAX_TOOL_CALLS_PER_STEP);
-      }
-
-      // Add the assistant message with tool_calls to the context first
-      // This is required by OpenAI API: tool messages must follow an assistant message with tool_calls
-      const assistantMsg = { 
-        role: "assistant" as const, 
-        content: message?.content || "",
-        tool_calls: toolCalls 
-      };
-      context.getMessages().push(assistantMsg);
-      
-      // Check if we can parallelize tool calls (for "all nodes" queries with independent SSH calls)
-      const canParallelize = isAllNodesQuery && 
-        toolCalls.length > 1 && 
-        toolCalls.every(tc => {
-          const fnCall = tc.function ?? {};
-          const toolName = fnCall.name;
-          if (toolName !== "ssh_execute") return false;
-          try {
-            const args = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-            return args.command?.includes("sensors");
-          } catch {
-            return false;
-          }
-        });
-      
-      if (canParallelize) {
-        // Execute all SSH calls in parallel for "all nodes" queries
-        logger.info(`Parallelizing ${toolCalls.length} SSH tool calls for "all nodes" query`);
-        const toolPromises = toolCalls.map(async (toolCall) => {
-          const fnCall = toolCall.function ?? {};
-          const toolName = fnCall.name as string | undefined;
-          if (!toolName) return null;
-          
-          let parsedArgs: Record<string, any> = {};
-          try {
-            parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-          } catch {
-            return null;
-          }
-          
-          // Check duplicates
-          const callSignature = `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
-          if (seenToolCalls.has(callSignature)) {
-            logger.warn(`Duplicate tool call detected, skipping: ${callSignature}`);
-            return null;
-          }
-          seenToolCalls.add(callSignature);
-          
-          const targetTool = tools.find((t) => t.metadata.name === toolName);
-          if (!targetTool || !isToolAuthorized(targetTool, session)) {
-            return null;
-          }
-          
-          const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          const node = parsedArgs.node || parsedArgs.host;
-          const execContext = {
-            userId: session.userId,
-            aclGroup: session.aclGroup,
-            node,
-          };
-          
-          // Emit tool:start
-          eventBus.emit({
-            type: "tool:start",
-            sessionId,
-            timestamp: Date.now(),
-            data: { toolName, parameters: parsedArgs, toolCallId: toolCall.id },
-          });
-          
-          // Execute tool (SSH calls are read-only, no confirmation needed)
-          const result = await executeToolCall(
-            { toolName, parameters: parsedArgs },
-            tools,
-            execContext
-          );
-          
-          // Emit tool:complete
-          eventBus.emit({
-            type: "tool:complete",
-            sessionId,
-            timestamp: Date.now(),
-            data: {
-              toolName,
-              parameters: parsedArgs,
-              toolCallId: toolCall.id,
-              success: !result.error,
-              error: result.error,
-              durationMs: result.durationMs,
-            },
-          });
-          
-          return { toolCall, toolName, parsedArgs, result, provenanceId, execContext };
-        });
-        
-        const toolResults = await Promise.all(toolPromises);
-        
-        // Process results and add to context
-        for (const toolResult of toolResults) {
-          if (!toolResult) continue;
-          
-          const { toolCall, toolName, parsedArgs, result, provenanceId } = toolResult;
-          
-          // Track node queries
-          if (isAllNodesQuery && !result.error) {
-            const host = parsedArgs.host;
-            const proxmoxNodePatterns = [
-              { pattern: /prox.*big|172\.16\.0\.10/i, id: "prox_big" },
-              { pattern: /^yin$|172\.16\.0\.11/i, id: "yin" },
-              { pattern: /^yang$|172\.16\.0\.12/i, id: "yang" },
-            ];
-            
-            let matchedNodeId: string | null = null;
-            for (const nodePattern of proxmoxNodePatterns) {
-              if (nodePattern.pattern.test(host || "")) {
-                matchedNodeId = nodePattern.id;
-                break;
-              }
-            }
-            
-            if (matchedNodeId && !queriedNodeIds.has(matchedNodeId)) {
-              queriedNodeIds.add(matchedNodeId);
-              queriedNodeCount++;
-              logger.warn(`[ALL NODES TRACKING] Queried ${queriedNodeCount}/${discoveredNodeCount} Proxmox nodes (host: ${host}, node: ${matchedNodeId})`);
-            }
-          }
-          
-          // Add to reasoning step
-          const dataPreview = result.data && typeof result.data === 'object' 
-            ? JSON.stringify(result.data).slice(0, 500) 
-            : String(result.data || '').slice(0, 500);
-          const dataSize = result.data && typeof result.data === 'object'
-            ? JSON.stringify(result.data).length
-            : String(result.data || '').length;
-          const resultType = result.data 
-            ? (Array.isArray(result.data) ? 'array' : typeof result.data)
-            : undefined;
-          
-          reasoningStep.toolCalls.push({
-            toolName,
-            parameters: parsedArgs,
-            result: {
-              success: !result.error,
-              error: result.error,
-              dataPreview,
-              dataSize,
-              resultType,
-            },
-            durationMs: result.durationMs ?? 0,
-          });
-          totalToolCalls++;
-          
-          // Add to context
-          const sanitizedData = sanitizeToolPayload(result.data);
-          context.addToolResult(toolCall.id, toolName, {
-            provenanceId,
-            success: !result.error,
-            data: sanitizedData,
-            error: result.error ?? null,
-            durationMs: result.durationMs ?? 0,
-          });
-          
-          // For real-time metric queries, mark that we've successfully retrieved data
-          if (isRealTimeMetricQuery && result.data && !result.error) {
-            hasRealTimeMetricData = true;
-            logger.info("Real-time metric data retrieved successfully (parallel path), allowing text response", {
-              toolName,
-              hasData: !!result.data,
-            });
-          }
-        }
-      } else {
-        // Sequential execution (original behavior)
-        for (const toolCall of toolCalls) {
-        // Create a signature for this tool call to detect duplicates
-        const fnCall = toolCall.function ?? {};
-        const toolName = fnCall.name as string | undefined;
-        if (!toolName) continue;
-        
-        let parsedArgs: Record<string, any> = {};
-        try {
-          parsedArgs = fnCall.arguments ? JSON.parse(fnCall.arguments) : {};
-        } catch {
-          // Continue even if parsing fails
-        }
-        
-        // Create a signature: toolName + sorted stringified args
-        // For twin_query with node_temperature, allow different nodeName params (not duplicates)
-        const isTemperatureQuery = toolName === "twin_query" && parsedArgs.operation === "node_temperature";
-        const callSignature = isTemperatureQuery
-          ? `${toolName}:${parsedArgs.operation}:${parsedArgs.params?.nodeName || "all"}`
-          : `${toolName}:${JSON.stringify(parsedArgs, Object.keys(parsedArgs).sort())}`;
-        if (seenToolCalls.has(callSignature)) {
-          logger.warn(`Duplicate tool call detected, skipping: ${callSignature}`);
-          reasoningStep.decisions.push({
-            type: "duplicate_detected",
-            description: `Duplicate tool call detected: ${toolName}`,
-            metadata: { toolName, parameters: parsedArgs },
-          });
-          context.addToolResult(toolCall.id, toolName, {
-            provenanceId: `tool://${toolName}/duplicate-${Date.now()}`,
-            success: false,
-            error: "Duplicate tool call detected - this exact call was already made in this session",
-          });
-          continue;
-        }
-        seenToolCalls.add(callSignature);
-        
-        // For proxmox_write, also check for similar calls (same action + vmid + node, even if other params differ)
-        if (toolName === "proxmox_write" && parsedArgs.action && parsedArgs.vmid && parsedArgs.node) {
-          const similarSignature = `${toolName}:${parsedArgs.action}:${parsedArgs.vmid}:${parsedArgs.node}`;
-          if (seenToolCalls.has(similarSignature)) {
-            logger.warn(`Similar proxmox_write call detected, skipping: ${similarSignature}`);
-            reasoningStep.decisions.push({
-              type: "duplicate_detected",
-              description: `Similar proxmox_write call detected: ${parsedArgs.action} on VMID ${parsedArgs.vmid}`,
-              metadata: { toolName, action: parsedArgs.action, vmid: parsedArgs.vmid, node: parsedArgs.node },
-            });
-            context.addToolResult(toolCall.id, toolName, {
-              provenanceId: `tool://${toolName}/similar-duplicate-${Date.now()}`,
-              success: false,
-              error: `A similar operation (${parsedArgs.action}) was already attempted for VMID ${parsedArgs.vmid} on node ${parsedArgs.node} in this session`,
-            });
-            continue;
-          }
-          seenToolCalls.add(similarSignature);
-        }
-        
-        // Record tool choice decision
-        reasoningStep.decisions.push({
-          type: "tool_choice",
-          description: `Selected tool: ${toolName}`,
-          metadata: { toolName, parameters: parsedArgs },
-        });
-        const targetTool = tools.find((t) => t.metadata.name === toolName);
-        const provenanceId = `tool://${toolName}/${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        
-        // Emit tool:start event
-        eventBus.emit({
-          type: "tool:start",
-          sessionId,
-          timestamp: Date.now(),
-          data: { toolName, parameters: parsedArgs, toolCallId: toolCall.id },
-        });
-
-        // parsedArgs already parsed above for duplicate detection
-        logger.debug(`Tool call parsed: ${toolName}`, {
-          parsedArgs,
-          argKeys: Object.keys(parsedArgs),
-        });
-
-        if (!targetTool) {
-          context.addToolResult(toolCall.id, toolName, {
-            provenanceId,
-            success: false,
-            error: "Tool not registered",
-          });
-          continue;
-        }
-
-        if (!isToolAuthorized(targetTool, session)) {
-          const errorMsg = `ACL group ${session.aclGroup} is not authorized to run ${toolName}`;
-          logger.error(errorMsg);
-          context.addToolResult(toolCall.id, toolName, {
-            provenanceId,
-            success: false,
-            error: errorMsg,
-          });
-          continue;
-        }
-
-        // Extract node and vmid from parameters for audit trail
-        const node = parsedArgs.node || parsedArgs.host;
-        const vmid = parsedArgs.vmid || parsedArgs.vmId;
-        
-        // Build execution context for audit trail
-        const execContext = {
-          userId: session.userId,
-          aclGroup: session.aclGroup,
-          node,
-          vmid: typeof vmid === "number" ? vmid : undefined,
-        };
-
-        const toolRisk = mapToolRiskToIntentRisk(getToolRisk(targetTool));
-        const derivedRisk = deriveToolCallRisk(toolName, parsedArgs);
-        const effectiveRisk = maxRisk(classification.risk, toolRisk, derivedRisk ?? "READ");
-        const needsToolConfirmation = effectiveRisk === "WRITE_HIGH" || effectiveRisk === "DESTRUCTIVE";
-        const requiresApproval = requiresConfirmation(targetTool) || needsToolConfirmation;
-        const explicitConfirmationOk =
-          confirmation.confirmed &&
-          !!pendingActionId &&
-          confirmation.actionId === pendingActionId &&
-          !pendingActionExpired;
-
-        const missingToolSlots = inferMissingToolSlots(toolName, parsedArgs);
-        if (missingToolSlots.length > 0) {
-          let clarificationQuestion = "Could you clarify the missing details?";
-          try {
-            const askMissingResult = await executeToolCall(
-              {
-                toolName: "ask_missing",
-                parameters: {
-                  missing: missingToolSlots,
-                  intent: "ACTION",
-                  context: `Tool call: ${toolName} ${JSON.stringify(parsedArgs)}`,
-                },
-              },
-              tools,
-              { userId: session.userId, aclGroup: session.aclGroup }
-            );
-            const question = (askMissingResult as any)?.data?.question;
-            if (typeof question === "string" && question.trim().length > 0) {
-              clarificationQuestion = question.trim();
-            }
-          } catch (error: any) {
-            logger.warn("ask_missing failed during tool pre-validation", { error: error.message, toolName });
-          }
-
-          const shouldResetPendingContext =
-            usedPendingAction ||
-            (confirmation.confirmed && !!pendingActionId && confirmation.actionId === pendingActionId);
-          clarificationAbort = {
-            prompt: clarificationQuestion,
-            state: "NEED_CLARIFICATION",
-            context: shouldResetPendingContext
-              ? {
-                  pendingAction: "",
-                  pendingActionId: "",
-                  pendingActionDigest: "",
-                  pendingActionCreatedAt: 0,
-                  pendingActionSummary: "",
-                  pendingActionType: "",
-                  pendingActionPreview: "",
-                  pendingActionExecuteInput: "",
-                  pendingActionExpiresAt: 0,
-                }
-              : {},
-          };
-          reasoningStep.decisions.push({
-            type: "validation_failed",
-            description: "Tool execution blocked until required action details are provided",
-            metadata: { toolName, missing: missingToolSlots },
-          });
-          break;
-        }
-
-        if (requiresApproval && !explicitConfirmationOk) {
-          const summary = summarizeToolCall(toolName, parsedArgs);
-          const existingId = pendingActionId;
-          const pendingRecord = existingId
-            ? {
-                id: existingId,
-                digest: options.conversationContext?.pendingActionDigest ?? "",
-                createdAt: pendingActionCreatedAt ?? Date.now(),
-                expiresAt: pendingActionExpiresAt ?? (Date.now() + 15 * 60 * 1000),
-                type: options.conversationContext?.pendingActionType ?? `tool:${toolName}`,
-                preview: pendingActionPreview ?? pendingActionSummary ?? summary,
-                executeInput: pendingActionExecuteInput ?? pendingAction ?? userInput,
-                summary: pendingActionSummary ?? pendingActionPreview ?? summary,
-              }
-            : buildPendingActionRecord(
-                userInput,
-                summary,
-                `tool:${toolName}`
-              );
-          const prompt =
-            `Review pending change: ${pendingRecord.preview}\n` +
-            `Reply with CONFIRM ${pendingRecord.id} to apply, or CANCEL.`;
-
-          confirmationAbort = {
-            prompt,
-            state: "AWAITING_CONFIRMATION",
-            context: {
-              pendingAction: pendingRecord.executeInput,
-              pendingActionId: pendingRecord.id,
-              pendingActionDigest: pendingRecord.digest,
-              pendingActionCreatedAt: pendingRecord.createdAt,
-              pendingActionSummary: pendingRecord.summary,
-              pendingActionType: pendingRecord.type,
-              pendingActionPreview: pendingRecord.preview,
-              pendingActionExecuteInput: pendingRecord.executeInput,
-              pendingActionExpiresAt: pendingRecord.expiresAt,
-            },
-          };
-          pceLogger.incrementCounter("confirmation_requested");
-          logger.info("Conversation transition", {
-            conversation_state_before: options.conversationState ?? "IDLE",
-            decision: "ASK_CONFIRM",
-            confirmation_id: pendingRecord.id,
-            pending_action_source: existingId ? "existing_pending_action" : "tool_guard",
-          });
-          reasoningStep.decisions.push({
-            type: "validation_failed",
-            description: "Tool execution blocked pending explicit confirmation",
-            metadata: { toolName, effectiveRisk },
-          });
-          break;
-        }
-
-        // For proxmox_write operations, do a dry-run first to check if action is needed
-        // This avoids prompting for confirmation when the VM is already in the desired state
-        let result: ExecutionResult;
-        if (toolName === "proxmox_write" && parsedArgs.action) {
-          const dryRunResult = await executeToolCall(
-            { toolName, parameters: { ...parsedArgs, dryRun: true } },
-            tools,
-            execContext
-          );
-          
-          // Check if the dry-run indicates no action is needed
-          const noActionNeeded = 
-            dryRunResult.data?.status === "already_running" ||
-            dryRunResult.data?.status === "already_stopped" ||
-            dryRunResult.data?.message?.includes("already") ||
-            dryRunResult.data?.message?.includes("No action needed");
-          
-          if (noActionNeeded) {
-            // No action needed, return the dry-run result without prompting
-            result = dryRunResult;
-          } else {
-            // Execute the actual operation
-            result = await executeToolCall(
-              { toolName, parameters: parsedArgs },
-              tools,
-              execContext
-            );
-          }
-        } else {
-          result = await executeToolCall(
-            { toolName, parameters: parsedArgs },
-            tools,
-            execContext
-          );
-        }
-
-        // Emit tool:complete event
-        eventBus.emit({
-          type: "tool:complete",
-          sessionId,
-          timestamp: Date.now(),
-          data: {
-            toolName,
-            parameters: parsedArgs,
-            toolCallId: toolCall.id,
-            success: !result.error,
-            error: result.error,
-            durationMs: result.durationMs,
-            dataPreview: result.data && typeof result.data === 'object' 
-              ? JSON.stringify(result.data).slice(0, 200) 
-              : String(result.data || '').slice(0, 200),
-          },
-        });
-
-        // CRITICAL: Add tool result to context IMMEDIATELY after execution
-        // This ensures the context is always correct before any failure handling
-        // that might add user messages and trigger another LLM call
-        const sanitizedData = sanitizeToolPayload(result.data);
-        context.addToolResult(toolCall.id, toolName, {
-          provenanceId,
-          success: !result.error,
-          data: sanitizedData,
-          error: result.error ?? null,
-          durationMs: result.durationMs ?? 0,
-        });
-
-        if (result.error) {
-          logger.error(`Tool execution failed: ${toolName}`, {
-            error: result.error,
-            parameters: parsedArgs,
-          });
-          
-          // Reclassify intent with failure context instead of blindly retrying
-          const failureHistory = failureTracker.getFailureHistory(userInput);
-          const attemptNumber = failureHistory.length + 1;
-          
-          // Check if we should stop retrying
-          if (failureTracker.shouldStopRetrying(userInput)) {
-            logger.warn(`Stopping retries for "${userInput}" after ${attemptNumber} attempts`);
-            reasoningStep.decisions.push({
-              type: "failure_limit_reached",
-              description: `Tool execution failed after ${attemptNumber} attempts. Stopping retries to prevent loop.`,
-              metadata: { toolName, error: result.error, attemptNumber },
-            });
-          } else {
-            // Record failure and reclassify with context
-            const failureContext: FailureContext = {
-              error: result.error,
-              toolName,
-              parameters: parsedArgs,
-              partialState: result.data ? { partialData: result.data } : undefined,
-              attemptNumber,
-              previousAttempts: failureHistory.map(f => ({
-                toolName: f.toolName,
-                error: f.error,
-                attemptNumber: f.attemptNumber,
-              })),
-            };
-            
-            failureTracker.recordFailure(userInput, failureContext);
-            
-            // Get original classification for confidence monotonicity
-            const originalClassification = failureTracker.getOriginalClassification(userInput);
-            
-            // Reclassify with context (confidence will be capped to original if no new evidence)
-            const reclassification = reclassifyIntentWithContext(
-              userInput, 
-              failureContext,
-              originalClassification
-            );
-            
-            logger.info(`Reclassified intent after failure`, {
-              originalInput: userInput,
-              originalConfidence: originalClassification?.confidence,
-              newClassification: reclassification.classification.type,
-              newConfidence: reclassification.classification.confidence,
-              confidenceAdjusted: reclassification.confidenceAdjusted,
-              shouldRetry: reclassification.shouldRetry,
-              reason: reclassification.reason,
-              suggestedAction: reclassification.suggestedAction,
-            });
-            
-            reasoningStep.decisions.push({
-              type: "failure_reclassification",
-              description: reclassification.reason,
-              metadata: {
-                toolName,
-                error: result.error,
-                attemptNumber,
-                originalConfidence: originalClassification?.confidence,
-                newClassification: reclassification.classification.type,
-                newConfidence: reclassification.classification.confidence,
-                confidenceAdjusted: reclassification.confidenceAdjusted,
-                shouldRetry: reclassification.shouldRetry,
-                suggestedAction: reclassification.suggestedAction,
-              },
-            });
-            
-            // If reclassification suggests a different approach, add context to help LLM
-            if (reclassification.shouldRetry && reclassification.suggestedAction) {
-              context.addUserMessage(
-                `Previous attempt failed: ${result.error}. ${reclassification.suggestedAction}`
-              );
-            } else if (!reclassification.shouldRetry) {
-              // Don't retry - add context explaining why
-              context.addUserMessage(
-                `Tool execution failed: ${result.error}. ${reclassification.reason}. Please try a different approach or ask for clarification.`
-              );
-            }
-          }
-        } else {
-          if (
-            toolName === "proxmox_write" &&
-            parsedArgs.action === "destroy_vm" &&
-            parsedArgs.dryRun !== true &&
-            (result.data as any)?.status === "destroyed"
-          ) {
-            const destroyedVmName = (result.data as any)?.vmName;
-            if (typeof destroyedVmName === "string" && destroyedVmName.trim().length > 0) {
-              await cleanupAfterProxmoxDestroy(destroyedVmName);
-            } else {
-              logger.warn("Skipping Terraform cleanup for proxmox_write destroy_vm due to missing vmName", {
-                node: parsedArgs.node,
-                vmid: parsedArgs.vmid,
-              });
-            }
-          }
-
-          logger.debug(`Tool execution succeeded: ${toolName}`, {
-            dataKeys: result.data && typeof result.data === 'object' ? Object.keys(result.data) : [],
-          });
-          
-          // Clear failure history on success
-          failureTracker.clearHistory(userInput);
-          
-          // For real-time metric queries, mark that we've successfully retrieved data
-          // This allows the LLM to respond with text instead of forcing more tool calls
-          if (isRealTimeMetricQuery && result.data && !result.error) {
-            hasRealTimeMetricData = true;
-            logger.info("Real-time metric data retrieved successfully, allowing text response", {
-              toolName,
-              hasData: !!result.data,
-            });
-          }
-        }
-
-        // Track node discovery and queries for "all nodes" validation (BEFORE sanitization)
-        if (isAllNodesQuery && !result.error) {
-          console.error(`[ALL NODES TRACKING] Tool: ${toolName}, Action: ${parsedArgs.action}, Command: ${parsedArgs.command}`);
-          logger.warn(`[ALL NODES TRACKING] Tool: ${toolName}, Action: ${parsedArgs.action}, Command: ${parsedArgs.command}`);
-          
-          // For temperature queries, we use SSH config discovery (already done above)
-          // For other "all nodes" queries, use Proxmox API discovery
-          if (toolName === "proxmox_readonly" && parsedArgs.action === "list_nodes" && expectedProxmoxNodes.length === 0) {
-            // Response structure: { data: { nodes: [...], count: ... } }
-            const data = result.data as any;
-            const nodes = data?.nodes || data?.data?.nodes || [];
-            discoveredNodeCount = Array.isArray(nodes) ? nodes.length : (data?.count || 0);
-            logger.warn(`[ALL NODES TRACKING] Discovered ${discoveredNodeCount} nodes from Proxmox API`, {
-              nodesArray: Array.isArray(nodes) ? nodes.length : 'not array',
-              countField: data?.count,
-              dataKeys: data && typeof data === 'object' ? Object.keys(data) : [],
-              rawData: JSON.stringify(data).slice(0, 500),
-            });
-          }
-          
-          // Track SSH queries for temperature - check if this host is one of our expected Proxmox nodes
-          if (toolName === "ssh_execute" && parsedArgs.command?.includes("sensors")) {
-            const host = parsedArgs.host;
-            // For temperature queries, we expect 3 Proxmox nodes: prox_big, yin, yang
-            // Match by checking if host is one of the known Proxmox nodes (flexible matching)
-            const proxmoxNodePatterns = [
-              { pattern: /prox.*big|172\.16\.0\.10/i, id: "prox_big" },  // prox_big, proxBig, 172.16.0.10
-              { pattern: /^yin$|172\.16\.0\.11/i, id: "yin" },          // yin, 172.16.0.11
-              { pattern: /^yang$|172\.16\.0\.12/i, id: "yang" },        // yang, YANG, 172.16.0.12
-            ];
-            
-            let matchedNodeId: string | null = null;
-            if (expectedProxmoxNodes.length > 0) {
-              // Try to match against expected nodes
-              for (const nodePattern of proxmoxNodePatterns) {
-                if (nodePattern.pattern.test(host || "")) {
-                  matchedNodeId = nodePattern.id;
-                  break;
-                }
-              }
-            } else {
-              // Fallback: use pattern matching
-              for (const nodePattern of proxmoxNodePatterns) {
-                if (nodePattern.pattern.test(host || "")) {
-                  matchedNodeId = nodePattern.id;
-                  break;
-                }
-              }
-            }
-              
-            if (matchedNodeId) {
-              // Only increment if we haven't queried this physical node yet
-              if (!queriedNodeIds.has(matchedNodeId)) {
-                queriedNodeIds.add(matchedNodeId);
-                queriedNodeCount++;
-                logger.warn(`[ALL NODES TRACKING] Queried ${queriedNodeCount}/${discoveredNodeCount} Proxmox nodes (host: ${host}, node: ${matchedNodeId})`);
-              } else {
-                logger.warn(`[ALL NODES TRACKING] Duplicate query for node ${matchedNodeId} (host: ${host}) - not counted`);
-              }
-            } else {
-              logger.warn(`[ALL NODES TRACKING] Sensors query on non-Proxmox host: ${host} (not counted)`);
-            }
-          }
-        }
-
-        // Capture tool execution in reasoning step with enhanced details
-        const dataPreview = result.data && typeof result.data === 'object' 
-          ? JSON.stringify(result.data).slice(0, 500) 
-          : String(result.data || '').slice(0, 500);
-        
-        const dataSize = result.data && typeof result.data === 'object'
-          ? JSON.stringify(result.data).length
-          : String(result.data || '').length;
-        
-        const resultType = result.data 
-          ? (Array.isArray(result.data) ? 'array' : typeof result.data)
-          : undefined;
-        
-        reasoningStep.toolCalls.push({
-          toolName,
-          parameters: parsedArgs,
-          result: {
-            success: !result.error,
-            error: result.error,
-            dataPreview,
-            dataSize,
-            resultType,
-          },
-          durationMs: result.durationMs ?? 0,
-        });
-        totalToolCalls++;
-        }
-      }
-
-      if (clarificationAbort) {
-        const mergedContext: ConversationContext = {
-          ...contextUpdate,
-          ...clarificationAbort.context,
-        };
-        emitFinalEvent(clarificationAbort.prompt, {
-          clarification: true,
-          needsResponse: true,
-          classification,
-          conversationState: clarificationAbort.state,
-          conversationContext: mergedContext,
-        });
-        return { text: clarificationAbort.prompt };
-      }
-
-      if (confirmationAbort) {
-        const mergedContext: ConversationContext = {
-          ...contextUpdate,
-          ...confirmationAbort.context,
-        };
-        emitFinalEvent(confirmationAbort.prompt, {
-          confirmationRequired: true,
-          confirmationId: mergedContext.pendingActionId,
-          confirmationPreview: mergedContext.pendingActionPreview ?? mergedContext.pendingActionSummary,
-          confirmationExpiresAt: mergedContext.pendingActionExpiresAt ?? 0,
-          classification,
-          conversationState: confirmationAbort.state,
-          conversationContext: mergedContext,
-        });
-        return { text: confirmationAbort.prompt };
-      }
-
-      // Record this reasoning step
-      reasoningSteps.push(reasoningStep);
-      continue;
-    }
-
-    // Record step even if no tool calls
-    if (message?.content) {
-      reasoningStep.llmResponse = message.content;
-    }
-    reasoningSteps.push(reasoningStep);
-
-    let finalText = coerceTextContent(message?.content).trim();
-    if (finalText) {
-      const shouldPreserveClarificationQuestion =
-        classification.intent === "ACTION" &&
-        reasoningStep.toolCalls.length === 0 &&
-        /\?\s*$/.test(finalText);
-      const shouldPreserveConfirmationPrompt =
-        /^Review pending change:\s*/i.test(finalText) &&
-        /Reply with CONFIRM\s+[a-z0-9_-]+\s+to apply,\s+or\s+CANCEL\.?/i.test(finalText);
-      const shouldBypassFormatting = shouldPreserveClarificationQuestion || shouldPreserveConfirmationPrompt;
-
-      // Validate "all nodes" queries - prevent partial answers
-      if (isAllNodesQuery) {
-        logger.warn(`[ALL NODES VALIDATION] discovered=${discoveredNodeCount}, queried=${queriedNodeCount}, hasText=${!!finalText}`);
-        if (discoveredNodeCount > 0 && queriedNodeCount < discoveredNodeCount) {
-          logger.error(`[ALL NODES VALIDATION] BLOCKING partial answer: discovered ${discoveredNodeCount} nodes but only queried ${queriedNodeCount}`);
-          reasoningStep.decisions.push({
-            type: "validation_failed",
-            description: `Partial answer prevented: need to query all ${discoveredNodeCount} nodes, only ${queriedNodeCount} queried`,
-            metadata: { discoveredNodeCount, queriedNodeCount },
-          });
-          // Force continuation by adding a user message to the context
-          context.addUserMessage(`You have not queried all discovered nodes yet. You discovered ${discoveredNodeCount} nodes but have only queried ${queriedNodeCount}. You MUST continue querying the remaining ${discoveredNodeCount - queriedNodeCount} node(s) before providing an answer. Do NOT provide a text response yet - make more tool calls instead.`);
-          reasoningSteps.push(reasoningStep);
-          continue; // Force another iteration
-        } else if (discoveredNodeCount === 0 && queriedNodeCount > 0) {
-          // Nodes were queried but we didn't track discovery - might be a tracking issue
-          logger.warn(`All nodes query: nodes were queried (${queriedNodeCount}) but discovery count is 0 - tracking may have failed`);
-        }
-      }
-      
-      if (!shouldBypassFormatting) {
-        // Format response for bot-like style before returning
-        try {
-          // Extract tool calls from reasoning steps for context
-          const allToolCalls = reasoningSteps.flatMap(step => 
-            step.toolCalls.map(tc => ({
-              toolName: tc.toolName,
-              parameters: tc.parameters,
-            }))
-          );
-          
-          const intentType = detectResponseIntent(userInput, allToolCalls);
-          let enrichedText = finalText;
-          if (responseMode === "ASSISTIVE" || responseMode === "EXPLAINER") {
-            const movesContext = await buildBotMoveContext(finalText, classification.intent);
-            if (movesContext) {
-              enrichedText = `${movesContext}\n\n${finalText}`;
-            }
-          }
-          finalText = await formatResponseForBot(enrichedText, {
-            userQuery: userInput,
-            intentType,
-            toolCalls: allToolCalls,
-            mode: responseMode,
-          });
-        } catch (error: any) {
-          logger.warn("Failed to format final response", { error: error.message });
-          // Continue with unformatted response
-        }
-      }
-      
-      context.addAssistantMessage(finalText);
-      
-      // Record reasoning trace first to get trace ID
-      let traceId: string | undefined;
-      try {
-        const traceStore = getReasoningTraceStore();
-        traceId = await traceStore.recordTrace({
-          userId: session.userId,
-          aclGroup: session.aclGroup,
-          userInput,
-          finalResponse: finalText,
-          steps: reasoningSteps,
-          provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-          artifacts: retrievalArtifacts,
-          totalSteps: reasoningSteps.length,
-          totalToolCalls,
-          maxStepsReached: false,
-          timestamp: new Date(),
-          durationMs: Date.now() - startTime,
-        });
-      } catch (error: any) {
-        logger.warn("Failed to record reasoning trace", { error: error.message });
-      }
-      
-      // Synthesis marker: log possible RAG underuse when CandidateAnswer was provided but reply may not use it
-      if (retrievalInjected && ragPayload?.answer?.trim() && finalText) {
-        const candidate = ragPayload.answer.trim();
-        const reply = finalText.trim();
-        const minLen = Math.min(30, Math.floor(candidate.length / 2));
-        if (minLen >= 15) {
-          const candidateNorm = candidate.toLowerCase().replace(/\s+/g, " ");
-          const replyNorm = reply.toLowerCase().replace(/\s+/g, " ");
-          let found = false;
-          for (let i = 0; i <= candidateNorm.length - minLen && !found; i++) {
-            const slice = candidateNorm.slice(i, i + minLen);
-            if (replyNorm.includes(slice)) found = true;
-          }
-          if (!found) {
-            logger.info("Possible RAG underuse: reply may not incorporate CandidateAnswer", {
-              candidateAnswerLength: candidate.length,
-              replyLength: reply.length,
-              query: userInput.slice(0, 80),
-            });
-          }
-        }
-      }
-
-      // Emit agent:final event with trace ID
-      const durationMs = Date.now() - startTime;
-      emitFinalEvent(finalText, { 
-        totalSteps: step + 1,
-        totalToolCalls,
-        traceId,
-        conversationState: shouldPreserveClarificationQuestion
-          ? "NEED_CLARIFICATION"
-          : shouldPreserveConfirmationPrompt
-            ? "AWAITING_CONFIRMATION"
-            : postExecutionState,
-        conversationContext: finalContextUpdate,
-        clarification: shouldPreserveClarificationQuestion,
-        needsResponse: shouldPreserveClarificationQuestion || shouldPreserveConfirmationPrompt,
-      });
-      
-      return { text: finalText };
-    }
   }
 
-  // Max steps reached - record trace
-  const durationMs = Date.now() - startTime;
-  let traceId: string | undefined;
-  try {
-    const traceStore = getReasoningTraceStore();
-    traceId = await traceStore.recordTrace({
-      userId: session.userId,
-      aclGroup: session.aclGroup,
-      userInput,
-      finalResponse: "Max reasoning depth reached. Please try a simpler query.",
-      steps: reasoningSteps,
-      provenance: buildProvenance({ toolRegistryVersion, policyMode, selectedMode: responseMode }),
-      artifacts: retrievalArtifacts,
-      totalSteps: reasoningSteps.length,
-      totalToolCalls,
-      maxStepsReached: true,
-      timestamp: new Date(),
-      durationMs,
-    });
-  } catch (error: any) {
-    logger.warn("Failed to record reasoning trace", { error: error.message });
-  }
-  
-  emitFinalEvent("Max reasoning depth reached. Please try a simpler query.", { 
-    totalSteps: reasoningSteps.length, 
-    totalToolCalls,
-    traceId,
-    conversationState: conversationPlan.nextState,
-    conversationContext: contextUpdate,
-  });
-
-  return { text: "Max reasoning depth reached. Please try a simpler query." };
+  return executeResult;
 }

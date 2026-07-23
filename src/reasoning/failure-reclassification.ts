@@ -51,12 +51,14 @@ export interface ReclassificationResult {
  * @param originalInput - The original user input
  * @param failureContext - Context about the failure
  * @param originalClassification - The original classification (for confidence capping)
+ * @param classifyFn - Optional async classifier (e.g. classifyIntentWithLLM); when provided, used instead of sync classifyIntent
  */
-export function reclassifyIntentWithContext(
+export async function reclassifyIntentWithContext(
   originalInput: string,
   failureContext: FailureContext,
-  originalClassification?: IntentClassification
-): ReclassificationResult {
+  originalClassification?: IntentClassification,
+  classifyFn?: (input: string) => Promise<IntentClassification>
+): Promise<ReclassificationResult> {
   const { error, toolName, parameters, partialState, attemptNumber, previousAttempts = [] } = failureContext;
   
   // Build enriched input with context
@@ -105,8 +107,10 @@ export function reclassifyIntentWithContext(
   // Create enriched input for reclassification
   const enrichedInput = contextParts.join(". ");
   
-  // Reclassify with enriched context
-  let classification = classifyIntent(enrichedInput);
+  // Reclassify with enriched context (LLM when classifyFn provided, else sync classifier)
+  let classification = classifyFn
+    ? await classifyFn(enrichedInput)
+    : classifyIntent(enrichedInput);
   
   // CRITICAL: Make confidence monotonic - don't allow it to increase unless
   // there's genuinely new evidence (not just error messages)

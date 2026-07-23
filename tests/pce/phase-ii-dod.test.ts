@@ -12,7 +12,8 @@ import {
   QueueConsumer,
   type WebhookPayload,
 } from "../../src/pce/realtime";
-import { LLMWorkerPool, LLMCache } from "../../src/pce/llm";
+import { LLMWorkerPool } from "../../src/pce/llm/worker-pool";
+import { LLMCache } from "../../src/pce/llm/cache";
 import {
   MetricsCollector,
   IngestionMetrics,
@@ -23,13 +24,15 @@ import { IngestionPipeline } from "../../src/pce/ingestion";
 import { GraphIngestionPipeline } from "../../src/pce/ingestion/graph-pipeline";
 import { SnapshotLog, RawDocumentStorage } from "../../src/pce/dlm";
 import { Redactor } from "../../src/pce/redaction";
-import { EmbeddingService, QdrantVectorStore, TEST_COLLECTION } from "../../src/pce/vector";
+import { EmbeddingService, QdrantVectorStore } from "../../src/pce/vector";
 import { Neo4jGraphStore } from "../../src/pce/kg/indexation/neo4j-client";
 import { pceLogger } from "../../src/pce/utils/logger";
+import { buildIsolatedQdrantCollectionName } from "../helpers/qdrant-test-collection";
 
 const TEST_DIR = "./.pce-ii-dod-test";
 const TEST_SNAPSHOT_LOG = join(TEST_DIR, "snapshots.json");
 const TEST_RAW_STORAGE = join(TEST_DIR, "raw-documents");
+const PHASE_II_COLLECTION = buildIsolatedQdrantCollectionName("phase_ii_dod");
 
 describe("Phase II: Real-Time Updates and Production Readiness", () => {
   let queue: RealtimeIngestionQueue;
@@ -63,11 +66,12 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
     rawStorage = new RawDocumentStorage(TEST_RAW_STORAGE);
     redactor = new Redactor();
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
+    vectorStore = new QdrantVectorStore(undefined, undefined, PHASE_II_COLLECTION);
     graphStore = new Neo4jGraphStore();
 
     // Initialize vector store collection
-    await vectorStore.initializeCollection();
+    await vectorStore.initializeCollection(embeddingService.getDimension());
+    await vectorStore.clearCollection();
 
     // Initialize ingestion pipelines
     ingestionPipeline = new IngestionPipeline(
@@ -87,7 +91,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
 
     // Initialize real-time components
     queue = new RealtimeIngestionQueue();
-    webhookListener = new WebhookListener(queue, { port: 3001 });
+    webhookListener = new WebhookListener(queue, { port: 0 });
     queueConsumer = new QueueConsumer(
       queue,
       ingestionPipeline,
@@ -143,10 +147,11 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
 
       const info = webhookListener.getInfo();
       expect(info.running).toBe(true);
-      expect(info.port).toBe(3001);
+      expect(info.hostname).toBe("127.0.0.1");
+      expect(info.port).toBeGreaterThan(0);
 
       // Test webhook endpoint
-      const response = await fetch(`http://localhost:${info.port}${info.path}`, {
+      const response = await fetch(`http://${info.hostname}:${info.port}${info.path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -167,9 +172,10 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
 
     it("should validate webhook payload", async () => {
       await webhookListener.start();
+      const info = webhookListener.getInfo();
 
       // Missing required fields
-      const response = await fetch(`http://localhost:3001/webhook`, {
+      const response = await fetch(`http://${info.hostname}:${info.port}${info.path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -479,6 +485,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
     it("should process 10 concurrent webhook events with latency < 15s", async () => {
       await webhookListener.start();
       await queueConsumer.start();
+      const info = webhookListener.getInfo();
 
       // Create test documents
       const testDocs: string[] = [];
@@ -491,7 +498,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
       // Send 10 concurrent webhooks
       const startTime = Date.now();
       const webhookPromises = testDocs.map((docPath) =>
-        fetch("http://localhost:3001/webhook", {
+        fetch(`http://${info.hostname}:${info.port}${info.path}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -509,10 +516,14 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
       // Wait for processing to complete
       let allProcessed = false;
       let attempts = 0;
-      while (!allProcessed && attempts < 30) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+      while (!allProcessed && attempts < 60) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
         const stats = queueConsumer.getStats();
-        allProcessed = stats.queueStats.completed >= 10;
+        allProcessed =
+          stats.queueStats.completed + stats.queueStats.failed >= 10 &&
+          stats.activeProcessing === 0 &&
+          stats.queueStats.pending === 0 &&
+          stats.queueStats.processing === 0;
         attempts++;
       }
 
@@ -521,14 +532,15 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
 
       // Verify all processed
       const finalStats = queueConsumer.getStats();
-      expect(finalStats.queueStats.completed).toBeGreaterThanOrEqual(10);
+      expect(finalStats.queueStats.completed).toBe(10);
+      expect(finalStats.queueStats.failed).toBe(0);
 
       // Verify latency < 15 seconds (with some buffer for test environment)
       expect(totalLatency).toBeLessThan(20000); // 20s buffer for test environment
 
       await queueConsumer.stop();
       await webhookListener.stop();
-    });
+    }, { timeout: 25000 });
 
     it("should log all key performance metrics", () => {
       // Record various metrics
@@ -552,4 +564,3 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
     });
   });
 });
-

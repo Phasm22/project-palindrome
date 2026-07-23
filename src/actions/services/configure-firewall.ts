@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIP } from "net";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { AnsibleRunner } from "../helpers/ansible-runner";
 import {
@@ -12,18 +13,21 @@ import {
  * Configure Firewall Action Schema
  */
 export const ConfigureFirewallSchema = z.object({
-  vmName: z.string().min(1, "VM name is required"),
+  vmName: z.string().min(1, "VM name is required").describe("VM name to configure UFW firewall on (resolved via digital twin to obtain the SSH hostname)"),
   rules: z.array(z.object({
-    port: z.number().int().positive(),
-    protocol: z.enum(["tcp", "udp", "both"]).default("tcp"),
-    action: z.enum(["allow", "deny"]).default("allow"),
-  })).optional(),
-  defaultPolicy: z.enum(["allow", "deny"]).default("deny"),
-  waitForVm: z.boolean().default(true),
-  timeout: z.number().int().positive().default(300),
-  retryOnFailure: z.boolean().default(false),
-  maxRetries: z.number().int().positive().default(1),
-  dryRun: z.boolean().default(false),
+    port: z.number().int().positive().describe("Port number to allow or deny"),
+    protocol: z.enum(["tcp", "udp", "both"]).default("tcp").describe("Protocol: 'tcp', 'udp', or 'both' (default: 'tcp')"),
+    action: z.enum(["allow", "deny"]).default("allow").describe("Firewall action: 'allow' or 'deny' (default: 'allow')"),
+    source: z.string().default("any").refine(isValidFirewallSource, {
+      message: "Source must be 'any', an IP address, or a valid CIDR",
+    }).describe("Traffic source: 'any', an IP address, or CIDR (default: 'any')"),
+  })).optional().describe("UFW rules to apply (optional; each rule specifies port, protocol, and action)"),
+  defaultPolicy: z.enum(["allow", "deny"]).default("deny").describe("Default UFW policy for unmatched traffic (default: 'deny')"),
+  waitForVm: z.boolean().default(true).describe("Wait for SSH to become accessible before running ansible commands (default: true)"),
+  timeout: z.number().int().positive().default(300).describe("SSH wait timeout in seconds (default: 300)"),
+  retryOnFailure: z.boolean().default(false).describe("Retry on failure (default: false)"),
+  maxRetries: z.number().int().positive().default(1).describe("Maximum number of retry attempts when retryOnFailure is true (default: 1)"),
+  dryRun: z.boolean().default(false).describe("Preview without executing firewall changes (default: false)"),
 });
 
 export type ConfigureFirewallParams = z.infer<typeof ConfigureFirewallSchema>;
@@ -39,6 +43,35 @@ export interface ConfigureFirewallResult {
   duration: number;
   message: string;
   errors?: string[];
+}
+
+export function isValidFirewallSource(source: string): boolean {
+  if (source === "any") return true;
+  const [address, prefix, ...extra] = source.split("/");
+  if (!address || extra.length > 0) return false;
+  const family = isIP(address);
+  if (family === 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d+$/.test(prefix)) return false;
+  const numericPrefix = Number.parseInt(prefix, 10);
+  return family === 4
+    ? numericPrefix >= 0 && numericPrefix <= 32
+    : numericPrefix >= 0 && numericPrefix <= 128;
+}
+
+export function buildUfwRuleCommand(rule: {
+  port: number;
+  protocol: "tcp" | "udp" | "both";
+  action: "allow" | "deny";
+  source?: string;
+}): string {
+  const protocol = rule.protocol === "both" ? "" : ` proto ${rule.protocol}`;
+  const source = rule.source ?? "any";
+  if (source === "any") {
+    const portProtocol = rule.protocol === "both" ? "" : `/${rule.protocol}`;
+    return `ufw ${rule.action} ${rule.port}${portProtocol}`;
+  }
+  return `ufw ${rule.action} from ${source} to any port ${rule.port}${protocol}`;
 }
 
 /**
@@ -157,8 +190,8 @@ export async function configureFirewall(params: ConfigureFirewallParams): Promis
         const action = rule.action === "allow" ? "allow" : "deny";
         commands.push({
           module: "command",
-          args: { _raw_params: `ufw ${action} ${rule.port}${protocol}` },
-          description: `${action} ${rule.port}${protocol}`,
+          args: { _raw_params: buildUfwRuleCommand(rule) },
+          description: `${action} ${rule.port}${protocol} from ${rule.source}`,
         });
       }
 
@@ -283,4 +316,3 @@ export async function configureFirewall(params: ConfigureFirewallParams): Promis
     };
   }
 }
-

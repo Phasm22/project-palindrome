@@ -15,10 +15,25 @@ export type ActionIntent =
   | { type: "configure_firewall"; vmName: string }
   | { type: "set_static_ip"; vmName: string; ip?: string; gateway?: string };
 
-function isLikelyQuestion(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (normalized.endsWith("?")) return true;
-  return /^(what|which|who|where|when|why|how|is|are|do|does|can|could|would|will)\b/.test(normalized);
+export function extractCreateVmParameters(text: string): {
+  cores?: number;
+  memory?: number;
+  diskSize?: string;
+  sshUsername?: string;
+} {
+  const coreMatch = text.match(/\b(\d+)\s*(?:v?cpus?|cores?)\b/i);
+  const memoryMatch = text.match(/\b(\d+)\s*(mb|gb)\s*(?:of\s+)?(?:ram|memory)\b/i);
+  const diskMatch = text.match(/\b(\d+)\s*(g|gb)\s*(?:of\s+)?(?:disk|storage)\b/i);
+  const sshUserMatch = text.match(/\bssh\s+(?:user|username)\s*(?:is|=|:)?\s*([a-z_][a-z0-9_-]*)\b/i);
+  const memoryValue = memoryMatch
+    ? Number(memoryMatch[1]) * (memoryMatch[2]?.toLowerCase() === "gb" ? 1024 : 1)
+    : undefined;
+  return {
+    ...(coreMatch ? { cores: Number(coreMatch[1]) } : {}),
+    ...(memoryValue ? { memory: memoryValue } : {}),
+    ...(diskMatch ? { diskSize: `${diskMatch[1]}G` } : {}),
+    ...(sshUserMatch ? { sshUsername: sshUserMatch[1] } : {}),
+  };
 }
 
 function normalizeVmNameCandidate(candidate: string | null | undefined): string | null {
@@ -42,9 +57,14 @@ function extractRegexCandidate(match: RegExpMatchArray | null): string | null {
 
 function extractCreateVmName(text: string): string | null {
   const explicitNamePattern =
-    /\b(?:vm|virtual machine)\s+(?:named|called|with\s+name|name(?:\s+is|=|:)?|hostname(?:\s+is|=|:)?)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
+    /\b(?:vm|virtual machine)\b(?:[^\n]{0,80}?)\b(?:named|called|with\s+name|name(?:\s+is|=|:)?|hostname(?:\s+is|=|:)?)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
   const explicitName = extractRegexCandidate(text.match(explicitNamePattern));
   if (explicitName) return explicitName;
+
+  const trailingNamePattern =
+    /\b(?:create|make|provision|spin up)\b(?:[^\n]{0,120}?)\b(?:named|called|with\s+name|name(?:\s+is|=|:)?|hostname(?:\s+is|=|:)?)\s*(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
+  const trailingName = extractRegexCandidate(text.match(trailingNamePattern));
+  if (trailingName) return trailingName;
 
   const inlineNamePattern =
     /\b(?:create|make|provision|spin up)\s+(?:a|an|new)?\s*(?:vm|virtual machine)\s+(?:"([^"]+)"|'([^']+)'|`([^`]+)`|([a-z0-9][a-z0-9._-]*))/i;
@@ -83,56 +103,33 @@ function extractCreateVmName(text: string): string | null {
 function extractVmName(text: string): string | null {
   // Match patterns like "create VM named X", "create a VM called X", "VM named X"
   const namedMatch = text.match(/\b(?:vm|virtual machine)\s+(?:named|called|with name)\s+([a-z0-9\-_]+)/i);
-  if (namedMatch) {
-    return namedMatch[1] ?? null;
+  const namedCandidate = namedMatch?.[1] ?? null;
+  if (isPlausibleNameCandidate(namedCandidate)) {
+    return namedCandidate;
   }
 
   // Match patterns like "destroy X", "delete X", "remove X" where X is a VM name
-  const destroyMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
-  if (destroyMatch) {
-    return destroyMatch[1] ?? null;
+  const destroyMatch = text.match(
+    /\b(?:destroy|delete|remove)\s+(?:(?:the|a|an)\s+)?(?:(?:vm|virtual\s+machine|container|lxc)\s+)?([a-z0-9][a-z0-9._-]*)/i
+  );
+  const destroyCandidate = destroyMatch?.[1] ?? null;
+  if (isPlausibleNameCandidate(destroyCandidate)) {
+    return destroyCandidate;
   }
 
   // Match patterns like "restart X", "start X", "stop X", "reboot X" where X is a VM name
   // These are common patterns for VM lifecycle operations
   const lifecycleMatch = text.match(/\b(?:restart|start|stop|reboot|shutdown)\s+(?:vm\s+)?([a-z0-9\-_]+)/i);
-  if (lifecycleMatch) {
-    return lifecycleMatch[1] ?? null;
+  const lifecycleCandidate = lifecycleMatch?.[1] ?? null;
+  if (isPlausibleNameCandidate(lifecycleCandidate)) {
+    return lifecycleCandidate;
   }
 
   return null;
 }
 
 function extractVmId(text: string): number | null {
-  // Match patterns like "vm 104", "vmid 104", "vm id 104", "virtual machine 104"
-  const vmIdMatch = text.match(/\b(?:vm|vmid|vm\s+id|virtual\s+machine)\s+(\d+)/i);
-  if (vmIdMatch?.[1]) {
-    return parseInt(vmIdMatch[1], 10);
-  }
-
-  // Match standalone numbers after destroy/delete/remove
-  const destroyIdMatch = text.match(/\b(?:destroy|delete|remove)\s+(?:vm\s+)?(\d+)/i);
-  if (destroyIdMatch?.[1]) {
-    return parseInt(destroyIdMatch[1], 10);
-  }
-
-  return null;
-}
-
-function extractNodeName(text: string): string | null {
-  // Match patterns like "on node X", "on X", "in X", "node X"
-  const onMatch = text.match(/\b(?:on|in)\s+(?:node\s+)?([a-z0-9\-_]+)/i);
-  if (onMatch) {
-    return onMatch[1] ?? null;
-  }
-
-  // Also try "node X" pattern
-  const nodeMatch = text.match(/\bnode\s+([a-z0-9\-_]+)/i);
-  if (nodeMatch) {
-    return nodeMatch[1] ?? null;
-  }
-
-  return null;
+  return extractVmReference(text, { allowBareIdAfterDestructiveVerb: true })?.numericId ?? null;
 }
 
 /**
@@ -146,6 +143,7 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
   if (
     (
       normalized.includes("create") ||
+      normalized.includes("creation") ||
       normalized.includes("make") ||
       normalized.includes("spin up") ||
       normalized.includes("provision")
@@ -162,9 +160,7 @@ export function detectActionIntent(userInput: string): ActionIntent | null {
   }
 
   // Destroy/Delete VM
-  if (
-    normalized.includes("destroy") || normalized.includes("delete") || normalized.includes("remove")
-  ) {
+  if (!isQuestion && hasLeadingDestructiveVerb(userInput)) {
     const nodeName = extractNodeName(userInput) || undefined;
     // Try to extract VM ID first (more specific)
     const vmId = extractVmId(userInput);
@@ -297,3 +293,10 @@ function extractVmNameFromContext(text: string): string | null {
   }
   return null;
 }
+import {
+  extractNodeName,
+  extractVmReference,
+  hasLeadingDestructiveVerb,
+  isLikelyQuestion,
+  isPlausibleNameCandidate,
+} from "./detector-toolkit";

@@ -101,9 +101,23 @@ async function fetchVmsByNode(
   return sortVmsById([...qemuVms, ...lxcVms]);
 }
 
+/** Derive a short, readable label from twin VM id (e.g. compute-vm:yang:103 → "VM 103") or use name if friendly. */
+function vmDisplayLabel(vm: VmRecord): string {
+  const kind = vm.vmKind === "lxc" ? "LXC" : "VM";
+  const name = vm.name?.trim();
+  if (name && name !== vm.id && !name.startsWith("compute-vm:") && !name.startsWith("compute-lxc:")) {
+    return name;
+  }
+  const id = vm.id ?? "";
+  const match = id.match(/compute-(?:vm|lxc):[^:]+:(\d+)$/);
+  const vmid = match ? match[1] : id.split(":").pop() ?? id;
+  return `${kind} ${vmid}`;
+}
+
 function formatVmList(
   title: string,
-  vms: VmRecord[]
+  vms: VmRecord[],
+  options: { compact?: boolean } = {}
 ): string {
   const lines = [title];
   if (!vms.length) {
@@ -111,29 +125,41 @@ function formatVmList(
     return lines.join("\n");
   }
 
+  const compact = options.compact ?? false;
   for (const vm of vms) {
-    const label = vm.name || vm.id || "Unnamed compute entity";
+    const label = vmDisplayLabel(vm);
     const vmType = vm.vmKind === "lxc" ? "LXC" : "VM";
-    const state = vm.state ? vm.state : "unknown state";
-    lines.push(`- ${label} (${vmType}, ${state})`);
+    const state = vm.state ?? "unknown";
+    const nodePart = vm.nodeName ? ` on ${vm.nodeName}` : "";
 
-    const detailParts = [
-      vm.nodeName ? `node=${vm.nodeName}` : null,
-      `trace=${vm.id ?? "unknown"}`,
-    ].filter(Boolean);
-    lines.push(`  - Details: ${detailParts.join(" | ")}`);
-    const agentNote =
-      vm.agentAvailable === undefined
-        ? "agent status unknown"
-        : vm.agentAvailable
-        ? "guest agent detected"
-        : "guest agent missing";
-    lines.push(`  - Source: Digital twin (Proxmox ingest); ${agentNote}.`);
+    if (compact) {
+      const nodeLabel = vm.nodeName ?? "unknown node";
+      const tracePart = vm.id ? ` | trace=${vm.id}` : "";
+      lines.push(`- ${label} (${nodeLabel}, ${state})${tracePart}`);
+    } else {
+      lines.push(`- ${label} (${vmType}, ${state})${nodePart}`);
+      const detailParts = [
+        vm.nodeName ? `node=${vm.nodeName}` : null,
+        vm.id ? `trace=${vm.id}` : null,
+      ].filter(Boolean);
+      if (detailParts.length > 0) {
+        lines.push(`  - Details: ${detailParts.join(" | ")}`);
+      }
+      const agentNote =
+        vm.agentAvailable === undefined
+          ? "agent status unknown"
+          : vm.agentAvailable
+          ? "guest agent detected"
+          : "guest agent missing";
+      lines.push(`  - Source: Digital twin (Proxmox ingest); ${agentNote}.`);
+    }
   }
 
-  lines.push(
-    "Tip: Use twin_query with the trace ID above to retrieve raw fields for auditing."
-  );
+  if (!compact) {
+    lines.push(
+      "Tip: Use twin_query with the trace ID above to retrieve raw fields for auditing."
+    );
+  }
   return lines.join("\n");
 }
 
@@ -155,18 +181,39 @@ export async function describeClusterChain(tools: BaseTool[], session: ToolSessi
   const nodes = payload?.data?.nodes ?? [];
   const vms = payload?.data?.vms ?? [];
 
+  // Per-node VM counts from actual VM list (twin node.vmCount can be stale)
+  const vmCountByNode: Record<string, number> = {};
+  for (const vm of vms) {
+    const n = (vm.nodeName ?? "unknown") as string;
+    vmCountByNode[n] = (vmCountByNode[n] ?? 0) + 1;
+  }
+  const totalVms = vms.length;
+  const nodeCount = nodes.length;
+  const summaryParts = [
+    `Cluster status: ${nodeCount} node${nodeCount === 1 ? "" : "s"}, ${totalVms} VM/LXC total.`,
+  ];
+  if (Object.keys(vmCountByNode).length > 0) {
+    const perNode = Object.entries(vmCountByNode)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([node, count]) => `${node}: ${count}`)
+      .join(", ");
+    summaryParts.push(`Per node: ${perNode}.`);
+  }
+  const summary = summaryParts.join(" ");
+
   const nodeLines = ["Cluster Nodes:"];
   if (!nodes.length) {
     nodeLines.push("- None discovered in twin");
   } else {
     for (const node of nodes) {
-      nodeLines.push(`- ${node.name} (id=${node.id}, vms=${node.vmCount}, status=${node.status ?? "unknown"})`);
+      const count = vmCountByNode[node.name ?? node.id ?? ""] ?? node.vmCount ?? 0;
+      nodeLines.push(`- ${node.name} (id=${node.id}, vms=${count}, status=${node.status ?? "unknown"})`);
     }
   }
 
-  const vmLines = formatVmList("Cluster VMs and LXC Containers:", vms);
+  const vmLines = formatVmList("Cluster VMs and LXC Containers:", vms, { compact: true });
 
-  return `${nodeLines.join("\n")}\n\n${vmLines}`;
+  return `${summary}\n\n${nodeLines.join("\n")}\n\n${vmLines}`;
 }
 
 export async function listAllVmsChain(
@@ -191,7 +238,7 @@ export async function listAllVmsChain(
   const payload = result.data as any;
   const vms = payload?.data ?? [];
 
-  return formatVmList(`All ${labels.listLabel} in the cluster:`, vms);
+  return formatVmList(`All ${labels.listLabel} in the cluster:`, vms, { compact: true });
 }
 
 export async function listVmsByNodeChain(
@@ -222,7 +269,7 @@ export async function listVmsByNodeChain(
   }
 
   // Use formatVmList helper for consistent formatting (no nodes)
-  return formatVmList(`${labels.listLabel} on node ${finalNodeName}:`, allVms);
+  return formatVmList(`${labels.listLabel} on node ${finalNodeName}:`, allVms, { compact: true });
 }
 
 export async function listRunningVmsOnNodeChain(
@@ -253,7 +300,7 @@ export async function listRunningVmsOnNodeChain(
     return `No running ${labels.noneLabel} found on node ${finalNodeName}.`;
   }
 
-  return formatVmList(`Running ${labels.listLabel} on node ${finalNodeName}:`, running);
+  return formatVmList(`Running ${labels.listLabel} on node ${finalNodeName}:`, running, { compact: true });
 }
 
 export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolSession): Promise<string> {
@@ -272,7 +319,7 @@ export async function listVmsWithoutAgentChain(tools: BaseTool[], session: ToolS
 
   const payload = result.data as any;
   const vms = payload?.data ?? [];
-  return formatVmList("VMs without guest agent data:", vms);
+  return formatVmList("VMs without guest agent data:", vms, { compact: true });
 }
 
 export async function listStoppedVmsChain(
@@ -322,7 +369,7 @@ export async function listStoppedVmsChain(
     vms.push(...(payload?.data ?? []));
   }
 
-  return formatVmList(`Stopped ${labels.listLabel} on ${nodeName}:`, sortVmsById(vms));
+  return formatVmList(`Stopped ${labels.listLabel} on ${nodeName}:`, sortVmsById(vms), { compact: true });
 }
 
 export async function findVmByIdChain(
@@ -432,6 +479,9 @@ export async function findVmByNameChain(
  */
 const KNOWN_NODES = ["proxBig", "YANG", "YIN"];
 
+/** Minimum length required on both sides of a fuzzy substring VM-name match. See usage below. */
+const MIN_FUZZY_MATCH_LENGTH = 3;
+
 /**
  * Resolve VM details by name or ID using cluster_resources
  * This is used before write operations to get the node, vmid, and type
@@ -523,7 +573,16 @@ export async function resolveVmDetailsChain(
       // Case-insensitive name match
       const name = (r.name || "").toLowerCase();
       const searchStr = String(searchValue);
-      return name === searchStr || name.includes(searchStr) || searchStr.includes(name);
+      if (name === searchStr) return true;
+      // Fuzzy substring matching is only meaningful for reasonably specific
+      // terms. A degenerately short search string (e.g. a stray character
+      // left over from garbled/adversarial input) or short real name would
+      // otherwise match almost any VM via .includes() in either direction,
+      // silently resolving to an unrelated real destructive target.
+      if (searchStr.length < MIN_FUZZY_MATCH_LENGTH || name.length < MIN_FUZZY_MATCH_LENGTH) {
+        return false;
+      }
+      return name.includes(searchStr) || searchStr.includes(name);
     }
   });
 

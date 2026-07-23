@@ -63,7 +63,7 @@ The dashboard calls these endpoints from the Palindrome API:
 - `GET /api/dashboard/execution-stats` - Execution statistics
 - `GET /api/dashboard/tool-executions` - Tool execution log
 - `GET /api/dashboard/cluster-status` - Proxmox cluster status
-- `GET /api/dashboard/ontology-graph` - Neo4j graph data
+- `GET /api/dashboard/twin-graph` - Neo4j Twin graph data (:TwinEntity)
 - `GET /api/dashboard/rag-diagnostics?query=...` - RAG query diagnostics
 - `POST /api/dashboard/query/rag` - Execute RAG query
 - `POST /api/dashboard/query/graph` - Execute graph query

@@ -1,9 +1,12 @@
 import { NetworkIngestionOrchestrator } from "../ingestion/network-ingestion";
 import { FirewallIngestionOrchestrator } from "../ingestion/firewall-ingestion";
+import { SwitchIngestionOrchestrator } from "../ingestion/switch-ingestion";
 import { pceLogger as logger } from "../utils/logger";
 import { MetricsCollector } from "../metrics/collector";
 import { StaleNodeCleaner } from "../../twin/cleanup/stale-node-cleaner";
 import { $ } from "bun";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 /**
  * Scheduled Ingestion Service
@@ -26,12 +29,25 @@ export interface IngestionRunDetails {
     entities?: number;
     relationships?: number;
     error?: string;
+    degraded?: boolean;
   };
   firewall: {
     success: boolean;
     duration: number;
     entities?: number;
     relationships?: number;
+    error?: string;
+  };
+  switch: {
+    success: boolean;
+    duration: number;
+    entities?: number;
+    relationships?: number;
+    error?: string;
+  };
+  topology: {
+    success: boolean;
+    duration: number;
     error?: string;
   };
   cleanup: {
@@ -57,6 +73,7 @@ export class IngestionScheduler {
   private runCount = 0;
   private successCount = 0;
   private failureCount = 0;
+  private readonly runEventLogPath = `${process.cwd()}/.pce-dashboard/ingestion-runs.ndjson`;
 
   constructor(intervalMinutes: number = 5, metricsCollector?: MetricsCollector) {
     this.intervalMs = intervalMinutes * 60 * 1000;
@@ -67,6 +84,10 @@ export class IngestionScheduler {
    * Start the scheduler
    */
   start() {
+    if (process.env.PCE_INGESTION_ENABLED !== "1") {
+      logger.info("Ingestion scheduler disabled (set PCE_INGESTION_ENABLED=1 to enable)");
+      return;
+    }
     if (this.interval) {
       logger.warn("Ingestion scheduler already running");
       return;
@@ -144,6 +165,13 @@ export class IngestionScheduler {
     this.isRunning = true;
     const startTime = Date.now();
     this.runCount++;
+    const runId = `ing-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+    this.emitJobEvent("job.started", {
+      job: "ingestion_scheduler",
+      run_id: runId,
+      interval_minutes: this.intervalMs / 60000,
+    });
 
     let proxmoxSuccess = false;
     let networkSuccess = false;
@@ -155,9 +183,18 @@ export class IngestionScheduler {
     let networkError: string | undefined;
     let networkEntities = 0;
     let networkRelationships = 0;
+    let networkDegraded = false;
     let firewallError: string | undefined;
     let firewallEntities = 0;
     let firewallRelationships = 0;
+    let switchSuccess = false;
+    let switchDuration = 0;
+    let switchError: string | undefined;
+    let switchEntities = 0;
+    let switchRelationships = 0;
+    let topologySuccess = false;
+    let topologyDuration = 0;
+    let topologyError: string | undefined;
     let temperatureStats: { nodesWithTemp: number; nodesWithoutTemp: number } | undefined;
 
     try {
@@ -200,11 +237,17 @@ export class IngestionScheduler {
       try {
         logger.info("Running Network ingestion...");
         networkOrchestrator = new NetworkIngestionOrchestrator();
-        await networkOrchestrator.ingestNetwork();
+        const networkResult = await networkOrchestrator.ingestNetwork();
         networkDuration = Date.now() - networkStart;
         networkSuccess = true;
-        // Note: Network ingestion doesn't return counts, but we can track from logs
-        logger.info("Network ingestion completed");
+        networkEntities = networkResult.entitiesWritten;
+        networkRelationships = networkResult.relationshipsWritten;
+        networkDegraded = networkResult.proxmoxDegraded || networkResult.opnsenseDegraded;
+        logger.info("Network ingestion completed", {
+          entities: networkEntities,
+          relationships: networkRelationships,
+          degraded: networkDegraded,
+        });
         this.metricsCollector.record("ingestion_scheduler_network_duration_ms", networkDuration, { status: "success" });
         this.metricsCollector.record("ingestion_scheduler_network_success", 1);
       } catch (error: any) {
@@ -240,6 +283,54 @@ export class IngestionScheduler {
         await firewallOrchestrator?.dispose?.();
       }
 
+      // Run Switch ingestion
+      const switchStart = Date.now();
+      let switchOrchestrator: SwitchIngestionOrchestrator | null = null;
+      try {
+        logger.info("Running Switch ingestion...");
+        switchOrchestrator = new SwitchIngestionOrchestrator();
+        const switchResult = await switchOrchestrator.ingestSwitches();
+        switchDuration = Date.now() - switchStart;
+        switchSuccess = true;
+        switchEntities = switchResult.entitiesWritten;
+        switchRelationships = switchResult.relationshipsWritten;
+        logger.info("Switch ingestion completed");
+        this.metricsCollector.record("ingestion_scheduler_switch_duration_ms", switchDuration, { status: "success" });
+        this.metricsCollector.record("ingestion_scheduler_switch_success", 1);
+      } catch (error: any) {
+        switchDuration = Date.now() - switchStart;
+        switchError = error.message || String(error);
+        logger.error("Switch ingestion failed", { error: switchError });
+        this.metricsCollector.record("ingestion_scheduler_switch_duration_ms", switchDuration, { status: "failure" });
+        this.metricsCollector.record("ingestion_scheduler_switch_failure", 1);
+      } finally {
+        await switchOrchestrator?.dispose?.();
+      }
+
+      // Run Topology ingestion (declared facts from docs/topology.yaml, into the
+      // legacy ontology graph — see docs on TopologyIngestionOrchestrator for why
+      // that's a deliberately separate target from the Twin-graph steps above)
+      const topologyStart = Date.now();
+      try {
+        logger.info("Running Topology ingestion...");
+        await $`bun run scripts/ingest-topology.ts`.quiet();
+        topologyDuration = Date.now() - topologyStart;
+        topologySuccess = true;
+        logger.info("Topology ingestion completed");
+        this.metricsCollector.record("ingestion_scheduler_topology_duration_ms", topologyDuration, { status: "success" });
+        this.metricsCollector.record("ingestion_scheduler_topology_success", 1);
+      } catch (error: any) {
+        topologyDuration = Date.now() - topologyStart;
+        topologyError = error.message || String(error);
+        if (error.stderr) {
+          const stderrStr = error.stderr.toString();
+          topologyError = stderrStr.length < 500 ? stderrStr : `${error.message} (see logs for details)`;
+        }
+        logger.error("Topology ingestion failed", { error: topologyError });
+        this.metricsCollector.record("ingestion_scheduler_topology_duration_ms", topologyDuration, { status: "failure" });
+        this.metricsCollector.record("ingestion_scheduler_topology_failure", 1);
+      }
+
       const duration = Date.now() - startTime;
       this.lastRun = new Date();
       
@@ -272,7 +363,7 @@ export class IngestionScheduler {
       }
 
       // Record overall metrics
-      const overallSuccess = proxmoxSuccess && networkSuccess && firewallSuccess;
+      const overallSuccess = proxmoxSuccess && networkSuccess && firewallSuccess && switchSuccess && topologySuccess;
       if (overallSuccess) {
         this.successCount++;
         this.metricsCollector.record("ingestion_scheduler_run_success", 1);
@@ -302,6 +393,7 @@ export class IngestionScheduler {
           entities: networkEntities,
           relationships: networkRelationships,
           error: networkError,
+          degraded: networkDegraded,
         },
         firewall: {
           success: firewallSuccess,
@@ -309,6 +401,18 @@ export class IngestionScheduler {
           entities: firewallEntities,
           relationships: firewallRelationships,
           error: firewallError,
+        },
+        switch: {
+          success: switchSuccess,
+          duration: switchDuration,
+          entities: switchEntities,
+          relationships: switchRelationships,
+          error: switchError,
+        },
+        topology: {
+          success: topologySuccess,
+          duration: topologyDuration,
+          error: topologyError,
         },
         cleanup: {
           duration: Date.now() - cleanupStart,
@@ -331,8 +435,29 @@ export class IngestionScheduler {
         proxmoxDuration,
         networkDuration,
         firewallDuration,
+        switchDuration,
+        topologyDuration,
         success: overallSuccess,
         lastRun: this.lastRun.toISOString(),
+      });
+      this.emitJobEvent("job.completed", {
+        job: "ingestion_scheduler",
+        run_id: runId,
+        success: overallSuccess,
+        duration_ms: duration,
+        timestamp: this.lastRun.toISOString(),
+        proxmox: runDetails.proxmox,
+        network: runDetails.network,
+        firewall: runDetails.firewall,
+        switch: runDetails.switch,
+        topology: runDetails.topology,
+        cleanup: runDetails.cleanup,
+      });
+      this.appendRunEvent({
+        ts: new Date().toISOString(),
+        event: "job.completed",
+        run_id: runId,
+        details: runDetails,
       });
     } catch (error: any) {
       this.failureCount++;
@@ -341,9 +466,31 @@ export class IngestionScheduler {
         error: error.message,
         stack: error.stack,
       });
+      this.emitJobEvent("job.failed", {
+        job: "ingestion_scheduler",
+        run_id: runId,
+        error: error.message,
+      });
     } finally {
       this.isRunning = false;
     }
+  }
+
+  private emitJobEvent(event: string, fields: Record<string, unknown>) {
+    logger.info(JSON.stringify({
+      ts: new Date().toISOString(),
+      event,
+      service: "pce-api",
+      ...fields,
+    }));
+  }
+
+  private appendRunEvent(payload: Record<string, unknown>) {
+    const dir = dirname(this.runEventLogPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    appendFileSync(this.runEventLogPath, `${JSON.stringify(payload)}\n`, "utf8");
   }
 
   /**
@@ -357,4 +504,3 @@ export class IngestionScheduler {
     await this.runIngestion();
   }
 }
-

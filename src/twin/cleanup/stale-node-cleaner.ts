@@ -9,6 +9,7 @@ import neo4j from "neo4j-driver";
 import { Neo4jGraphStore } from "../../pce/kg/indexation/neo4j-client";
 import { ProxmoxClient } from "../../tools/proxmox/client";
 import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
+import { getExpectedEndpointLabel, wasEndpointVerified } from "../../tools/proxmox/endpoint-attribution";
 import { pceLogger } from "../../pce/utils/logger";
 
 export interface StaleCleanupResult {
@@ -135,6 +136,7 @@ export class StaleNodeCleaner {
       // Get all VMs from all configured Proxmox clusters
       const allConfigs = this.getAllProxmoxConfigs();
       const proxmoxResources: any[] = [];
+      const successfulEndpoints = new Set<string>();
 
       for (const config of allConfigs) {
         try {
@@ -147,6 +149,7 @@ export class StaleNodeCleaner {
           const resourcesResult = await client.get("/cluster/resources");
           const clusterResources = resourcesResult.data?.data || [];
           proxmoxResources.push(...clusterResources);
+          successfulEndpoints.add(config.clusterName.toLowerCase());
           pceLogger.debug(`Fetched ${clusterResources.length} resources from ${config.clusterName} cluster`);
         } catch (error: any) {
           pceLogger.warn(`Failed to fetch resources from ${config.clusterName} cluster`, {
@@ -159,7 +162,7 @@ export class StaleNodeCleaner {
 
       // Filter to only VM resources (qemu, lxc)
       const proxmoxVms = proxmoxResources.filter((r: any) => r.type === "qemu" || r.type === "lxc");
-      
+
       pceLogger.debug(`Found ${proxmoxVms.length} VMs across all clusters`, {
         sampleVms: proxmoxVms.slice(0, 5).map((r: any) => ({
           vmid: r.vmid,
@@ -171,6 +174,7 @@ export class StaleNodeCleaner {
 
       // Find stale VMs
       const staleVmIds: string[] = [];
+      let skippedDueToUnreachableEndpoint = 0;
 
       for (const twinVm of twinVms) {
         const idParts = twinVm.id.split(":");
@@ -179,6 +183,20 @@ export class StaleNodeCleaner {
 
         if (!vmid || isNaN(vmid)) {
           pceLogger.debug(`Skipping VM with invalid ID format: ${twinVm.id}`);
+          continue;
+        }
+
+        // A transient failure fetching this VM's expected endpoint must not
+        // be treated as "the VM is gone" — skip (keep) it instead. Mirrors
+        // TwinQueryService.verifyVmsAgainstProxmox's proven-correct handling
+        // of the same scenario.
+        const expectedEndpoint = getExpectedEndpointLabel(twinVm.nodeName);
+        if (!wasEndpointVerified(expectedEndpoint, successfulEndpoints, allConfigs.length)) {
+          skippedDueToUnreachableEndpoint++;
+          pceLogger.warn(`Skipping stale-check for VM ${twinVm.name || twinVm.id}: its Proxmox endpoint was unavailable this run`, {
+            nodeName: twinVm.nodeName,
+            expectedEndpoint,
+          });
           continue;
         }
 
@@ -196,6 +214,12 @@ export class StaleNodeCleaner {
           staleVmIds.push(twinVm.id);
           result.details.push(`VM ${twinVm.name || twinVm.id} (vmid: ${vmid}, node: ${twinVm.nodeName || "any"}, type: ${twinVm.vmKind || "any"}) not found in Proxmox`);
         }
+      }
+
+      if (skippedDueToUnreachableEndpoint > 0) {
+        result.details.push(
+          `Skipped ${skippedDueToUnreachableEndpoint} VM stale-checks due to Proxmox endpoint fetch failures (avoids false deletions)`
+        );
       }
 
       // Delete stale VMs
@@ -269,6 +293,7 @@ export class StaleNodeCleaner {
       // Use /cluster/resources instead of /nodes to get all nodes across clusters
       const allConfigs = this.getAllProxmoxConfigs();
       const proxmoxNodeNames = new Set<string>();
+      const successfulEndpoints = new Set<string>();
 
       for (const config of allConfigs) {
         try {
@@ -278,7 +303,7 @@ export class StaleNodeCleaner {
             tokenSecret: config.tokenSecret,
             verifySsl: config.verifySsl,
           });
-          
+
           // Try /cluster/resources first (works for clusters)
           let clusterNodes: any[] = [];
           try {
@@ -295,13 +320,14 @@ export class StaleNodeCleaner {
             clusterNodes = nodesResult.data?.data || [];
             pceLogger.debug(`Fetched ${clusterNodes.length} nodes from ${config.clusterName} cluster via /nodes`);
           }
-          
+
           clusterNodes.forEach((n: any) => {
             const nodeName = n.node || n.name;
             if (nodeName) {
               proxmoxNodeNames.add(nodeName.toLowerCase());
             }
           });
+          successfulEndpoints.add(config.clusterName.toLowerCase());
         } catch (error: any) {
           pceLogger.warn(`Failed to fetch nodes from ${config.clusterName} cluster`, {
             error: error.message,
@@ -310,12 +336,13 @@ export class StaleNodeCleaner {
           // Continue with other clusters
         }
       }
-      
+
       pceLogger.debug(`Total unique nodes found across all clusters: ${proxmoxNodeNames.size}`, {
         nodes: Array.from(proxmoxNodeNames),
       });
 
       const staleNodeIds: string[] = [];
+      let skippedDueToUnreachableEndpoint = 0;
 
       for (const twinNode of twinNodes) {
         const nodeName = twinNode.name?.toLowerCase() || twinNode.id.split(":").pop()?.toLowerCase();
@@ -323,13 +350,30 @@ export class StaleNodeCleaner {
           pceLogger.debug(`Skipping node with no name: ${twinNode.id}`);
           continue;
         }
-        
+
+        // A transient failure fetching this node's expected endpoint must
+        // not be treated as "the node is gone" — skip (keep) it instead.
+        const expectedEndpoint = getExpectedEndpointLabel(nodeName);
+        if (!wasEndpointVerified(expectedEndpoint, successfulEndpoints, allConfigs.length)) {
+          skippedDueToUnreachableEndpoint++;
+          pceLogger.warn(`Skipping stale-check for node ${twinNode.name || twinNode.id}: its Proxmox endpoint was unavailable this run`, {
+            expectedEndpoint,
+          });
+          continue;
+        }
+
         if (!proxmoxNodeNames.has(nodeName)) {
           staleNodeIds.push(twinNode.id);
           result.details.push(`Node ${twinNode.name || twinNode.id} not found in Proxmox (searched: ${Array.from(proxmoxNodeNames).join(", ")})`);
         } else {
           pceLogger.debug(`Node ${twinNode.name} found in Proxmox`);
         }
+      }
+
+      if (skippedDueToUnreachableEndpoint > 0) {
+        result.details.push(
+          `Skipped ${skippedDueToUnreachableEndpoint} node stale-checks due to Proxmox endpoint fetch failures (avoids false deletions)`
+        );
       }
 
       if (staleNodeIds.length > 0) {

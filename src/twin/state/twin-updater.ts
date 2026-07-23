@@ -79,7 +79,20 @@ export class TwinUpdateService {
                 n.aliasName = $aliasName,
                 n.aliasType = $aliasType,
                 n.aliasEntryCount = $aliasEntryCount,
-                n.aliasCidrCount = $aliasCidrCount
+                n.aliasCidrCount = $aliasCidrCount,
+                n.hostname = $hostname,
+                n.model = $model,
+                n.role = $role,
+                n.provenance = $provenance,
+                n.managementIps = $managementIps,
+                n.declaredTrunkPorts = $declaredTrunkPorts,
+                n.declaredVlans = $declaredVlans,
+                n.switchId = $switchId,
+                n.portName = $portName,
+                n.mode = $mode,
+                n.accessVlan = $accessVlan,
+                n.trunkVlans = $trunkVlans,
+                n.portDescription = $portDescription
           `,
           {
             id: entity.id,
@@ -113,6 +126,19 @@ export class TwinUpdateService {
             aliasType: props.aliasType,
             aliasEntryCount: props.aliasEntryCount,
             aliasCidrCount: props.aliasCidrCount,
+            hostname: props.hostname,
+            model: props.model,
+            role: props.role,
+            provenance: props.provenance,
+            managementIps: props.managementIps,
+            declaredTrunkPorts: props.declaredTrunkPorts,
+            declaredVlans: props.declaredVlans,
+            switchId: props.switchId,
+            portName: props.portName,
+            mode: props.mode,
+            accessVlan: props.accessVlan,
+            trunkVlans: props.trunkVlans,
+            portDescription: props.portDescription,
           }
         );
       }
@@ -269,6 +295,19 @@ export class TwinUpdateService {
       aliasType: null,
       aliasEntryCount: null,
       aliasCidrCount: null,
+      hostname: null,
+      model: null,
+      role: null,
+      provenance: null,
+      managementIps: null,
+      declaredTrunkPorts: null,
+      declaredVlans: null,
+      switchId: null,
+      portName: null,
+      mode: null,
+      accessVlan: null,
+      trunkVlans: null,
+      portDescription: null,
     };
 
     if (entity.type === TwinEntityType.COMPUTE_NODE) {
@@ -322,6 +361,26 @@ export class TwinUpdateService {
       props.aliasType = data.aliasType ?? null;
       props.aliasEntryCount = Array.isArray(data.entries) ? data.entries.length : null;
       props.aliasCidrCount = Array.isArray(data.cidrs) ? data.cidrs.length : null;
+    }
+
+    if (entity.type === TwinEntityType.SWITCH) {
+      props.hostname = data.hostname ?? null;
+      props.model = data.model ?? null;
+      props.role = data.role ?? null;
+      props.provenance = data.provenance ?? null;
+      props.managementIps = Array.isArray(data.managementIps) ? data.managementIps : null;
+      props.declaredTrunkPorts = Array.isArray(data.declaredTrunkPorts) ? data.declaredTrunkPorts : null;
+      props.declaredVlans = Array.isArray(data.declaredVlans) ? data.declaredVlans : null;
+    }
+
+    if (entity.type === TwinEntityType.SWITCH_PORT) {
+      props.switchId = data.switchId ?? null;
+      props.portName = data.portName ?? null;
+      props.mode = data.mode ?? null;
+      props.accessVlan = data.accessVlan ?? null;
+      props.trunkVlans = Array.isArray(data.trunkVlans) ? data.trunkVlans : null;
+      props.portDescription = data.description ?? null;
+      props.provenance = data.provenance ?? null;
     }
 
     return props;

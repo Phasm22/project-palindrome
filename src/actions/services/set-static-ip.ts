@@ -12,16 +12,16 @@ import {
  * Set Static IP Action Schema
  */
 export const SetStaticIpSchema = z.object({
-  vmName: z.string().min(1, "VM name is required"),
-  ip: z.string().regex(/^\d+\.\d+\.\d+\.\d+\/\d+$/, "IP must be in CIDR format (e.g., 192.168.1.100/24)"),
-  gateway: z.string().regex(/^\d+\.\d+\.\d+\.\d+$/, "Gateway must be a valid IP address"),
-  dns: z.array(z.string()).default(["8.8.8.8", "8.8.4.4"]),
-  interface: z.string().default("eth0"),
-  waitForVm: z.boolean().default(true),
-  timeout: z.number().int().positive().default(300),
-  retryOnFailure: z.boolean().default(false),
-  maxRetries: z.number().int().positive().default(1),
-  dryRun: z.boolean().default(false),
+  vmName: z.string().min(1, "VM name is required").describe("VM name to configure static IP on (resolved via digital twin to obtain the SSH hostname)"),
+  ip: z.string().regex(/^\d+\.\d+\.\d+\.\d+\/\d+$/, "IP must be in CIDR format (e.g., 192.168.1.100/24)").describe("Static IP in CIDR format (e.g. '192.168.1.100/24')"),
+  gateway: z.string().regex(/^\d+\.\d+\.\d+\.\d+$/, "Gateway must be a valid IP address").describe("Default gateway IPv4 address (e.g. '192.168.1.1')"),
+  dns: z.array(z.string()).default(["8.8.8.8", "8.8.4.4"]).describe("DNS server addresses (default: ['8.8.8.8', '8.8.4.4'])"),
+  interface: z.string().default("eth0").describe("Network interface to configure via netplan (default: 'eth0')"),
+  waitForVm: z.boolean().default(true).describe("Wait for SSH to become accessible before running ansible commands (default: true)"),
+  timeout: z.number().int().positive().default(300).describe("SSH wait timeout in seconds (default: 300)"),
+  retryOnFailure: z.boolean().default(false).describe("Retry on failure (default: false)"),
+  maxRetries: z.number().int().positive().default(1).describe("Maximum number of retry attempts when retryOnFailure is true (default: 1)"),
+  dryRun: z.boolean().default(false).describe("Preview without executing netplan changes (default: false)"),
 });
 
 export type SetStaticIpParams = z.infer<typeof SetStaticIpSchema>;

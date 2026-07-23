@@ -77,6 +77,24 @@ hosts:
     ip: "192.168.71.40"
     network: "home"
 
+  - name: "tj-tp-switch"
+    role: "switch"
+    network: "home"
+    status: "unverified"
+    # Declared only. This is the managed 8-port TP-Link switch between the
+    # home router and the Cisco 2960G (`switch:` block below) — a different
+    # physical device. Its config.cfg export is a proprietary binary format
+    # with no machine-readable structure beyond its hostname ("TJ-TP-Switch")
+    # and one VLAN name ("uplinkHome"); no automated ingestion path exists
+    # yet without live SNMP/CLI access to the switch itself.
+    #
+    # Per TJ (2026-07-21): the one thing worth knowing about this switch is
+    # its downlink to the lab (the 2960G) — VLAN 40, UNTAGGED. Deliberate,
+    # not an oversight: tagging it caused the TP-Link Deco home router to
+    # stop routing traffic entirely, so it was reverted to untagged as a
+    # workaround. Not modeled as a graph fact (no ingestion path exists for
+    # this device), but keep this in mind if that link ever looks "wrong."
+
 containers:
   - name: "lab_pihole"
     type: "lxc"
@@ -144,6 +162,23 @@ dependencies:
   # Services depend on their hosts (auto-inferred from services[].host)
 
 # Optional: Switch/network hardware
+# This declared block is hand-maintained and known to disagree with the
+# switch's real running-config (see docs/network/2960g-running-config-*.txt,
+# parsed by src/parsers/network/cisco-ios-switch-parser.ts) in two ways:
+#  - No port on this switch is actually trunking. Gi0/33 and Gi0/34 (declared
+#    below as the trunk) are plain single-VLAN access ports, same as every
+#    other port in that Gi0/33-48 bank. TJ confirmed the FUNCTIONAL behavior
+#    this was meant to capture still holds, though: all 16 ports in that
+#    bank are `switchport access vlan 40`, and VLAN 40's SVI is L3-routed
+#    (default route) to the home gateway 192.168.68.1 — so anything plugged
+#    into that bank does reach home, just via 16 individual access ports
+#    rather than a multi-VLAN trunk.
+#  - The lab subnet (172.16.0.0/22) rides the switch's untagged default
+#    VLAN 1, not VLAN 50 as declared here.
+# Both the declared and observed facts are ingested and kept side by side
+# (see SwitchIngestionOrchestrator) rather than one silently overwriting the
+# other — this block is intentionally left as originally written so that
+# disagreement stays visible.
 switch:
   model: "Cisco 2960G"
   trunk_ports:

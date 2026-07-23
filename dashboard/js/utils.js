@@ -1,13 +1,34 @@
 // Shared utilities
-// Use current hostname for API (supports remote access)
-// HTTPS dashboard (8443) -> HTTPS API (4443), HTTP dashboard (8080) -> HTTP API (4000)
-const apiPort = window.location.protocol === 'https:' ? 4443 : 4000;
-export const API_URL = `${window.location.protocol}//${window.location.hostname}:${apiPort}`;
+// Use same-origin API routing via dashboard server proxy.
+export const API_URL = `${window.location.protocol}//${window.location.host}`;
+
+const refreshIndicatorTimers = new WeakMap();
 
 export function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+export function beginContentRefresh(element, hasContent, label = 'Updating') {
+  element.setAttribute('aria-busy', 'true');
+  if (!hasContent) return;
+
+  element.dataset.refreshLabel = label;
+  const timer = window.setTimeout(() => {
+    element.classList.add('content-refreshing');
+    refreshIndicatorTimers.delete(element);
+  }, 180);
+  refreshIndicatorTimers.set(element, timer);
+}
+
+export function endContentRefresh(element) {
+  const timer = refreshIndicatorTimers.get(element);
+  if (timer) window.clearTimeout(timer);
+  refreshIndicatorTimers.delete(element);
+  element.classList.remove('content-refreshing');
+  element.removeAttribute('aria-busy');
+  delete element.dataset.refreshLabel;
 }
 
 // Render responsive table: cards on mobile, table on desktop
@@ -62,4 +83,3 @@ export function renderResponsiveTable(headers, rows, rowRenderer) {
   `;
   return tableHtml;
 }
-

@@ -2,6 +2,8 @@ import type { IntentClassification } from "../reasoning/intent-classifier";
 import type { ConversationState, UserPreferences } from "../types";
 import type { RoutingDecision } from "../reasoning/intent-router";
 import type { ResponseMode } from "./response-formatter";
+import type { HistoricalScore } from "./historical-scorer";
+import type { HistoricalScorer } from "./historical-scorer";
 
 export interface ConfirmationParseResult {
   confirmed: boolean;
@@ -19,6 +21,8 @@ export interface DialogPolicyInput {
   confirmation?: ConfirmationParseResult;
   pendingActionId?: string;
   pendingActionCreatedAt?: number;
+  score?: HistoricalScore;
+  scorer?: HistoricalScorer;
 }
 
 export interface DialogPolicyDecision {
@@ -95,15 +99,30 @@ export function selectResponseMode(
 }
 
 export function evaluateDialogPolicy(input: DialogPolicyInput): DialogPolicyDecision {
-  const { intent, routing, userPreferences, confirmation, pendingActionId, pendingActionCreatedAt } = input;
+  // Dialog-act policy is stage 3 of the classification pipeline. It consumes
+  // the stage-2 RoutingDecision plus explicit slots/risk/confirmation state;
+  // it does not interpret or calibrate classifier confidence itself.
+  const { intent, routing, userPreferences, confirmation, pendingActionId, pendingActionCreatedAt, score, scorer } = input;
 
   const needsClarification =
     intent.intent === "CLARIFICATION" ||
     (intent.missing && intent.missing.length > 0) ||
     routing?.route === "clarification";
 
-  const requiresConfirmation =
+  let requiresConfirmation =
     intent.intent === "ACTION" && (intent.risk === "WRITE_HIGH" || intent.risk === "DESTRUCTIVE");
+
+  let frictionReducedReason: string | undefined;
+  if (
+    score && scorer && scorer.hasEnoughData(score) &&
+    score.successRate > 0.85 &&
+    score.confirmationSkipRate < 0.3 &&
+    intent.risk === "WRITE_LOW" &&
+    intent.intent === "ACTION"
+  ) {
+    requiresConfirmation = false;
+    frictionReducedReason = `Reduced friction: ${Math.round(score.successRate * 100)}% success rate over ${score.sampleCount} runs`;
+  }
 
   const isConfirmed = confirmation?.confirmed === true;
   const hasPendingAction = !!pendingActionId;
@@ -141,9 +160,9 @@ export function evaluateDialogPolicy(input: DialogPolicyInput): DialogPolicyDeci
     shouldExecute,
     decision,
     reason: needsClarification
-      ? "Missing slots or low confidence"
+      ? "Classifier requested clarification, slots are missing, or routing requested clarification"
       : requiresConfirmation && !confirmationAllowed
         ? "Awaiting explicit confirmation"
-        : "Ready",
+        : frictionReducedReason ?? "Ready",
   };
 }

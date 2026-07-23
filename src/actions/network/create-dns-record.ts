@@ -6,10 +6,10 @@ import { pceLogger as logger } from "../../pce/utils/logger";
  * Create DNS Record Action Schema
  */
 export const CreateDnsRecordSchema = z.object({
-  hostname: z.string().min(1, "Hostname is required"),
-  ip: z.string().min(1, "IP address is required"),
-  domain: z.string().optional().default(".prox"), // Default domain suffix
-  dryRun: z.boolean().default(false),
+  hostname: z.string().min(1, "Hostname is required").describe("Hostname without domain (e.g. 'web-server'); combined with domain to form the full DNS record"),
+  ip: z.string().min(1, "IP address is required").describe("IPv4 address for the A record (e.g. '172.16.50.100')"),
+  domain: z.string().optional().default(".prox").describe("Domain suffix to append to the hostname (default: '.prox'); results in e.g. 'web-server.prox'"),
+  dryRun: z.boolean().default(false).describe("Preview DNS record creation without executing (default: false)"),
 });
 
 export type CreateDnsRecordParams = z.infer<typeof CreateDnsRecordSchema>;

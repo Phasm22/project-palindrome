@@ -120,6 +120,112 @@ export async function describeNetworkChain(tools: BaseTool[], session: ToolSessi
   return formatInterfaceList("Network Interfaces:", interfaces);
 }
 
+function formatSwitchVlanList(
+  entries: Array<{
+    vlan: number;
+    provenance?: string;
+    switchHostname?: string;
+    ports: string[];
+    portCount: number;
+  }>
+): string {
+  if (!entries.length) {
+    return "No VLANs found on any ingested switch.";
+  }
+  const lines = ["VLANs on switch:"];
+  for (const entry of entries) {
+    const parts = [
+      `vlan=${entry.vlan}`,
+      entry.switchHostname ? `switch=${entry.switchHostname}` : null,
+      entry.provenance ? `provenance=${entry.provenance}` : null,
+      `ports=${entry.portCount}`,
+    ].filter(Boolean);
+    lines.push(`- ${parts.join(" | ")} (${entry.ports.join(", ")})`);
+  }
+  return lines.join("\n");
+}
+
+export async function switchVlansChain(tools: BaseTool[], session: ToolSession): Promise<string> {
+  const result = await executeToolCall(
+    { toolName: "twin_query", parameters: { operation: "switch_list_vlans" } },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const entries = payload?.data ?? [];
+  return formatSwitchVlanList(entries);
+}
+
+export async function switchPortsByVlanChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  vlan: number
+): Promise<string> {
+  const result = await executeToolCall(
+    { toolName: "twin_query", parameters: { operation: "switch_ports_by_vlan", params: { vlan } } },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const ports = payload?.data ?? [];
+  if (!ports.length) {
+    return `No switch ports found carrying VLAN ${vlan}.`;
+  }
+  const lines = [`Switch ports carrying VLAN ${vlan}:`];
+  for (const port of ports) {
+    const parts = [
+      port.switchHostname ? `switch=${port.switchHostname}` : null,
+      port.mode ? `mode=${port.mode}` : null,
+      port.provenance ? `provenance=${port.provenance}` : null,
+      port.description ? `desc=${port.description}` : null,
+    ].filter(Boolean);
+    lines.push(`- ${port.portName} (${parts.join(" | ")})`);
+  }
+  return lines.join("\n");
+}
+
+export async function interfaceLookupChain(
+  tools: BaseTool[],
+  session: ToolSession,
+  interfaceName: string
+): Promise<string> {
+  const result = await executeToolCall(
+    { toolName: "twin_query", parameters: { operation: "network_list_interfaces" } },
+    tools,
+    session
+  );
+  if (result.error) {
+    throw new Error(result.error);
+  }
+  const payload = result.data as any;
+  const interfaces: Array<{ id?: string; name?: string; nodeName?: string; status?: string; vlan?: string; primaryIp?: string; vmId?: string }> =
+    payload?.data ?? [];
+  const target = interfaceName.toLowerCase();
+  const match = interfaces.find(
+    (iface) =>
+      iface.name?.toLowerCase() === target ||
+      iface.id?.toLowerCase() === target ||
+      iface.id?.toLowerCase().endsWith(`:${target}`)
+  );
+  if (!match) {
+    return `No network interface named "${interfaceName}" was found in the digital twin. It may not have been ingested yet, or the name doesn't match any known interface.`;
+  }
+  const parts = [
+    match.nodeName ? `node=${match.nodeName}` : null,
+    match.status ? `status=${match.status}` : null,
+    match.primaryIp ? `ip=${match.primaryIp}` : null,
+    match.vlan ? `vlan=${match.vlan}` : null,
+    match.vmId ? `vm=${match.vmId}` : null,
+  ].filter(Boolean);
+  return `${interfaceName} is a network interface${match.nodeName ? ` on ${match.nodeName}` : ""}${parts.length ? ` (${parts.join(" | ")})` : ""}.`;
+}
+
 export async function listNodeInterfacesChain(
   tools: BaseTool[],
   session: ToolSession,
@@ -326,7 +432,10 @@ export async function vmIpByNameChain(
   if (findResult.error) {
     return `Could not find VM "${vmNameOrId}": ${findResult.error}`;
   }
-  const payload = findResult.data as { kind?: string; data?: Array<{ id: string; name?: string; nodeName?: string }> };
+  const payload = findResult.data as {
+    kind?: string;
+    data?: Array<{ id: string; name?: string; nodeName?: string; vmKind?: string }>;
+  };
   const vms = payload?.data ?? [];
   if (!vms.length) {
     return `No VM found with name "${vmNameOrId}".`;
@@ -338,13 +447,15 @@ export async function vmIpByNameChain(
   const nodeName = first.nodeName;
   const vmidStr = first.id?.split(":").pop();
   const vmid = vmidStr ? parseInt(vmidStr, 10) : NaN;
+  const vmKind = (first as any).vmKind as string | undefined;
+  const vmType = vmKind === "lxc" ? "lxc" : "qemu";
   if (!nodeName || Number.isNaN(vmid)) {
     return `Could not resolve node/vmid for "${vmNameOrId}" (id: ${first.id}).`;
   }
   const ipResult = await executeToolCall(
     {
       toolName: "proxmox_readonly",
-      parameters: { action: "get_vm_ip", node: nodeName, vmid },
+      parameters: { action: "get_vm_ip", node: nodeName, vmid, type: vmType },
     },
     tools,
     session

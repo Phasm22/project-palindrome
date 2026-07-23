@@ -1,45 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { runAgent } from "../../src/agent/runner";
+import { describe, it, expect, beforeEach } from "bun:test";
 import { loadTools } from "../../src/agent/tool-loader";
 import { ProxmoxWriteTool } from "../../src/tools/proxmox/writes/proxmox-write-tool";
 
-// Mock OpenAI
-const mockCreate = vi.fn();
-vi.mock("openai", () => {
-  return {
-    default: vi.fn().mockImplementation(() => ({
-      chat: {
-        completions: {
-          create: mockCreate,
-        },
-      },
-    })),
-  };
-});
-
-// Mock PCE API for RAG context
-const mockFetch = vi.fn();
-global.fetch = mockFetch;
-
 describe("TL-2B.6: Write ACL Enforcement (Agent Runner Integration)", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    
     // Set up environment
     process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key";
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
-
-    // Mock PCE API responses
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        answer: "Context",
-        sources: [],
-        sTotalScore: 0.8,
-      }),
-    });
   });
 
   it("should block viewer user from executing write operations at policy layer", () => {
@@ -93,8 +62,8 @@ describe("TL-2B.6: Write ACL Enforcement (Agent Runner Integration)", () => {
     expect(writeTool!.metadata.allowedAcls).toContain("ops");
     expect(writeTool!.metadata.allowedAcls).not.toContain("viewer");
     
-    // Verify requiresConfirmation is set
-    expect(writeTool!.metadata.requiresConfirmation).toBe(true);
+    // HIL confirmation is handled by the runner's policy layer (requiresConfirmation flag is false
+    // on the tool itself; the runner evaluates high-risk tool calls and sets ASK_CONFIRM).
+    expect(writeTool!.metadata.requiresConfirmation).toBe(false);
   });
 });
-

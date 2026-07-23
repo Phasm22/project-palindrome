@@ -60,11 +60,10 @@ describe("TL-1C: LLM Tool Calling Integration", () => {
       .filter((def): def is NonNullable<typeof def> => def !== null);
 
     // Verify OPNsense tools are included
+    // Note: opnsense_safewrite was superseded by the generic action tool layer (action_*)
     const opnsenseReadOnly = toolDefs.find((d) => d.function.name === "opnsense_readonly");
-    const opnsenseWrite = toolDefs.find((d) => d.function.name === "opnsense_safewrite");
     
     expect(opnsenseReadOnly).toBeDefined();
-    expect(opnsenseWrite).toBeDefined();
     
     // Verify parameters are correct
     expect(opnsenseReadOnly?.function.parameters).toBeDefined();
@@ -119,7 +118,7 @@ describe("TL-1C: LLM Tool Calling Integration", () => {
     const { SYSTEM_PROMPT } = require("../../src/agent/system-prompt");
     
     expect(SYSTEM_PROMPT).toContain("opnsense_readonly");
-    expect(SYSTEM_PROMPT).toContain("opnsense_safewrite");
+    // opnsense_safewrite was superseded by the generic action tool layer
     expect(SYSTEM_PROMPT).toContain("OPNsense");
   });
 

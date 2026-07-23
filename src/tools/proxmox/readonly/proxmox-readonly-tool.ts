@@ -4,7 +4,7 @@ import type { ToolSchema } from "../../tool-schema";
 import { createToolSchema } from "../../tool-helpers";
 import type { ExecutionResult, ExecutionContext } from "../../../types/execution";
 import { ProxmoxClient } from "../client";
-import { getProxmoxEndpointConfigs } from "../config";
+import { getProxmoxEndpointConfigs, type ProxmoxEndpointConfig } from "../config";
 import { normalizeProxmoxResponse, normalizeMemory } from "./normalization";
 import { pceLogger } from "../../../pce/utils/logger";
 import { promises as dns } from "dns";
@@ -51,7 +51,10 @@ export const ProxmoxReadOnlyParams = z.object({
 
   // Optional parameters for specific actions
   node: z.string().optional().describe("Node name (required for node-level and VM-level actions)"),
-  vmid: z.number().optional().describe("VM ID (required for VM-level actions)"),
+  vmid: z
+    .number()
+    .optional()
+    .describe("VM ID (required for VM-level actions; optional filter for node_tasks)"),
   type: z
     .enum(["qemu", "lxc"])
     .optional()
@@ -65,14 +68,47 @@ export type ProxmoxReadOnlyParams = z.infer<typeof ProxmoxReadOnlyParams>;
  * Provides comprehensive read-only access to Proxmox cluster state
  */
 export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
+  // Which configured endpoint answers for a given (normalized) node name,
+  // learned the first time normalizeNodeName() has to fall back to scanning
+  // every endpoint. This is purely informational — it does NOT replace the
+  // per-call this.apiClient reset in execute() below (that reset is
+  // deliberate, to stop one request's endpoint selection leaking into an
+  // unrelated one) — it only lets a repeat lookup for the same node skip
+  // straight to the right endpoint instead of re-scanning all of them.
+  // Without this, ingesting N interfaces/VMs against a multi-endpoint
+  // cluster fires N redundant /nodes calls per endpoint per node, which is
+  // what was piling up enough load to eventually time out a plain /nodes
+  // call during network ingestion.
+  private nodeEndpointCache = new Map<string, ProxmoxEndpointConfig>();
+
   constructor() {
     super({
       name: "proxmox_readonly",
       description:
-        "Comprehensive read-only access to Proxmox cluster state (Nodes, VMs, Cluster). All operations return structured JSON data.",
+        "Comprehensive read-only access to Proxmox cluster state (Nodes, VMs, Cluster). All operations return structured JSON data. Reuse node, VMID, and type from prior tool results instead of rediscovering them. For VM provenance and recent-change questions, call get_vm_config and node_tasks with the same node and VMID; only report no recent changes when the filtered node_tasks call succeeds with count 0.",
       categories: ["proxmox", "virtualization", "infrastructure", "cluster"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
+      classification: [
+        {
+          domain: "compute",
+          triggerPatterns: [/\b(vm|container|qemu|lxc|virtual machine|host|node|containers|vms)\b/i],
+          classificationExamples: ["list all VMs"],
+          retrievalKeywords: ["proxmox", "vm", "lxc", "cluster", "compute"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 60,
+        },
+        {
+          domain: "metrics",
+          triggerPatterns: [/\b(temperature|temp|cpu|memory|ram|disk|status|uptime|metrics|load)\b/i],
+          classificationExamples: ["show cluster temperature"],
+          retrievalKeywords: ["metrics", "temperature", "sensors", "cpu", "memory"],
+          toolFirst: true,
+          compositeEligible: true,
+          priority: 40,
+        },
+      ],
     });
   }
 
@@ -98,6 +134,10 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         {
           description: "List tasks on a node",
           parameters: { action: "node_tasks", node: "pve1" },
+        },
+        {
+          description: "Get recent Proxmox changes for one VM/container",
+          parameters: { action: "node_tasks", node: "YANG", vmid: 100 },
         },
         {
           description: "Get Proxmox version",
@@ -137,6 +177,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         "All responses are structured JSON objects with normalized data (memory in MB/GB, timestamps in ISO8601).",
         "get_vm_ip requires guest agent enabled in VM config and API token with VM.Monitor + VM.Audit permissions. Returns 403 if permissions insufficient or guest agent unavailable.",
         "node_temperature fetches temperature data via SSH sensors command. Requires SSH access to the node.",
+        "For provenance and recent-change questions, resolve the VM once, call get_vm_config with its node/VMID/type, and call node_tasks with the same node and VMID. Only report no recent changes when the filtered node_tasks result succeeds with count 0.",
         "Internal IP addresses, MAC addresses, and credentials are automatically sanitized from responses.",
       ],
     });
@@ -275,7 +316,11 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         const originalNodeTasks = params.node;
         const normalizedNodeTasks = await this.normalizeNodeName(client, params.node);
         const activeClientTasks = this.apiClient || client;
-        const tasksResult = await this.getNodeTasks(activeClientTasks, normalizedNodeTasks);
+        const tasksResult = await this.getNodeTasks(
+          activeClientTasks,
+          normalizedNodeTasks,
+          params.vmid
+        );
         if (originalNodeTasks !== normalizedNodeTasks) {
           tasksResult.data._hint = `Note: Node name "${originalNodeTasks}" was normalized to "${normalizedNodeTasks}". For future queries, use the exact node name "${normalizedNodeTasks}" or call "list_nodes" first to see available nodes.`;
         }
@@ -640,24 +685,48 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     const configs = getProxmoxEndpointConfigs();
     const normalizeForMatch = (name: string) => name.toLowerCase().replace(/[_-]/g, '');
     const searchNormalized = normalizeForMatch(nodeName);
+
+    const tryEndpoint = async (cfg: ProxmoxEndpointConfig) => {
+      const endpointClient = new ProxmoxClient({
+        url: cfg.url,
+        tokenId: cfg.tokenId,
+        tokenSecret: cfg.tokenSecret,
+        verifySsl: cfg.verifySsl,
+      });
+      const result = await endpointClient.get("/nodes");
+      const nodes: any[] = Array.isArray(result?.data?.data) ? result.data.data : Array.isArray(result?.data) ? result.data : [];
+      const normalized = nodes.find(
+        (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
+      );
+      return normalized?.node ? { client: endpointClient, resolved: normalized.node as string } : null;
+    };
+
+    // Fast path: this node's endpoint was already discovered earlier in this
+    // tool instance's lifetime — try it directly instead of scanning everyone.
+    const cachedCfg = this.nodeEndpointCache.get(searchNormalized);
+    if (cachedCfg) {
+      try {
+        const hit = await tryEndpoint(cachedCfg);
+        if (hit) {
+          pceLogger.debug(`Found node "${nodeName}" via cached endpoint ${cachedCfg.label ?? cachedCfg.url} (normalized to "${hit.resolved}")`);
+          this.apiClient = hit.client;
+          return hit.resolved;
+        }
+        this.nodeEndpointCache.delete(searchNormalized); // stale, fall through to full scan
+      } catch {
+        this.nodeEndpointCache.delete(searchNormalized);
+      }
+    }
+
     for (const cfg of configs) {
       try {
         pceLogger.debug(`Trying configured endpoint for node "${nodeName}": ${cfg.label ?? cfg.url}`);
-        const endpointClient = new ProxmoxClient({
-          url: cfg.url,
-          tokenId: cfg.tokenId,
-          tokenSecret: cfg.tokenSecret,
-          verifySsl: cfg.verifySsl,
-        });
-        const result = await endpointClient.get("/nodes");
-        const nodes: any[] = Array.isArray(result?.data?.data) ? result.data.data : Array.isArray(result?.data) ? result.data : [];
-        const normalized = nodes.find(
-          (n: any) => n?.node && normalizeForMatch(n.node) === searchNormalized
-        );
-        if (normalized?.node) {
-          pceLogger.info(`Found node "${nodeName}" on endpoint ${cfg.label ?? cfg.url} (normalized to "${normalized.node}")`);
-          this.apiClient = endpointClient;
-          return normalized.node;
+        const hit = await tryEndpoint(cfg);
+        if (hit) {
+          pceLogger.info(`Found node "${nodeName}" on endpoint ${cfg.label ?? cfg.url} (normalized to "${hit.resolved}")`);
+          this.apiClient = hit.client;
+          this.nodeEndpointCache.set(searchNormalized, cfg);
+          return hit.resolved;
         }
       } catch (altError: any) {
         pceLogger.debug(`Endpoint ${cfg.label ?? cfg.url} failed for node "${nodeName}": ${altError?.message ?? "unknown"}`);
@@ -870,12 +939,16 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
    */
   private async getNodeTasks(
     client: ProxmoxClient,
-    node: string
+    node: string,
+    vmid?: number
   ): Promise<{ data: any; metadata: any }> {
     const result = await client.get(`/nodes/${node}/tasks`);
     const tasks = result.data.data || [];
+    const matchingTasks = vmid === undefined
+      ? tasks
+      : tasks.filter((task: any) => String(task.id) === String(vmid));
 
-    const normalized = tasks.map((t: any) =>
+    const normalized = matchingTasks.map((t: any) =>
       normalizeProxmoxResponse({
         upid: t.upid,
         type: t.type,
@@ -889,7 +962,12 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     );
 
     return {
-      data: { node, tasks: normalized, count: normalized.length },
+      data: {
+        node,
+        ...(vmid === undefined ? {} : { vmid }),
+        tasks: normalized,
+        count: normalized.length,
+      },
       metadata: result.metadata,
     };
   }

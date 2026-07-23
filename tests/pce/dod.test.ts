@@ -13,17 +13,18 @@ import {
   chunkDocument,
   EmbeddingService,
   QdrantVectorStore,
-  TEST_COLLECTION,
   IngestionPipeline,
   RetrievalService,
   GenerationService,
   RAGOrchestrator,
   pceLogger,
 } from "../../src/pce";
+import { buildIsolatedQdrantCollectionName } from "../helpers/qdrant-test-collection";
 
 const TEST_DIR = "./.pce-dod-test";
 const TEST_SNAPSHOT_LOG = join(TEST_DIR, "snapshots.json");
 const TEST_RAW_STORAGE = join(TEST_DIR, "raw-documents");
+const DOD_COLLECTION = buildIsolatedQdrantCollectionName("dod");
 
 // Capture logs for DOD 6
 const logMessages: string[] = [];
@@ -134,21 +135,23 @@ describe("DOD 1: Hashing & Versioning Works", () => {
 });
 
 describe("DOD 2: Redaction is Verifiably Safe", () => {
-  it("should remove all sensitive content from test documents", () => {
+  it("should remove secrets while preserving infrastructure identifiers", () => {
     const redactor = new Redactor();
     
-    const testDocs = [
+    const redactedDocs = [
       'const apiKey = "sk_live_1234567890abcdefghijklmnopqrstuvwxyz";',
       'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
       'password: "MySecretPassword123!"',
-      'Contact support@example.com for help.',
       'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
-      'Server IP: 192.168.1.100',
       'Credit card: 4532-1234-5678-9010',
       '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----',
     ];
+    const preservedDocs = [
+      'Contact support@example.com for help.',
+      'Server IP: 192.168.1.100',
+    ];
 
-    for (const doc of testDocs) {
+    for (const doc of redactedDocs) {
       const result = redactor.redact(doc);
       
       // Verify sensitive content is removed
@@ -162,6 +165,13 @@ describe("DOD 2: Redaction is Verifiably Safe", () => {
       // Verify no sensitive patterns remain
       const stillContainsSensitive = redactor.containsSensitiveData(result.redactedText);
       expect(stillContainsSensitive).toBe(false);
+    }
+
+    for (const doc of preservedDocs) {
+      const result = redactor.redact(doc);
+      expect(result.redactedText).toBe(doc);
+      expect(result.redactions).toHaveLength(0);
+      expect(redactor.containsSensitiveData(result.redactedText)).toBe(false);
     }
   });
 
@@ -237,6 +247,7 @@ describe("DOD 3: Chunking is Deterministic", () => {
   it("should only change adjacent chunks when small part is modified", () => {
     const baseText = "Section 1 content. ".repeat(20) + "\n\n" + "Section 2 content. ".repeat(20);
     const modifiedText = "Section 1 content. ".repeat(20) + "\n\n" + "Section 2 MODIFIED content. ".repeat(20);
+    const chunkingConfig = { maxChunkSize: 200, overlapSize: 50 };
     
     const metadata = {
       versionHash: "hash-1",
@@ -246,11 +257,11 @@ describe("DOD 3: Chunking is Deterministic", () => {
       timestamp: new Date(),
     };
     
-    const baseChunks = chunkDocument(baseText, "generic_text", metadata);
+    const baseChunks = chunkDocument(baseText, "generic_text", metadata, chunkingConfig);
     const modifiedChunks = chunkDocument(modifiedText, "generic_text", {
       ...metadata,
       versionHash: "hash-2",
-    });
+    }, chunkingConfig);
     
     // At least one chunk should differ (the one containing the modification)
     const hasDifference = baseChunks.some((chunk, i) => {
@@ -299,8 +310,9 @@ describe("DOD 4: Vector DB Integration Produces Real Results", () => {
     await fs.mkdir(TEST_DIR, { recursive: true });
 
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
+    vectorStore = new QdrantVectorStore(undefined, undefined, DOD_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
+    await vectorStore.clearCollection();
     
     retrievalService = new RetrievalService(vectorStore, embeddingService);
   });
@@ -364,8 +376,9 @@ describe("DOD 5: Access Control Filtering Works", () => {
     await fs.mkdir(TEST_DIR, { recursive: true });
 
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
+    vectorStore = new QdrantVectorStore(undefined, undefined, DOD_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
+    await vectorStore.clearCollection();
     
     retrievalService = new RetrievalService(vectorStore, embeddingService);
   });
@@ -467,8 +480,9 @@ describe("DOD 6: Logging Provides a Record of Everything", () => {
     snapshotLog = new SnapshotLog(TEST_SNAPSHOT_LOG);
     await snapshotLog.initialize();
     embeddingService = new EmbeddingService();
-    vectorStore = new QdrantVectorStore(undefined, undefined, TEST_COLLECTION);
+    vectorStore = new QdrantVectorStore(undefined, undefined, DOD_COLLECTION);
     await vectorStore.initializeCollection(embeddingService.getDimension());
+    await vectorStore.clearCollection();
   });
 
   afterEach(() => {
@@ -540,4 +554,3 @@ describe("DOD 6: Logging Provides a Record of Everything", () => {
     expect(logText).toMatch(/chunk|result/i);
   }, 30000);
 });
-

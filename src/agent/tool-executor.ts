@@ -2,12 +2,15 @@ import type { ToolCall, ExecutionResult, ExecutionContext, ACLGroup } from "../t
 import type { BaseTool } from "../tools/BaseTool";
 import { logger } from "../utils/logger";
 import { getToolExecutionStore } from "../pce/api/tool-execution-store";
+import { runWithAgentSession } from "./event-bus";
 
 export interface ToolExecutionContext {
   userId?: string;
   aclGroup?: ACLGroup;
   node?: string; // For Proxmox operations
   vmid?: number; // For VM operations
+  sessionId?: string;
+  traceId?: string; // Links this call back to its parent reasoning trace
 }
 
 export async function executeToolCall(
@@ -30,7 +33,24 @@ export async function executeToolCall(
   logger.info(`Executing tool: ${call.toolName}`);
   
   const startTime = Date.now();
-  const result = await tool.execute(call.parameters ?? {}, context);
+  // Tools are contractually expected to return { error } rather than throw, but
+  // several action handlers (e.g. proxmox_readonly's node_disks/node_network_interfaces
+  // param validation) still `throw`. Without this guard, an uncaught rejection here
+  // propagates all the way up through the agent loop and aborts the entire turn with
+  // "The agent run failed before it completed." instead of surfacing a normal tool
+  // error the LLM (or reclassification logic) can react to.
+  let result: ExecutionResult;
+  try {
+    result = await runWithAgentSession(
+      executionContext?.sessionId,
+      () => tool.execute(call.parameters ?? {}, context)
+    );
+  } catch (error: any) {
+    logger.error(`Tool threw instead of returning an error result: ${call.toolName}`, {
+      error: error?.message ?? String(error),
+    });
+    result = { error: error?.message ?? `${call.toolName} failed unexpectedly` };
+  }
   const durationMs = Date.now() - startTime;
   
   // Record execution for dashboard (if context provided)
@@ -54,6 +74,7 @@ export async function executeToolCall(
         node: executionContext.node,
         vmid: executionContext.vmid,
         error: storedError,
+        traceId: executionContext.traceId,
       });
     } catch (error: any) {
       // Don't fail tool execution if audit logging fails
@@ -72,4 +93,3 @@ export async function executeToolCall(
   
   return result;
 }
-

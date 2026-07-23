@@ -4,6 +4,7 @@ export {
   type PceApiServerOptions,
   bootstrapPceApiServer,
 } from "./server";
+export { OperatorMemoryStore, getOperatorMemoryStore } from "./operator-memory-store";
 export { ContextHistoryStore } from "./history-store";
 export { PromptSuggestionStore } from "./prompt-suggestion-store";
 export { PromptSuggestionService } from "./prompt-suggestion-service";

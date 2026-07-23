@@ -4,6 +4,7 @@ import type { ExecutionContext } from "../../../../src/types/execution";
 
 // Mock ProxmoxClient
 let mockProxmoxClient: any;
+const loggerCounters = new Map<string, number>();
 
 vi.mock("../../../../src/tools/proxmox/client", () => {
   mockProxmoxClient = {
@@ -23,6 +24,17 @@ vi.mock("../../../../src/pce/utils/logger", () => ({
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
+    incrementCounter: vi.fn((counterName: string, amount: number = 1) => {
+      loggerCounters.set(counterName, (loggerCounters.get(counterName) ?? 0) + amount);
+    }),
+    getCounter: vi.fn((counterName: string) => loggerCounters.get(counterName) ?? 0),
+    getAllCounters: vi.fn(() => Object.fromEntries(loggerCounters.entries())),
+    resetCounters: vi.fn(() => {
+      loggerCounters.clear();
+    }),
+    logCounters: vi.fn(),
+    logHashComparison: vi.fn(),
+    logDocumentStatusChange: vi.fn(),
   },
 }));
 
@@ -43,6 +55,7 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
   let mockClient: any;
 
   beforeEach(() => {
+    loggerCounters.clear();
     process.env.PROXMOX_URL = "https://pve1.prox:8006";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";

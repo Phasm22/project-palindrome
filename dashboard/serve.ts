@@ -3,10 +3,11 @@
 import { serve } from "bun";
 import { watch } from "node:fs";
 
-const HTTP_PORT = 8080;
-const HTTPS_PORT = 8443;
+const HTTP_PORT = Number(process.env.DASHBOARD_HTTP_PORT || process.env.PORT || 8080);
+const HTTPS_PORT = Number(process.env.DASHBOARD_HTTPS_PORT || 8443);
 const DASHBOARD_DIR = import.meta.dir;
 const PROJECT_ROOT = `${DASHBOARD_DIR}/..`;
+const API_PROXY_BASE = process.env.PCE_API_URL || "http://127.0.0.1:4000";
 
 // Check if certs exist
 const certPath = `${PROJECT_ROOT}/certs/cert.pem`;
@@ -14,6 +15,18 @@ const keyPath = `${PROJECT_ROOT}/certs/key.pem`;
 const hasCerts = await Bun.file(certPath).exists() && await Bun.file(keyPath).exists();
 
 const connectedClients = new Set<WebSocket>();
+const bootTime = Date.now();
+
+function logEvent(event: string, fields: Record<string, unknown> = {}) {
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      event,
+      service: "dashboard",
+      ...fields,
+    })
+  );
+}
 
 // Watch for file changes
 const watcher = watch(
@@ -37,6 +50,155 @@ const watcher = watch(
 // Request handler
 async function handleRequest(req: Request, server: any) {
     const url = new URL(req.url);
+    const requestStart = Date.now();
+
+    const respond = (response: Response, extra: Record<string, unknown> = {}) => {
+      logEvent("http.request", {
+        method: req.method,
+        path: url.pathname,
+        status: response.status,
+        duration_ms: Date.now() - requestStart,
+        ...extra,
+      });
+      return response;
+    };
+
+    if (url.pathname === "/health" || url.pathname === "/api/health") {
+      const payload = {
+        status: "ok",
+        uptimeMs: Date.now() - bootTime,
+        apiProxyBase: API_PROXY_BASE,
+      };
+      return respond(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+        { route: "dashboard.health" }
+      );
+    }
+
+    if (url.pathname === "/api/pce-health") {
+      const upstreamUrl = `${API_PROXY_BASE}/health`;
+      const responseHeaders = new Headers({
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      });
+
+      if (req.method === "OPTIONS") {
+        return respond(new Response(null, { status: 204, headers: responseHeaders }), {
+          route: "dashboard.pce_health",
+        });
+      }
+
+      try {
+        const upstreamResponse = await fetch(upstreamUrl, { method: "GET" });
+        const contentType = upstreamResponse.headers.get("Content-Type") || "";
+        const upstreamPayload = contentType.includes("application/json")
+          ? await upstreamResponse.json().catch(() => null)
+          : await upstreamResponse.text().catch(() => null);
+        const upstreamObject = upstreamPayload && typeof upstreamPayload === "object"
+          ? upstreamPayload as Record<string, unknown>
+          : null;
+        const upstreamHealthy =
+          upstreamResponse.ok &&
+          (!upstreamObject || upstreamObject.success !== false);
+        const payload = {
+          healthy: upstreamHealthy,
+          status: upstreamHealthy ? "ok" : "unhealthy",
+          upstreamStatus: upstreamResponse.status,
+          apiProxyBase: API_PROXY_BASE,
+          upstream: upstreamPayload,
+          checkedAt: new Date().toISOString(),
+        };
+
+        return respond(new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: responseHeaders,
+        }), {
+          route: "dashboard.pce_health",
+          upstream_status: upstreamResponse.status,
+        });
+      } catch (error: any) {
+        const payload = {
+          healthy: false,
+          status: "unreachable",
+          upstreamStatus: 0,
+          apiProxyBase: API_PROXY_BASE,
+          error: error?.message || String(error),
+          checkedAt: new Date().toISOString(),
+        };
+
+        logEvent("service.unhealthy", {
+          dependency: "pce-api",
+          route: url.pathname,
+          upstream: upstreamUrl,
+          error: payload.error,
+        });
+
+        return respond(new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: responseHeaders,
+        }), {
+          route: "dashboard.pce_health",
+          upstream_status: 0,
+        });
+      }
+    }
+
+    const shouldProxyToApi =
+      url.pathname.startsWith("/api/") ||
+      (url.pathname === "/query" && req.method !== "GET") ||
+      url.pathname === "/metrics" ||
+      url.pathname === "/health" ||
+      url.pathname.startsWith("/history/");
+
+    if (shouldProxyToApi) {
+      const upstreamPath =
+        url.pathname === "/api/health"
+          ? "/health"
+          : url.pathname === "/api/metrics"
+            ? "/metrics"
+            : url.pathname;
+      const upstreamUrl = `${API_PROXY_BASE}${upstreamPath}${url.search}`;
+      const headers = new Headers(req.headers);
+      headers.set("host", new URL(API_PROXY_BASE).host);
+
+      let upstreamResponse: Response;
+      try {
+        upstreamResponse = await fetch(upstreamUrl, {
+          method: req.method,
+          headers,
+          body: req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+        });
+      } catch (error: any) {
+        logEvent("service.unhealthy", {
+          dependency: "pce-api",
+          route: url.pathname,
+          upstream: upstreamUrl,
+          error: error?.message || String(error),
+        });
+        return respond(
+          new Response(
+            JSON.stringify({ error: "API upstream unavailable", detail: error?.message || String(error) }),
+            { status: 502, headers: { "Content-Type": "application/json" } }
+          ),
+          { route: "dashboard.proxy", upstream_status: 502 }
+        );
+      }
+
+      const responseHeaders = new Headers(upstreamResponse.headers);
+      responseHeaders.set("Access-Control-Allow-Origin", "*");
+      responseHeaders.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+      responseHeaders.set("Access-Control-Allow-Headers", "Content-Type");
+
+      return respond(new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        headers: responseHeaders,
+      }), { route: "dashboard.proxy", upstream_status: upstreamResponse.status });
+    }
     
     // Handle WebSocket upgrade for /_reload
     if (url.pathname === "/_reload" && server.upgrade(req)) {
@@ -52,7 +214,7 @@ async function handleRequest(req: Request, server: any) {
     
     // Security: prevent directory traversal
     if (path.includes("..")) {
-      return new Response("Not found", { status: 404 });
+      return respond(new Response("Not found", { status: 404 }));
     }
     
     try {
@@ -68,7 +230,7 @@ async function handleRequest(req: Request, server: any) {
         
         // If it's a static asset that doesn't exist, return 404
         if (hasStaticExtension) {
-          return new Response("Not found", { status: 404 });
+          return respond(new Response("Not found", { status: 404 }));
         }
         
         // Otherwise, it's a client-side route - serve index.html for SPA routing
@@ -77,7 +239,7 @@ async function handleRequest(req: Request, server: any) {
         const indexExists = await indexFile.exists();
         
         if (!indexExists) {
-          return new Response("Not found", { status: 404 });
+          return respond(new Response("Not found", { status: 404 }));
         }
         
         // Serve index.html with reload script
@@ -102,9 +264,9 @@ async function handleRequest(req: Request, server: any) {
         } else {
           content += reloadScript;
         }
-        return new Response(content, {
+        return respond(new Response(content, {
           headers: { "Content-Type": "text/html" },
-        });
+        }));
       }
       
       // Inject auto-reload script for HTML files
@@ -131,14 +293,18 @@ async function handleRequest(req: Request, server: any) {
         } else {
           content += reloadScript;
         }
-        return new Response(content, {
+        return respond(new Response(content, {
           headers: { "Content-Type": "text/html" },
-        });
+        }));
       }
       
-      return new Response(file);
+      return respond(new Response(file));
     } catch (error) {
-      return new Response(`Error: ${error}`, { status: 500 });
+      logEvent("service.unhealthy", {
+        route: url.pathname,
+        error: String(error),
+      });
+      return respond(new Response(`Error: ${error}`, { status: 500 }));
     }
 }
 
@@ -146,11 +312,11 @@ const websocketHandlers = {
   message(ws: any, message: any) {},
   open(ws: any) {
     connectedClients.add(ws);
-    console.log(`✅ WebSocket client connected for auto-reload`);
+    logEvent("ws.connected", { clients: connectedClients.size });
   },
   close(ws: any) {
     connectedClients.delete(ws);
-    console.log(`❌ WebSocket client disconnected`);
+    logEvent("ws.disconnected", { clients: connectedClients.size });
   },
 };
 
@@ -162,7 +328,7 @@ const httpServer = serve({
   websocket: websocketHandlers,
 });
 
-console.log(`🚀 Dashboard server running at http://0.0.0.0:${HTTP_PORT}`);
+logEvent("service.starting", { http_port: HTTP_PORT, api_proxy_base: API_PROXY_BASE });
 
 // HTTPS server (if certs exist)
 if (hasCerts) {
@@ -176,13 +342,7 @@ if (hasCerts) {
       key: Bun.file(keyPath),
     },
   });
-  console.log(`🔒 HTTPS server running at https://0.0.0.0:${HTTPS_PORT}`);
+  logEvent("service.ready", { http_port: HTTP_PORT, https_port: HTTPS_PORT, tls: true });
 } else {
-  console.log(`⚠️  No certs found at ${certPath} - HTTPS disabled`);
-  console.log(`   Run: openssl req -x509 -newkey rsa:2048 -keyout certs/key.pem -out certs/cert.pem -days 365 -nodes`);
+  logEvent("service.ready", { http_port: HTTP_PORT, tls: false });
 }
-
-console.log(`📁 Serving from: ${DASHBOARD_DIR}`);
-console.log(`🔄 Auto-reload enabled - changes will refresh automatically`);
-console.log(`\nPress Ctrl+C to stop\n`);
-

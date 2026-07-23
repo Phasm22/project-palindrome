@@ -74,9 +74,27 @@ Palindrome is built on a **local-first** architecture:
 
 Palindrome can run in several ways:
 
-- **Systemd Service** - Run as a background service (recommended for production)
-- **Docker Compose** - All services containerized
-- **Manual** - Run components individually
+- **On-demand (TJ desktop)** — `pc-stacks up palindrome` (cold by default at login; see below)
+- **Systemd Service** — `palindrome-services.service` (disabled at boot on TJ desktop; enable for always-on hosts)
+- **Docker Compose** — All services containerized
+- **Manual** — Run components individually
+
+### Local runtime (on-demand / `pc-stacks`)
+
+On TJ's Linux desktop the full stack (Neo4j, Qdrant, Docker Ollama, PCE API) is **not** auto-started at login.
+
+```bash
+pc-stacks up palindrome              # docker-compose.dev-lite + API :4000
+PCE_INGESTION_ENABLED=1 pc-stacks up palindrome   # + 5-min ingestion scheduler
+PC_STACKS_GRAFANA=1 pc-stacks up palindrome        # + prometheus/grafana profile
+pc-stacks down palindrome
+pc-stacks status
+```
+
+- **Orchestrator:** [`/home/tj/bin/pc-stacks`](/home/tj/bin/pc-stacks) — [`/home/tj/bin/README.md`](/home/tj/bin/README.md)
+- **Ingestion** is off unless `PCE_INGESTION_ENABLED=1` (see `src/pce/scheduler/ingestion-scheduler.ts`).
+- **Ollama** in compose uses `OLLAMA_KEEP_ALIVE=5m`; system `ollama.service` is disabled when Palindrome docker ollama is used.
+- **Traceability:** PC Idle Quietdown plan (Cursor plans, Jul 2025).
 
 See [Getting Started](docs/GETTING_STARTED.md) for detailed setup instructions.
 

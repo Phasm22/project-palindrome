@@ -7,9 +7,9 @@ import { pceLogger as logger } from "../../pce/utils/logger";
  * Sync DHCP Leases to DNS Records Action Schema
  */
 export const SyncDhcpToDnsSchema = z.object({
-  dryRun: z.boolean().default(false),
-  domain: z.string().optional().default(".prox"), // Domain suffix for DNS records
-  updateExisting: z.boolean().default(true), // Update DNS records if IP changed
+  dryRun: z.boolean().default(false).describe("Preview sync without creating or updating DNS records (default: false)"),
+  domain: z.string().optional().default(".prox").describe("Domain suffix appended to DHCP hostnames when creating DNS records (default: '.prox')"),
+  updateExisting: z.boolean().default(true).describe("Update existing DNS records when the IP has changed (default: true)"),
 });
 
 export type SyncDhcpToDnsParams = z.infer<typeof SyncDhcpToDnsSchema>;

@@ -2,6 +2,8 @@
 
 This directory contains all project documentation organized into machine-friendly categories.
 
+**Current dev cycle (realAgent branch):** The single source of truth for architecture, bottlenecks, and next-iteration priorities is **[REVIEW.md](../REVIEW.md)** at repo root. Status and phase files below are historical reference.
+
 ## Structure
 
 ```
@@ -12,7 +14,8 @@ docs/
 ├── technical/          # Technical implementation details
 ├── features/           # Feature-specific documentation
 ├── tests/              # Test documentation and debugging
-└── tools/              # Tool-specific documentation
+├── tools/              # Tool-specific documentation
+└── archive/            # Archived one-off and superseded docs
 ```
 
 ## Quick Navigation

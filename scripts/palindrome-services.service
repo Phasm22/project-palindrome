@@ -21,6 +21,7 @@ SyslogIdentifier=palindrome-services
 # Environment variables
 Environment="NODE_ENV=production"
 Environment="PCE_API_PORT=4000"
+Environment="PCE_INGESTION_ENABLED=1"
 Environment="PATH=/home/tj/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Resource limits (adjust as needed)

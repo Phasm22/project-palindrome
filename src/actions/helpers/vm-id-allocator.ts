@@ -17,6 +17,8 @@ export interface VmIdAllocationOptions {
   preferredId?: number;
   /** Maximum attempts to find available ID (default: 100) */
   maxAttempts?: number;
+  /** IDs reserved by Terraform state/config even if absent from live Proxmox. */
+  reservedIds?: Iterable<number>;
 }
 
 export interface VmIdAllocationResult {
@@ -79,6 +81,7 @@ export async function allocateVmId(
     endId = 9999,
     preferredId,
     maxAttempts = 100,
+    reservedIds = [],
   } = options;
 
   // Validate range
@@ -89,6 +92,9 @@ export async function allocateVmId(
 
   // Get used VM IDs from Proxmox
   const usedIds = await getUsedVmIds(client);
+  for (const reservedId of reservedIds) {
+    if (Number.isInteger(reservedId)) usedIds.add(reservedId);
+  }
 
   // Strategy 1: Use preferred ID if provided and available
   if (preferredId !== undefined) {
@@ -172,4 +178,3 @@ export async function isVmIdAvailable(
   const usedIds = await getUsedVmIds(client);
   return !usedIds.has(vmId);
 }
-

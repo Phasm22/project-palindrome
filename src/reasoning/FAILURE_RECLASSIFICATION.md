@@ -1,5 +1,10 @@
 # Failure-Aware Intent Reclassification
 
+> **Verified live 2026-07-22.** `reclassifyIntentWithContext` and `FailureTracker`
+> remain implemented in `failure-reclassification.ts` and are invoked by
+> `agent/handlers/handle-execute.ts`. This is a companion to
+> `CLASSIFICATION_STANDARDS.md`, not part of the pre-LLM documentation archive.
+
 ## Overview
 
 When a tool execution fails, we **don't retry blindly**. Instead, we reclassify the intent with context (error message, partial state) to make better decisions about next steps.
@@ -285,4 +290,3 @@ Attempt 3: action tool fails
 2. **State validation**: Automatically validate state before retrying
 3. **Alternative action suggestions**: Suggest specific alternative actions based on error
 4. **Confidence adjustment**: Adjust confidence scores based on failure history
-

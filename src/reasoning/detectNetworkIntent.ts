@@ -1,4 +1,9 @@
 import { getKnownEntities } from "./clarification";
+import {
+  extractNodeName,
+  extractVmReference,
+  isActionRequest,
+} from "./detector-toolkit";
 
 export type NetworkIntent =
   | { type: "describe_network" }
@@ -9,12 +14,22 @@ export type NetworkIntent =
   | { type: "vm_networks"; vmNameOrId: string }
   | { type: "vm_by_ip"; ip: string }
   | { type: "vm_ip_by_name"; vmNameOrId: string }
-  | { type: "vms_with_multiple_interfaces" };
+  | { type: "vms_with_multiple_interfaces" }
+  | { type: "switch_vlans" }
+  | { type: "switch_ports_by_vlan"; vlan: number }
+  | { type: "interface_lookup"; interfaceName: string };
 
 const CIDR_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}\b/;
 const IP_REGEX = /\b\d{1,3}(?:\.\d{1,3}){3}\b/;
-const ENTITY_ID_REGEX = /(network-if:[\w:-]+|compute-vm:[\w:-]+)/i;
-const VM_NAME_REGEX = /\bvm\s+([a-z0-9\-_]+)/i;
+const NETWORK_ENTITY_ID_REGEX = /network-if:[\w:-]+/i;
+const VLAN_NUMBER_REGEX = /\bvlan\s+(\d+)\b/i;
+// Linux persistent interface naming convention: "enx" + 12 hex chars (the
+// interface's MAC address). Matched regardless of surrounding phrasing (bare
+// "what is enx...?" vs. "what network interface is this? enx...") so a
+// specific, real interface lookup never depends on the LLM recognizing the
+// naming convention itself and hallucinating a plausible-sounding answer
+// instead of querying the twin. See B-06.
+const MAC_INTERFACE_REGEX = /\benx[0-9a-f]{12}\b/i;
 const MULTI_NIC_PATTERNS = [
   /\btwo\s+nics?\b/i,
   /\bmultiple\s+nics?\b/i,
@@ -23,18 +38,8 @@ const MULTI_NIC_PATTERNS = [
   /\btwo\s+interfaces?\b/i,
 ];
 
-function extractNodeName(text: string): string | null {
-  const match = text.match(/\b(?:node|host)\s+([a-z0-9\-_]+)/i);
-  return match?.[1] ?? null;
-}
-
 function extractVmNameOrId(text: string): string | null {
-  const idMatch = text.match(ENTITY_ID_REGEX);
-  if (idMatch && idMatch[0].startsWith("compute-vm:")) {
-    return idMatch[0];
-  }
-  const nameMatch = text.match(VM_NAME_REGEX);
-  return nameMatch?.[1] ?? null;
+  return extractVmReference(text, { allowVmLabelName: true })?.raw ?? null;
 }
 
 function extractKnownVmName(text: string): string | null {
@@ -48,22 +53,14 @@ function extractKnownVmName(text: string): string | null {
 export function detectNetworkIntent(userInput: string): NetworkIntent | null {
   const normalized = userInput.toLowerCase();
 
-  // Don't match network intent if this is clearly an action (create, install, configure, etc.)
-  // Action intents should take priority
-  const hasActionKeyword = 
-    normalized.includes("create") || 
-    normalized.includes("install") || 
-    normalized.includes("configure") || 
-    normalized.includes("set") ||
-    normalized.includes("destroy") ||
-    normalized.includes("delete") ||
-    normalized.includes("sync") ||
-    normalized.includes("put") ||
-    normalized.includes("assign");
-  
-  if (hasActionKeyword) {
+  if (isActionRequest(userInput)) {
     // This is likely an action, not a query - let action intent detection handle it
     return null;
+  }
+
+  const macInterfaceMatch = userInput.match(MAC_INTERFACE_REGEX);
+  if (macInterfaceMatch) {
+    return { type: "interface_lookup", interfaceName: macInterfaceMatch[0] };
   }
 
   const vmNameOrId = extractVmNameOrId(userInput) || extractKnownVmName(userInput);
@@ -91,7 +88,7 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
   }
 
   if (normalized.includes("network") || normalized.includes("interfaces")) {
-    const nodeName = extractNodeName(userInput);
+      const nodeName = extractNodeName(userInput, { allowRelations: false });
     if (nodeName) {
       return { type: "node_interfaces", nodeName };
     }
@@ -112,14 +109,33 @@ export function detectNetworkIntent(userInput: string): NetworkIntent | null {
       const vmId = vmNameOrId.startsWith("compute-vm:") ? vmNameOrId : vmNameOrId;
       return { type: "vm_reachability", vmId };
     }
-    const entityMatch = userInput.match(ENTITY_ID_REGEX);
+    const entityMatch = userInput.match(NETWORK_ENTITY_ID_REGEX);
     if (entityMatch?.[1]) {
       return { type: "reachability", fromId: entityMatch[1] };
     }
   }
 
-  // Only match VLAN/subnet/routing if it's clearly a query (not an action)
-  if ((normalized.includes("vlan") || normalized.includes("subnet") || normalized.includes("routing")) && !hasActionKeyword) {
+  // VLAN/switch-port queries route to the switch twin data, not the generic
+  // VM/node interface dump — see the "What VLANs are on the switch?" gap.
+  if (normalized.includes("vlan")) {
+    const vlanMatch = userInput.match(VLAN_NUMBER_REGEX);
+    if (vlanMatch?.[1]) {
+      return { type: "switch_ports_by_vlan", vlan: parseInt(vlanMatch[1], 10) };
+    }
+    return { type: "switch_vlans" };
+  }
+
+  // Only match subnet/routing if it's clearly a query (not an action).
+  // Excludes "routing table" specifically: that's a live OPNsense diagnostic
+  // (opnsense_readonly's diagnostics_routing_table action) the twin doesn't
+  // model at all, so swallowing it into the generic interface-list fallback
+  // here means the EXECUTE/LLM path — which could actually call that action —
+  // never even sees the query. See A-OP-09.
+  if (
+    (normalized.includes("subnet") || normalized.includes("routing")) &&
+    !isActionRequest(userInput) &&
+    !/\brouting\s+table\b/.test(normalized)
+  ) {
     return { type: "describe_network" };
   }
 

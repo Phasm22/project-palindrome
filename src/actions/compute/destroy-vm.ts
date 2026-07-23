@@ -3,17 +3,23 @@ import { TerraformRunner } from "../helpers/terraform-runner";
 import { TwinQueryService } from "../../twin/api/twin-query-service";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { checkTerraformEnv } from "../helpers/env-validator";
-import { readFile, writeFile } from "fs/promises";
+import { readFile, unlink, writeFile } from "fs/promises";
+import { randomUUID } from "crypto";
+import { tmpdir } from "os";
+import { join } from "path";
 import type { DnsRecord } from "../../tools/pihole/client";
+import { ProxmoxClient } from "../../tools/proxmox/client";
+import { getProxmoxEndpointConfigs } from "../../tools/proxmox/config";
+import { isPlausibleVmIdentifier } from "../helpers/identifier-validation";
 
 /**
  * Destroy VM Action Schema
  */
 export const DestroyVmSchema = z.object({
-  name: z.string().optional(), // Optional: can use vmId instead
-  vmId: z.number().int().positive().optional(), // Optional: can use name instead
-  node: z.string().min(1, "Node name is required").optional(), // Optional: helps with validation
-  dryRun: z.boolean().default(false),
+  name: z.string().optional().describe("VM name to destroy (optional if vmId is provided)"),
+  vmId: z.number().int().positive().optional().describe("VM ID to destroy (optional if name is provided); resolved to name via digital twin"),
+  node: z.string().optional().describe("Proxmox node name (optional; used for validation and Terraform token selection)"),
+  dryRun: z.boolean().default(false).describe("Preview destruction without executing (default: false)"),
 }).refine(
   (data) => data.name || data.vmId,
   {
@@ -30,6 +36,12 @@ export interface DestroyVmResult {
   terraformOutput?: any;
 }
 
+export interface DestroyVmExecutionOptions {
+  tfvarsPath?: string;
+  statePath?: string;
+  removeSharedConfig?: boolean;
+}
+
 export function normalizeDestroyVmIdentifiers(rawName: string): {
   infraName: string;
   dnsDomain: string;
@@ -40,6 +52,87 @@ export function normalizeDestroyVmIdentifiers(rawName: string): {
     ? trimmed
     : `${infraName}.prox`;
   return { infraName, dnsDomain };
+}
+
+export function stripAnsi(value: string): string {
+  return value.replace(
+    /[\u001B\u009B][[\]()#;?]*(?:(?:(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d\/#&.:=?%@~_]*)*)?\u0007|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g,
+    ""
+  );
+}
+
+export function getTerraformDeleteAddresses(plan: unknown): string[] {
+  if (!plan || typeof plan !== "object") return [];
+  const changes = (plan as { resource_changes?: unknown }).resource_changes;
+  if (!Array.isArray(changes)) return [];
+
+  return changes.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const address = (entry as { address?: unknown }).address;
+    const actions = (entry as { change?: { actions?: unknown } }).change?.actions;
+    return typeof address === "string" && Array.isArray(actions) && actions.includes("delete")
+      ? [address]
+      : [];
+  });
+}
+
+export function findUnexpectedTerraformDeletes(
+  plan: unknown,
+  allowedAddresses: Iterable<string>
+): string[] {
+  const allowed = new Set(allowedAddresses);
+  return getTerraformDeleteAddresses(plan).filter((address) => !allowed.has(address));
+}
+
+export function terraformTargetWasDestroyed(stdout: string, targetAddress: string): boolean {
+  return stdout.includes(`${targetAddress}: Destruction complete`);
+}
+
+async function destroyExactLiveVm(
+  vmName: string,
+  requestedNode?: string
+): Promise<{ vmId: number; node: string }> {
+  const matches: Array<{ client: ProxmoxClient; vmId: number; node: string; type: "qemu" | "lxc" }> = [];
+  for (const config of getProxmoxEndpointConfigs()) {
+    const client = new ProxmoxClient(config);
+    const response = await client.get("/cluster/resources", { type: "vm" });
+    for (const resource of response.data?.data || []) {
+      if (
+        String(resource.name || "").toLowerCase() === vmName.toLowerCase() &&
+        (!requestedNode || String(resource.node || "").toLowerCase() === requestedNode.toLowerCase()) &&
+        (resource.type === "qemu" || resource.type === "lxc")
+      ) {
+        matches.push({ client, vmId: resource.vmid, node: resource.node, type: resource.type });
+      }
+    }
+  }
+  const unique = matches.filter((match, index, all) =>
+    all.findIndex((candidate) => candidate.vmId === match.vmId && candidate.node === match.node) === index
+  );
+  if (unique.length !== 1) {
+    throw new Error(`Exact live recovery requires one matching VM; found ${unique.length}.`);
+  }
+  const target = unique[0]!;
+  const endpoint = `/nodes/${encodeURIComponent(target.node)}/${target.type}/${target.vmId}`;
+  const current = await target.client.get(`${endpoint}/status/current`);
+  if (current.data?.data?.status !== "stopped") {
+    await target.client.post(`${endpoint}/status/stop`, {});
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const status = await target.client.get(`${endpoint}/status/current`);
+      if (status.data?.data?.status === "stopped") break;
+      if (attempt === 59) throw new Error("Timed out stopping exact live VM.");
+    }
+  }
+  await target.client.delete(endpoint, { purge: 1, "destroy-unreferenced-disks": 1 });
+  for (let attempt = 0; attempt < 60; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const resources = await target.client.get("/cluster/resources", { type: "vm" });
+    if (!(resources.data?.data || []).some((resource: any) => resource.vmid === target.vmId && resource.node === target.node)) {
+      return { vmId: target.vmId, node: target.node };
+    }
+  }
+  throw new Error("Timed out verifying exact live VM deletion.");
 }
 
 /** Client interface for DNS cleanup (allows mocking in tests). */
@@ -104,7 +197,10 @@ export async function deleteDnsRecordForDestroyedVm(
  * 
  * Uses terraform destroy -target to remove a specific VM
  */
-export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResult> {
+export async function destroyVm(
+  params: DestroyVmParams,
+  executionOptions: DestroyVmExecutionOptions = {}
+): Promise<DestroyVmResult> {
   let { name, vmId, node, dryRun } = params;
 
   logger.info("Destroying VM", { name, vmId, node, dryRun });
@@ -114,6 +210,18 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
     logger.info("Name appears to be a VM ID, converting", { name, vmId });
     vmId = parseInt(name.trim(), 10);
     name = undefined; // Clear name so we look it up from twin
+  }
+
+  // Reject implausible target names before any twin/Proxmox/Terraform lookup.
+  // Twin lookups below match by substring, so a garbled or adversarial "name"
+  // (e.g. a leftover fragment of injected Cypher/SQL text) can otherwise
+  // silently resolve to an unrelated real VM instead of failing to resolve.
+  if (name && !isPlausibleVmIdentifier(name)) {
+    logger.warn("Refusing destroy_vm: name does not look like a plausible VM identifier", { name });
+    return {
+      success: false,
+      message: `"${name}" does not look like a valid VM name (expected a short hostname-like identifier, e.g. "windowsVM"). Refusing to resolve it against live infrastructure — please provide the exact VM name or ID.`,
+    };
   }
 
   // If VM ID provided but no name, look up the name from the twin
@@ -213,6 +321,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
   // 1. Twin-grounded validation - verify VM exists (but don't fail if not found - proceed with Terraform destroy)
   const twinQuery = new TwinQueryService();
   let vmFoundInTwin = false;
+  let twinVmId: string | undefined;
   
   try {
     // Use verifyAgainstProxmox: false to avoid filtering out VMs that might have timing issues
@@ -261,6 +370,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
         // This shouldn't happen since we checked existingVms.length > 0, but TypeScript needs this
         logger.warn("VM found in twin but first entry is undefined", { name: finalName });
       } else {
+        twinVmId = targetVm.id;
         if (typeof targetVm.name === "string" && targetVm.name.trim().length > 0) {
           finalName = targetVm.name.trim();
         }
@@ -355,7 +465,8 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
 
     // For destroy, we need to ensure the tfvars file has the vm_id field if it's missing
     // Read existing tfvars, patch it if needed, then use it
-    const tfvarsPath = terraformRunner.getTfvarsPath();
+    const tfvarsPath =
+      executionOptions.tfvarsPath || terraformRunner.getTfvarsPath();
     try {
       let tfvarsContent = await readFile(tfvarsPath, "utf-8");
       
@@ -398,19 +509,124 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       });
     }
 
-    // Execute terraform destroy with targets
-    // The Proxmox provider will automatically stop the VM if it's running before destroying it
-    // Use single quotes around the target to handle the brackets properly
-    // Include var-file to avoid prompting for variables
-    // Use -refresh=false to skip state refresh (avoids SSL errors during destroy)
-    const destroyResult = await terraformRunner.executeTerraform("destroy", [
+    // Build and inspect a saved plan before applying it. Terraform can expand a
+    // targeted destroy to dependent resources, so validate the complete delete set.
+    const planPath = join(
+      tmpdir(),
+      `palindrome-destroy-${process.pid}-${randomUUID()}.tfplan`
+    );
+    const planArgs = [
+      "-destroy",
       `-var-file="${tfvarsPath}"`,
       `-target='${targetResource}'`,
       `-target='${cloudConfigTarget}'`,
-      "-refresh=false", // Skip refresh to avoid SSL certificate errors during destroy
+      "-refresh=false",
+      "-input=false",
+      `-out="${planPath}"`,
+    ];
+    if (executionOptions.statePath) {
+      planArgs.push(`-state="${executionOptions.statePath}"`);
+    }
+
+    const planResult = await terraformRunner.executeTerraform("plan", planArgs);
+    if (!planResult.success) {
+      await unlink(planPath).catch(() => undefined);
+      return {
+        success: false,
+        message: `Terraform destroy plan failed: ${stripAnsi(planResult.stderr)}`,
+        terraformOutput: planResult,
+      };
+    }
+
+    const showResult = await terraformRunner.executeTerraform("show", [
+      "-json",
+      `"${planPath}"`,
+    ]);
+    if (!showResult.success) {
+      await unlink(planPath).catch(() => undefined);
+      return {
+        success: false,
+        message: `Unable to inspect Terraform destroy plan: ${stripAnsi(showResult.stderr)}`,
+        terraformOutput: showResult,
+      };
+    }
+
+    let planJson: unknown;
+    try {
+      planJson = JSON.parse(showResult.stdout);
+    } catch (error: any) {
+      await unlink(planPath).catch(() => undefined);
+      return {
+        success: false,
+        message: `Unable to parse Terraform destroy plan: ${error.message}`,
+        terraformOutput: showResult,
+      };
+    }
+
+    const deleteAddresses = getTerraformDeleteAddresses(planJson);
+    const unexpectedDeletes = findUnexpectedTerraformDeletes(planJson, [
+      targetResource,
+      cloudConfigTarget,
+    ]);
+    if (unexpectedDeletes.length > 0) {
+      await unlink(planPath).catch(() => undefined);
+      logger.error("Refusing unsafe targeted destroy plan", {
+        name: terraformVmName,
+        expectedDeletes: [targetResource, cloudConfigTarget],
+        unexpectedDeletes,
+      });
+      if (process.env.PROXMOX_EXACT_DESTROY_FALLBACK !== "true") {
+        return {
+          success: false,
+          message: `Refusing destroy because Terraform also planned unrelated deletions: ${unexpectedDeletes.join(", ")}. Repair the shared Terraform state before retrying.`,
+          terraformOutput: planResult,
+        };
+      }
+
+      logger.warn("Using opt-in exact Proxmox destroy recovery", {
+        name: terraformVmName,
+        node: finalNode,
+        unexpectedDeletes,
+      });
+      const recovered = await destroyExactLiveVm(terraformVmName, finalNode);
+      await terraformRunner.removeVmFromState(terraformVmName);
+      await terraformRunner.removeVmFromTfvars(terraformVmName);
+      let dnsRecordDeleted = false;
+      if (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY) {
+        const { getPiholeClient } = await import("../../tools/pihole/client");
+        dnsRecordDeleted = (await deleteDnsRecordForDestroyedVm(
+          getPiholeClient(),
+          dnsDomain,
+          terraformVmName
+        )).dnsRecordDeleted;
+      }
+      return {
+        success: true,
+        message: `VM "${terraformVmName}" (ID: ${recovered.vmId}) has been successfully destroyed using exact-target recovery after Terraform refused an unsafe shared-state plan.${dnsRecordDeleted ? " DNS record deleted." : ""}`,
+        terraformOutput: planResult,
+      };
+    }
+
+    if (!deleteAddresses.includes(targetResource)) {
+      await unlink(planPath).catch(() => undefined);
+      return {
+        success: false,
+        message: `VM "${terraformVmName}"${vmId ? ` (ID: ${vmId})` : ""} was not present in Terraform's destroy plan. It may already be destroyed or absent from Terraform state.`,
+        terraformOutput: planResult,
+      };
+    }
+
+    const applyArgs = [
       "-auto-approve",
       "-input=false",
-    ]);
+      `"${planPath}"`,
+    ];
+    if (executionOptions.statePath) {
+      applyArgs.splice(2, 0, `-state="${executionOptions.statePath}"`);
+      applyArgs.splice(3, 0, `-state-out="${executionOptions.statePath}"`);
+    }
+    const destroyResult = await terraformRunner.executeTerraform("apply", applyArgs);
+    await unlink(planPath).catch(() => undefined);
 
     // Check if Terraform actually destroyed anything
     // Terraform returns success=true even when "No changes" - we need to check stdout
@@ -433,8 +649,9 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       };
     }
 
-    if (!destroyResult.success) {
-      let errorMessage = `Terraform destroy failed: ${stderr}`;
+    const targetDestroyed = terraformTargetWasDestroyed(stdout, targetResource);
+    if (!destroyResult.success && !targetDestroyed) {
+      let errorMessage = `Terraform destroy failed: ${stripAnsi(stderr)}`;
       
       if (stderr.includes("Resource targeting is required")) {
         errorMessage = `VM "${terraformVmName}" not found in Terraform state. It may have already been destroyed or was created outside of Terraform.`;
@@ -448,6 +665,10 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
         terraformOutput: destroyResult,
       };
     }
+
+    const partialFailureMessage = !destroyResult.success && targetDestroyed
+      ? ` Terraform destroyed the VM, but reported a follow-up cleanup error: ${stripAnsi(stderr).trim()}`
+      : "";
 
     // 8. Delete DNS record if VM was successfully destroyed (non-blocking)
     let dnsRecordDeleted = false;
@@ -465,30 +686,47 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       }
     }
 
-    try {
-      await terraformRunner.removeVmFromState(terraformVmName);
-    } catch (error: any) {
-      logger.warn("Failed to remove destroyed VM from terraform state", {
-        vmName: terraformVmName,
-        tfvarsPath,
-        error: error.message,
-      });
-    }
-
-    try {
-      const removed = await terraformRunner.removeVmFromTfvars(terraformVmName);
-      if (!removed) {
-        logger.warn("Destroyed VM was not present in tfvars vm_configs (nothing removed)", {
+    if (executionOptions.removeSharedConfig !== false) {
+      try {
+        await terraformRunner.removeVmFromState(terraformVmName);
+      } catch (error: any) {
+        logger.warn("Failed to remove destroyed VM from terraform state", {
           vmName: terraformVmName,
           tfvarsPath,
+          error: error.message,
         });
       }
-    } catch (error: any) {
-      logger.warn("Failed to remove destroyed VM from tfvars vm_configs", {
-        vmName: terraformVmName,
-        tfvarsPath,
-        error: error.message,
-      });
+
+      try {
+        const removed = await terraformRunner.removeVmFromTfvars(terraformVmName);
+        if (!removed) {
+          logger.warn("Destroyed VM was not present in tfvars vm_configs (nothing removed)", {
+            vmName: terraformVmName,
+            tfvarsPath,
+          });
+        }
+      } catch (error: any) {
+        logger.warn("Failed to remove destroyed VM from tfvars vm_configs", {
+          vmName: terraformVmName,
+          tfvarsPath,
+          error: error.message,
+        });
+      }
+    }
+
+    if (twinVmId) {
+      const cleanupTwin = new TwinQueryService();
+      try {
+        await cleanupTwin.deleteVmById(twinVmId);
+      } catch (error: any) {
+        logger.warn("Failed to remove destroyed VM from the digital twin", {
+          vmName: terraformVmName,
+          twinVmId,
+          error: error.message,
+        });
+      } finally {
+        await cleanupTwin.close();
+      }
     }
 
     const dnsStatusMessage = process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY
@@ -498,7 +736,7 @@ export async function destroyVm(params: DestroyVmParams): Promise<DestroyVmResul
       : "";
     return {
       success: true,
-      message: `VM "${terraformVmName}"${vmId ? ` (ID: ${vmId})` : ""} has been successfully destroyed.${dnsStatusMessage}`,
+      message: `VM "${terraformVmName}"${vmId ? ` (ID: ${vmId})` : ""} has been successfully destroyed.${dnsStatusMessage}${partialFailureMessage}`,
       terraformOutput: destroyResult,
     };
 

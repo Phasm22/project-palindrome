@@ -20,3 +20,21 @@ test("are there any firewall rules gets QUERY with domain set", () => {
   expect(routing.route).not.toBe("clarification");
   expect(["firewall", "network"]).toContain(classification.metadata?.domain);
 });
+
+test("'give me' and imperative diagnostic phrasing bypass the observe/diagnose/change clarification", () => {
+  // These were previously landing on the generic "Are you asking to observe,
+  // diagnose, change, explain, or plan?" clarification even though they're
+  // clearly read-only asks — see fuzz-campaign-2026-07-21.md.
+  const phrases = [
+    "Give me a summary of the whole cluster.",
+    "Ping 172.16.0.1 for me.",
+    "Traceroute to 8.8.8.8.",
+    "Run a full health diagnostic on windowsVM.",
+    "Why can't I reach pihole, can you diagnose it?",
+    "vms???? on yang???? pls?????",
+  ];
+  for (const p of phrases) {
+    const { routing } = classifyAndRoute(p);
+    expect(routing.route).not.toBe("clarification");
+  }
+});

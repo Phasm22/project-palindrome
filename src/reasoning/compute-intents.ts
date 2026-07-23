@@ -1,3 +1,10 @@
+import {
+  extractNodeName,
+  extractVmReference,
+  isActionRequest,
+  KNOWN_NODE_NAMES,
+} from "./detector-toolkit";
+
 type VmKind = "qemu" | "lxc" | "all";
 
 export type ComputeIntent =
@@ -9,8 +16,6 @@ export type ComputeIntent =
   | { type: "vms_without_agent" }
   | { type: "stopped_vms_on_node"; nodeName: string; vmKind?: VmKind }
   | { type: "find_vm_by_id"; vmId: number };
-
-const KNOWN_NODE_NAMES = new Set(["yang", "yin", "proxbig", "pve1", "pve2"]);
 
 function extractVmNameForLocationQuery(text: string): string | null {
   const normalized = text.toLowerCase().trim();
@@ -38,65 +43,8 @@ function extractVmNameForLocationQuery(text: string): string | null {
   return null;
 }
 
-function extractNodeName(text: string): string | null {
-  // Try "node <name>" first
-  const nodeMatch = text.match(/\bnode\s+([a-z0-9\-_]+)/i);
-  if (nodeMatch) {
-    return nodeMatch[1] ?? null;
-  }
-
-  // Try "between <name>"
-  const relationMatch = text.match(/\bbetween\s+([a-z0-9\-_]+)/i);
-  if (relationMatch) {
-    return relationMatch[1] ?? null;
-  }
-
-  // Try "on <name>" - this is the most common pattern
-  // Match "on Yang", "on yin", "on proxBig", etc.
-  const onMatch = text.match(/\bon\s+([a-z0-9\-_]+)/i);
-  if (onMatch) {
-    return onMatch[1] ?? null;
-  }
-
-  // Try to find node names directly (yang, yin, proxbig, etc.)
-  // This helps with queries like "vm ids on yang" where "on" might be implicit
-  const knownNodes = ['yang', 'yin', 'proxbig', 'proxbig', 'pve1', 'pve2'];
-  const lowerText = text.toLowerCase();
-  for (const node of knownNodes) {
-    if (lowerText.includes(node) && (lowerText.includes('vm') || lowerText.includes('node'))) {
-      return node;
-    }
-  }
-
-  return null;
-}
-
 function extractVmId(text: string): number | null {
-  // Match patterns like "vm 101", "vm id 101", "vm-id 101", "vm101", etc.
-  // Look for "vm" followed by optional "id" or "-" and then a number
-  const patterns = [
-    /\bvm\s+id\s+(\d+)/i,
-    /\bvm\s*-?\s*id\s+(\d+)/i,
-    /\bvm\s+(\d+)/i,
-    /\bvm\s*-?\s*(\d+)/i,
-    /\bvm(\d+)/i,
-  ];
-  
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) {
-      const idText = match[1];
-      if (!idText) {
-        continue;
-      }
-      const id = parseInt(idText, 10);
-      if (!isNaN(id) && id > 0) {
-        return id;
-      }
-    }
-  }
-  
-  return null;
+  return extractVmReference(text)?.numericId ?? null;
 }
 
 function detectVmKind(text: string): VmKind | undefined {
@@ -119,6 +67,7 @@ function detectVmKind(text: string): VmKind | undefined {
 }
 
 export function detectComputeIntent(userInput: string): ComputeIntent | null {
+  if (isActionRequest(userInput)) return null;
   const normalized = userInput.toLowerCase();
   const vmKind = detectVmKind(userInput);
   const hasVmOrContainer = vmKind !== undefined;
@@ -136,7 +85,7 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
     !normalized.includes("temperature") &&
     !normalized.includes("temp")
   ) {
-    const nodeName = extractNodeName(userInput);
+    const nodeName = extractNodeName(userInput, { allowKnownBare: true });
     if (nodeName && KNOWN_NODE_NAMES.has(nodeName.toLowerCase())) {
       return { type: "running_vms_on_node", nodeName, vmKind };
     }
@@ -154,6 +103,14 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
   }
 
   if (normalized.includes("describe") && normalized.includes("cluster")) {
+    return { type: "describe_cluster" };
+  }
+
+  // "VM counts per node" / "show counts per node" / "how many vms per node" → describe_cluster (summary), not list_all_vms (full dump)
+  if (
+    (normalized.includes("count") || normalized.includes("how many")) &&
+    (normalized.includes("per node") || normalized.includes("per-node") || (normalized.includes("node") && (normalized.includes("vm") || normalized.includes("container"))))
+  ) {
     return { type: "describe_cluster" };
   }
 
@@ -237,4 +194,3 @@ export function detectComputeIntent(userInput: string): ComputeIntent | null {
 
   return null;
 }
-

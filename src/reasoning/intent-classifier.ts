@@ -1,4 +1,6 @@
 import { getKnownEntities } from "./clarification";
+import type { Domain } from "./domain-taxonomy";
+import { inferDomainFromToolRegistry } from "./classifier-registry";
 
 /**
  * Probabilistic Intent Classifier
@@ -46,10 +48,14 @@ export interface IntentClassification {
   operation: IntentOperation;
   risk: RiskLevel;
   missing: string[];
+  /** Confidence provenance; routing thresholds are selected per method. */
+  classificationMethod?: "llm" | "jaccard";
   metadata?: {
-    domain?: "compute" | "network" | "firewall" | "metrics" | "general";
+    domain?: Domain;
     actionType?: string;
     queryType?: string;
+    /** When true, query has multiple dimensions (e.g. node + exposure, subnet + level); route to EXECUTE path. */
+    composite?: boolean;
   };
 }
 
@@ -328,31 +334,21 @@ export function classifyIntent(userInput: string): IntentClassification {
       type: "CLARIFICATION",
       intent: "CLARIFICATION",
       confidence: maxScore,
+      classificationMethod: "jaccard",
       entities,
       scope,
       operation,
       risk: "READ",
       missing: ["intent"],
+      metadata: { domain: inferDomainFromToolRegistry(normalized) },
     };
   }
   
   // Extract metadata for better routing
   const metadata: IntentClassification["metadata"] = {};
   
-  // Detect domain
-  const domainKeywords = {
-    compute: /\b(vm|container|qemu|lxc|virtual machine|host|node|containers|vms)\b/i,
-    network: /\b(network|interface|vlan|subnet|routing|ip|gateway)\b/i,
-    firewall: /\b(firewall|rule|allow|block|port|nat)\b/i,
-    metrics: /\b(temperature|temp|cpu|memory|ram|disk|status|uptime|metrics|load)\b/i,
-  };
-  
-  for (const [domain, pattern] of Object.entries(domainKeywords)) {
-    if (pattern.test(normalized)) {
-      metadata.domain = domain as typeof metadata.domain;
-      break;
-    }
-  }
+  // Domain vocabulary is registered by tools; unmatched input is explicitly general.
+  metadata.domain = inferDomainFromToolRegistry(normalized);
   
   // Detect action type for ACTION intents
   if (bestIntent === "ACTION") {
@@ -404,6 +400,7 @@ export function classifyIntent(userInput: string): IntentClassification {
     type: bestIntent,
     intent: bestIntent,
     confidence: bestScore,
+    classificationMethod: "jaccard",
     entities,
     scope,
     operation,

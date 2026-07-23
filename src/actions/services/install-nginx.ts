@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ConnectionTarget } from "../../types/connections";
 import { pceLogger as logger } from "../../pce/utils/logger";
 import { AnsibleRunner } from "../helpers/ansible-runner";
 import {
@@ -12,13 +13,13 @@ import {
  * Install Nginx Action Schema
  */
 export const InstallNginxSchema = z.object({
-  vmName: z.string().min(1, "VM name is required"),
-  waitForVm: z.boolean().default(true),
-  timeout: z.number().int().positive().default(300),
-  extraVars: z.record(z.string(), z.any()).optional(),
-  retryOnFailure: z.boolean().default(false),
-  maxRetries: z.number().int().positive().default(1),
-  dryRun: z.boolean().default(false),
+  vmName: z.string().min(1, "VM name is required").describe("VM name to install nginx on (resolved via digital twin to obtain the SSH hostname)"),
+  waitForVm: z.boolean().default(true).describe("Wait for SSH to become accessible before running ansible commands (default: true)"),
+  timeout: z.number().int().positive().default(300).describe("SSH wait timeout in seconds (default: 300)"),
+  extraVars: z.record(z.string(), z.any()).optional().describe("Additional Ansible extra-vars (optional; passed to ad-hoc commands)"),
+  retryOnFailure: z.boolean().default(false).describe("Retry on failure (default: false)"),
+  maxRetries: z.number().int().positive().default(1).describe("Maximum number of retry attempts when retryOnFailure is true (default: 1)"),
+  dryRun: z.boolean().default(false).describe("Preview without executing ansible commands (default: false)"),
 });
 
 export type InstallNginxParams = z.infer<typeof InstallNginxSchema>;
@@ -34,6 +35,7 @@ export interface InstallNginxResult {
   duration: number;
   message: string;
   errors?: string[];
+  connectionTarget?: ConnectionTarget;
 }
 
 /**
@@ -200,6 +202,14 @@ export async function installNginx(params: InstallNginxParams): Promise<InstallN
         stdout: results.join("\n"),
         stderr: errors.join("\n"),
         duration,
+        connectionTarget: {
+          hostname,
+          ipAddresses: [],
+          hints: [
+            { service: "SSH", protocol: "ssh", port: 22, username: "ops" },
+            { service: "Nginx", protocol: "http", port: 80, path: "/" },
+          ],
+        },
         message: `Nginx installed successfully on ${hostname}. Service is running and enabled.`,
       };
     }
