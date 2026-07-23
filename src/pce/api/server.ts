@@ -2673,10 +2673,12 @@ export interface BootstrapPceApiServerOptions extends PceApiServerOptions {
   fusionConfig?: Partial<FusionConfig>;
   /** Use this Qdrant collection instead of default (e.g. for audit/gold-path scripts). */
   vectorStoreCollectionName?: string;
+  /** Restrict graph reads to this entity label (e.g. for audit/gold-path scripts). */
+  graphEntityLabel?: string;
 }
 
 export async function bootstrapPceApiServer(options: BootstrapPceApiServerOptions = {}) {
-  const { fusionConfig, vectorStoreCollectionName, ...serverOptions } = options;
+  const { fusionConfig, vectorStoreCollectionName, graphEntityLabel, ...serverOptions } = options;
   const embeddingService = new EmbeddingService();
   const collectionName = vectorStoreCollectionName ?? DEFAULT_COLLECTION;
   const vectorStore = new QdrantVectorStore(undefined, undefined, collectionName);
@@ -2686,7 +2688,9 @@ export async function bootstrapPceApiServer(options: BootstrapPceApiServerOption
 
   const graphStore = new Neo4jGraphStore();
   await graphStore.connect();
-  const graphQuery = new GraphQueryInterface(graphStore);
+  const graphQuery = graphEntityLabel
+    ? new GraphQueryInterface(graphStore, graphEntityLabel)
+    : new GraphQueryInterface(graphStore);
   const graphRetrieval = new GraphRAGRetrieval(graphQuery);
 
   const entityResolver = new QueryEntityResolver(graphQuery);

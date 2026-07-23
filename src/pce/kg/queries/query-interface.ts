@@ -6,6 +6,7 @@
 
 import type { Driver } from "neo4j-driver";
 import { pceLogger } from "../../utils/logger";
+import { DEFAULT_GRAPH_ENTITY_LABEL, toCypherLabel } from "../graph-labels";
 
 export interface GraphQueryResult {
   nodes: Array<{
@@ -33,10 +34,15 @@ export interface GraphQueryResult {
 
 export class GraphQueryInterface {
   private driver: Driver;
+  private entityLabelCypher: string;
 
-  constructor(driver: Driver | { getDriver(): Driver }) {
+  constructor(
+    driver: Driver | { getDriver(): Driver },
+    entityLabel: string = DEFAULT_GRAPH_ENTITY_LABEL
+  ) {
     // Support both direct driver and Neo4jGraphStore instance
     this.driver = 'getDriver' in driver ? driver.getDriver() : driver;
+    this.entityLabelCypher = toCypherLabel(entityLabel);
   }
 
   /**
@@ -44,10 +50,11 @@ export class GraphQueryInterface {
    */
   async executeQuery(cypher: string, parameters?: Record<string, any>): Promise<GraphQueryResult> {
     const session = this.driver.session();
+    const scopedCypher = cypher.replace(/:Entity\b/g, `:${this.entityLabelCypher}`);
     try {
-      pceLogger.debug("Executing Cypher query", { cypher, parameters });
+      pceLogger.debug("Executing Cypher query", { cypher: scopedCypher, parameters });
 
-      const result = await session.run(cypher, parameters || {});
+      const result = await session.run(scopedCypher, parameters || {});
 
       const nodes = new Map<string, any>();
       const relationships: any[] = [];
@@ -229,7 +236,10 @@ export class GraphQueryInterface {
         paths: paths.length > 0 ? paths : undefined,
       };
     } catch (error: any) {
-      pceLogger.error("Failed to execute Cypher query", { error: error.message, cypher });
+      pceLogger.error("Failed to execute Cypher query", {
+        error: error.message,
+        cypher: scopedCypher,
+      });
       throw error;
     } finally {
       await session.close();
@@ -241,7 +251,7 @@ export class GraphQueryInterface {
    */
   async findAlertsAffectingHost(hostId: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (alert:Entity {type: 'Alert'})-[r:AFFECTS]->(host:Entity {id: $hostId})
+      MATCH (alert:${this.entityLabelCypher} {type: 'Alert'})-[r:AFFECTS]->(host:${this.entityLabelCypher} {id: $hostId})
       RETURN alert, r, host, startNode(r).id as fromId, endNode(r).id as toId
     `;
     return this.executeQuery(cypher, { hostId });
@@ -252,7 +262,7 @@ export class GraphQueryInterface {
    */
   async findHostsConnectedToService(serviceId: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (host:Entity {type: 'Host'})-[r:CONNECTS_TO]->(service:Entity {id: $serviceId})
+      MATCH (host:${this.entityLabelCypher} {type: 'Host'})-[r:CONNECTS_TO]->(service:${this.entityLabelCypher} {id: $serviceId})
       RETURN host, r, service, host.id as hostId, service.id as serviceId, startNode(r).id as fromId, endNode(r).id as toId
     `;
     return this.executeQuery(cypher, { serviceId });
@@ -263,7 +273,7 @@ export class GraphQueryInterface {
    */
   async findPath(fromId: string, toId: string, maxDepth: number = 5): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH path = shortestPath((from:Entity {id: $fromId})-[*1..${maxDepth}]-(to:Entity {id: $toId}))
+      MATCH path = shortestPath((from:${this.entityLabelCypher} {id: $fromId})-[*1..${maxDepth}]-(to:${this.entityLabelCypher} {id: $toId}))
       RETURN path
     `;
     return this.executeQuery(cypher, { fromId, toId });
@@ -274,7 +284,7 @@ export class GraphQueryInterface {
    */
   async getEntitiesByType(type: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (n:Entity {type: $type})
+      MATCH (n:${this.entityLabelCypher} {type: $type})
       RETURN n
     `;
     return this.executeQuery(cypher, { type });
@@ -285,7 +295,7 @@ export class GraphQueryInterface {
    */
   async findEntitiesByIdOrName(searchTerm: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (n:Entity)
+      MATCH (n:${this.entityLabelCypher})
       WHERE n.id =~ $pattern OR 
             ANY(alias IN n.aliases WHERE alias =~ $pattern) OR
             (n.attributes IS NOT NULL AND n.attributes CONTAINS $searchTerm)
@@ -308,7 +318,7 @@ export class GraphQueryInterface {
     const session = this.driver.session();
     try {
       const cypher = `
-        MATCH (n:Entity)
+        MATCH (n:${this.entityLabelCypher})
         WHERE n.id IN $entityIds
         RETURN n.id as id, n.versionHash as versionHash, n.sourcePath as sourcePath
       `;
@@ -332,7 +342,7 @@ export class GraphQueryInterface {
    */
   async findDependents(entityId: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (dependent:Entity)-[r:DEPENDS_ON]->(target:Entity {id: $entityId})
+      MATCH (dependent:${this.entityLabelCypher})-[r:DEPENDS_ON]->(target:${this.entityLabelCypher} {id: $entityId})
       RETURN dependent, r, target, startNode(r).id as fromId, endNode(r).id as toId
     `;
     return this.executeQuery(cypher, { entityId });
@@ -343,7 +353,7 @@ export class GraphQueryInterface {
    */
   async findDependencies(entityId: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (entity:Entity {id: $entityId})-[r:DEPENDS_ON]->(dependency:Entity)
+      MATCH (entity:${this.entityLabelCypher} {id: $entityId})-[r:DEPENDS_ON]->(dependency:${this.entityLabelCypher})
       RETURN entity, r, dependency, startNode(r).id as fromId, endNode(r).id as toId
     `;
     return this.executeQuery(cypher, { entityId });
@@ -354,7 +364,7 @@ export class GraphQueryInterface {
    */
   async findHostedEntities(hostId: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (host:Entity {id: $hostId})-[r:HOSTS]->(entity:Entity)
+      MATCH (host:${this.entityLabelCypher} {id: $hostId})-[r:HOSTS]->(entity:${this.entityLabelCypher})
       RETURN host, r, entity, startNode(r).id as fromId, endNode(r).id as toId
     `;
     return this.executeQuery(cypher, { hostId });
@@ -371,7 +381,7 @@ export class GraphQueryInterface {
    */
   async findByPurpose(purpose: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (n:Entity)
+      MATCH (n:${this.entityLabelCypher})
       WHERE (n.type = "Host" OR n.type = "Service" OR n.type = "Container")
         AND toLower(toString(n.attributes)) CONTAINS toLower($purpose)
       RETURN n
@@ -386,7 +396,7 @@ export class GraphQueryInterface {
    */
   async findByArchitecture(architecture: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (n:Entity)
+      MATCH (n:${this.entityLabelCypher})
       WHERE toString(n.attributes) CONTAINS $architecture
       RETURN n
       LIMIT 100
@@ -400,7 +410,7 @@ export class GraphQueryInterface {
    */
   async findByRole(role: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (n:Entity)
+      MATCH (n:${this.entityLabelCypher})
       WHERE (n.type = "Host" OR n.type = "Service" OR n.type = "Container")
         AND toString(n.attributes) CONTAINS $role
       RETURN n
@@ -415,10 +425,10 @@ export class GraphQueryInterface {
    */
   async findByPurposeWithRelationships(purpose: string): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH (n:Entity)
+      MATCH (n:${this.entityLabelCypher})
       WHERE (n.type = "Host" OR n.type = "Service" OR n.type = "Container")
         AND toString(n.attributes) CONTAINS $purpose
-      OPTIONAL MATCH (n)-[r]-(connected:Entity)
+      OPTIONAL MATCH (n)-[r]-(connected:${this.entityLabelCypher})
       RETURN n, r, connected
       LIMIT 100
     `;
@@ -426,7 +436,7 @@ export class GraphQueryInterface {
   }
   async findDependencyChain(entityId: string, maxDepth: number = 10): Promise<GraphQueryResult> {
     const cypher = `
-      MATCH path = (entity:Entity {id: $entityId})<-[:DEPENDS_ON*1..${maxDepth}]-(dependent:Entity)
+      MATCH path = (entity:${this.entityLabelCypher} {id: $entityId})<-[:DEPENDS_ON*1..${maxDepth}]-(dependent:${this.entityLabelCypher})
       RETURN path
       ORDER BY length(path) DESC
       LIMIT 100
@@ -434,4 +444,3 @@ export class GraphQueryInterface {
     return this.executeQuery(cypher, { entityId });
   }
 }
-

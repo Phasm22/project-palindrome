@@ -7,7 +7,10 @@ import { Redactor } from "../src/pce/redaction";
 import { EmbeddingService, GOLDPATH_COLLECTION } from "../src/pce/vector";
 import { QdrantVectorStore } from "../src/pce/vector/qdrant-client";
 import { IngestionPipeline, GraphIngestionPipeline } from "../src/pce/ingestion";
-import { Neo4jGraphStore } from "../src/pce/kg";
+import {
+  GOLD_PATH_GRAPH_ENTITY_LABEL,
+  Neo4jGraphStore,
+} from "../src/pce/kg";
 import type { GraphIngestionOptions } from "../src/pce/ingestion/graph-pipeline";
 import { generateHybridTestData } from "../tests/pce/fixtures/hybrid-test-data";
 import { bootstrapPceApiServer } from "../src/pce/api/server";
@@ -62,8 +65,14 @@ async function runIngestion(docPath: string) {
     reindex: true,
   });
 
-  const graphStore = new Neo4jGraphStore();
+  const graphStore = new Neo4jGraphStore(
+    undefined,
+    undefined,
+    undefined,
+    GOLD_PATH_GRAPH_ENTITY_LABEL
+  );
   await graphStore.connect();
+  await graphStore.wipeLabels([GOLD_PATH_GRAPH_ENTITY_LABEL]);
   const graphPipeline = new GraphIngestionPipeline(
     snapshotLog,
     rawStorage,
@@ -75,7 +84,7 @@ async function runIngestion(docPath: string) {
     documentType: "markdown_runbook",
     aclGroup: "admin",
     redact: false,
-    reindex: true,
+    reindex: false,
   } satisfies GraphIngestionOptions);
 
   await graphStore.close();
@@ -143,6 +152,7 @@ async function runGoldPath() {
   const { server } = await bootstrapPceApiServer({
     port: 0,
     vectorStoreCollectionName: GOLDPATH_COLLECTION,
+    graphEntityLabel: GOLD_PATH_GRAPH_ENTITY_LABEL,
   });
   await server.start();
   const baseUrl = `http://localhost:${server.getPort()}`;
