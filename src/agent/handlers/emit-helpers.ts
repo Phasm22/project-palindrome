@@ -1,6 +1,7 @@
 import type { AgentEventBus } from "../event-bus";
 import type { AgentFinalPayload, AgentStepPayload } from "../event-payloads";
 import { createTextAgentResponse } from "../schemas/agent-response";
+import { sanitizeToolPayload } from "../tool-sanitizer";
 
 export type AgentStepEventData = {
   step: number;
@@ -46,8 +47,9 @@ export function emitFinalEvent(
   ].includes(conversationState)
     ? conversationState as "IDLE" | "NEED_CLARIFICATION" | "AWAITING_CONFIRMATION" | "READY_READ" | "READY_WRITE"
     : "IDLE";
+  const sanitizedText = sanitizeToolPayload(text);
   const providedStructuredResponse = extra.structuredResponse as AgentFinalPayload["structuredResponse"] | undefined;
-  const structuredResponse = providedStructuredResponse ?? createTextAgentResponse(text, {
+  const structuredResponse = sanitizeToolPayload(providedStructuredResponse) ?? createTextAgentResponse(sanitizedText, {
     state,
     pendingActionId: typeof extra.pendingActionId === "string" ? extra.pendingActionId : undefined,
     traceId: typeof extra.traceId === "string" ? extra.traceId : undefined,
@@ -56,7 +58,7 @@ export function emitFinalEvent(
     type: "agent:final",
     ...extra,
     structuredResponse,
-    text,
+    text: sanitizedText,
     totalSteps,
     totalToolCalls,
     durationMs: Date.now() - startTime,

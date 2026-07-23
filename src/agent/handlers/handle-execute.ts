@@ -568,6 +568,7 @@ async function handleExecuteWithAcl(
       });
     }
 
+    finalText = sanitizeToolPayload(finalText);
     reasoningStep.llmResponse = finalText;
     reasoningSteps.push(reasoningStep);
     const durationMs = Date.now() - startTime;
@@ -666,11 +667,12 @@ async function handleExecuteWithAcl(
     const rawAnswer = aliasPayload
       ? formatAliasContentsPayload(aliasIntent.aliasName, aliasPayload)
       : `Answer: No. No alias named \`${aliasIntent.aliasName}\` was found in the current firewall alias list.`;
-    const finalText = applyAdaptivePackaging(rawAnswer, {
+    let finalText = applyAdaptivePackaging(rawAnswer, {
       userQuery: userInput,
       intentType: "firewall_rules",
       mode: state.responseMode,
     }) ?? rawAnswer;
+    finalText = sanitizeToolPayload(finalText);
     reasoningStep.llmResponse = finalText;
     reasoningSteps.push(reasoningStep);
 
@@ -1907,6 +1909,8 @@ async function handleExecuteWithAcl(
         }
       }
 
+      finalText = sanitizeToolPayload(finalText);
+      reasoningStep.llmResponse = finalText;
       context.addAssistantMessage(finalText);
 
       // Record reasoning trace first to get trace ID
@@ -2000,6 +2004,7 @@ async function handleExecuteWithAcl(
           data: connectionEndpoints,
         });
       }
+      structuredResponse = sanitizeToolPayload(structuredResponse);
 
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
@@ -2078,7 +2083,6 @@ async function handleExecuteWithAcl(
       if (synthText) {
         boundaryText = prettifyRawPfctlText(synthText);
         boundarySynthesized = true;
-        context.addAssistantMessage(boundaryText);
         logger.info("Boundary synthesis produced an answer from gathered tool results", {
           succeededToolCallCount,
           totalSteps: reasoningSteps.length,
@@ -2090,6 +2094,10 @@ async function handleExecuteWithAcl(
         error: error?.message,
       });
     }
+  }
+  boundaryText = sanitizeToolPayload(boundaryText);
+  if (boundarySynthesized) {
+    context.addAssistantMessage(boundaryText);
   }
   const lastReasoningStep = reasoningSteps[reasoningSteps.length - 1];
   if (lastReasoningStep) {

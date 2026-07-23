@@ -24,9 +24,12 @@ export function sanitizeToolPayload<T>(payload: T): T {
 
   if (typeof payload === "object") {
     try {
-      const serialized = JSON.stringify(payload);
-      const sanitized = toolRedactor.redact(serialized).redactedText;
-      return JSON.parse(sanitized);
+      const serialized = JSON.stringify(payload, (_key, value) =>
+        typeof value === "string"
+          ? toolRedactor.redact(value).redactedText
+          : value
+      );
+      return JSON.parse(serialized);
     } catch {
       return payload;
     }

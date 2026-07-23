@@ -23,10 +23,7 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
     }
 
     logger.debug("Resolved primary Proxmox credentials", {
-      url: config.url,
       credentialSource: config.credentialSource,
-      tokenIdPrefix: `${config.tokenId.substring(0, 16)}...`,
-      secretPrefix: `${config.tokenSecret.substring(0, 4)}...`,
     });
 
     return {
@@ -113,12 +110,13 @@ export abstract class ProxmoxReadOnlyBase extends BaseTool {
         durationMs: result.metadata.durationMs,
       };
     } catch (error: any) {
-      logger.error("Proxmox API call failed", {
+      const sanitizedLogDetails = sanitizeToolPayload({
         tool: this.metadata.name,
         error: error.message,
         status: error.response?.status,
         endpoint: error.config?.url,
       });
+      logger.error("Proxmox API call failed", sanitizedLogDetails);
 
       // Sanitize error messages too
       const errorMessage =

@@ -51,11 +51,12 @@ export abstract class PiholeReadOnlyBase extends BaseTool {
       const rawData = await apiCall();
       return { data: sanitizeToolPayload(rawData) };
     } catch (error: any) {
-      logger.error("Pi-hole API call failed", {
+      const sanitizedLogDetails = sanitizeToolPayload({
         tool: this.metadata.name,
         error: error.message,
         stack: error.stack,
       });
+      logger.error("Pi-hole API call failed", sanitizedLogDetails);
 
       const errorMessage = error.message || "Unknown error";
       const sanitizedError =
