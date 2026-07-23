@@ -11,22 +11,12 @@ import { pceLogger as logger } from "../pce/utils/logger";
  * 
  * Provides diagnostic capabilities for infrastructure components:
  * - Guest agent status checks
- * - Network connectivity diagnostics
- * - Service health checks
- * - Configuration validation
  */
 
 const DiagnosticParams = z.object({
-  diagnostic_type: z.enum([
-    "guest_agent",
-    "network_connectivity",
-    "service_health",
-    "vm_health",
-  ]).describe("Type of diagnostic to run"),
-  vmid: z.number().int().positive().optional().describe("VM ID (required for guest_agent, vm_health)"),
-  node: z.string().optional().describe("Proxmox node name (required for guest_agent, vm_health)"),
-  hostname: z.string().optional().describe("Hostname or IP to check (for network_connectivity)"),
-  service: z.string().optional().describe("Service name to check (for service_health)"),
+  diagnostic_type: z.enum(["guest_agent"]).describe("Type of diagnostic to run"),
+  vmid: z.number().int().positive().optional().describe("VM ID (required for guest_agent)"),
+  node: z.string().optional().describe("Proxmox node name (required for guest_agent)"),
 });
 
 type DiagnosticParams = z.infer<typeof DiagnosticParams>;
@@ -61,7 +51,7 @@ export class InfrastructureDiagnosticTool extends BaseTool {
   constructor() {
     super({
       name: "infrastructure_diagnostic",
-      description: "Run diagnostic checks on infrastructure components (guest agent, network, services, VMs). Use this to troubleshoot issues automatically.",
+      description: "Check the status and configuration of a VM's QEMU guest agent.",
       categories: ["diagnostic", "troubleshooting", "infrastructure"],
       allowedAcls: ["admin", "ops"],
       risk: "low", // Read-only diagnostic operations
@@ -84,21 +74,6 @@ export class InfrastructureDiagnosticTool extends BaseTool {
             node: "YANG",
           },
         },
-        {
-          description: "Check VM health and configuration",
-          parameters: {
-            diagnostic_type: "vm_health",
-            vmid: 9000,
-            node: "YANG",
-          },
-        },
-        {
-          description: "Check network connectivity to a host",
-          parameters: {
-            diagnostic_type: "network_connectivity",
-            hostname: "bob.prox",
-          },
-        },
       ],
     });
   }
@@ -107,7 +82,7 @@ export class InfrastructureDiagnosticTool extends BaseTool {
     params: DiagnosticParams,
     context: ExecutionContext
   ): Promise<ExecutionResult> {
-    const { diagnostic_type, vmid, node, hostname, service } = params;
+    const { diagnostic_type, vmid, node } = params;
 
     try {
       switch (diagnostic_type) {
@@ -116,24 +91,6 @@ export class InfrastructureDiagnosticTool extends BaseTool {
             return { error: "vmid and node are required for guest_agent diagnostic" };
           }
           return await this.checkGuestAgent(vmid, node);
-
-        case "vm_health":
-          if (!vmid || !node) {
-            return { error: "vmid and node are required for vm_health diagnostic" };
-          }
-          return await this.checkVmHealth(vmid, node);
-
-        case "network_connectivity":
-          if (!hostname) {
-            return { error: "hostname is required for network_connectivity diagnostic" };
-          }
-          return await this.checkNetworkConnectivity(hostname);
-
-        case "service_health":
-          if (!service) {
-            return { error: "service is required for service_health diagnostic" };
-          }
-          return await this.checkServiceHealth(service);
 
         default:
           return { error: `Unknown diagnostic type: ${diagnostic_type}` };
@@ -309,30 +266,6 @@ export class InfrastructureDiagnosticTool extends BaseTool {
       logger.error("Guest agent diagnostic failed", { vmid, node, error: error.message });
       return { error: `Guest agent diagnostic failed: ${error.message}` };
     }
-  }
-
-  private async checkVmHealth(vmid: number, node: string): Promise<ExecutionResult> {
-    // TODO: Implement VM health check (status, resources, connectivity)
-    return {
-      data: { success: false, diagnostic_type: "vm_health", vmid, node },
-      error: "vm_health diagnostic not yet implemented",
-    };
-  }
-
-  private async checkNetworkConnectivity(hostname: string): Promise<ExecutionResult> {
-    // TODO: Implement network connectivity check (ping, DNS, port checks)
-    return {
-      data: { success: false, diagnostic_type: "network_connectivity", hostname },
-      error: "network_connectivity diagnostic not yet implemented",
-    };
-  }
-
-  private async checkServiceHealth(service: string): Promise<ExecutionResult> {
-    // TODO: Implement service health check
-    return {
-      data: { success: false, diagnostic_type: "service_health", service },
-      error: "service_health diagnostic not yet implemented",
-    };
   }
 
   private getProxmoxClientConfig(node: string): { url: string; tokenId: string; tokenSecret: string } {
