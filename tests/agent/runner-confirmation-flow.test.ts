@@ -79,9 +79,11 @@ test("cancel clears pending change", async () => {
 });
 
 test("bare test input returns a liveness response without clarification", async () => {
-  const res = await runAgent("test");
+  const { response, finalEvent } = await runAgentWithFinalEvent("test");
 
-  expect(res.text).toBe("Agent is online.");
+  expect(response.text).toBe("Agent is online.");
+  expect(response.structuredResponse.answer.summary).toBe("Agent is online.");
+  expect((finalEvent as any)?.data?.structuredResponse?.answer?.summary).toBe("Agent is online.");
 }, { timeout: 15000 });
 
 test("confirmed id replays pending executable input", async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { rmSync } from "node:fs";
 import { PceApiServer, type PceApiServerOptions, type PceApiServerDependencies } from "../../../src/pce/api/server";
 import { ChatHistoryStore } from "../../../src/pce/api/chat-history-store";
@@ -32,6 +32,7 @@ class MockOrchestrator implements PceApiServerDependencies["orchestrator"] {
 const servers: PceApiServer[] = [];
 const tempPaths: string[] = [];
 const stores: ChatHistoryStore[] = [];
+const originalApiToken = process.env.PALINDROME_API_TOKEN;
 
 async function startAgentTestServer(
   options: Partial<PceApiServerOptions> = {},
@@ -74,6 +75,10 @@ async function waitFor(predicate: () => Promise<boolean>, timeoutMs: number = 20
   throw new Error("Timed out waiting for condition");
 }
 
+beforeEach(() => {
+  delete process.env.PALINDROME_API_TOKEN;
+});
+
 afterEach(async () => {
   while (servers.length) {
     const server = servers.pop();
@@ -87,9 +92,90 @@ afterEach(async () => {
     const path = tempPaths.pop();
     if (path) rmSync(path, { force: true });
   }
+  if (originalApiToken === undefined) {
+    delete process.env.PALINDROME_API_TOKEN;
+  } else {
+    process.env.PALINDROME_API_TOKEN = originalApiToken;
+  }
 });
 
 describe("agent query history contract", () => {
+  it("defaults agent requests without a valid ACL string to viewer", async () => {
+    let receivedAclGroup: string | undefined;
+    const agentRunner: typeof runAgent = async (_input, optionsOrStream) => {
+      const options = typeof optionsOrStream === "boolean" ? {} : optionsOrStream ?? {};
+      receivedAclGroup = options.aclGroup;
+      return { text: "ok" } as any;
+    };
+    const { server, baseUrl } = await startAgentTestServer({}, { agentRunner });
+    servers.push(server);
+
+    const response = await fetch(`${baseUrl}/api/agent/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "status", userId: "viewer-default" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(receivedAclGroup).toBe("viewer");
+  });
+
+  it("requires the configured token on agent and mutation endpoints", async () => {
+    process.env.PALINDROME_API_TOKEN = "test-shared-token";
+    let runnerCalls = 0;
+    const agentRunner: typeof runAgent = async () => {
+      runnerCalls++;
+      return { text: "ok" } as any;
+    };
+    const { server, baseUrl } = await startAgentTestServer({}, { agentRunner });
+    servers.push(server);
+
+    const missing = await fetch(`${baseUrl}/api/agent/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "status", aclGroup: "admin" }),
+    });
+    expect(missing.status).toBe(401);
+
+    const wrong = await fetch(`${baseUrl}/api/agent/status`, {
+      headers: { authorization: "Bearer wrong-token" },
+    });
+    expect(wrong.status).toBe(401);
+
+    const mutation = await fetch(`${baseUrl}/api/user/preferences`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-1" }),
+    });
+    expect(mutation.status).toBe(401);
+
+    const cypher = await fetch(`${baseUrl}/api/dashboard/query/cypher`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cypher: "MATCH (n) RETURN n" }),
+    });
+    expect(cypher.status).toBe(401);
+
+    const status = await fetch(`${baseUrl}/api/agent/status`, {
+      headers: { "x-api-token": "test-shared-token" },
+    });
+    expect(status.status).toBe(200);
+
+    const authorized = await fetch(`${baseUrl}/api/agent/query`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-shared-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ query: "status", aclGroup: "admin", userId: "authorized-user" }),
+    });
+    expect(authorized.status).toBe(200);
+    expect(runnerCalls).toBe(1);
+
+    const health = await fetch(`${baseUrl}/health`);
+    expect(health.status).toBe(200);
+  });
+
   it("keeps run state authoritative, rejects a second chat, and stops cooperatively", async () => {
     let receivedSignal: AbortSignal | undefined;
     const agentRunner: typeof runAgent = async (_input, optionsOrStream) => {
