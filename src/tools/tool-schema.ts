@@ -175,6 +175,7 @@ function zodToJsonSchemaProperty(zodType: z.ZodTypeAny): JSONSchemaProperty {
     const defaultValue = typeof defaultFnOrValue === "function"
       ? defaultFnOrValue()
       : defaultFnOrValue;
+    prop.description = innerType.description || zodType.description;
     prop.default = defaultValue;
     return prop;
   }
