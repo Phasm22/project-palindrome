@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import type { Neo4jGraphStore } from "../../src/pce/kg/indexation/neo4j-client";
 
 const CLUSTER_CONFIG = {
@@ -18,34 +18,45 @@ const PROXBIG_CONFIG = {
   credentialSource: "test",
 };
 
-vi.mock("../../src/tools/proxmox/config", () => ({
-  getProxmoxEndpointConfigs: () => [CLUSTER_CONFIG, PROXBIG_CONFIG],
-}));
-
 // proxBig's endpoint fails this run; the cluster (yin/yang) endpoint succeeds
 // and reports only sentinelZero (vmid 200) — windowsVM (vmid 100, on proxBig)
 // is absent everywhere, but only because its own endpoint never answered.
 let proxbigShouldFail = true;
 
-vi.mock("../../src/tools/proxmox/client", () => ({
-  ProxmoxClient: vi.fn().mockImplementation((config: any) => ({
-    get: vi.fn(async () => {
-      if (config.url.includes("proxbig")) {
-        if (proxbigShouldFail) {
-          throw new Error("simulated proxBig outage");
-        }
-        return { data: { data: [] } }; // proxBig reachable, genuinely has no VMs
-      }
-      return {
-        data: {
-          data: [{ vmid: 200, node: "yin", type: "qemu", name: "sentinelZero" }],
-        },
-      };
-    }),
-  })),
-}));
-
+import { ProxmoxClient } from "../../src/tools/proxmox/client";
+import * as ProxmoxConfigModule from "../../src/tools/proxmox/config";
 import { StaleNodeCleaner } from "../../src/twin/cleanup/stale-node-cleaner";
+
+// Intercept ProxmoxClient (vi.spyOn on the prototype) and
+// getProxmoxEndpointConfigs (vi.spyOn on the module namespace) rather than
+// replacing either module wholesale (vi.mock) - under `bun test`, module
+// mocks are process-global with no per-file teardown, so these used to leak
+// into tests/tools/proxmox/readonly/client.test.ts and
+// tests/tools/proxmox/config.test.ts, both of which need the real
+// implementations. A real `function` (not an arrow) preserves `this` so
+// the spy can still read the per-instance config.url the way the original
+// per-endpoint mock did.
+vi.spyOn(ProxmoxConfigModule, "getProxmoxEndpointConfigs").mockReturnValue([
+  CLUSTER_CONFIG,
+  PROXBIG_CONFIG,
+] as any);
+vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(async function (this: any) {
+  if (this.config.url.includes("proxbig")) {
+    if (proxbigShouldFail) {
+      throw new Error("simulated proxBig outage");
+    }
+    return { data: { data: [] } }; // proxBig reachable, genuinely has no VMs
+  }
+  return {
+    data: {
+      data: [{ vmid: 200, node: "yin", type: "qemu", name: "sentinelZero" }],
+    },
+  };
+});
+
+afterAll(() => {
+  vi.restoreAllMocks();
+});
 
 function makeFakeGraphStore(twinVms: Array<{ id: string; name: string; nodeName: string }>) {
   const deleteCalls: string[] = [];

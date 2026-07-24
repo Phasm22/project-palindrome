@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ProxmoxReadOnlyBase } from "../../../../src/tools/proxmox/readonly/base";
+import * as ToolSanitizerModule from "../../../../src/agent/tool-sanitizer";
 import type { ExecutionContext } from "../../../../src/types/execution";
 
 // Create mocks - use object to store so they're accessible everywhere
@@ -37,10 +38,6 @@ vi.mock("https", () => ({
   },
 }));
 
-vi.mock("../../../../src/agent/tool-sanitizer", () => ({
-  sanitizeToolPayload: (data: any) => data, // Pass through for testing
-}));
-
 // Import after mocking
 import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
 
@@ -60,11 +57,26 @@ describe("TL-2A.1: Proxmox Read-Only Base Class", () => {
     }
   }
 
+  const originalProxmoxEnv = {
+    PROXMOX_URL: process.env.PROXMOX_URL,
+    PROXMOX_TOKEN_ID: process.env.PROXMOX_TOKEN_ID,
+    PROXMOX_TOKEN_SECRET: process.env.PROXMOX_TOKEN_SECRET,
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
+    vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const [key, value] of Object.entries(originalProxmoxEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   describe("API Client Management", () => {

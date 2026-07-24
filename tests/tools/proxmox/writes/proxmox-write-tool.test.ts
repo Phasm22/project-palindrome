@@ -1,21 +1,17 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ProxmoxWriteTool } from "../../../../src/tools/proxmox/writes/proxmox-write-tool";
+import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
+import * as ToolSanitizerModule from "../../../../src/agent/tool-sanitizer";
 import type { ExecutionContext } from "../../../../src/types/execution";
 
-// Mock ProxmoxClient
-let mockProxmoxClient: any;
 const loggerCounters = new Map<string, number>();
 
-vi.mock("../../../../src/tools/proxmox/client", () => {
-  mockProxmoxClient = {
-    get: vi.fn(),
-    post: vi.fn(),
-  };
-  
-  return {
-    ProxmoxClient: vi.fn().mockImplementation(() => mockProxmoxClient),
-  };
-});
+// Intercept ProxmoxClient at the prototype level (vi.spyOn), not by
+// replacing the "proxmox/client" module (vi.mock) - under `bun test`, module
+// mocks are process-global with no per-file teardown, so this used to leak
+// into tests/tools/proxmox/readonly/client.test.ts, which needs the real
+// ProxmoxClient class. vi.restoreAllMocks() in afterEach properly undoes a
+// prototype spy but does not undo a module replacement.
 
 // Mock logger
 vi.mock("../../../../src/pce/utils/logger", () => ({
@@ -38,11 +34,6 @@ vi.mock("../../../../src/pce/utils/logger", () => ({
   },
 }));
 
-// Mock sanitizeToolPayload
-vi.mock("../../../../src/agent/tool-sanitizer", () => ({
-  sanitizeToolPayload: (data: any) => data,
-}));
-
 describe("TL-2B: Proxmox Safe Write Suite", () => {
   const mockContext: ExecutionContext = {
     toolName: "proxmox_write",
@@ -52,7 +43,12 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
   };
 
   let tool: ProxmoxWriteTool;
-  let mockClient: any;
+  let mockClient: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> };
+  const originalProxmoxEnv = {
+    PROXMOX_URL: process.env.PROXMOX_URL,
+    PROXMOX_TOKEN_ID: process.env.PROXMOX_TOKEN_ID,
+    PROXMOX_TOKEN_SECRET: process.env.PROXMOX_TOKEN_SECRET,
+  };
 
   beforeEach(() => {
     loggerCounters.clear();
@@ -60,12 +56,24 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
 
-    mockClient = mockProxmoxClient;
-    mockClient.get.mockClear();
-    mockClient.post.mockClear();
+    mockClient = {
+      get: vi.fn(),
+      post: vi.fn(),
+    };
+    vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(mockClient.get as any);
+    vi.spyOn(ProxmoxClient.prototype, "post").mockImplementation(mockClient.post as any);
+    vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data);
 
     tool = new ProxmoxWriteTool();
     (tool as any).apiClient = undefined;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const [key, value] of Object.entries(originalProxmoxEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   describe("TL-2B.1: Restricted Write Action Implementation", () => {
@@ -329,7 +337,7 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
       });
 
       const result = await tool.execute(
-        { action: "migrate_vm", node: "pve1", vmid: 101, targetNode: "pve2" },
+        { action: "migrate_vm", node: "pve1", vmid: 101, targetNode: "pve2", dryRun: true },
         mockContext
       );
 

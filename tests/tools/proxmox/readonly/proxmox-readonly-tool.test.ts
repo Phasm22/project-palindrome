@@ -1,35 +1,8 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ProxmoxReadOnlyTool } from "../../../../src/tools/proxmox/readonly/proxmox-readonly-tool";
+import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
+import * as ToolSanitizerModule from "../../../../src/agent/tool-sanitizer";
 import type { ExecutionContext } from "../../../../src/types/execution";
-
-// Create mocks - use object to store so they're accessible everywhere
-const mocks: any = {};
-
-vi.mock("axios", () => {
-  // Create mocks inside factory
-  mocks.instance = {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    delete: vi.fn(),
-    interceptors: {
-      request: { use: vi.fn() },
-      response: { use: vi.fn() },
-    },
-  };
-  
-  mocks.create = vi.fn(() => mocks.instance);
-  
-  return {
-    default: {
-      create: () => mocks.create(),
-    },
-  };
-});
-
-// Export for use in tests
-const mockAxiosInstance = mocks.instance;
-const mockAxiosCreate = mocks.create;
 
 vi.mock("https", () => ({
   default: {
@@ -37,28 +10,16 @@ vi.mock("https", () => ({
   },
 }));
 
-vi.mock("../../../../src/agent/tool-sanitizer", () => ({
-  sanitizeToolPayload: (data: any) => data, // Pass through for testing
-}));
-
-// Mock ProxmoxClient directly to ensure tool uses our mock
-let mockProxmoxClient: any;
-
-vi.mock("../../../../src/tools/proxmox/client", () => {
-  mockProxmoxClient = {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    delete: vi.fn(),
-  };
-  
-  return {
-    ProxmoxClient: vi.fn().mockImplementation(() => mockProxmoxClient),
-  };
-});
-
-// Import after mocking
-import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
+// Intercept ProxmoxClient at the prototype level and sanitizeToolPayload at
+// the module-namespace level (vi.spyOn) rather than replacing whole modules
+// (vi.mock). Under `bun test`, module-level mock replacements are registered
+// in a single process-wide registry with no per-file teardown -
+// vi.restoreAllMocks() doesn't undo them - so whichever test file's
+// vi.mock("proxmox/client"/"tool-sanitizer", ...) happened to win leaked into
+// every *other* file that imports the real thing (e.g.
+// tests/tools/proxmox/readonly/client.test.ts and
+// tests/tools/proxmox/readonly/redaction.test.ts). Prototype/namespace spies,
+// unlike module mocks, are properly torn down by vi.restoreAllMocks().
 
 describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
   const mockContext: ExecutionContext = {
@@ -78,24 +39,45 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
   };
 
   let tool: ProxmoxReadOnlyTool;
-  let mockClient: any;
+  let mockClient: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> };
+  const originalProxmoxEnv = {
+    PROXMOX_URL: process.env.PROXMOX_URL,
+    PROXMOX_TOKEN_ID: process.env.PROXMOX_TOKEN_ID,
+    PROXMOX_TOKEN_SECRET: process.env.PROXMOX_TOKEN_SECRET,
+  };
 
   beforeEach(() => {
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
 
-    // Reset mock client - ProxmoxClient is mocked to return this
-    mockClient = mockProxmoxClient;
-    mockClient.get.mockClear();
-    mockClient.post.mockClear();
-    mockClient.put.mockClear();
-    mockClient.delete.mockClear();
+    // Every ProxmoxClient instance (any endpoint the tool constructs
+    // internally) shares this prototype, so spying here intercepts all of
+    // them regardless of which endpoint config the tool picked.
+    mockClient = {
+      get: vi.fn(),
+      post: vi.fn(),
+      put: vi.fn(),
+      delete: vi.fn(),
+    };
+    vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(mockClient.get as any);
+    vi.spyOn(ProxmoxClient.prototype, "post").mockImplementation(mockClient.post as any);
+    vi.spyOn(ProxmoxClient.prototype, "put").mockImplementation(mockClient.put as any);
+    vi.spyOn(ProxmoxClient.prototype, "delete").mockImplementation(mockClient.delete as any);
+    vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data);
 
     tool = new ProxmoxReadOnlyTool();
-    
-    // Clear any cached client so tool creates a new one (which will be our mock)
+
+    // Clear any cached client so tool creates a new one (which will use the spied prototype)
     (tool as any).apiClient = undefined;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const [key, value] of Object.entries(originalProxmoxEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   describe("Node-Level Actions", () => {

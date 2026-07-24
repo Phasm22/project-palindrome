@@ -1,12 +1,15 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TwinEntityType } from "../../../src/twin/models/entities";
+import { ProxmoxReadOnlyTool } from "../../../src/tools/proxmox/readonly/proxmox-readonly-tool";
 
+// Intercept ProxmoxReadOnlyTool at the prototype level (vi.spyOn), not by
+// replacing its module (vi.mock) - under `bun test`, module mocks are
+// process-global with no per-file teardown and leak into every other file
+// that imports the real class (e.g.
+// tests/tools/proxmox/readonly/proxmox-readonly-tool.test.ts).
+// vi.restoreAllMocks() properly undoes a prototype spy but not a module
+// replacement.
 const proxmoxExecuteMock = vi.fn();
-vi.mock("../../../src/tools/proxmox/readonly/proxmox-readonly-tool", () => ({
-  ProxmoxReadOnlyTool: vi.fn().mockImplementation(() => ({
-    execute: proxmoxExecuteMock,
-  })),
-}));
 
 vi.mock("../../../src/tools/MCPOpnsenseTool", () => ({
   MCPOpnsenseTool: vi.fn().mockImplementation(() => ({
@@ -51,6 +54,7 @@ function fakeInterfaceEntity(node: string) {
 describe("NetworkIngestionOrchestrator — per-node failure isolation", () => {
   beforeEach(() => {
     proxmoxExecuteMock.mockReset();
+    vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(proxmoxExecuteMock as any);
     parseMock.mockReset();
     twinUpdaterMocks.initialize.mockClear();
     twinUpdaterMocks.upsert.mockClear();
@@ -60,6 +64,10 @@ describe("NetworkIngestionOrchestrator — per-node failure isolation", () => {
       entities: input.nodes.map((n: any) => fakeInterfaceEntity(n.node)),
       relationships: [],
     }));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("keeps a healthy node's interfaces and skips pruning when a sibling node fails", async () => {
