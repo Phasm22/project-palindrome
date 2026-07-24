@@ -56,7 +56,11 @@ let executeSpy: { mockRestore: () => void };
 
 describe("TL-2A.6.B: Graph Store Ingestion Validation", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // vi.clearAllMocks() clears call history for every mock in the whole
+    // process, not just this file's - under `bun test`, files run with real
+    // concurrency, so it can zero out another file's still-in-flight spy
+    // call count. Clear only this file's own mock.
+    mockToolInstance.execute.mockClear();
     executeSpy = vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(mockToolInstance.execute as any);
   });
 

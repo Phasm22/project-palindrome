@@ -66,7 +66,15 @@ describe("TL-2A.1: Proxmox Read-Only Base Class", () => {
   let activeSpies: Array<{ mockRestore: () => void }> = [];
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // vi.clearAllMocks() clears call history for every mock in the whole
+    // process, not just this file's - under `bun test`, files run with real
+    // concurrency, so it can zero out another file's still-in-flight spy
+    // call count. Clear only this file's own axios mocks.
+    mockAxiosInstance.get.mockClear();
+    mockAxiosInstance.post.mockClear();
+    mockAxiosInstance.put.mockClear();
+    mockAxiosInstance.delete.mockClear();
+    mockAxiosCreate.mockClear();
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";

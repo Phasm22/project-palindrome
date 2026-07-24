@@ -77,9 +77,13 @@ describe("PiholeClient DNS record operations", () => {
     });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  // No afterEach restore needed: this file never calls vi.spyOn() (only
+  // relies on the persistent module-level vi.mock() factories above, which
+  // aren't undone by restoreAllMocks() anyway), and vi.restoreAllMocks()
+  // is process-global under `bun test` - it was restoring OTHER files'
+  // still-in-flight prototype spies (e.g.
+  // tests/tools/pihole/readonly/pihole-readonly.test.ts's spy on
+  // PiholeClient.prototype) for no benefit to this file.
 
   describe("listDnsRecords", () => {
     it("parses Pi-hole v6 hosts format and returns DnsRecord[]", async () => {
