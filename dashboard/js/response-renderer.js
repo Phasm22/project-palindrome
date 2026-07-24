@@ -238,6 +238,43 @@ function hasDuplicateKeys(fields) {
   return false;
 }
 
+// TERSE_DATA sometimes stamps a repeated type label into every row
+// ("| Entity | VM Name=opnsense | Node=proxBig | ...") instead of using the
+// real name as the first cell. When every data row shares a generic label and
+// a name-like field, promote that field so the CSS table isn't a wall of
+// identical "Entity" cells.
+const GENERIC_ENTITY_LABELS = new Set(["entity", "item", "row", "record", "entry"]);
+const ENTITY_NAME_KEYS = ["VM Name", "Name", "name", "vm_name", "hostname", "Hostname", "Host"];
+
+function promoteGenericEntityLabels(entityRows) {
+  const dataRows = entityRows.filter((row) => !/^total$/i.test(row.entity.trim()));
+  if (dataRows.length < 1) return entityRows;
+
+  const labels = new Set(dataRows.map((row) => row.entity.trim().toLowerCase()));
+  if (labels.size !== 1) return entityRows;
+  const [onlyLabel] = labels;
+  if (!GENERIC_ENTITY_LABELS.has(onlyLabel)) return entityRows;
+
+  let nameKey = null;
+  for (const key of ENTITY_NAME_KEYS) {
+    if (dataRows.every((row) => row.fields.some(([fieldKey]) => fieldKey === key))) {
+      nameKey = key;
+      break;
+    }
+  }
+  if (!nameKey) return entityRows;
+
+  return entityRows.map((row) => {
+    if (/^total$/i.test(row.entity.trim())) return row;
+    const nameField = row.fields.find(([fieldKey]) => fieldKey === nameKey);
+    if (!nameField) return row;
+    return {
+      entity: nameField[1],
+      fields: row.fields.filter(([fieldKey]) => fieldKey !== nameKey),
+    };
+  });
+}
+
 // Renders heterogeneous entity rows (no shared field vocabulary) as
 // independent labeled fact panels instead of one table with mostly-empty
 // cells — readable per-entity, not a sparse grid.
@@ -268,8 +305,9 @@ function renderPipeBlock(rows) {
   // Entity rows ("entity | key=value | ...") are tried before requiring
   // uniform cell counts across rows — see hasSharedSchema above for why
   // ragged arity alone isn't a reason to give up on a real table.
-  const entityRows = rows.map(parseEntityRow);
-  if (entityRows.every(Boolean)) {
+  const parsedEntityRows = rows.map(parseEntityRow);
+  if (parsedEntityRows.every(Boolean)) {
+    const entityRows = promoteGenericEntityLabels(parsedEntityRows);
     if (hasSharedSchema(entityRows) && !entityRows.some((row) => hasDuplicateKeys(row.fields))) {
       const keyOrder = [];
       entityRows.forEach((row) => row.fields.forEach(([key]) => {
