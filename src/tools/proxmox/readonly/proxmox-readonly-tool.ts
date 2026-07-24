@@ -826,37 +826,71 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     };
   }
 
+  /**
+   * Resolve used/total memory bytes from a `/nodes/{node}/status` payload and/or
+   * the `/nodes` list row. Node status often nests memory as `{ used, total, free }`
+   * rather than top-level `mem`/`maxmem` (those appear on the list endpoint and
+   * cluster resources). Prefer status values, fall back to the list row so
+   * enrichment never wipes memory that the list already provided.
+   */
+  private static resolveNodeMemory(
+    listNode: Record<string, any>,
+    status: Record<string, any>
+  ): { mem?: number; maxmem?: number } {
+    const nested = status.memory && typeof status.memory === "object" ? status.memory : null;
+    const statusMem =
+      typeof status.mem === "number"
+        ? status.mem
+        : typeof nested?.used === "number"
+          ? nested.used
+          : undefined;
+    const statusMaxmem =
+      typeof status.maxmem === "number"
+        ? status.maxmem
+        : typeof nested?.total === "number"
+          ? nested.total
+          : undefined;
+    const listMem = typeof listNode.mem === "number" ? listNode.mem : undefined;
+    const listMaxmem = typeof listNode.maxmem === "number" ? listNode.maxmem : undefined;
+    return {
+      mem: statusMem ?? listMem,
+      maxmem: statusMaxmem ?? listMaxmem,
+    };
+  }
+
   private async enrichNodesWithStatus(client: ProxmoxClient, nodes: any[]): Promise<any[]> {
     const nodeStatusPromises = nodes
       .filter((node): node is { node: string; [key: string]: any } => Boolean(node?.node))
       .map(async (node) => {
         const nodeName = node.node;
-      try {
-        const statusResult = await client.get(`/nodes/${nodeName}/status`);
+        try {
+          const statusResult = await client.get(`/nodes/${nodeName}/status`);
           const status = statusResult.data?.data || {};
-        return {
-          node: nodeName,
-          status: node.status || status.status,
-          level: node.level,
-          cpu: status.cpu,
-          maxcpu: status.maxcpu,
-          mem: status.mem,
-          maxmem: status.maxmem,
-          uptime: status.uptime,
-        };
+          const { mem, maxmem } = ProxmoxReadOnlyTool.resolveNodeMemory(node, status);
+          return {
+            node: nodeName,
+            status: node.status || status.status,
+            level: node.level,
+            cpu: status.cpu ?? node.cpu,
+            maxcpu: status.maxcpu ?? node.maxcpu,
+            mem,
+            maxmem,
+            uptime: status.uptime ?? node.uptime,
+          };
         } catch {
-        return {
-          node: nodeName,
-        status: node.status,
-        level: node.level,
-          cpu: undefined,
-          maxcpu: undefined,
-          mem: undefined,
-          maxmem: undefined,
-          uptime: undefined,
-        };
-      }
-    });
+          const { mem, maxmem } = ProxmoxReadOnlyTool.resolveNodeMemory(node, {});
+          return {
+            node: nodeName,
+            status: node.status,
+            level: node.level,
+            cpu: node.cpu,
+            maxcpu: node.maxcpu,
+            mem,
+            maxmem,
+            uptime: node.uptime,
+          };
+        }
+      });
 
     const enriched = await Promise.all(nodeStatusPromises);
     return enriched.filter(Boolean);

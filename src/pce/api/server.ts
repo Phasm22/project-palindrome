@@ -1111,7 +1111,11 @@ export class PceApiServer {
             name: n.node,
             status: n.status_normalized || n.status,
             cpu: n.cpu,
-            memory: n.mem_normalized || n.mem,
+            // Prefer raw bytes so the dashboard can format used/total consistently.
+            // mem_normalized is `{ value, unit, raw }` — never pass that object through
+            // as `memory` or formatBytes() will fail / render N/A.
+            memory: typeof n.mem === "number" ? n.mem : n.mem_normalized?.raw,
+            maxMemory: typeof n.maxmem === "number" ? n.maxmem : n.maxmem_normalized?.raw,
             uptime: n.uptime,
           })),
         },

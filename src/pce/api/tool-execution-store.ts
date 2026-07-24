@@ -33,8 +33,11 @@ export interface ToolExecutionStats {
   total: number;
   byTool: Record<string, number>;
   byUser: Record<string, number>;
+  /** Total failed executions in the window (not capped). */
+  errorCount: number;
   errorRate: number;
   avgDurationMs: number;
+  /** Most recent failures only (capped for UI preview). */
   recentErrors: ToolExecution[];
 }
 
@@ -269,6 +272,7 @@ export class ToolExecutionStore {
       total,
       byTool,
       byUser,
+      errorCount,
       errorRate: total > 0 ? errorCount / total : 0,
       avgDurationMs: total > 0 ? totalDuration / total : 0,
       recentErrors: recentErrors.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()),

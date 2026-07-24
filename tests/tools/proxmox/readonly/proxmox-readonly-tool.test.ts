@@ -123,6 +123,77 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(calls.some((call: any[]) => call[0] === "/nodes")).toBe(true);
     });
 
+    it("should keep node memory when status nests memory.used/total", async () => {
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve({
+            data: {
+              data: [
+                { node: "pve1", status: "online", cpu: 0.1, maxcpu: 8, mem: 1, maxmem: 2, uptime: 100 },
+              ],
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/list" },
+          });
+        }
+        if (endpoint === "/nodes/pve1/status") {
+          return Promise.resolve({
+            data: {
+              data: {
+                cpu: 0.25,
+                maxcpu: 16,
+                uptime: 86400,
+                // Real Proxmox node status shape — nested, not top-level mem/maxmem
+                memory: { used: 8589934592, total: 17179869184, free: 8589934592 },
+              },
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/status" },
+          });
+        }
+        return Promise.reject(new Error(`Unexpected endpoint ${endpoint}`));
+      });
+
+      const result = await tool.execute({ action: "list_nodes" }, mockContext);
+      expect(result.data.nodes).toHaveLength(1);
+      const node = result.data.nodes[0];
+      expect(node.mem).toBe(8589934592);
+      expect(node.maxmem).toBe(17179869184);
+      expect(node.mem_normalized?.raw).toBe(8589934592);
+      expect(node.maxmem_normalized?.raw).toBe(17179869184);
+    });
+
+    it("should fall back to list-endpoint mem when status omits memory", async () => {
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve({
+            data: {
+              data: [
+                { node: "pve1", status: "online", cpu: 0.1, mem: 4294967296, maxmem: 8589934592, uptime: 100 },
+              ],
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/list" },
+          });
+        }
+        if (endpoint === "/nodes/pve1/status") {
+          return Promise.resolve({
+            data: {
+              data: {
+                cpu: 0.2,
+                uptime: 200,
+                // No mem/maxmem and no nested memory — enrichment must keep list values
+              },
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/status" },
+          });
+        }
+        return Promise.reject(new Error(`Unexpected endpoint ${endpoint}`));
+      });
+
+      const result = await tool.execute({ action: "list_nodes" }, mockContext);
+      const node = result.data.nodes[0];
+      expect(node.mem).toBe(4294967296);
+      expect(node.maxmem).toBe(8589934592);
+    });
+
     it("should implement node_status action", async () => {
       const mockResponse = {
         data: {
