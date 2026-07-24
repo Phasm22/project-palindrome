@@ -50,11 +50,15 @@ function fakeInterfaceEntity(node: string) {
 }
 
 describe("NetworkIngestionOrchestrator — per-node failure isolation", () => {
+  let activeSpies: Array<{ mockRestore: () => void }> = [];
+
   beforeEach(() => {
     proxmoxExecuteMock.mockReset();
-    vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(proxmoxExecuteMock as any);
     mcpOpnsenseExecuteMock.mockClear();
-    vi.spyOn(MCPOpnsenseTool.prototype, "execute").mockImplementation(mcpOpnsenseExecuteMock as any);
+    activeSpies = [
+      vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(proxmoxExecuteMock as any),
+      vi.spyOn(MCPOpnsenseTool.prototype, "execute").mockImplementation(mcpOpnsenseExecuteMock as any),
+    ];
     parseMock.mockReset();
     twinUpdaterMocks.initialize.mockClear();
     twinUpdaterMocks.upsert.mockClear();
@@ -67,7 +71,12 @@ describe("NetworkIngestionOrchestrator — per-node failure isolation", () => {
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the same
+    // shared prototype. Restore only the specific spies made here.
+    activeSpies.forEach((spy) => spy.mockRestore());
+    activeSpies = [];
   });
 
   it("keeps a healthy node's interfaces and skips pruning when a sibling node fails", async () => {

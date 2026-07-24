@@ -52,15 +52,20 @@ import { ProxmoxReadOnlyTool } from "../../../../src/tools/proxmox/readonly/prox
 const mockToolInstance = {
   execute: vi.fn(),
 };
+let executeSpy: { mockRestore: () => void };
 
 describe("TL-2A.6.B: Graph Store Ingestion Validation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(mockToolInstance.execute as any);
+    executeSpy = vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(mockToolInstance.execute as any);
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the same
+    // shared prototype. Restore only the specific spy made here.
+    executeSpy.mockRestore();
   });
 
   describe("Node Entity Extraction", () => {

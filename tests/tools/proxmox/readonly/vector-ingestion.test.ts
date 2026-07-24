@@ -53,7 +53,7 @@ import { ProxmoxReadOnlyTool } from "../../../../src/tools/proxmox/readonly/prox
 const mockToolInstance = {
   execute: vi.fn(),
 };
-vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(mockToolInstance.execute as any);
+const executeSpy = vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(mockToolInstance.execute as any);
 
 describe("TL-2A.6.A: Vector Store Ingestion Validation", () => {
   let mockClient: ProxmoxClient;
@@ -64,7 +64,11 @@ describe("TL-2A.6.A: Vector Store Ingestion Validation", () => {
   });
 
   afterAll(() => {
-    vi.restoreAllMocks();
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the same
+    // shared prototype. Restore only the specific spy made here.
+    executeSpy.mockRestore();
   });
 
   describe("VM Inventory Document Generation", () => {

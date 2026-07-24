@@ -63,16 +63,25 @@ describe("TL-2A.1: Proxmox Read-Only Base Class", () => {
     PROXMOX_TOKEN_SECRET: process.env.PROXMOX_TOKEN_SECRET,
   };
 
+  let activeSpies: Array<{ mockRestore: () => void }> = [];
+
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
-    vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data);
+    activeSpies = [
+      vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data),
+    ];
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the
+    // same shared module namespace. Restore only the specific spies made here.
+    activeSpies.forEach((spy) => spy.mockRestore());
+    activeSpies = [];
     for (const [key, value] of Object.entries(originalProxmoxEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

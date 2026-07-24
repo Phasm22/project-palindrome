@@ -36,11 +36,11 @@ import { StaleNodeCleaner } from "../../src/twin/cleanup/stale-node-cleaner";
 // implementations. A real `function` (not an arrow) preserves `this` so
 // the spy can still read the per-instance config.url the way the original
 // per-endpoint mock did.
-vi.spyOn(ProxmoxConfigModule, "getProxmoxEndpointConfigs").mockReturnValue([
+const configSpy = vi.spyOn(ProxmoxConfigModule, "getProxmoxEndpointConfigs").mockReturnValue([
   CLUSTER_CONFIG,
   PROXBIG_CONFIG,
 ] as any);
-vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(async function (this: any) {
+const clientGetSpy = vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(async function (this: any) {
   if (this.config.url.includes("proxbig")) {
     if (proxbigShouldFail) {
       throw new Error("simulated proxBig outage");
@@ -55,7 +55,12 @@ vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(async function (this
 });
 
 afterAll(() => {
-  vi.restoreAllMocks();
+  // vi.restoreAllMocks() restores every spy in the whole process, not just
+  // this file's - under `bun test`, files run with real concurrency, so a
+  // global restore can undo another file's still-in-flight spy on the same
+  // shared prototype/module namespace. Restore only these two specifically.
+  configSpy.mockRestore();
+  clientGetSpy.mockRestore();
 });
 
 function makeFakeGraphStore(twinVms: Array<{ id: string; name: string; nodeName: string }>) {

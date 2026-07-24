@@ -44,6 +44,7 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
 
   let tool: ProxmoxWriteTool;
   let mockClient: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> };
+  let activeSpies: Array<{ mockRestore: () => void }> = [];
   const originalProxmoxEnv = {
     PROXMOX_URL: process.env.PROXMOX_URL,
     PROXMOX_TOKEN_ID: process.env.PROXMOX_TOKEN_ID,
@@ -60,16 +61,23 @@ describe("TL-2B: Proxmox Safe Write Suite", () => {
       get: vi.fn(),
       post: vi.fn(),
     };
-    vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(mockClient.get as any);
-    vi.spyOn(ProxmoxClient.prototype, "post").mockImplementation(mockClient.post as any);
-    vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data);
+    activeSpies = [
+      vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(mockClient.get as any),
+      vi.spyOn(ProxmoxClient.prototype, "post").mockImplementation(mockClient.post as any),
+      vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data),
+    ];
 
     tool = new ProxmoxWriteTool();
     (tool as any).apiClient = undefined;
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the
+    // same shared prototype. Restore only the specific spies this file made.
+    activeSpies.forEach((spy) => spy.mockRestore());
+    activeSpies = [];
     for (const [key, value] of Object.entries(originalProxmoxEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
