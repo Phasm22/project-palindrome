@@ -1,7 +1,7 @@
 import { exec } from "child_process";
 import { promisify } from "util";
-import { readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { readFile, readdir, writeFile } from "fs/promises";
+import { basename, join } from "path";
 import { pceLogger as logger } from "../../pce/utils/logger";
 
 const execAsync = promisify(exec);
@@ -72,6 +72,12 @@ export type VmConfigEntry = {
   bios?: "seabios" | "ovmf";
   disk_interface?: "virtio0" | "scsi0" | "sata0";
 };
+
+export interface TerraformVmConfigSource {
+  environment: string;
+  sourcePath: string;
+  vmConfigs: Record<string, VmConfigEntry>;
+}
 
 export interface TerraformExecutionOptions {
   skipLock?: boolean;
@@ -257,6 +263,31 @@ export function parseVmConfigsFromTfvars(content: string): Record<string, VmConf
   }
 
   return vmConfigs;
+}
+
+/**
+ * Read the declared VM sets from environment tfvars without invoking Terraform.
+ *
+ * The returned list is sorted by path so ingestion is deterministic. Files
+ * without a vm_configs block are included with an empty VM set, allowing
+ * callers to report which declarations were inspected.
+ */
+export async function readTerraformVmConfigsFromEnvironmentDirectory(
+  environmentsDir: string = join(process.cwd(), "lab-infra", "environments")
+): Promise<TerraformVmConfigSource[]> {
+  const entries = await readdir(environmentsDir, { withFileTypes: true });
+  const tfvarsPaths = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".tfvars"))
+    .map((entry) => join(environmentsDir, entry.name))
+    .sort();
+
+  return Promise.all(
+    tfvarsPaths.map(async (sourcePath) => ({
+      environment: basename(sourcePath, ".tfvars"),
+      sourcePath,
+      vmConfigs: parseVmConfigsFromTfvars(await readFile(sourcePath, "utf8")),
+    }))
+  );
 }
 
 export function mergeVmConfigsWithExistingTfvars(
