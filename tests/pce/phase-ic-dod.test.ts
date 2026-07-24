@@ -134,7 +134,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
       expect(analysis.structuralIndicators.length).toBeGreaterThan(0);
     }, { timeout: 45000 });
 
-    it("should classify HYBRID queries correctly", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should classify HYBRID queries correctly", async () => {
       const testData = generateHybridTestData();
       const firstDoc = testData[0];
       await fs.writeFile(firstDoc.sourcePath, firstDoc.content);
@@ -363,7 +363,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 10.1: Failure Mode 1: Graph Down", () => {
-    it("should fallback to vector-only when graph is unavailable", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should fallback to vector-only when graph is unavailable", async () => {
       const testData = generateHybridTestData();
       const firstDoc = testData[0];
       await fs.writeFile(firstDoc.sourcePath, firstDoc.content);
@@ -405,7 +405,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 10.2: Failure Mode 2: Low S_Total", () => {
-    it("should return 'Insufficient Context' when fusion score is too low", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should return 'Insufficient Context' when fusion score is too low", async () => {
       const fusionEngine = new FusionEngine({
         minTotalScore: 0.9, // Very high threshold
       });
@@ -445,7 +445,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 11.2: Hybrid RAG End-to-End", () => {
-    it("should execute complete hybrid pipeline", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should execute complete hybrid pipeline", async () => {
       // Ingest test data
       const testData = generateHybridTestData();
       const firstDoc = testData[0];
@@ -494,7 +494,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 11.3: Definition of Done", () => {
-    it("should execute 10 unique HYBRID queries successfully", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should execute 10 unique HYBRID queries successfully", async () => {
       // Ingest all test documents
       const testData = generateHybridTestData();
       for (const doc of testData) {

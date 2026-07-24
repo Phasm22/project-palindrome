@@ -6,12 +6,16 @@ import { generateAllProxmoxDocuments, extractProxmoxGraphEntities } from "../../
 import { readFileSync } from "fs";
 import { join } from "path";
 
-// Load .env file if it exists (Bun auto-loads .env, but ensure it's loaded for tests)
+// Load .env file if it exists (Bun auto-loads .env, but ensure it's loaded for tests).
+// Only fill in keys that are genuinely absent - `!process.env[key]` is also true for
+// an intentionally-empty value (e.g. CI sets PROXMOX_URL='' so live-API tests skip),
+// and that falsy check silently overwrote it with .env's real value, leaking a real
+// key/URL into every test that ran afterward in the same bun test process.
 try {
   const envFile = readFileSync(join(process.cwd(), ".env"), "utf-8");
   envFile.split("\n").forEach((line) => {
     const match = line.match(/^([^#=]+)=(.*)$/);
-    if (match && !process.env[match[1]]) {
+    if (match && !(match[1] in process.env)) {
       process.env[match[1]] = match[2].replace(/^["']|["']$/g, "");
     }
   });
