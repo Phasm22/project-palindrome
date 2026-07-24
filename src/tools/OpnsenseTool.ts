@@ -91,10 +91,10 @@ export class OpnsenseTool extends BaseTool {
     }
 
     const started = context.startedAt ?? Date.now();
-    const { url, verifySsl } = this.getApiConfig();
-    const client = this.createAxiosInstance(verifySsl);
 
     try {
+      const { url, verifySsl } = this.getApiConfig();
+      const client = this.createAxiosInstance(verifySsl);
       let result: any;
 
       switch (parsed.data.action) {
