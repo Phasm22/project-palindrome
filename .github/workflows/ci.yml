@@ -40,10 +40,10 @@ jobs:
           - 6333:6333
           - 6334:6334
         options: >-
-          --health-cmd "curl -f http://localhost:6333/health || exit 1"
+          --health-cmd "find /proc -maxdepth 2 -name cmdline -exec grep -l qdrant {} \\; 2>/dev/null | head -1 | xargs -r cat | grep -q qdrant || exit 1"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 3
+          --health-retries 5
       
       neo4j:
         image: neo4j:latest
