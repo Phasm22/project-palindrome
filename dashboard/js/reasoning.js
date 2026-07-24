@@ -139,6 +139,7 @@ function formatFinalResponse(text) {
  */
 export async function copyTraceData(traceId, buttonElement) {
   const originalHtml = buttonElement.innerHTML;
+  const checkIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`;
   const setButtonLabel = (label, className = '') => {
     buttonElement.classList.remove('is-copying', 'is-copied', 'is-copy-failed');
     if (className) buttonElement.classList.add(className);
@@ -180,12 +181,12 @@ ${JSON.stringify(traceData, null, 2)}
     
     await writeClipboardText(formattedTrace);
     
-    setButtonLabel('Copied', 'is-copied');
+    setButtonLabel(`${checkIcon} Copied`, 'is-copied');
     setTimeout(() => {
       buttonElement.innerHTML = originalHtml;
       buttonElement.classList.remove('is-copying', 'is-copied', 'is-copy-failed');
       buttonElement.disabled = false;
-    }, 1000);
+    }, 1400);
   } catch (error) {
     console.error('Failed to copy trace data:', error);
     setButtonLabel('Copy failed', 'is-copy-failed');
@@ -199,8 +200,12 @@ ${JSON.stringify(traceData, null, 2)}
 
 async function writeClipboardText(text) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through for non-secure contexts / denied permissions.
+    }
   }
 
   const textarea = document.createElement('textarea');

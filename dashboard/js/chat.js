@@ -3,30 +3,62 @@ import { createButton } from './components.js';
 import { showConfirm } from './modal.js';
 import { renderAssistantResponse, renderConnectionEndpoints } from './response-renderer.js';
 
+const COPY_ICON_SVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`;
+const CHECK_ICON_SVG = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`;
+
+async function writeClipboardText(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through to execCommand for non-secure contexts / permission denials.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard API unavailable');
+}
+
 /**
  * Copy trace ID to clipboard. Uses data-trace-id on the button to avoid
  * embedding the ID in onclick (which can break with quotes or long IDs).
  * Handles clipboard API errors (e.g. non-secure context) with visual feedback.
  */
-function copyTraceIdToClipboard(buttonEl) {
+async function copyTraceIdToClipboard(buttonEl) {
   const id = buttonEl?.getAttribute?.('data-trace-id');
   if (!id) return;
-  const labelHtml = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg> Trace: ${escapeHtml(id.substring(0, 8))}...`;
-  navigator.clipboard.writeText(id).then(() => {
-    const prev = buttonEl.innerHTML;
-    buttonEl.innerHTML = 'Copied!';
+  const shortTraceId = escapeHtml(id.substring(0, 8));
+  const idleHtml = `${COPY_ICON_SVG} trace ${shortTraceId}`;
+  try {
+    await writeClipboardText(id);
+    buttonEl.innerHTML = `${CHECK_ICON_SVG} copied`;
+    buttonEl.classList.add('is-copied');
+    buttonEl.title = 'Copied trace ID';
     setTimeout(() => {
-      buttonEl.innerHTML = prev;
-    }, 1200);
-  }).catch(() => {
-    const prev = buttonEl.innerHTML;
-    buttonEl.title = 'Copy failed – ID: ' + id;
+      buttonEl.innerHTML = idleHtml;
+      buttonEl.classList.remove('is-copied');
+      buttonEl.title = 'Copy trace ID';
+    }, 1400);
+  } catch {
     buttonEl.innerHTML = 'Copy failed';
+    buttonEl.classList.add('is-copy-failed');
+    buttonEl.title = 'Copy failed – ID: ' + id;
     setTimeout(() => {
-      buttonEl.innerHTML = prev;
+      buttonEl.innerHTML = idleHtml;
+      buttonEl.classList.remove('is-copy-failed');
       buttonEl.title = 'Copy trace ID';
     }, 2000);
-  });
+  }
 }
 // Expose for inline onclick (trace buttons use data-trace-id + this to avoid quoting issues)
 window.copyTraceIdToClipboard = copyTraceIdToClipboard;
@@ -43,9 +75,7 @@ function renderTraceFooter(traceId) {
         style="background:transparent;border:none;color:#64748b;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:1em;"
         title="Copy trace ID"
       >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
-        </svg>
+        ${COPY_ICON_SVG}
         trace ${shortTraceId}
       </button>
       <span style="color:#334155;">/</span>
@@ -61,21 +91,22 @@ function renderTraceFooter(traceId) {
 /**
  * Copy text from a button's data-copyable attribute (e.g. SSH command in VM create message).
  */
-function copyCopyableText(buttonEl) {
+async function copyCopyableText(buttonEl) {
   const text = buttonEl?.getAttribute?.('data-copyable');
   if (!text) return;
-  navigator.clipboard.writeText(text).then(() => {
-    const prev = buttonEl.textContent;
-    buttonEl.textContent = 'Copied!';
+  const prev = buttonEl.innerHTML;
+  try {
+    await writeClipboardText(text);
+    buttonEl.innerHTML = `${CHECK_ICON_SVG} Copied`;
     setTimeout(() => {
-      buttonEl.textContent = prev;
+      buttonEl.innerHTML = prev;
     }, 1200);
-  }).catch(() => {
+  } catch {
     buttonEl.textContent = 'Copy failed';
     setTimeout(() => {
-      buttonEl.textContent = 'Copy';
+      buttonEl.innerHTML = prev || 'Copy';
     }, 2000);
-  });
+  }
 }
 window.copyCopyableText = copyCopyableText;
 
