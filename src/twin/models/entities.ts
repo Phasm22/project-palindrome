@@ -32,6 +32,7 @@ const BaseTwinEntitySchema = z.object({
 export const ComputeNodeEntitySchema = BaseTwinEntitySchema.extend({
   type: z.literal(TwinEntityType.COMPUTE_NODE),
   data: z.object({
+    provenance: FactProvenanceSchema.optional(),
     roles: z.array(z.string()).default([]),
     ipAddresses: z.array(z.string()).default([]),
     status: z.enum(["online", "degraded", "offline"]).optional(),
@@ -56,6 +57,7 @@ export const ComputeNodeEntitySchema = BaseTwinEntitySchema.extend({
 export const ComputeVmEntitySchema = BaseTwinEntitySchema.extend({
   type: z.literal(TwinEntityType.COMPUTE_VM),
   data: z.object({
+    provenance: FactProvenanceSchema.optional(),
     nodeId: z.string(),
     state: z.enum(["running", "stopped", "paused"]).optional(),
     ipAddresses: z.array(z.string()).default([]),
