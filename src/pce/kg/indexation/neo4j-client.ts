@@ -7,6 +7,7 @@
 import neo4j, { type Driver, type Session } from "neo4j-driver";
 import type { GraphNode, GraphRelationship, NodeType, RelationshipType } from "../schema/ontology";
 import { pceLogger } from "../../utils/logger";
+import { DEFAULT_GRAPH_ENTITY_LABEL, toCypherLabel } from "../graph-labels";
 
 const NEO4J_URI = process.env.NEO4J_URI || "bolt://localhost:7687";
 const NEO4J_USER = process.env.NEO4J_USER || "neo4j";
@@ -17,11 +18,18 @@ export class Neo4jGraphStore {
   private uri: string;
   private user: string;
   private password: string;
+  private entityLabelCypher: string;
 
-  constructor(uri: string = NEO4J_URI, user: string = NEO4J_USER, password: string = NEO4J_PASSWORD) {
+  constructor(
+    uri: string = NEO4J_URI,
+    user: string = NEO4J_USER,
+    password: string = NEO4J_PASSWORD,
+    entityLabel: string = DEFAULT_GRAPH_ENTITY_LABEL
+  ) {
     this.uri = uri;
     this.user = user;
     this.password = password;
+    this.entityLabelCypher = toCypherLabel(entityLabel);
   }
 
   /**
@@ -78,21 +86,21 @@ export class Neo4jGraphStore {
       // Index on node ID
       await session.run(`
         CREATE INDEX node_id_index IF NOT EXISTS
-        FOR (n:Entity)
+        FOR (n:${this.entityLabelCypher})
         ON (n.id)
       `);
 
       // Index on node type
       await session.run(`
         CREATE INDEX node_type_index IF NOT EXISTS
-        FOR (n:Entity)
+        FOR (n:${this.entityLabelCypher})
         ON (n.type)
       `);
 
       // Index on version hash for provenance
       await session.run(`
         CREATE INDEX version_hash_index IF NOT EXISTS
-        FOR (n:Entity)
+        FOR (n:${this.entityLabelCypher})
         ON (n.versionHash)
       `);
 
@@ -122,7 +130,7 @@ export class Neo4jGraphStore {
         : neo4j.types.DateTime.fromStandardDate(new Date());
 
       const query = `
-        MERGE (n:Entity {id: $id})
+        MERGE (n:${this.entityLabelCypher} {id: $id})
         ON CREATE SET n.createdAt = $createdAt,
                      n.type = $type,
                      n.attributes = $attributesJson,
@@ -175,7 +183,7 @@ export class Neo4jGraphStore {
     try {
       // Check for duplicate relationship
       const checkQuery = `
-        MATCH (a:Entity {id: $from})-[r:${rel.type}]->(b:Entity {id: $to})
+        MATCH (a:${this.entityLabelCypher} {id: $from})-[r:${rel.type}]->(b:${this.entityLabelCypher} {id: $to})
         WHERE r.versionHash = $versionHash
         RETURN r
       `;
@@ -203,7 +211,7 @@ export class Neo4jGraphStore {
         : neo4j.types.DateTime.fromStandardDate(new Date());
 
       const query = `
-        MATCH (a:Entity {id: $from}), (b:Entity {id: $to})
+        MATCH (a:${this.entityLabelCypher} {id: $from}), (b:${this.entityLabelCypher} {id: $to})
         MERGE (a)-[r:${rel.type}]->(b)
         SET r.properties = $propertiesJson,
             r.versionHash = $versionHash,
@@ -254,7 +262,7 @@ export class Neo4jGraphStore {
           : neo4j.types.DateTime.fromStandardDate(new Date());
 
         const query = `
-          MERGE (n:Entity {id: $id})
+          MERGE (n:${this.entityLabelCypher} {id: $id})
           ON CREATE SET n.createdAt = $createdAt,
                        n.type = $type,
                        n.attributes = $attributesJson,
@@ -315,7 +323,7 @@ export class Neo4jGraphStore {
 
         // Check for duplicates
         const checkQuery = `
-          MATCH (a:Entity {id: $from})-[r:${rel.type}]->(b:Entity {id: $to})
+          MATCH (a:${this.entityLabelCypher} {id: $from})-[r:${rel.type}]->(b:${this.entityLabelCypher} {id: $to})
           WHERE r.versionHash = $versionHash
           RETURN r
         `;
@@ -342,7 +350,7 @@ export class Neo4jGraphStore {
           : neo4j.types.DateTime.fromStandardDate(new Date());
 
         const query = `
-          MATCH (a:Entity {id: $from}), (b:Entity {id: $to})
+          MATCH (a:${this.entityLabelCypher} {id: $from}), (b:${this.entityLabelCypher} {id: $to})
           MERGE (a)-[r:${rel.type}]->(b)
           SET r.properties = $propertiesJson,
               r.versionHash = $versionHash,
@@ -385,6 +393,37 @@ export class Neo4jGraphStore {
       pceLogger.warn("Wiped all nodes and relationships from graph");
     } catch (error: any) {
       pceLogger.error("Failed to wipe graph", { error: error.message });
+      throw error;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Delete only nodes carrying one of the declared labels.
+   */
+  async wipeLabels(labels: string[]): Promise<void> {
+    const scopedLabels = [...new Set(labels.map((label) => label.trim()))];
+    if (scopedLabels.length === 0 || scopedLabels.some((label) => label.length === 0)) {
+      throw new Error("wipeLabels requires at least one non-empty label");
+    }
+
+    const session = this.getSession();
+    try {
+      await session.run(
+        `
+          MATCH (n)
+          WHERE any(nodeLabel IN labels(n) WHERE nodeLabel IN $labels)
+          DETACH DELETE n
+        `,
+        { labels: scopedLabels }
+      );
+      pceLogger.warn("Wiped scoped nodes and relationships from graph", { labels: scopedLabels });
+    } catch (error: any) {
+      pceLogger.error("Failed to wipe scoped graph labels", {
+        labels: scopedLabels,
+        error: error.message,
+      });
       throw error;
     } finally {
       await session.close();
@@ -454,4 +493,3 @@ export class Neo4jGraphStore {
     }
   }
 }
-

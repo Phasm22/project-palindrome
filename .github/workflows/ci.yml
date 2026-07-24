@@ -7,6 +7,26 @@ on:
     branches: [main]
 
 jobs:
+  # Deterministic semantic regression gate: committed fixtures only, no live services.
+  eval-gate:
+    name: Offline Eval Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Enforce eval baseline
+        run: bun test tests/pce/eval/offline-gate.test.ts
+
   # Run all tests - tests skip gracefully if services/env vars missing
   test:
     name: Tests
@@ -19,11 +39,8 @@ jobs:
         ports:
           - 6333:6333
           - 6334:6334
-        options: >-
-          --health-cmd "curl -f http://localhost:6333/health || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 3
+        # No container health-cmd: image has no curl, and GHA options-escaping
+        # breaks the compose-style /proc check. Wait on host /readyz below.
       
       neo4j:
         image: neo4j:latest
@@ -46,6 +63,18 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - name: Wait for Qdrant
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:6333/readyz >/dev/null; then
+              echo "qdrant ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "qdrant failed to become ready"
+          exit 1
       
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -57,7 +86,10 @@ jobs:
           NEO4J_USER: neo4j
           NEO4J_PASSWORD: password
           QDRANT_URL: http://localhost:6333
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || 'skip' }}
+          # Empty (not a placeholder like 'skip') so `if (!process.env.OPENAI_API_KEY)`
+          # guards in tests actually skip instead of hitting the real API with an
+          # invalid key and failing with a 401.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Proxmox/OPNSense tests will skip if not set
           PROXMOX_URL: ''
           OPNSENSE_URL: ''
@@ -95,4 +127,3 @@ jobs:
           echo "## Type Check Complete" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "- Note: Type errors are non-blocking. Fix gradually." >> $GITHUB_STEP_SUMMARY
-

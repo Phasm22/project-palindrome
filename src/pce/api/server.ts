@@ -29,6 +29,8 @@ import { TwinQueryService } from "../../twin/api/twin-query-service";
 
 type BunServer = ReturnType<typeof Bun.serve>;
 
+let warnedMissingApiToken = false;
+
 type ActiveAgentRun = {
   sessionId: string;
   conversationId: string | null;
@@ -101,6 +103,7 @@ export class PceApiServer {
   private activeAgentRuns = new Map<string, ActiveAgentRun>();
   private activeRunByConversation = new Map<string, string>();
   private activeRunByUser = new Map<string, string>();
+  private apiToken: string | null;
 
   constructor(deps: PceApiServerDependencies, options: PceApiServerOptions = {}) {
     this.options = {
@@ -129,11 +132,19 @@ export class PceApiServer {
       this.options.perIpRateLimit
     );
     this.redactor = new Redactor();
+    this.apiToken = process.env.PALINDROME_API_TOKEN?.trim() || null;
   }
 
   async start(): Promise<void> {
     if (this.server) {
       throw new Error("PCE API server is already running");
+    }
+
+    if (!this.apiToken && !warnedMissingApiToken) {
+      warnedMissingApiToken = true;
+      pceLogger.warn(
+        "PALINDROME_API_TOKEN is not configured; agent and mutation endpoints are unauthenticated"
+      );
     }
 
     // Start ingestion scheduler only when explicitly enabled (off by default for on-demand stacks)
@@ -238,9 +249,13 @@ export class PceApiServer {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Token",
         },
       });
+    }
+
+    if (this.requiresApiToken(req, url) && !this.hasValidApiToken(req)) {
+      return this.jsonResponse(401, { error: "Unauthorized" });
     }
 
     if (req.method === "POST" && url.pathname === "/query") {
@@ -424,6 +439,24 @@ export class PceApiServer {
     }
 
     return this.jsonResponse(404, { error: "Not Found" });
+  }
+
+  private requiresApiToken(req: Request, url: URL): boolean {
+    if (!this.apiToken) return false;
+    if (url.pathname.startsWith("/api/agent/")) return true;
+    if (["PUT", "PATCH", "DELETE"].includes(req.method)) return true;
+    return req.method === "POST" && (
+      url.pathname.startsWith("/api/chat/") ||
+      url.pathname === "/api/dashboard/query/cypher"
+    );
+  }
+
+  private hasValidApiToken(req: Request): boolean {
+    if (!this.apiToken) return true;
+    const authorization = req.headers.get("authorization");
+    const bearerToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    const headerToken = req.headers.get("x-api-token");
+    return bearerToken === this.apiToken || headerToken === this.apiToken;
   }
 
   private async handleQuery(req: Request, server: BunServer): Promise<Response> {
@@ -1078,7 +1111,11 @@ export class PceApiServer {
             name: n.node,
             status: n.status_normalized || n.status,
             cpu: n.cpu,
-            memory: n.mem_normalized || n.mem,
+            // Prefer raw bytes so the dashboard can format used/total consistently.
+            // mem_normalized is `{ value, unit, raw }` — never pass that object through
+            // as `memory` or formatBytes() will fail / render N/A.
+            memory: typeof n.mem === "number" ? n.mem : n.mem_normalized?.raw,
+            maxMemory: typeof n.maxmem === "number" ? n.maxmem : n.maxmem_normalized?.raw,
             uptime: n.uptime,
           })),
         },
@@ -1110,38 +1147,47 @@ export class PceApiServer {
   private async handleTwinGraph(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
-      const limitParam = url.searchParams.get("limit") || "300";
+      const limitParam = url.searchParams.get("limit") || "500";
       // Ensure limit is an integer, not a float
-      const limitValue = Math.floor(parseInt(limitParam, 10)) || 300;
-      const defaultGraphTypes = [
-        "compute_vm",
-        "compute_node",
-        "network_interface",
-        "network_subnet",
-        "storage",
-        "firewall_rule",
-      ];
+      const limitValue = Math.floor(parseInt(limitParam, 10)) || 500;
       const requestedTypes = url.searchParams
         .get("types")
         ?.split(",")
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean);
-      const graphTypes = requestedTypes?.length ? requestedTypes : defaultGraphTypes;
-      
+
       // Get graph store from dependencies (if available) or create new instance
       const graphStore = new Neo4jGraphStore();
       await graphStore.connect();
       const queryInterface = new GraphQueryInterface(graphStore);
-      
+
       // Use neo4j.int() to ensure integer type for LIMIT clause
       const { int } = await import("neo4j-driver");
-      
+
+      // Default to every entity type currently in the twin rather than a
+      // hardcoded allowlist. A fixed list silently drops any type ingested
+      // after it was written (e.g. switch/switch_port/firewall_alias were
+      // added by later ingestion work and were invisible in the ontology
+      // view until this discovery query existed).
+      let graphTypes = requestedTypes?.length ? requestedTypes : null;
+      if (!graphTypes) {
+        const typesSession = graphStore.getDriver().session();
+        try {
+          const typesResult = await typesSession.run(
+            `MATCH (n:TwinEntity) RETURN DISTINCT toLower(coalesce(n.type, "unknown")) AS type`
+          );
+          graphTypes = typesResult.records.map((record) => record.get("type"));
+        } finally {
+          await typesSession.close();
+        }
+      }
+
       // Fetch up to N ontology nodes first, then optionally include their outgoing
       // relationships. This preserves isolated nodes (e.g. interfaces without
       // subnet links yet) so the graph view reflects full store contents.
       const result = await queryInterface.executeQuery(`
         MATCH (n:TwinEntity)
-        WHERE toLower(coalesce(n.type, "")) IN $types
+        WHERE toLower(coalesce(n.type, "unknown")) IN $types
         WITH n
         ORDER BY coalesce(n.displayName, n.id)
         LIMIT $limit
@@ -1817,7 +1863,7 @@ export class PceApiServer {
         "Content-Type": "application/json",
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Token",
       },
     });
   }
@@ -1869,7 +1915,11 @@ export class PceApiServer {
 
       const userId = body.userId || "dashboard-user";
       const profileUserId = body.profileUserId || userId;
-      const aclGroup = (body.aclGroup || "admin") as ACLGroup;
+      const aclGroup = (
+        typeof body.aclGroup === "string" && body.aclGroup.trim()
+          ? body.aclGroup.trim()
+          : "viewer"
+      ) as ACLGroup;
       const sessionId = body.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
       const conversationId = body.conversationId || null;
 
@@ -2673,10 +2723,12 @@ export interface BootstrapPceApiServerOptions extends PceApiServerOptions {
   fusionConfig?: Partial<FusionConfig>;
   /** Use this Qdrant collection instead of default (e.g. for audit/gold-path scripts). */
   vectorStoreCollectionName?: string;
+  /** Restrict graph reads to this entity label (e.g. for audit/gold-path scripts). */
+  graphEntityLabel?: string;
 }
 
 export async function bootstrapPceApiServer(options: BootstrapPceApiServerOptions = {}) {
-  const { fusionConfig, vectorStoreCollectionName, ...serverOptions } = options;
+  const { fusionConfig, vectorStoreCollectionName, graphEntityLabel, ...serverOptions } = options;
   const embeddingService = new EmbeddingService();
   const collectionName = vectorStoreCollectionName ?? DEFAULT_COLLECTION;
   const vectorStore = new QdrantVectorStore(undefined, undefined, collectionName);
@@ -2686,7 +2738,9 @@ export async function bootstrapPceApiServer(options: BootstrapPceApiServerOption
 
   const graphStore = new Neo4jGraphStore();
   await graphStore.connect();
-  const graphQuery = new GraphQueryInterface(graphStore);
+  const graphQuery = graphEntityLabel
+    ? new GraphQueryInterface(graphStore, graphEntityLabel)
+    : new GraphQueryInterface(graphStore);
   const graphRetrieval = new GraphRAGRetrieval(graphQuery);
 
   const entityResolver = new QueryEntityResolver(graphQuery);

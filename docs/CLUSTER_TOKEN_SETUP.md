@@ -17,15 +17,18 @@ Palindrome supports both standalone nodes (proxBig) and cluster nodes (yin, yang
 **On YIN node:**
 ```bash
 pveum user token delete llm@pve llm-agent
-pveum user token add llm@pve llm-agent --privsep 0
+pveum user token add llm@pve llm-agent --privsep 1
 # Save the secret that's displayed
+# Grant the *token* the roles it needs (privsep 1 does not inherit user ACLs):
+pveum acl modify / --tokens 'llm@pve!llm-agent' --roles AdminPlus,PVEVMAdmin,PVEAuditor,TerraformSafeOps --propagate 1
 ```
 
 **On YANG node:**
 ```bash
 pveum user token delete llm@pve llm-agent
-pveum user token add llm@pve llm-agent --privsep 0
+pveum user token add llm@pve llm-agent --privsep 1
 # Save the secret that's displayed
+pveum acl modify / --tokens 'llm@pve!llm-agent' --roles AdminPlus,PVEVMAdmin,PVEAuditor,TerraformSafeOps --propagate 1
 ```
 
 ### 2. Update .env File
@@ -91,23 +94,25 @@ The PCE API (`bun run pce:api`) loads `.env` at startup and uses `getProxmoxEndp
 
 - **Token ID is the same**: `llm@pve!llm-agent` works on all nodes
 - **Token secrets are different**: Each node generates its own secret
-- **Permissions**: Make sure `llm@pve` user has `AdminPlus` role (or equivalent) on all nodes
+- **Permissions**: `llm@pve` user keeps AdminPlus / PVEVMAdmin / PVEAuditor / TerraformSafeOps; with **privsep 1** the token needs the **same roles granted to the token** (not only the user). See RM-16.
+- **Rollback (privsep)**: `pveum user token modify llm@pve llm-agent --privsep 0` restores blanket user inheritance
 - **Cluster vs Standalone**: yin and yang are in a cluster, proxBig is standalone
 
 ## Quick Setup Script
 
-Run on each cluster node:
+Run on each cluster node (or once on the cluster — ACL syncs; recreate token carefully per node for secrets):
 
 ```bash
-# On yin
+# User roles (if not already present)
 pveum aclmod / -user llm@pve -role AdminPlus --propagate 1
-pveum user token delete llm@pve llm-agent
-pveum user token add llm@pve llm-agent --privsep 0
+pveum aclmod / -user llm@pve -role PVEVMAdmin --propagate 1
+pveum aclmod / -user llm@pve -role PVEAuditor --propagate 1
+pveum aclmod / -user llm@pve -role TerraformSafeOps --propagate 1
 
-# On yang  
-pveum aclmod / -user llm@pve -role AdminPlus --propagate 1
+# Token with privilege separation (preferred)
 pveum user token delete llm@pve llm-agent
-pveum user token add llm@pve llm-agent --privsep 0
+pveum user token add llm@pve llm-agent --privsep 1
+pveum acl modify / --tokens 'llm@pve!llm-agent' --roles AdminPlus,PVEVMAdmin,PVEAuditor,TerraformSafeOps --propagate 1
 ```
 
 Then update `.env` with the secrets.

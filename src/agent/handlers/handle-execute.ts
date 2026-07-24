@@ -20,7 +20,13 @@ import {
   verifyConnectionEndpoints,
 } from "../../connections/verifier";
 import { fetchHybridContext, type HybridApiContext } from "../rag-client";
-import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "../tool-policy";
+import {
+  getToolRisk,
+  isToolAuthorized,
+  requiresConfirmation,
+  runWithToolAcl,
+  type ToolSession,
+} from "../tool-policy";
 import { sanitizeToolPayload } from "../tool-sanitizer";
 import {
   getReasoningTraceStore,
@@ -62,7 +68,6 @@ import {
   cleanupAfterProxmoxDestroy,
 } from "./tool-helpers";
 import { isMetaIdentityQuery } from "./identity-helpers";
-import { generateActionPlan } from "./plan-generator";
 import {
   extractResolvedVmEntity,
   hydrateProxmoxReadArgs,
@@ -213,6 +218,12 @@ export interface HandleExecuteInput {
 }
 
 export async function handleExecute(
+  input: HandleExecuteInput
+): Promise<{ text: string; entityCacheUpdate?: Record<string, string> }> {
+  return runWithToolAcl(input.session.aclGroup, () => handleExecuteWithAcl(input));
+}
+
+async function handleExecuteWithAcl(
   input: HandleExecuteInput
 ): Promise<{ text: string; entityCacheUpdate?: Record<string, string> }> {
   const {
@@ -557,6 +568,7 @@ export async function handleExecute(
       });
     }
 
+    finalText = sanitizeToolPayload(finalText);
     reasoningStep.llmResponse = finalText;
     reasoningSteps.push(reasoningStep);
     const durationMs = Date.now() - startTime;
@@ -655,11 +667,12 @@ export async function handleExecute(
     const rawAnswer = aliasPayload
       ? formatAliasContentsPayload(aliasIntent.aliasName, aliasPayload)
       : `Answer: No. No alias named \`${aliasIntent.aliasName}\` was found in the current firewall alias list.`;
-    const finalText = applyAdaptivePackaging(rawAnswer, {
+    let finalText = applyAdaptivePackaging(rawAnswer, {
       userQuery: userInput,
       intentType: "firewall_rules",
       mode: state.responseMode,
     }) ?? rawAnswer;
+    finalText = sanitizeToolPayload(finalText);
     reasoningStep.llmResponse = finalText;
     reasoningSteps.push(reasoningStep);
 
@@ -866,39 +879,6 @@ export async function handleExecute(
         ]
       : [];
 
-  // P3.3: Plan-before-execute for multi-step ACTION intents.
-  // When the classifier identifies an ACTION intent and actionIntent has keys (meaning
-  // specific action-layer actions are involved), generate a structured plan first.
-  // If the plan has 2+ steps, stream it to the UI and enter AWAITING_CONFIRMATION
-  // before any tool executes. Single-step plans fall through to the normal loop.
-  if (state.classification.intent === "ACTION" && actionIntent != null && Object.keys(actionIntent).length > 0) {
-    const plan = await generateActionPlan({ userInput, sessionId });
-    throwIfStopped();
-    if (plan !== null && plan.steps.length > 1) {
-      // Persist plan on state so callers (runner.ts) can inspect it later
-      state.executionPlan = plan;
-
-      // Emit plan event so the UI can render it before confirmation
-      eventBus.emit({
-        type: "agent:plan",
-        sessionId,
-        timestamp: Date.now(),
-        data: {
-          type: "agent:plan",
-          plan,
-          pendingConfirmationId: sessionId,
-        },
-      });
-
-      // Return early — the runner will set conversationState to AWAITING_CONFIRMATION
-      // using the existing confirmation flow. No tools have executed yet.
-      return {
-        text: `I've prepared a ${plan.steps.length}-step plan: ${plan.summary}\n\nPlease confirm to proceed.`,
-        entityCacheUpdate: {},
-      };
-    }
-  }
-
   for (let step = 0; step < MAX_STEPS; step++) {
     throwIfStopped();
     logger.info(`Reasoning step ${step + 1}/${MAX_STEPS}`);
@@ -1070,7 +1050,7 @@ export async function handleExecute(
           seenToolCalls.add(callSignature);
 
           const targetTool = tools.find((t) => t.metadata.name === toolName);
-          if (!targetTool || !isToolAuthorized(targetTool, session)) {
+          if (!targetTool || !isToolAuthorized(targetTool, session, parsedArgs)) {
             return null;
           }
 
@@ -1332,7 +1312,7 @@ export async function handleExecute(
           continue;
         }
 
-        if (!isToolAuthorized(targetTool, session)) {
+        if (!isToolAuthorized(targetTool, session, parsedArgs)) {
           const errorMsg = `ACL group ${session.aclGroup} is not authorized to run ${toolName}`;
           logger.error(errorMsg);
           context.addToolResult(toolCall.id, toolName, {
@@ -1929,6 +1909,8 @@ export async function handleExecute(
         }
       }
 
+      finalText = sanitizeToolPayload(finalText);
+      reasoningStep.llmResponse = finalText;
       context.addAssistantMessage(finalText);
 
       // Record reasoning trace first to get trace ID
@@ -2022,6 +2004,7 @@ export async function handleExecute(
           data: connectionEndpoints,
         });
       }
+      structuredResponse = sanitizeToolPayload(structuredResponse);
 
       // Emit agent:final event with trace ID
       const durationMs = Date.now() - startTime;
@@ -2100,7 +2083,6 @@ export async function handleExecute(
       if (synthText) {
         boundaryText = prettifyRawPfctlText(synthText);
         boundarySynthesized = true;
-        context.addAssistantMessage(boundaryText);
         logger.info("Boundary synthesis produced an answer from gathered tool results", {
           succeededToolCallCount,
           totalSteps: reasoningSteps.length,
@@ -2112,6 +2094,10 @@ export async function handleExecute(
         error: error?.message,
       });
     }
+  }
+  boundaryText = sanitizeToolPayload(boundaryText);
+  if (boundarySynthesized) {
+    context.addAssistantMessage(boundaryText);
   }
   const lastReasoningStep = reasoningSteps[reasoningSteps.length - 1];
   if (lastReasoningStep) {

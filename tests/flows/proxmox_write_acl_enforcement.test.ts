@@ -1,14 +1,20 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { loadTools } from "../../src/agent/tool-loader";
 import { ProxmoxWriteTool } from "../../src/tools/proxmox/writes/proxmox-write-tool";
 
 describe("TL-2B.6: Write ACL Enforcement (Agent Runner Integration)", () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(() => {
     // Set up environment
     process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key";
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
   });
 
   it("should block viewer user from executing write operations at policy layer", () => {

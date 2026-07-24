@@ -12,7 +12,7 @@ import { fetchNodeTemperature, getSummaryTemperature } from "./temperature-fetch
 
 /**
  * Schema for Proxmox read-only tool parameters
- * Supports 18 distinct read-only actions across Nodes, VMs, Cluster, and System
+ * Supports read-only actions across Nodes, VMs, Cluster, and System
  */
 export const ProxmoxReadOnlyParams = z.object({
   action: z
@@ -85,7 +85,7 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     super({
       name: "proxmox_readonly",
       description:
-        "Comprehensive read-only access to Proxmox cluster state (Nodes, VMs, Cluster). All operations return structured JSON data. Reuse node, VMID, and type from prior tool results instead of rediscovering them. For VM provenance and recent-change questions, call get_vm_config and node_tasks with the same node and VMID; only report no recent changes when the filtered node_tasks call succeeds with count 0.",
+        "Comprehensive read-only access to Proxmox cluster state (Nodes, VMs, Cluster, Ceph health). All operations return structured JSON data. Use cluster_ceph_status for Ceph health, monitor quorum, OSD, placement-group, and capacity status. Reuse node, VMID, and type from prior tool results instead of rediscovering them. For VM provenance and recent-change questions, call get_vm_config and node_tasks with the same node and VMID; only report no recent changes when the filtered node_tasks call succeeds with count 0.",
       categories: ["proxmox", "virtualization", "infrastructure", "cluster"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
@@ -101,9 +101,9 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         },
         {
           domain: "metrics",
-          triggerPatterns: [/\b(temperature|temp|cpu|memory|ram|disk|status|uptime|metrics|load)\b/i],
-          classificationExamples: ["show cluster temperature"],
-          retrievalKeywords: ["metrics", "temperature", "sensors", "cpu", "memory"],
+          triggerPatterns: [/\b(temperature|temp|cpu|memory|ram|disk|status|uptime|metrics|load|ceph|osd|placement group)\b/i],
+          classificationExamples: ["show cluster temperature", "what is the Ceph status on the cluster?"],
+          retrievalKeywords: ["metrics", "temperature", "sensors", "cpu", "memory", "ceph", "osd", "storage health"],
           toolFirst: true,
           compositeEligible: true,
           priority: 40,
@@ -156,6 +156,10 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
           parameters: { action: "cluster_status" },
         },
         {
+          description: "Get Ceph cluster health, quorum, OSD, placement-group, and capacity status",
+          parameters: { action: "cluster_ceph_status" },
+        },
+        {
           description: "Find VM/container by name (e.g., find 'aiMarketBot' to get its VMID, node, and type)",
           parameters: { action: "cluster_resources" },
         },
@@ -177,8 +181,9 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
         "All responses are structured JSON objects with normalized data (memory in MB/GB, timestamps in ISO8601).",
         "get_vm_ip requires guest agent enabled in VM config and API token with VM.Monitor + VM.Audit permissions. Returns 403 if permissions insufficient or guest agent unavailable.",
         "node_temperature fetches temperature data via SSH sensors command. Requires SSH access to the node.",
+        "cluster_ceph_status uses the read-only Proxmox REST API. If Ceph is not configured, it returns configured=false with a clear message.",
         "For provenance and recent-change questions, resolve the VM once, call get_vm_config with its node/VMID/type, and call node_tasks with the same node and VMID. Only report no recent changes when the filtered node_tasks result succeeds with count 0.",
-        "Internal IP addresses, MAC addresses, and credentials are automatically sanitized from responses.",
+        "Credentials and secrets are automatically sanitized from responses. Infrastructure identifiers such as internal IP and MAC addresses are preserved because they are primary diagnostic data.",
       ],
     });
   }
@@ -821,37 +826,71 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
     };
   }
 
+  /**
+   * Resolve used/total memory bytes from a `/nodes/{node}/status` payload and/or
+   * the `/nodes` list row. Node status often nests memory as `{ used, total, free }`
+   * rather than top-level `mem`/`maxmem` (those appear on the list endpoint and
+   * cluster resources). Prefer status values, fall back to the list row so
+   * enrichment never wipes memory that the list already provided.
+   */
+  private static resolveNodeMemory(
+    listNode: Record<string, any>,
+    status: Record<string, any>
+  ): { mem?: number; maxmem?: number } {
+    const nested = status.memory && typeof status.memory === "object" ? status.memory : null;
+    const statusMem =
+      typeof status.mem === "number"
+        ? status.mem
+        : typeof nested?.used === "number"
+          ? nested.used
+          : undefined;
+    const statusMaxmem =
+      typeof status.maxmem === "number"
+        ? status.maxmem
+        : typeof nested?.total === "number"
+          ? nested.total
+          : undefined;
+    const listMem = typeof listNode.mem === "number" ? listNode.mem : undefined;
+    const listMaxmem = typeof listNode.maxmem === "number" ? listNode.maxmem : undefined;
+    return {
+      mem: statusMem ?? listMem,
+      maxmem: statusMaxmem ?? listMaxmem,
+    };
+  }
+
   private async enrichNodesWithStatus(client: ProxmoxClient, nodes: any[]): Promise<any[]> {
     const nodeStatusPromises = nodes
       .filter((node): node is { node: string; [key: string]: any } => Boolean(node?.node))
       .map(async (node) => {
         const nodeName = node.node;
-      try {
-        const statusResult = await client.get(`/nodes/${nodeName}/status`);
+        try {
+          const statusResult = await client.get(`/nodes/${nodeName}/status`);
           const status = statusResult.data?.data || {};
-        return {
-          node: nodeName,
-          status: node.status || status.status,
-          level: node.level,
-          cpu: status.cpu,
-          maxcpu: status.maxcpu,
-          mem: status.mem,
-          maxmem: status.maxmem,
-          uptime: status.uptime,
-        };
+          const { mem, maxmem } = ProxmoxReadOnlyTool.resolveNodeMemory(node, status);
+          return {
+            node: nodeName,
+            status: node.status || status.status,
+            level: node.level,
+            cpu: status.cpu ?? node.cpu,
+            maxcpu: status.maxcpu ?? node.maxcpu,
+            mem,
+            maxmem,
+            uptime: status.uptime ?? node.uptime,
+          };
         } catch {
-        return {
-          node: nodeName,
-        status: node.status,
-        level: node.level,
-          cpu: undefined,
-          maxcpu: undefined,
-          mem: undefined,
-          maxmem: undefined,
-          uptime: undefined,
-        };
-      }
-    });
+          const { mem, maxmem } = ProxmoxReadOnlyTool.resolveNodeMemory(node, {});
+          return {
+            node: nodeName,
+            status: node.status,
+            level: node.level,
+            cpu: node.cpu,
+            maxcpu: node.maxcpu,
+            mem,
+            maxmem,
+            uptime: node.uptime,
+          };
+        }
+      });
 
     const enriched = await Promise.all(nodeStatusPromises);
     return enriched.filter(Boolean);
@@ -2169,28 +2208,135 @@ export class ProxmoxReadOnlyTool extends ProxmoxReadOnlyBase {
   ): Promise<{ data: any; metadata: any }> {
     try {
       const result = await client.get("/cluster/ceph/status");
-      const status = result.data.data || {};
+      const status = result.data?.data;
 
-      const normalized = normalizeProxmoxResponse({
-        health: status.health,
-        time: status.time,
-        ...status,
-      });
+      if (
+        !status ||
+        typeof status !== "object" ||
+        Array.isArray(status) ||
+        Object.keys(status).length === 0
+      ) {
+        return {
+          data: {
+            configured: false,
+            message: "Ceph is not configured on this cluster / no Ceph status data is available",
+          },
+          metadata: result.metadata,
+        };
+      }
+
+      const health =
+        typeof status.health === "string"
+          ? status.health
+          : status.health?.status || "unknown";
+      const healthChecks =
+        status.health?.checks && typeof status.health.checks === "object"
+          ? Object.entries(status.health.checks).map(([name, check]: [string, any]) => ({
+              name,
+              severity: check?.severity,
+              message: check?.summary?.message,
+              count: check?.summary?.count,
+            }))
+          : [];
+      const monitorEntries = Array.isArray(status.monmap?.mons)
+        ? status.monmap.mons
+        : [];
+      const quorumNames = Array.isArray(status.quorum_names)
+        ? status.quorum_names
+        : monitorEntries
+            .filter((monitor: any) => status.quorum?.includes(monitor.rank))
+            .map((monitor: any) => monitor.name);
+      const osdMap = status.osdmap?.osdmap || status.osdmap || {};
+      const pgMap = status.pgmap || {};
+      const pgStates = Array.isArray(pgMap.pgs_by_state)
+        ? pgMap.pgs_by_state.map((pgState: any) => ({
+            state: pgState.state_name,
+            count: pgState.count,
+          }))
+        : [];
+      const usage = {
+        total: this.normalizeCephCapacity(pgMap.bytes_total),
+        used: this.normalizeCephCapacity(pgMap.bytes_used),
+        available: this.normalizeCephCapacity(pgMap.bytes_avail),
+        usedPercent:
+          typeof pgMap.bytes_used === "number" &&
+          typeof pgMap.bytes_total === "number" &&
+          pgMap.bytes_total > 0
+            ? Math.round((pgMap.bytes_used / pgMap.bytes_total) * 10000) / 100
+            : null,
+      };
 
       return {
-        data: normalized,
+        data: {
+          configured: true,
+          health,
+          healthChecks,
+          monitors: {
+            total: status.monmap?.num_mons ?? monitorEntries.length,
+            quorum: Array.isArray(status.quorum) ? status.quorum : [],
+            quorumNames,
+          },
+          manager: {
+            available: status.mgrmap?.available ?? null,
+            activeName: status.mgrmap?.active_name ?? null,
+            standbys: status.mgrmap?.num_standbys ?? null,
+          },
+          osds: {
+            total: osdMap.num_osds ?? null,
+            up: osdMap.num_up_osds ?? null,
+            in: osdMap.num_in_osds ?? null,
+          },
+          placementGroups: {
+            total: pgMap.num_pgs ?? null,
+            states: pgStates,
+          },
+          usage,
+          reportedAt: status.time ?? null,
+        },
         metadata: result.metadata,
       };
     } catch (error: any) {
-      // Ceph might not be configured, return empty status
-      if (error.response?.status === 404 || error.response?.status === 400) {
+      const statusCode = error.response?.status ?? error.status;
+      const errorMessage = String(
+        error.response?.data?.message || error.message || ""
+      );
+      const cephUnavailable =
+        statusCode === 400 ||
+        statusCode === 404 ||
+        (statusCode === 500 &&
+          /\b(ceph.*(?:not configured|not initialized|not installed)|no monitors specified)\b/i.test(
+            errorMessage
+          ));
+
+      if (cephUnavailable) {
         return {
-          data: { configured: false, message: "Ceph is not configured on this cluster" },
-          metadata: { status: 404, timestamp: Date.now(), durationMs: 0 },
+          data: {
+            configured: false,
+            message: "Ceph is not configured on this cluster / no Ceph status data is available",
+          },
+          metadata: {
+            status: statusCode,
+            timestamp: Date.now(),
+            durationMs: 0,
+          },
         };
       }
       throw error;
     }
+  }
+
+  private normalizeCephCapacity(
+    bytes: unknown
+  ): ReturnType<typeof normalizeMemory> | null {
+    if (
+      typeof bytes !== "number" ||
+      !Number.isFinite(bytes) ||
+      bytes < 0
+    ) {
+      return null;
+    }
+
+    return normalizeMemory(bytes);
   }
 
   /**

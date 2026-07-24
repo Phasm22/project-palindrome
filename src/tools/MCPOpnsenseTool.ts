@@ -59,6 +59,16 @@ export class MCPOpnsenseTool extends BaseTool {
   private async _doDiscovery(): Promise<void> {
 
     try {
+      // Fail fast without OPNsense config instead of spawning the MCP
+      // subprocess anyway: with no target to discover tools from, the
+      // spawn just hangs waiting on a handshake that will never resolve
+      // (observed: 5s+ instead of an immediate, catchable error).
+      if (!process.env.OPNSENSE_URL || !process.env.OPNSENSE_API_KEY || !process.env.OPNSENSE_API_SECRET) {
+        throw new Error(
+          "OPNSENSE_URL, OPNSENSE_API_KEY, and OPNSENSE_API_SECRET must be set"
+        );
+      }
+
       // Create MCP client from environment or config
       const command = process.env.MCP_OPNSENSE_COMMAND || "npx";
       const args = process.env.MCP_OPNSENSE_ARGS 
@@ -302,14 +312,16 @@ export class MCPOpnsenseTool extends BaseTool {
     const started = context.startedAt ?? Date.now();
 
     try {
-      // Ensure MCP client is initialized
-      await this.ensureInitialized();
-
-      // Validate parameters
+      // Validate the request shape before attempting any (expensive,
+      // network-dependent) initialization - a malformed request is a
+      // client error regardless of whether the MCP backend is reachable.
       const parsed = MCPOpnsenseParams.safeParse(params);
       if (!parsed.success) {
         return { error: parsed.error.message, durationMs: Date.now() - started };
       }
+
+      // Ensure MCP client is initialized
+      await this.ensureInitialized();
 
       const { module, action, parameters = {} } = parsed.data;
 

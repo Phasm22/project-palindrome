@@ -1,9 +1,10 @@
 import { NetworkIngestionOrchestrator } from "../ingestion/network-ingestion";
 import { FirewallIngestionOrchestrator } from "../ingestion/firewall-ingestion";
 import { SwitchIngestionOrchestrator } from "../ingestion/switch-ingestion";
+import { TerraformIngestionOrchestrator } from "../ingestion/terraform-ingestion";
+import { runIngestionStaleCleanup } from "../ingestion/stale-cleanup";
 import { pceLogger as logger } from "../utils/logger";
 import { MetricsCollector } from "../metrics/collector";
-import { StaleNodeCleaner } from "../../twin/cleanup/stale-node-cleaner";
 import { $ } from "bun";
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -21,6 +22,12 @@ export interface IngestionRunDetails {
   proxmox: {
     success: boolean;
     duration: number;
+    error?: string;
+  };
+  terraform: {
+    success: boolean;
+    duration: number;
+    entities?: number;
     error?: string;
   };
   network: {
@@ -174,12 +181,16 @@ export class IngestionScheduler {
     });
 
     let proxmoxSuccess = false;
+    let terraformSuccess = false;
     let networkSuccess = false;
     let firewallSuccess = false;
     let proxmoxDuration = 0;
+    let terraformDuration = 0;
     let networkDuration = 0;
     let firewallDuration = 0;
     let proxmoxError: string | undefined;
+    let terraformError: string | undefined;
+    let terraformEntities = 0;
     let networkError: string | undefined;
     let networkEntities = 0;
     let networkRelationships = 0;
@@ -229,6 +240,41 @@ export class IngestionScheduler {
         });
         this.metricsCollector.record("ingestion_scheduler_proxmox_duration_ms", proxmoxDuration, { status: "failure" });
         this.metricsCollector.record("ingestion_scheduler_proxmox_failure", 1);
+      }
+
+      // Run Terraform declared-state ingestion
+      const terraformStart = Date.now();
+      let terraformOrchestrator: TerraformIngestionOrchestrator | null = null;
+      try {
+        logger.info("Running Terraform declared-state ingestion...");
+        terraformOrchestrator = new TerraformIngestionOrchestrator();
+        const terraformResult = await terraformOrchestrator.ingestTerraform();
+        terraformDuration = Date.now() - terraformStart;
+        terraformSuccess = true;
+        terraformEntities = terraformResult.entitiesWritten;
+        logger.info("Terraform declared-state ingestion completed", {
+          entities: terraformEntities,
+        });
+        this.metricsCollector.record(
+          "ingestion_scheduler_terraform_duration_ms",
+          terraformDuration,
+          { status: "success" }
+        );
+        this.metricsCollector.record("ingestion_scheduler_terraform_success", 1);
+      } catch (error: any) {
+        terraformDuration = Date.now() - terraformStart;
+        terraformError = error.message || String(error);
+        logger.error("Terraform declared-state ingestion failed", {
+          error: terraformError,
+        });
+        this.metricsCollector.record(
+          "ingestion_scheduler_terraform_duration_ms",
+          terraformDuration,
+          { status: "failure" }
+        );
+        this.metricsCollector.record("ingestion_scheduler_terraform_failure", 1);
+      } finally {
+        await terraformOrchestrator?.dispose?.();
       }
 
       // Run Network ingestion
@@ -340,16 +386,15 @@ export class IngestionScheduler {
       let cleanupError: string | undefined;
       try {
         logger.info("Running stale node cleanup...");
-        const cleaner = new StaleNodeCleaner();
-        const cleanupResults = await cleaner.cleanAll({ maxAgeMinutes: 10 });
+        const cleanup = await runIngestionStaleCleanup({ maxAgeMinutes: 10 });
         const cleanupDuration = Date.now() - cleanupStart;
         
-        cleanupDeleted = cleanupResults.reduce((sum, r) => sum + r.deleted, 0);
+        cleanupDeleted = cleanup.deleted;
         if (cleanupDeleted > 0) {
           logger.info("Stale node cleanup completed", {
             durationMs: cleanupDuration,
             deleted: cleanupDeleted,
-            results: cleanupResults.map(r => ({ type: r.entityType, deleted: r.deleted })),
+            results: cleanup.results.map(r => ({ type: r.entityType, deleted: r.deleted })),
           });
           this.metricsCollector.record("ingestion_scheduler_cleanup_deleted", cleanupDeleted);
         } else {
@@ -363,7 +408,13 @@ export class IngestionScheduler {
       }
 
       // Record overall metrics
-      const overallSuccess = proxmoxSuccess && networkSuccess && firewallSuccess && switchSuccess && topologySuccess;
+      const overallSuccess =
+        proxmoxSuccess &&
+        terraformSuccess &&
+        networkSuccess &&
+        firewallSuccess &&
+        switchSuccess &&
+        topologySuccess;
       if (overallSuccess) {
         this.successCount++;
         this.metricsCollector.record("ingestion_scheduler_run_success", 1);
@@ -386,6 +437,12 @@ export class IngestionScheduler {
           success: proxmoxSuccess,
           duration: proxmoxDuration,
           error: proxmoxError,
+        },
+        terraform: {
+          success: terraformSuccess,
+          duration: terraformDuration,
+          entities: terraformEntities,
+          error: terraformError,
         },
         network: {
           success: networkSuccess,
@@ -433,6 +490,7 @@ export class IngestionScheduler {
       logger.info("Scheduled ingestion completed", {
         durationMs: duration,
         proxmoxDuration,
+        terraformDuration,
         networkDuration,
         firewallDuration,
         switchDuration,
@@ -447,6 +505,7 @@ export class IngestionScheduler {
         duration_ms: duration,
         timestamp: this.lastRun.toISOString(),
         proxmox: runDetails.proxmox,
+        terraform: runDetails.terraform,
         network: runDetails.network,
         firewall: runDetails.firewall,
         switch: runDetails.switch,

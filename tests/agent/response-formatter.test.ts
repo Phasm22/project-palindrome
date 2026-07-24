@@ -1,11 +1,17 @@
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { formatResponseForBot, applyAdaptivePackaging } from "../../src/agent/response-formatter";
 
 describe("formatResponseForBot (structured generateObject)", () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(() => {
     process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || "test-key";
     delete process.env.DISABLE_RESPONSE_FORMATTING;
     delete process.env.ENABLE_RESPONSE_FORMATTING_IN_TESTS;
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
   });
 
   it("returns raw response when mode is undefined", async () => {

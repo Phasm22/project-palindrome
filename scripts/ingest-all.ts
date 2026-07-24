@@ -4,14 +4,20 @@ import { $ } from "bun";
 import { NetworkIngestionOrchestrator } from "../src/pce/ingestion/network-ingestion";
 import { FirewallIngestionOrchestrator } from "../src/pce/ingestion/firewall-ingestion";
 import { SwitchIngestionOrchestrator } from "../src/pce/ingestion/switch-ingestion";
+import { TerraformIngestionOrchestrator } from "../src/pce/ingestion/terraform-ingestion";
+import { runIngestionStaleCleanup } from "../src/pce/ingestion/stale-cleanup";
 
 async function main() {
+  let terraformOrchestrator: TerraformIngestionOrchestrator | null = null;
   let networkOrchestrator: NetworkIngestionOrchestrator | null = null;
   let firewallOrchestrator: FirewallIngestionOrchestrator | null = null;
   let switchOrchestrator: SwitchIngestionOrchestrator | null = null;
   try {
     console.log("=== Running Proxmox ingestion ===");
     await $`bun run scripts/ingest-proxmox.ts`;
+    console.log("\n=== Running Terraform declared-state ingestion ===");
+    terraformOrchestrator = new TerraformIngestionOrchestrator();
+    await terraformOrchestrator.ingestTerraform();
     console.log("\n=== Running Network ingestion ===");
     networkOrchestrator = new NetworkIngestionOrchestrator();
     await networkOrchestrator.ingestNetwork();
@@ -23,11 +29,15 @@ async function main() {
     await switchOrchestrator.ingestSwitches();
     console.log("\n=== Running Topology ingestion ===");
     await $`bun run scripts/ingest-topology.ts`;
+    console.log("\n=== Running stale entity cleanup ===");
+    const cleanup = await runIngestionStaleCleanup({ maxAgeMinutes: 10 });
+    console.log(`Stale entity cleanup removed ${cleanup.deleted} entities.`);
     console.log("\nIngest-all complete.");
   } catch (error: any) {
     console.error("ingest-all failed:", error?.message || error);
     process.exit(1);
   } finally {
+    await terraformOrchestrator?.dispose?.();
     await networkOrchestrator?.dispose?.();
     await firewallOrchestrator?.dispose?.();
     await switchOrchestrator?.dispose?.();
@@ -35,4 +45,3 @@ async function main() {
 }
 
 main();
-

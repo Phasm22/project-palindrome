@@ -1,7 +1,7 @@
 import readline from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import OpenAI from "openai";
-import type { AgentResponse } from "../types/agent";
+import type { AgentResponse as LegacyAgentResponse } from "../types/agent";
 import type { ExecutionResult } from "../types/execution";
 import { ConnectionTargetSchema, type ConnectionEndpoint } from "../types/connections";
 import { buildConnectionEndpoints, resolveConnectionTarget, verifyConnectionEndpoints } from "../connections/verifier";
@@ -14,7 +14,13 @@ import { SYSTEM_PROMPT, buildSystemPrompt, buildStructuredResponsePrompt } from 
 import { generateObject } from "ai";
 import { openai as aiSdkOpenai } from "@ai-sdk/openai";
 import { fetchHybridContext, type HybridApiContext } from "./rag-client";
-import { getToolRisk, isToolAuthorized, requiresConfirmation, type ToolSession } from "./tool-policy";
+import {
+  getToolRisk,
+  isToolAuthorized,
+  requiresConfirmation,
+  runWithToolAcl,
+  type ToolSession,
+} from "./tool-policy";
 import { sanitizeToolPayload } from "./tool-sanitizer";
 import {
   getReasoningTraceStore,
@@ -23,7 +29,10 @@ import {
   type ReasoningTraceProvenance,
 } from "../pce/api/reasoning-trace-store";
 import { AgentEventBus } from "./event-bus";
-import { createTextAgentResponse } from "./schemas/agent-response";
+import {
+  createTextAgentResponse,
+  type AgentResponse as StructuredAgentResponse,
+} from "./schemas/agent-response";
 import type { BaseTool } from "../tools/BaseTool";
 import { formatToolGuidance, type ToolSchema } from "../tools/tool-schema";
 import { detectComputeIntent, type ComputeIntent } from "../reasoning/compute-intents";
@@ -797,13 +806,44 @@ export function coerceTextContent(content: any): string {
   return String(content);
 }
 
+export type AgentRunResponse = LegacyAgentResponse & {
+  structuredResponse: StructuredAgentResponse;
+  entityCacheUpdate?: Record<string, string>;
+};
+
+/**
+ * Final-event coverage is centralized in emitFinalEvent, which supplies the
+ * same text-envelope fallback for every runner path that does not provide a
+ * richer structured response. Keep the direct runAgent return equally covered
+ * so non-event consumers such as the CLI do not silently discard the envelope.
+ */
+function withStructuredResponse(
+  response: LegacyAgentResponse & { entityCacheUpdate?: Record<string, string> },
+  structuredResponse?: StructuredAgentResponse
+): AgentRunResponse {
+  return {
+    ...response,
+    structuredResponse: structuredResponse ?? createTextAgentResponse(response.text ?? ""),
+  };
+}
+
 export async function runAgent(
   userInput: string,
   optionsOrStream?: boolean | AgentRunOptions
-): Promise<AgentResponse> {
+): Promise<AgentRunResponse> {
   const options: AgentRunOptions =
     typeof optionsOrStream === "boolean" ? { stream: optionsOrStream } : optionsOrStream ?? {};
 
+  return runWithToolAcl(
+    options.aclGroup ?? "admin",
+    () => runAgentWithAcl(userInput, options)
+  );
+}
+
+async function runAgentWithAcl(
+  userInput: string,
+  options: AgentRunOptions
+): Promise<AgentRunResponse> {
   options.signal?.throwIfAborted();
 
   if (options.stream) {
@@ -894,7 +934,7 @@ export async function runAgent(
       userId: options.userId ?? "agent-user",
       aclGroup: options.aclGroup ?? "admin",
     });
-    return confirmResult.response;
+    return withStructuredResponse(confirmResult.response);
   }
   userInput = confirmResult.effectiveInput;
   usedPendingAction = confirmResult.usedPendingAction;
@@ -1178,7 +1218,7 @@ export async function runAgent(
       }
     },
   });
-  if (identityResult.handled) return identityResult.response;
+  if (identityResult.handled) return withStructuredResponse(identityResult.response);
 
   // Handle high-risk confirmation gate (bound to pending action)
   if (state.conversationPlan.decision === "ASK_CONFIRM") {
@@ -1191,7 +1231,7 @@ export async function runAgent(
       userId: session.userId,
       aclGroup: session.aclGroup,
     });
-    return confirmRequestResult;
+    return withStructuredResponse(confirmRequestResult);
   }
 
   // Handle clarification flow
@@ -1215,7 +1255,7 @@ export async function runAgent(
         userId: session.userId,
         aclGroup: session.aclGroup,
       });
-      return clarifyResult;
+      return withStructuredResponse(clarifyResult);
     }
   }
 
@@ -1392,7 +1432,7 @@ export async function runAgent(
             conversationContext: state.finalContextUpdate,
             traceId,
           });
-          return { text: cleanedAnswer };
+          return withStructuredResponse({ text: cleanedAnswer });
         }
         
         // RAG didn't have a good answer, fall through to clarification
@@ -1493,7 +1533,7 @@ export async function runAgent(
       conversationContext: state.contextUpdate,
       traceId: clarificationTraceId,
     });
-    return { text: clarificationMessage };
+    return withStructuredResponse({ text: clarificationMessage });
     } // end else (canHandleDirectlyFromRoute was false)
   }
 
@@ -1597,7 +1637,7 @@ export async function runAgent(
       totalSteps: 1,
       totalToolCalls: 1,
     });
-    return { text: answer };
+    return withStructuredResponse({ text: answer });
   } else if (actionIntent) {
     logger.info("Detected action intent", { intent: actionIntent.type });
 
@@ -1649,7 +1689,7 @@ export async function runAgent(
         structuredResponse,
         connections,
       });
-      return { text };
+      return withStructuredResponse({ text }, structuredResponse);
     }
 
     // Deterministic fast-path: create VM requests must include a node; we already extracted it.
@@ -1666,7 +1706,7 @@ export async function runAgent(
           conversationState: "NEED_CLARIFICATION",
           conversationContext: contextUpdate,
         });
-        return { text: prompt };
+        return withStructuredResponse({ text: prompt });
       }
 
       emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "create_vm", tool: "action" });
@@ -1817,7 +1857,7 @@ export async function runAgent(
         structuredResponse,
         connections,
       });
-      return { text };
+      return withStructuredResponse({ text }, structuredResponse);
     }
 
     if (actionIntent.type === "destroy_vm") {
@@ -1835,7 +1875,7 @@ export async function runAgent(
           conversationState: "NEED_CLARIFICATION",
           conversationContext: contextUpdate,
         });
-        return { text: prompt };
+        return withStructuredResponse({ text: prompt });
       }
 
       try {
@@ -1850,7 +1890,7 @@ export async function runAgent(
             conversationState: "NEED_CLARIFICATION",
             conversationContext: contextUpdate,
           });
-          return { text: prompt };
+          return withStructuredResponse({ text: prompt });
         }
         resolvedDestroyVm = resolved;
       } catch (error: any) {
@@ -1861,7 +1901,7 @@ export async function runAgent(
           conversationState: "NEED_CLARIFICATION",
           conversationContext: contextUpdate,
         });
-        return { text: prompt };
+        return withStructuredResponse({ text: prompt });
       }
 
       if (
@@ -1878,7 +1918,7 @@ export async function runAgent(
           conversationState: "NEED_CLARIFICATION",
           conversationContext: contextUpdate,
         });
-        return { text: prompt };
+        return withStructuredResponse({ text: prompt });
       }
 
       emitStepEvent(eventBus, sessionId, { step: 1, maxSteps: 1, userInput, intent: "destroy_vm", tool: "action" });
@@ -1973,7 +2013,7 @@ export async function runAgent(
         conversationContext: state.finalContextUpdate,
         traceId: destroyVmTraceId,
       });
-      return { text };
+      return withStructuredResponse({ text });
     }
 
     // For VM-related actions, resolve VM details (node, vmid, type) before letting LLM proceed
@@ -2067,7 +2107,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           conversationState: state.postExecutionState,
           conversationContext: state.finalContextUpdate,
         });
-        return { text: formattedAnswer };
+        return withStructuredResponse({ text: formattedAnswer });
       }
     }
     } // end exposure domain gate
@@ -2117,7 +2157,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           conversationState: state.postExecutionState,
           conversationContext: state.finalContextUpdate,
         });
-        return { text: formattedAnswer };
+        return withStructuredResponse({ text: formattedAnswer });
       }
     }
     } // end compute domain gate
@@ -2173,7 +2213,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           conversationState: state.postExecutionState,
           conversationContext: state.finalContextUpdate,
         });
-        return { text: formattedAnswer };
+        return withStructuredResponse({ text: formattedAnswer });
       }
     }
     // end firewall domain gate
@@ -2225,7 +2265,7 @@ IMPORTANT: When calling proxmox_write, you MUST use:
           conversationState: state.postExecutionState,
           conversationContext: state.finalContextUpdate,
         });
-        return { text: formattedAnswer };
+        return withStructuredResponse({ text: formattedAnswer });
       }
     }
     } // end network domain gate
@@ -2271,5 +2311,5 @@ IMPORTANT: When calling proxmox_write, you MUST use:
     };
   }
 
-  return executeResult;
+  return withStructuredResponse(executeResult);
 }

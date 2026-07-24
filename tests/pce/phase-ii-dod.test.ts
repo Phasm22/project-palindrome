@@ -260,7 +260,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
   });
 
   describe("Task 12.3: Fast-Path Index Update Logic", () => {
-    it("should use incremental updates for MODIFIED documents", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should use incremental updates for MODIFIED documents", async () => {
       const testDocPath = join(TEST_DIR, "test-doc.txt");
       await fs.writeFile(testDocPath, "Original content", "utf-8");
 
@@ -460,7 +460,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
   });
 
   describe("Task 14.2: Vector DB Batch Update Optimization", () => {
-    it("should batch index chunks efficiently", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should batch index chunks efficiently", async () => {
       // This is tested implicitly through ingestion pipeline
       // The batch size parameter is configurable in indexChunks
       const testDocPath = join(TEST_DIR, "batch-test.txt");
@@ -482,7 +482,7 @@ describe("Phase II: Real-Time Updates and Production Readiness", () => {
   });
 
   describe("Task 14.3: Definition of Done (DOD)", () => {
-    it("should process 10 concurrent webhook events with latency < 15s", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should process 10 concurrent webhook events with latency < 15s", async () => {
       await webhookListener.start();
       await queueConsumer.start();
       const info = webhookListener.getInfo();

@@ -1,7 +1,7 @@
 import { exec } from "child_process";
 import { promisify } from "util";
-import { readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { readFile, readdir, writeFile } from "fs/promises";
+import { basename, join } from "path";
 import { pceLogger as logger } from "../../pce/utils/logger";
 
 const execAsync = promisify(exec);
@@ -72,6 +72,12 @@ export type VmConfigEntry = {
   bios?: "seabios" | "ovmf";
   disk_interface?: "virtio0" | "scsi0" | "sata0";
 };
+
+export interface TerraformVmConfigSource {
+  environment: string;
+  sourcePath: string;
+  vmConfigs: Record<string, VmConfigEntry>;
+}
 
 export interface TerraformExecutionOptions {
   skipLock?: boolean;
@@ -259,6 +265,31 @@ export function parseVmConfigsFromTfvars(content: string): Record<string, VmConf
   return vmConfigs;
 }
 
+/**
+ * Read the declared VM sets from environment tfvars without invoking Terraform.
+ *
+ * The returned list is sorted by path so ingestion is deterministic. Files
+ * without a vm_configs block are included with an empty VM set, allowing
+ * callers to report which declarations were inspected.
+ */
+export async function readTerraformVmConfigsFromEnvironmentDirectory(
+  environmentsDir: string = join(process.cwd(), "lab-infra", "environments")
+): Promise<TerraformVmConfigSource[]> {
+  const entries = await readdir(environmentsDir, { withFileTypes: true });
+  const tfvarsPaths = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".tfvars"))
+    .map((entry) => join(environmentsDir, entry.name))
+    .sort();
+
+  return Promise.all(
+    tfvarsPaths.map(async (sourcePath) => ({
+      environment: basename(sourcePath, ".tfvars"),
+      sourcePath,
+      vmConfigs: parseVmConfigsFromTfvars(await readFile(sourcePath, "utf8")),
+    }))
+  );
+}
+
 export function mergeVmConfigsWithExistingTfvars(
   existingTfvarsContent: string,
   incomingVmConfigs: Record<string, VmConfigEntry>
@@ -278,6 +309,61 @@ export function parseManagedVmNamesFromTerraformStateList(stateListOutput: strin
     if (vmName) names.add(vmName);
   }
   return names;
+}
+
+export function parseCloudConfigNamesFromTerraformStateList(
+  stateListOutput: string
+): Set<string> {
+  const names = new Set<string>();
+  const pattern = /proxmox_virtual_environment_file\.cloud_config\["([^"]+)"\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(stateListOutput)) !== null) {
+    const vmName = match[1];
+    if (vmName) names.add(vmName);
+  }
+  return names;
+}
+
+export function getTerraformStateRemovalTargets(
+  vmName: string,
+  stateListOutput: string
+): string[] {
+  const managedVmNames = parseManagedVmNamesFromTerraformStateList(stateListOutput);
+  const cloudConfigNames = parseCloudConfigNamesFromTerraformStateList(stateListOutput);
+  const orphanedCloudConfigNames = Array.from(cloudConfigNames)
+    .filter((name) => !managedVmNames.has(name))
+    .sort();
+  const targets = new Set([
+    `proxmox_virtual_environment_vm.lab_vms["${vmName}"]`,
+    `proxmox_virtual_environment_file.cloud_config["${vmName}"]`,
+    ...orphanedCloudConfigNames.map(
+      (name) => `proxmox_virtual_environment_file.cloud_config["${name}"]`
+    ),
+  ]);
+  return Array.from(targets);
+}
+
+export function renderAnsibleInventory(outputs: TerraformOutput): string {
+  const hostnames = new Set<string>();
+  for (const hostname of Object.values(outputs.vm_hostnames || {})) {
+    if (hostname) hostnames.add(hostname);
+  }
+  for (const [name, vm] of Object.entries(outputs.vm_info || {})) {
+    hostnames.add(vm.hostname || `${name}.prox`);
+  }
+
+  const hosts = Array.from(hostnames)
+    .sort()
+    .map((hostname) => `${hostname} ansible_host=${hostname} ansible_user=ops`);
+  return [
+    "# Generated from Terraform state by Palindrome",
+    "[lab_vms]",
+    ...hosts,
+    "",
+    "[lab_vms:vars]",
+    "ansible_ssh_common_args='-o StrictHostKeyChecking=no'",
+    "",
+  ].join("\n");
 }
 
 export function reconcileVmConfigsWithTerraformState(
@@ -599,35 +685,32 @@ ${vmConfigsBlock}
     return true;
   }
 
-  async removeVmFromState(vmName: string): Promise<{ removed: string[]; missing: string[] }> {
-    const targets = [
-      `proxmox_virtual_environment_vm.lab_vms["${vmName}"]`,
-      `proxmox_virtual_environment_file.cloud_config["${vmName}"]`,
-    ];
+  async removeVmFromState(
+    vmName: string,
+    statePath?: string
+  ): Promise<{ removed: string[]; missing: string[] }> {
+    const stateArgs = ["list"];
+    if (statePath) stateArgs.push(`-state="${statePath}"`);
+    const stateListResult = await this.executeTerraform("state", stateArgs);
+    const targets = getTerraformStateRemovalTargets(
+      vmName,
+      stateListResult.success ? stateListResult.stdout : ""
+    );
     const removed: string[] = [];
     const missing: string[] = [];
 
     for (const target of targets) {
-      try {
-        const result = await execAsync(`terraform state rm '${target}'`, {
-          cwd: this.terraformDir,
-          env: process.env as Record<string, string>,
-          maxBuffer: 10 * 1024 * 1024,
-          timeout: 120000,
-        });
-        const output = `${result.stdout || ""}\n${result.stderr || ""}`.trim();
-        if (/No matching objects found/i.test(output)) {
-          missing.push(target);
-        } else {
-          removed.push(target);
-        }
-      } catch (error: any) {
-        const output = `${error?.stdout || ""}\n${error?.stderr || ""}\n${error?.message || ""}`;
-        if (/No matching objects found/i.test(output)) {
-          missing.push(target);
-          continue;
-        }
-        throw error;
+      const args = ["rm"];
+      if (statePath) args.push(`-state="${statePath}"`);
+      args.push(`'${target}'`);
+      const result = await this.executeTerraform("state", args);
+      const output = `${result.stdout || ""}\n${result.stderr || ""}`.trim();
+      if (/No matching objects found/i.test(output)) {
+        missing.push(target);
+      } else if (result.success) {
+        removed.push(target);
+      } else {
+        throw new Error(`Failed to remove ${target} from Terraform state: ${result.stderr}`);
       }
     }
 
@@ -637,6 +720,24 @@ ${vmConfigsBlock}
       missing,
     });
     return { removed, missing };
+  }
+
+  async reconcileStateRemovalArtifacts(
+    options: Pick<TerraformExecutionOptions, "tfvarsPath" | "statePath"> = {}
+  ): Promise<TerraformOutput> {
+    const refreshResult = await this.refresh(undefined, options);
+    if (!refreshResult.success) {
+      throw new Error(`Failed to refresh Terraform outputs: ${refreshResult.stderr}`);
+    }
+
+    const outputs = await this.getOutputs(options.statePath);
+    const inventoryPath = join(this.terraformDir, "..", "ansible", "inventory.ini");
+    await writeFile(inventoryPath, renderAnsibleInventory(outputs), "utf-8");
+    logger.info("Reconciled Terraform outputs and Ansible inventory after state cleanup", {
+      inventoryPath,
+      vmNames: Object.keys(outputs.vm_hostnames || outputs.vm_info || {}).sort(),
+    });
+    return outputs;
   }
 
   /**

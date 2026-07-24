@@ -7,7 +7,10 @@ import { Redactor } from "../src/pce/redaction";
 import { EmbeddingService, AUDIT_COLLECTION } from "../src/pce/vector";
 import { QdrantVectorStore } from "../src/pce/vector/qdrant-client";
 import { IngestionPipeline, GraphIngestionPipeline } from "../src/pce/ingestion";
-import { Neo4jGraphStore } from "../src/pce/kg";
+import {
+  Neo4jGraphStore,
+  PROVENANCE_AUDIT_GRAPH_ENTITY_LABEL,
+} from "../src/pce/kg";
 import type { GraphIngestionOptions } from "../src/pce/ingestion/graph-pipeline";
 import { generateHybridTestData } from "../tests/pce/fixtures/hybrid-test-data";
 import { bootstrapPceApiServer } from "../src/pce/api/server";
@@ -59,11 +62,16 @@ async function runIngestion(docPath: string) {
 
   const changeHash = snapshotLog.getSnapshot(docPath)?.sha256Hash ?? null;
 
-  const graphStore = new Neo4jGraphStore();
+  const graphStore = new Neo4jGraphStore(
+    undefined,
+    undefined,
+    undefined,
+    PROVENANCE_AUDIT_GRAPH_ENTITY_LABEL
+  );
   await graphStore.connect();
   
-  // Clear graph store for test isolation
-  await graphStore.wipeAll();
+  // Clear only the provenance-audit scratch graph.
+  await graphStore.wipeLabels([PROVENANCE_AUDIT_GRAPH_ENTITY_LABEL]);
   
   const graphPipeline = new GraphIngestionPipeline(
     snapshotLog,
@@ -76,7 +84,7 @@ async function runIngestion(docPath: string) {
     documentType: "markdown_runbook",
     aclGroup: "admin",
     redact: false,
-    reindex: true,
+    reindex: false,
   } satisfies GraphIngestionOptions);
 
   await graphStore.close();
@@ -127,6 +135,7 @@ export async function runProvenanceAudit() {
   const { server } = await bootstrapPceApiServer({
     port: 0,
     vectorStoreCollectionName: AUDIT_COLLECTION,
+    graphEntityLabel: PROVENANCE_AUDIT_GRAPH_ENTITY_LABEL,
     fusionConfig: {
       minTotalScore: 0.5,
     },

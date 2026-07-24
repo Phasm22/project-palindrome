@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ProxmoxReadOnlyBase } from "../../../../src/tools/proxmox/readonly/base";
+import * as ToolSanitizerModule from "../../../../src/agent/tool-sanitizer";
 import type { ExecutionContext } from "../../../../src/types/execution";
 
 // Create mocks - use object to store so they're accessible everywhere
@@ -37,10 +38,6 @@ vi.mock("https", () => ({
   },
 }));
 
-vi.mock("../../../../src/agent/tool-sanitizer", () => ({
-  sanitizeToolPayload: (data: any) => data, // Pass through for testing
-}));
-
 // Import after mocking
 import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
 
@@ -60,11 +57,43 @@ describe("TL-2A.1: Proxmox Read-Only Base Class", () => {
     }
   }
 
+  const originalProxmoxEnv = {
+    PROXMOX_URL: process.env.PROXMOX_URL,
+    PROXMOX_TOKEN_ID: process.env.PROXMOX_TOKEN_ID,
+    PROXMOX_TOKEN_SECRET: process.env.PROXMOX_TOKEN_SECRET,
+  };
+
+  let activeSpies: Array<{ mockRestore: () => void }> = [];
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    // vi.clearAllMocks() clears call history for every mock in the whole
+    // process, not just this file's - under `bun test`, files run with real
+    // concurrency, so it can zero out another file's still-in-flight spy
+    // call count. Clear only this file's own axios mocks.
+    mockAxiosInstance.get.mockClear();
+    mockAxiosInstance.post.mockClear();
+    mockAxiosInstance.put.mockClear();
+    mockAxiosInstance.delete.mockClear();
+    mockAxiosCreate.mockClear();
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
+    activeSpies = [
+      vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data),
+    ];
+  });
+
+  afterEach(() => {
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the
+    // same shared module namespace. Restore only the specific spies made here.
+    activeSpies.forEach((spy) => spy.mockRestore());
+    activeSpies = [];
+    for (const [key, value] of Object.entries(originalProxmoxEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   describe("API Client Management", () => {

@@ -16,6 +16,7 @@ Test documentation, debugging guides, test plans, and test-related status report
 - `test-failure-analysis.md` - Analysis of test failures
 - `test-fixes-complete.md` - Completion status of test fixes (comprehensive)
 - `ssh-tool-test-prompts.md` - Test prompts for SSH tool validation
+- `eval-gate.md` - Offline CI eval baseline and opt-in live corpus replay
 
 ## Purpose
 

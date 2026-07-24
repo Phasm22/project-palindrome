@@ -1,19 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TwinEntityType } from "../../../src/twin/models/entities";
+import { ProxmoxReadOnlyTool } from "../../../src/tools/proxmox/readonly/proxmox-readonly-tool";
+import { MCPOpnsenseTool } from "../../../src/tools/MCPOpnsenseTool";
 
+// Intercept ProxmoxReadOnlyTool/MCPOpnsenseTool at the prototype level
+// (vi.spyOn), not by replacing their modules (vi.mock) - under `bun test`,
+// module mocks are process-global with no per-file teardown and leak into
+// every other file that imports the real class (e.g.
+// tests/tools/proxmox/readonly/proxmox-readonly-tool.test.ts, and
+// tests/tools/actions/execution-result.test.ts's loadTools(), which builds
+// every registered tool including a real MCPOpnsenseTool and crashed
+// reading .metadata off the plain {execute, close} object this used to
+// wholesale-replace it with). vi.restoreAllMocks() properly undoes a
+// prototype spy but not a module replacement.
 const proxmoxExecuteMock = vi.fn();
-vi.mock("../../../src/tools/proxmox/readonly/proxmox-readonly-tool", () => ({
-  ProxmoxReadOnlyTool: vi.fn().mockImplementation(() => ({
-    execute: proxmoxExecuteMock,
-  })),
-}));
-
-vi.mock("../../../src/tools/MCPOpnsenseTool", () => ({
-  MCPOpnsenseTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn(async () => ({ data: { interfaces: [] } })),
-    close: vi.fn(),
-  })),
-}));
+const mcpOpnsenseExecuteMock = vi.fn(async () => ({ data: { interfaces: [] } }));
 
 const parseMock = vi.fn();
 vi.mock("../../../src/parsers/network/proxmox-interface-parser", () => ({
@@ -49,8 +50,15 @@ function fakeInterfaceEntity(node: string) {
 }
 
 describe("NetworkIngestionOrchestrator — per-node failure isolation", () => {
+  let activeSpies: Array<{ mockRestore: () => void }> = [];
+
   beforeEach(() => {
     proxmoxExecuteMock.mockReset();
+    mcpOpnsenseExecuteMock.mockClear();
+    activeSpies = [
+      vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(proxmoxExecuteMock as any),
+      vi.spyOn(MCPOpnsenseTool.prototype, "execute").mockImplementation(mcpOpnsenseExecuteMock as any),
+    ];
     parseMock.mockReset();
     twinUpdaterMocks.initialize.mockClear();
     twinUpdaterMocks.upsert.mockClear();
@@ -60,6 +68,15 @@ describe("NetworkIngestionOrchestrator — per-node failure isolation", () => {
       entities: input.nodes.map((n: any) => fakeInterfaceEntity(n.node)),
       relationships: [],
     }));
+  });
+
+  afterEach(() => {
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the same
+    // shared prototype. Restore only the specific spies made here.
+    activeSpies.forEach((spy) => spy.mockRestore());
+    activeSpies = [];
   });
 
   it("keeps a healthy node's interfaces and skips pruning when a sibling node fails", async () => {

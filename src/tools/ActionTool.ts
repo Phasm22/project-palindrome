@@ -3,10 +3,12 @@ import { BaseTool } from "./BaseTool";
 import { actionRegistry } from "../actions/registry";
 import { generateActionParamsDoc } from "../actions/action-docs-generator";
 import { pceLogger as logger } from "../pce/utils/logger";
+import { toExecutionResult } from "../types/execution";
 import type { ExecutionContext, ExecutionResult } from "../types/execution";
 import type { ToolSchema } from "./tool-schema";
 import { createToolSchema } from "./tool-helpers";
 import { emitToolProgress } from "../agent/event-bus";
+import { getActiveToolAcl } from "../agent/tool-policy";
 
 // Use z.any() wrapped in z.object() instead of z.record() to avoid schema issues
 const ActionParams = z.object({
@@ -285,6 +287,21 @@ export class ActionTool extends BaseTool {
         };
       }
 
+      const aclGroup = getActiveToolAcl();
+      if (
+        actionDef.acl &&
+        actionDef.acl.length > 0 &&
+        (!aclGroup || !actionDef.acl.includes(aclGroup))
+      ) {
+        return {
+          error: aclGroup
+            ? `ACL group ${aclGroup} is not authorized to run ${action}`
+            : `Action ${action} requires an authenticated ACL context`,
+          success: false,
+          durationMs: Date.now() - started,
+        };
+      }
+
       // Validate parameters
       const validatedParams = actionDef.schema.parse(actionParams);
 
@@ -314,20 +331,34 @@ export class ActionTool extends BaseTool {
       // Execute action
       const result = await actionDef.execute(validatedParams);
 
-      // Emit progress: completed
-      emitToolProgress({
-        toolName: "action",
-        action,
-        status: "completed",
-        message: `${actionFriendlyName} completed successfully`,
-        progress: 1,
-        details: { result: typeof result === 'object' ? result : { value: result } },
-      });
+      // Normalize into a single authoritative ExecutionResult: a domain action
+      // that resolves with { success: false, ... } WITHOUT throwing must be
+      // promoted into ExecutionResult.error so downstream (success = !error)
+      // does not treat a failed action as a success (RM-04).
+      const executionResult = toExecutionResult(result, started);
 
-      return {
-        data: result,
-        durationMs: Date.now() - started,
-      };
+      // Emit progress reflecting the actual outcome
+      if (executionResult.error) {
+        emitToolProgress({
+          toolName: "action",
+          action,
+          status: "failed",
+          message: `${actionFriendlyName} failed: ${executionResult.error}`,
+          progress: 0,
+          details: { result: typeof result === 'object' ? result : { value: result } },
+        });
+      } else {
+        emitToolProgress({
+          toolName: "action",
+          action,
+          status: "completed",
+          message: `${actionFriendlyName} completed successfully`,
+          progress: 1,
+          details: { result: typeof result === 'object' ? result : { value: result } },
+        });
+      }
+
+      return executionResult;
     } catch (error: any) {
       logger.error("Action execution failed", { action, error: error.message });
       

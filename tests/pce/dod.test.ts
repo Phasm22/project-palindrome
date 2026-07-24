@@ -297,7 +297,11 @@ describe("DOD 3: Chunking is Deterministic", () => {
   });
 });
 
-describe("DOD 4: Vector DB Integration Produces Real Results", () => {
+// DOD 4-6 all ingest through the real vector/embeddings pipeline.
+// EmbeddingService falls back to OpenAI when a local Ollama provider isn't
+// reachable, and CI has neither Ollama nor an OpenAI key configured - there's
+// no meaningful degraded path, so skip rather than fail.
+describe.skipIf(!process.env.OPENAI_API_KEY)("DOD 4: Vector DB Integration Produces Real Results", () => {
   let vectorStore: QdrantVectorStore;
   let embeddingService: EmbeddingService;
   let retrievalService: RetrievalService;
@@ -363,7 +367,7 @@ describe("DOD 4: Vector DB Integration Produces Real Results", () => {
   }, 30000); // 30 second timeout for API calls
 });
 
-describe("DOD 5: Access Control Filtering Works", () => {
+describe.skipIf(!process.env.OPENAI_API_KEY)("DOD 5: Access Control Filtering Works", () => {
   let vectorStore: QdrantVectorStore;
   let embeddingService: EmbeddingService;
   let retrievalService: RetrievalService;
@@ -463,7 +467,7 @@ describe("DOD 5: Access Control Filtering Works", () => {
   }, 30000);
 });
 
-describe("DOD 6: Logging Provides a Record of Everything", () => {
+describe.skipIf(!process.env.OPENAI_API_KEY)("DOD 6: Logging Provides a Record of Everything", () => {
   let snapshotLog: SnapshotLog;
   let vectorStore: QdrantVectorStore;
   let embeddingService: EmbeddingService;

@@ -43,7 +43,3 @@ export {
   inferMissingToolSlots,
   cleanupAfterProxmoxDestroy,
 } from "./tool-helpers";
-
-export { generateActionPlan } from "./plan-generator";
-export type { PlanGeneratorInput } from "./plan-generator";
-export type { ActionPlan, ActionStep } from "../schemas/action-step";

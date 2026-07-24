@@ -1,21 +1,202 @@
 [
   {
-    "name": "opnsense_manage",
-    "description": "Read-only access to OPNsense system status and firewall aliases in LAB ONLY.",
+    "name": "summarize_observations",
+    "description": "Summarize observations into 3 bullets with anomaly callouts.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "observations": {
+          "type": "string",
+          "description": "Raw observations to summarize."
+        },
+        "intent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "observations"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Summarize a metrics snapshot",
+        "parameters": {
+          "observations": [
+            "CPU load spiked to 95% on node yin",
+            "Disk usage 88% on /var/lib",
+            "3 VMs reported IO wait > 20%"
+          ],
+          "intent": "QUERY"
+        }
+      }
+    ],
+    "notes": [],
+    "categories": [
+      "analysis",
+      "summary"
+    ]
+  },
+  {
+    "name": "next_steps",
+    "description": "Generate 1-3 ranked next actions based on intent and observations.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "intent": {
+          "type": "string",
+          "description": "Intent label (QUERY/ACTION/CHAT_REASONING/etc.)."
+        },
+        "observations": {
+          "type": "string",
+          "description": "Observation summary or raw output."
+        }
+      },
+      "required": [
+        "intent",
+        "observations"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Suggest next steps for a CPU spike",
+        "parameters": {
+          "intent": "QUERY",
+          "observations": "CPU load 95% on node yin for last 15m"
+        }
+      }
+    ],
+    "notes": [],
+    "categories": [
+      "analysis",
+      "planning"
+    ]
+  },
+  {
+    "name": "ask_missing",
+    "description": "Generate the single best clarification question from missing slots.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "missing": {
+          "type": "array",
+          "description": "List of missing slots.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "intent": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "missing"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Ask for missing target",
+        "parameters": {
+          "missing": [
+            "target"
+          ],
+          "intent": "ACTION",
+          "context": "User requested restart"
+        }
+      }
+    ],
+    "notes": [],
+    "categories": [
+      "clarification"
+    ]
+  },
+  {
+    "name": "infrastructure_diagnostic",
+    "description": "Check the status and configuration of a VM's QEMU guest agent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "diagnostic_type": {
+          "type": "string",
+          "enum": [
+            "guest_agent"
+          ],
+          "description": "Type of diagnostic to run"
+        },
+        "vmid": {
+          "type": "number"
+        },
+        "node": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "diagnostic_type"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Check guest agent status for a VM",
+        "parameters": {
+          "diagnostic_type": "guest_agent",
+          "vmid": 9000,
+          "node": "YANG"
+        }
+      }
+    ],
+    "notes": [],
+    "categories": [
+      "diagnostic",
+      "troubleshooting",
+      "infrastructure"
+    ]
+  },
+  {
+    "name": "opnsense_readonly",
+    "description": "OPNsense read-only tool. Supports firewall_rules_list (uses SSH internally with pfctl commands), firewall aliases (REST API), and other read-only operations. Note: OPNsense REST API is intentionally incomplete (~20-30% coverage). For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
     "parameters": {
       "type": "object",
       "properties": {
         "action": {
           "type": "string",
           "enum": [
+            "firewall_rules_list",
+            "firewall_aliases_list",
+            "firewall_aliases_get",
+            "firewall_categories_list",
+            "firewall_states_list",
+            "interfaces_list",
+            "interface_status",
+            "interfaces_vlans_list",
+            "interfaces_vips_list",
             "system_status",
-            "list_aliases",
-            "search_aliases"
+            "system_health",
+            "system_info",
+            "system_backups_list",
+            "diagnostics_arp_table",
+            "diagnostics_routing_table",
+            "diagnostics_interface_statistics",
+            "diagnostics_system_logs",
+            "dhcp_leases_list",
+            "dhcp_status",
+            "dhcp_static_mappings_list"
           ],
-          "description": "The OPNsense operation to perform"
+          "description": "The read-only OPNsense operation to perform"
         },
-        "search_term": {
+        "alias_name": {
           "type": "string"
+        },
+        "interface_name": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "number"
         }
       },
       "required": [
@@ -25,32 +206,567 @@
     },
     "examples": [
       {
-        "description": "Get system status",
+        "description": "List firewall rules (uses SSH internally with pfctl commands)",
         "parameters": {
-          "action": "system_status"
+          "action": "firewall_rules_list"
         }
       },
       {
-        "description": "List all aliases",
+        "description": "List firewall aliases (REST API works well for aliases)",
         "parameters": {
-          "action": "list_aliases"
+          "action": "firewall_aliases_list"
         }
       },
       {
-        "description": "Search aliases",
+        "description": "Get a specific firewall alias",
         "parameters": {
-          "action": "search_aliases",
-          "search_term": "example"
+          "action": "firewall_aliases_get",
+          "alias_name": "allowed_guest"
+        }
+      },
+      {
+        "description": "List firewall categories",
+        "parameters": {
+          "action": "firewall_categories_list"
         }
       }
     ],
     "notes": [
-      "system_status includes disk usage, system health, and subsystem status information.",
-      "Write operations are disabled in this environment."
+      "firewall_rules_list action uses SSH internally with approved pfctl commands (parallelized for performance).",
+      "Firewall aliases use REST API (good coverage).",
+      "For firewall rules, use opnsense_readonly firewall_rules_list (not direct ssh_execute).",
+      "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
+      "All responses are structured JSON objects for easy parsing and dashboarding.",
+      "Credentials and secrets are automatically sanitized from responses. Internal IP addresses are preserved because they are primary diagnostic data."
     ],
     "categories": [
+      "opnsense",
       "networking",
-      "firewall"
+      "firewall",
+      "system"
+    ]
+  },
+  {
+    "name": "opnsense_safewrite",
+    "description": "Controlled, low-risk write operations for OPNsense with mandatory human-in-the-loop safety. All operations support dry-run mode and require confirmation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "create_disabled_alias",
+            "enable_rule_with_confirmation",
+            "update_description_field",
+            "toggle_rule_enabled",
+            "update_alias_description"
+          ],
+          "description": "The safe write operation to perform"
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "If true, return diff preview without executing",
+          "default": false
+        },
+        "alias_name": {
+          "type": "string"
+        },
+        "alias_type": {
+          "type": "string",
+          "enum": [
+            "host",
+            "network",
+            "port"
+          ]
+        },
+        "alias_content": {
+          "type": "string"
+        },
+        "alias_description": {
+          "type": "string"
+        },
+        "rule_uuid": {
+          "type": "string"
+        },
+        "target_type": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "alias"
+          ]
+        },
+        "target_uuid": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Create a disabled alias (dry-run)",
+        "parameters": {
+          "action": "create_disabled_alias",
+          "alias_name": "test-alias",
+          "alias_type": "host",
+          "alias_content": "192.168.1.100",
+          "alias_description": "Test alias",
+          "dryRun": true
+        }
+      },
+      {
+        "description": "Enable a firewall rule",
+        "parameters": {
+          "action": "enable_rule_with_confirmation",
+          "rule_uuid": "abc-123-def",
+          "dryRun": false
+        }
+      },
+      {
+        "description": "Update rule description",
+        "parameters": {
+          "action": "update_description_field",
+          "target_type": "rule",
+          "target_uuid": "abc-123-def",
+          "description": "Updated description",
+          "dryRun": true
+        }
+      }
+    ],
+    "notes": [
+      "All write operations require human confirmation before execution.",
+      "Use dryRun: true to preview changes without executing.",
+      "Only admin and ops ACL groups can execute write operations.",
+      "Pre-write state is automatically captured for rollback capability."
+    ],
+    "categories": [
+      "opnsense",
+      "networking",
+      "firewall",
+      "write"
+    ]
+  },
+  {
+    "name": "pihole_readonly",
+    "description": "Pi-hole DNS read-only tool. DNS is served by Pi-hole in this environment, not OPNsense — use this tool (not opnsense_readonly or ssh_execute) for any DNS, blocklist, or query-log question: custom DNS records, top/blocked domains, top clients by query volume, query type breakdown, query-log search, and whether blocking is currently enabled.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "dns_records_list",
+            "dns_summary_stats",
+            "dns_top_domains",
+            "dns_top_blocked_domains",
+            "dns_top_clients",
+            "dns_query_types",
+            "dns_query_log_search",
+            "dns_blocking_status"
+          ],
+          "description": "The read-only Pi-hole DNS operation to perform"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "client_ip": {
+          "type": "string"
+        },
+        "query_type": {
+          "type": "string"
+        },
+        "count": {
+          "type": "number"
+        },
+        "length": {
+          "type": "number"
+        },
+        "from": {
+          "type": "number"
+        },
+        "until": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "List custom DNS records",
+        "parameters": {
+          "action": "dns_records_list"
+        }
+      },
+      {
+        "description": "Overall DNS summary (queries today, percent blocked, gravity size)",
+        "parameters": {
+          "action": "dns_summary_stats"
+        }
+      },
+      {
+        "description": "Top 10 most-queried domains",
+        "parameters": {
+          "action": "dns_top_domains",
+          "count": 10
+        }
+      },
+      {
+        "description": "Top 10 most-blocked domains",
+        "parameters": {
+          "action": "dns_top_blocked_domains",
+          "count": 10
+        }
+      },
+      {
+        "description": "Which clients generate the most DNS queries",
+        "parameters": {
+          "action": "dns_top_clients",
+          "count": 10
+        }
+      },
+      {
+        "description": "Query type breakdown (A, AAAA, PTR, HTTPS, ...)",
+        "parameters": {
+          "action": "dns_query_types"
+        }
+      },
+      {
+        "description": "Search the query log for a specific domain",
+        "parameters": {
+          "action": "dns_query_log_search",
+          "domain": "example.com",
+          "length": 20
+        }
+      },
+      {
+        "description": "Search the query log for a specific client",
+        "parameters": {
+          "action": "dns_query_log_search",
+          "client_ip": "172.16.0.100",
+          "length": 20
+        }
+      },
+      {
+        "description": "Is DNS blocking currently enabled",
+        "parameters": {
+          "action": "dns_blocking_status"
+        }
+      }
+    ],
+    "notes": [
+      "DNS is served by Pi-hole, not OPNsense — use this tool, not opnsense_readonly or ssh_execute, for DNS/blocklist/query-log questions.",
+      "dns_top_domains/dns_top_clients return pre-aggregated data in one call — do not fetch dns_query_log_search and count client-side.",
+      "dns_top_blocked_domains is dns_top_domains restricted to blocked queries only — pass blocked implicitly via this action, not a separate flag.",
+      "dns_top_domains/dns_top_blocked_domains/dns_top_clients return total_queries and blocked_queries as lab-wide totals across ALL domains/clients, sibling fields next to the domains/clients array — they are NOT attributes of any single listed domain/client. Report them separately (e.g. 'lab-wide: N total, M blocked') rather than alongside a specific domain's count, or it reads as if that one domain accounted for the whole total.",
+      "There is no standalone 'is domain X on the blocklist' check — that would only cover custom lists, not the full external gravity blocklist. To answer 'is domain X blocked', use dns_query_log_search with that domain and inspect the returned status field: GRAVITY/DENYLIST/REGEX/EXTERNAL_BLOCKED_* means it was blocked; FORWARDED/CACHE/etc. means it was allowed. If there are no recent queries for that domain, say so explicitly rather than guessing.",
+      "dns_blocking_status reports whether Pi-hole blocking is globally enabled/disabled — it is NOT a per-domain check.",
+      "All operations are strictly read-only. Write operations (creating/deleting DNS records) are not available through this tool.",
+      "Query-log stats reflect Pi-hole's current in-memory window, not a full historical archive — for long-range trends, note that limitation in the answer."
+    ],
+    "categories": [
+      "pihole",
+      "dns",
+      "networking"
+    ]
+  },
+  {
+    "name": "proxmox_readonly",
+    "description": "Comprehensive read-only access to Proxmox cluster state (Nodes, VMs, Cluster). All operations return structured JSON data. Reuse node, VMID, and type from prior tool results instead of rediscovering them. For VM provenance and recent-change questions, call get_vm_config and node_tasks with the same node and VMID; only report no recent changes when the filtered node_tasks call succeeds with count 0.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list_nodes",
+            "node_status",
+            "node_storage",
+            "node_services",
+            "node_tasks",
+            "node_disks",
+            "node_network_interfaces",
+            "node_temperature",
+            "list_vms",
+            "get_vm_status",
+            "get_vm_config",
+            "get_vm_network",
+            "get_vm_snapshots",
+            "get_vm_ip",
+            "get_vm_guest_network",
+            "get_lxc_config",
+            "cluster_resources",
+            "cluster_status",
+            "cluster_ceph_status",
+            "ha_groups",
+            "ha_resources",
+            "get_version"
+          ],
+          "description": "The read-only Proxmox operation to perform"
+        },
+        "node": {
+          "type": "string"
+        },
+        "vmid": {
+          "type": "number"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "qemu",
+            "lxc"
+          ]
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "List all nodes in the cluster",
+        "parameters": {
+          "action": "list_nodes"
+        }
+      },
+      {
+        "description": "Get node status",
+        "parameters": {
+          "action": "node_status",
+          "node": "pve1"
+        }
+      },
+      {
+        "description": "List storage on a node",
+        "parameters": {
+          "action": "node_storage",
+          "node": "pve1"
+        }
+      },
+      {
+        "description": "List services on a node",
+        "parameters": {
+          "action": "node_services",
+          "node": "pve1"
+        }
+      },
+      {
+        "description": "List tasks on a node",
+        "parameters": {
+          "action": "node_tasks",
+          "node": "pve1"
+        }
+      },
+      {
+        "description": "Get recent Proxmox changes for one VM/container",
+        "parameters": {
+          "action": "node_tasks",
+          "node": "YANG",
+          "vmid": 100
+        }
+      },
+      {
+        "description": "Get Proxmox version",
+        "parameters": {
+          "action": "get_version"
+        }
+      },
+      {
+        "description": "List all VMs",
+        "parameters": {
+          "action": "list_vms",
+          "node": "pve1"
+        }
+      },
+      {
+        "description": "Get VM status",
+        "parameters": {
+          "action": "get_vm_status",
+          "node": "pve1",
+          "vmid": 101
+        }
+      },
+      {
+        "description": "Get cluster status",
+        "parameters": {
+          "action": "cluster_status"
+        }
+      },
+      {
+        "description": "Find VM/container by name (e.g., find 'aiMarketBot' to get its VMID, node, and type)",
+        "parameters": {
+          "action": "cluster_resources"
+        }
+      },
+      {
+        "description": "Get VM IP address via guest agent (requires guest agent enabled and VM.Monitor + VM.Audit permissions)",
+        "parameters": {
+          "action": "get_vm_ip",
+          "node": "YANG",
+          "vmid": 211,
+          "type": "qemu"
+        }
+      },
+      {
+        "description": "Get LXC container configuration",
+        "parameters": {
+          "action": "get_lxc_config",
+          "node": "YANG",
+          "vmid": 100
+        }
+      },
+      {
+        "description": "Get node temperature via hardware sensors",
+        "parameters": {
+          "action": "node_temperature",
+          "node": "proxBig"
+        }
+      }
+    ],
+    "notes": [
+      "All operations are strictly read-only. Write operations will return OPERATION_FORBIDDEN error.",
+      "All responses are structured JSON objects with normalized data (memory in MB/GB, timestamps in ISO8601).",
+      "get_vm_ip requires guest agent enabled in VM config and API token with VM.Monitor + VM.Audit permissions. Returns 403 if permissions insufficient or guest agent unavailable.",
+      "node_temperature fetches temperature data via SSH sensors command. Requires SSH access to the node.",
+      "For provenance and recent-change questions, resolve the VM once, call get_vm_config with its node/VMID/type, and call node_tasks with the same node and VMID. Only report no recent changes when the filtered node_tasks result succeeds with count 0.",
+      "Credentials and secrets are automatically sanitized from responses. Infrastructure identifiers such as internal IP and MAC addresses are preserved because they are primary diagnostic data."
+    ],
+    "categories": [
+      "proxmox",
+      "virtualization",
+      "infrastructure",
+      "cluster"
+    ]
+  },
+  {
+    "name": "proxmox_write",
+    "description": "Execute safe write operations on Proxmox VMs: start, stop, shutdown, reboot, reset, snapshot, rollback, clone, migrate, and destroy. All operations support dry-run mode and require confirmation. WARNING: destroy_vm is a destructive operation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "start_vm",
+            "stop_vm",
+            "shutdown_vm",
+            "reboot_vm",
+            "reset_vm",
+            "create_snapshot",
+            "rollback_snapshot",
+            "clone_vm",
+            "migrate_vm",
+            "destroy_vm"
+          ]
+        },
+        "node": {
+          "type": "string"
+        },
+        "vmid": {
+          "type": "number"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "qemu",
+            "lxc"
+          ],
+          "description": "VM type (qemu or lxc, default: qemu)",
+          "default": "qemu"
+        },
+        "targetNode": {
+          "type": "string"
+        },
+        "snapshotName": {
+          "type": "string"
+        },
+        "newVmid": {
+          "type": "number"
+        },
+        "dryRun": {
+          "type": "boolean",
+          "default": false
+        },
+        "timeout": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "action",
+        "node",
+        "vmid"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Start a VM (dry-run)",
+        "parameters": {
+          "action": "start_vm",
+          "node": "pve1",
+          "vmid": 101,
+          "dryRun": true
+        }
+      },
+      {
+        "description": "Restart/Reboot a VM - use reboot_vm action for restart operations",
+        "parameters": {
+          "action": "reboot_vm",
+          "node": "YANG",
+          "vmid": 9000,
+          "type": "qemu",
+          "dryRun": false
+        }
+      },
+      {
+        "description": "Stop a VM gracefully",
+        "parameters": {
+          "action": "stop_vm",
+          "node": "pve1",
+          "vmid": 101,
+          "type": "qemu",
+          "dryRun": false
+        }
+      },
+      {
+        "description": "Migrate a VM with pre-flight checks",
+        "parameters": {
+          "action": "migrate_vm",
+          "node": "pve1",
+          "vmid": 101,
+          "targetNode": "pve2",
+          "dryRun": false
+        }
+      },
+      {
+        "description": "Create a snapshot",
+        "parameters": {
+          "action": "create_snapshot",
+          "node": "pve1",
+          "vmid": 101,
+          "snapshotName": "pre-update-snapshot",
+          "dryRun": true
+        }
+      }
+    ],
+    "notes": [
+      "All write operations require human confirmation before execution.",
+      "Use dryRun: true to preview changes without executing.",
+      "Only admin and ops ACL groups can execute write operations.",
+      "Pre-write state is automatically captured for rollback capability.",
+      "Migration operations include mandatory pre-flight safety checks.",
+      "Migration with local storage (LVM, ZFS local) is complex and may require manual steps or stopping the VM/container first. Shared storage (NFS, Ceph) enables seamless live migration."
     ]
   },
   {
@@ -100,7 +816,7 @@
       }
     ],
     "notes": [
-      "Available hosts: 172.16.0.1, opnsense, radar, firewall",
+      "Available hosts: 172.16.0.1, opnsense, radar, firewall, opnsense.prox, OPNsense.prox, 172.16.0.10, prox_big, proxbig, prox_big.prox, proxbig.prox, 172.16.0.11, yin, yin.prox, 172.16.0.12, yang, yang.prox, 172.16.0.9, tjswitch, 2960g, switch.prox",
       "Hosts can be specified by IP (e.g., 172.16.0.1) or alias (e.g., opnsense, radar, firewall)",
       "Only pre-approved commands can be executed",
       "If a command fails with 'not approved', the error will suggest similar approved commands",
@@ -109,6 +825,589 @@
     "categories": [
       "system",
       "filesystem"
+    ]
+  },
+  {
+    "name": "mcp_opnsense",
+    "description": "Access OPNsense via MCP server. Organized by modules: firewall, system, interfaces, routing, dhcp, dns, vpn, diagnostics, firmware.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "module": {
+          "type": "string",
+          "enum": [
+            "core",
+            "firewall",
+            "interfaces",
+            "routing",
+            "dhcp",
+            "dns",
+            "vpn",
+            "system",
+            "diagnostics",
+            "firmware"
+          ],
+          "description": "OPNsense module (e.g., firewall, system, interfaces)"
+        },
+        "action": {
+          "type": "string",
+          "description": "Action/method to perform. For modules like 'core', this is the method name (e.g., 'systemStatus', 'backupBackups'). For other modules, this is the action name (e.g., 'list_rules', 'search_aliases'). Auto-discovered from MCP server."
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Any object/value",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "module",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "List firewall rules",
+        "parameters": {
+          "module": "firewall",
+          "action": "list_rules"
+        }
+      },
+      {
+        "description": "Get system status",
+        "parameters": {
+          "module": "core",
+          "action": "system_status"
+        }
+      },
+      {
+        "description": "List network interfaces",
+        "parameters": {
+          "module": "interfaces",
+          "action": "list"
+        }
+      }
+    ],
+    "notes": [
+      "This tool uses the OPNsense MCP server with 88+ available tools",
+      "Tools are organized by module for easier discovery",
+      "Available modules: core, firewall, interfaces, routing, dhcp, dns, vpn, system, diagnostics, firmware",
+      "Actions are auto-discovered from the MCP server",
+      "Use 'list' or 'search' actions to discover available operations for each module"
+    ],
+    "categories": [
+      "mcp",
+      "opnsense",
+      "networking",
+      "firewall"
+    ]
+  },
+  {
+    "name": "twin_query",
+    "description": "Query the digital twin for compute entities (nodes, VMs, relationships) with structured responses. Use this before calling live Proxmox tools. IMPORTANT: When searching for a VM by name (e.g., 'code server', 'nginx', 'database'), use operation='find_vm_by_name' which searches across ALL nodes with case-insensitive partial matching. Do NOT assume a VM is on a specific node - always search by name first. For temperature queries: Use operation='node_temperature' WITHOUT nodeName param to get all nodes, or WITH nodeName for a specific node. Note: For IP addresses, check the 'primaryIp' field on network interfaces (even if 'ips' array is empty). If twin data doesn't have IPs, use proxmox_readonly get_vm_ip for real-time IP resolution. For switch/VLAN questions (e.g. 'what VLANs are on the switch', 'what's on VLAN 40'), use operation='switch_list_vlans' or 'switch_ports_by_vlan' — these read real switch/switch-port entities, distinct from the VM/node network interfaces network_list_interfaces returns.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "describe_cluster",
+            "list_all_vms",
+            "vms_by_node",
+            "vms_without_agent",
+            "stopped_vms_on_node",
+            "find_vm_by_name",
+            "find_vm_by_id",
+            "network_list_interfaces",
+            "network_interfaces_by_node",
+            "network_vms_by_subnet",
+            "network_reachability",
+            "vm_reachability_summary",
+            "firewall_list_rules",
+            "firewall_rules_by_chain",
+            "firewall_rules_allowing_subnet",
+            "firewall_rules_blocking_subnet",
+            "firewall_rules_by_port",
+            "firewall_exposure_map",
+            "firewall_reachability_from_subnet",
+            "firewall_reachability_from_chain",
+            "firewall_rule_impact",
+            "exposure_vm_analysis",
+            "exposure_vms_by_subnet",
+            "exposure_path",
+            "exposure_internet_exposed",
+            "node_temperature",
+            "switch_list_vlans",
+            "switch_ports_by_vlan"
+          ]
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "nodeName": {
+              "type": "string"
+            },
+            "subnet": {
+              "type": "string"
+            },
+            "fromId": {
+              "type": "string"
+            },
+            "chain": {
+              "type": "string"
+            },
+            "ruleId": {
+              "type": "string"
+            },
+            "fromSubnet": {
+              "type": "string"
+            },
+            "toVmId": {
+              "type": "string"
+            },
+            "vmName": {
+              "type": "string"
+            },
+            "vmId": {
+              "type": "string"
+            },
+            "vmKind": {
+              "type": "string",
+              "enum": [
+                "qemu",
+                "lxc",
+                "all"
+              ]
+            },
+            "vlan": {
+              "type": "string"
+            },
+            "port": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Describe the entire Proxmox cluster",
+        "parameters": {
+          "operation": "describe_cluster"
+        }
+      },
+      {
+        "description": "List VMs running on node proxBig",
+        "parameters": {
+          "operation": "vms_by_node",
+          "params": {
+            "nodeName": "proxBig"
+          }
+        }
+      },
+      {
+        "description": "List VMs that lack guest agent data",
+        "parameters": {
+          "operation": "vms_without_agent"
+        }
+      },
+      {
+        "description": "List VMs on proxBig that are stopped",
+        "parameters": {
+          "operation": "stopped_vms_on_node",
+          "params": {
+            "nodeName": "proxBig"
+          }
+        }
+      },
+      {
+        "description": "Find VM by name (searches across all nodes)",
+        "parameters": {
+          "operation": "find_vm_by_name",
+          "params": {
+            "vmName": "SentinelZero"
+          }
+        }
+      },
+      {
+        "description": "Find VM by ID (handles ambiguity when same ID exists on multiple nodes/types)",
+        "parameters": {
+          "operation": "find_vm_by_id",
+          "params": {
+            "vmId": 100
+          }
+        }
+      },
+      {
+        "description": "Show all network interfaces",
+        "parameters": {
+          "operation": "network_list_interfaces"
+        }
+      },
+      {
+        "description": "List interfaces on proxBig",
+        "parameters": {
+          "operation": "network_interfaces_by_node",
+          "params": {
+            "nodeName": "proxBig"
+          }
+        }
+      },
+      {
+        "description": "Find VMs sharing subnet 172.16.0.0/22",
+        "parameters": {
+          "operation": "network_vms_by_subnet",
+          "params": {
+            "subnet": "172.16.0.0/22"
+          }
+        }
+      },
+      {
+        "description": "List all firewall rules",
+        "parameters": {
+          "operation": "firewall_list_rules"
+        }
+      },
+      {
+        "description": "List firewall rules for interface chain",
+        "parameters": {
+          "operation": "firewall_rules_by_chain",
+          "params": {
+            "chain": "chain:em0"
+          }
+        }
+      },
+      {
+        "description": "Find rules allowing access to subnet",
+        "parameters": {
+          "operation": "firewall_rules_allowing_subnet",
+          "params": {
+            "subnet": "172.16.0.0/22"
+          }
+        }
+      },
+      {
+        "description": "Find rules referencing a specific port (e.g. 'which rule permits access to port 8006')",
+        "parameters": {
+          "operation": "firewall_rules_by_port",
+          "params": {
+            "port": "8006"
+          }
+        }
+      },
+      {
+        "description": "Get exposure map for all VMs",
+        "parameters": {
+          "operation": "firewall_exposure_map"
+        }
+      },
+      {
+        "description": "Get temperature for all nodes (preferred for 'all nodes' queries)",
+        "parameters": {
+          "operation": "node_temperature"
+        }
+      },
+      {
+        "description": "Get temperature for a specific node",
+        "parameters": {
+          "operation": "node_temperature",
+          "params": {
+            "nodeName": "proxBig"
+          }
+        }
+      },
+      {
+        "description": "List VLANs configured on switches, grouped by declared vs observed",
+        "parameters": {
+          "operation": "switch_list_vlans"
+        }
+      },
+      {
+        "description": "Find switch ports carrying VLAN 40",
+        "parameters": {
+          "operation": "switch_ports_by_vlan",
+          "params": {
+            "vlan": 40
+          }
+        }
+      }
+    ],
+    "notes": [],
+    "categories": [
+      "twin",
+      "compute",
+      "graph",
+      "read"
+    ]
+  },
+  {
+    "name": "application_lifecycle",
+    "description": "Plan or execute complete applications from one strict manifest. Use this for compound prompts involving multiple VMs, generated images, services, source-restricted firewalls, DNS, Traefik, or Authentik. A single call owns rollback and teardown across every resource.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "deploy",
+            "destroy"
+          ]
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "rollbackPolicy": {
+          "type": "string",
+          "enum": [
+            "automatic",
+            "retain-successful"
+          ]
+        },
+        "applications": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "requestId",
+        "operation",
+        "dryRun",
+        "rollbackPolicy",
+        "applications"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [],
+    "notes": [
+      "Fill every field; use null for templateId or vlanId when unspecified",
+      "Use operation=deploy to create and operation=destroy to tear down the complete application",
+      "Use dryRun=true to preview without changing infrastructure",
+      "Generated images use source=generate, a non-null prompt, and an absolute VM destination",
+      "For IDP-protected sites use provider=ops-authentik and expose backend HTTP only to the opsbox IP"
+    ],
+    "categories": [
+      "action",
+      "application",
+      "terraform",
+      "ansible",
+      "authentik",
+      "traefik"
+    ]
+  },
+  {
+    "name": "action",
+    "description": "Execute safe automation actions (create VMs, configure network, manage firewall). Uses Terraform/Ansible for deterministic operations.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "Action name (e.g., 'compute.create_vm')"
+        },
+        "params": {
+          "type": "object",
+          "description": "Action parameters as an object. For compute.create_vm: {name (optional); node — Proxmox node name (e.g. YANG, yin, proxBig); canonicalized to live cluster names; cores (optional) (default: 2) — vCPU count (default: 2); memory (optional) (default: 4096) — RAM in MB (default: 4096); diskSize (optional) (default: \"20G\") — Root disk size in Terraform format, e.g. '20G' (default: '20G'); sshPublicKey (optional); sshUsername (optional); vmBridge (optional) (default: \"vmbr0\") — Network bridge (default: 'vmbr0'); use 'vmbr2' for pre-configured VLAN bridges; vlanId (optional); datastore (optional) (default: \"local-lvm\") — Storage datastore for the VM disk (default: 'local-lvm'); auto-selected if unavailable; cloudInitDatastore (optional); templateId (optional); vmId (optional); bootstrap (optional) (default: false) — Run Ansible common.yml bootstrap playbook after VM creation (default: false); dryRun (optional) (default: false) — Preview changes without applying them (default: false)}. Create a new VM on a Proxmox node using Terraform For compute.destroy_vm: {name (optional); vmId (optional); node (optional); dryRun (optional) (default: false) — Preview destruction without executing (default: false)}. Destroy a VM on a Proxmox node using Terraform For network.create_dns_record: {hostname — Hostname without domain (e.g. 'web-server'); combined with domain to form the full DNS record; ip — IPv4 address for the A record (e.g. '172.16.50.100'); domain (optional) (default: \".prox\") — Domain suffix to append to the hostname (default: '.prox'); results in e.g. 'web-server.prox'; dryRun (optional) (default: false) — Preview DNS record creation without executing (default: false)}. Create a DNS A record in Pi-hole for a hostname and IP address For network.sync_dhcp_to_dns: {dryRun (optional) (default: false) — Preview sync without creating or updating DNS records (default: false); domain (optional) (default: \".prox\") — Domain suffix appended to DHCP hostnames when creating DNS records (default: '.prox'); updateExisting (optional) (default: true) — Update existing DNS records when the IP has changed (default: true)}. Sync OPNsense DHCP leases to Pi-hole DNS records. Bridges the gap between OPNsense DHCP (Unbound) and Pi-hole (forwarder). For network.set_interface_vlan: {vmid — Proxmox VM ID of the target VM; node — Proxmox node where the VM resides (e.g. YANG, yin); vlanId — VLAN ID 1–4094 to assign to the VM's network interface; bridge (optional) (default: \"vmbr0\") — Network bridge to use (default: 'vmbr0'); use 'vmbr2' for pre-configured VLAN bridges; dryRun (optional) (default: false) — Preview the network config change without applying it (default: false)}. Assign a VM to an existing VLAN by updating its network configuration. Validates VLAN exists in OPNsense and twin before assignment. For services.bootstrap: {vmName — VM name to bootstrap (resolved via digital twin to obtain the SSH hostname); playbook (optional) (default: \"common.yml\") — Ansible playbook filename to run (default: 'common.yml'); waitForVm (optional) (default: true) — Wait for SSH to become accessible before running the playbook (default: true); timeout (optional) (default: 300) — SSH wait timeout in seconds (default: 300); extraVars (optional) — Record/object with string keys and any values; retryOnFailure (optional) (default: false) — Retry the playbook on failure (default: false); maxRetries (optional) (default: 1) — Maximum number of retry attempts when retryOnFailure is true (default: 1); dryRun (optional) (default: false) — Preview without executing the playbook (default: false)}. Run Ansible bootstrap playbook (common.yml) on a VM to perform complete system setup (security hardening, Docker, etc.) For services.install_docker: {vmName — VM name to install Docker on (resolved via digital twin to obtain the SSH hostname); waitForVm (optional) (default: true) — Wait for SSH to become accessible before running the playbook (default: true); timeout (optional) (default: 300) — SSH wait timeout in seconds (default: 300); extraVars (optional) — Record/object with string keys and any values; retryOnFailure (optional) (default: false) — Retry the playbook on failure (default: false); maxRetries (optional) (default: 1) — Maximum number of retry attempts when retryOnFailure is true (default: 1); dryRun (optional) (default: false) — Preview without executing the playbook (default: false)}. Install Docker CE, Docker Compose, and Portainer on a VM using Ansible For services.install_nginx: {vmName — VM name to install nginx on (resolved via digital twin to obtain the SSH hostname); waitForVm (optional) (default: true) — Wait for SSH to become accessible before running ansible commands (default: true); timeout (optional) (default: 300) — SSH wait timeout in seconds (default: 300); extraVars (optional) — Record/object with string keys and any values; retryOnFailure (optional) (default: false) — Retry on failure (default: false); maxRetries (optional) (default: 1) — Maximum number of retry attempts when retryOnFailure is true (default: 1); dryRun (optional) (default: false) — Preview without executing ansible commands (default: false)}. Install and configure nginx web server on a VM using Ansible For services.configure_firewall: {vmName — VM name to configure UFW firewall on (resolved via digital twin to obtain the SSH hostname); rules (optional); defaultPolicy (optional) (default: \"deny\") — Default UFW policy for unmatched traffic (default: 'deny'); waitForVm (optional) (default: true) — Wait for SSH to become accessible before running ansible commands (default: true); timeout (optional) (default: 300) — SSH wait timeout in seconds (default: 300); retryOnFailure (optional) (default: false) — Retry on failure (default: false); maxRetries (optional) (default: 1) — Maximum number of retry attempts when retryOnFailure is true (default: 1); dryRun (optional) (default: false) — Preview without executing firewall changes (default: false)}. Configure UFW (Uncomplicated Firewall) rules on a VM using Ansible For services.set_static_ip: {vmName — VM name to configure static IP on (resolved via digital twin to obtain the SSH hostname); ip — Static IP in CIDR format (e.g. '192.168.1.100/24'); gateway — Default gateway IPv4 address (e.g. '192.168.1.1'); dns (optional) (default: [\"8.8.8.8\",\"8.8.4.4\"]) — DNS server addresses (default: ['8.8.8.8', '8.8.4.4']); interface (optional) (default: \"eth0\") — Network interface to configure via netplan (default: 'eth0'); waitForVm (optional) (default: true) — Wait for SSH to become accessible before running ansible commands (default: true); timeout (optional) (default: 300) — SSH wait timeout in seconds (default: 300); retryOnFailure (optional) (default: false) — Retry on failure (default: false); maxRetries (optional) (default: 1) — Maximum number of retry attempts when retryOnFailure is true (default: 1); dryRun (optional) (default: false) — Preview without executing netplan changes (default: false)}. Configure a static IP address on a VM using netplan via Ansible Must be an object.",
+          "additionalProperties": true
+        }
+      },
+      "required": [
+        "action",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "description": "Create a new VM on a Proxmox node",
+        "parameters": {
+          "action": "compute.create_vm",
+          "params": {
+            "name": "test-vm",
+            "node": "proxBig",
+            "cores": 2,
+            "memory": 4096,
+            "diskSize": "20G",
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Create a VM with a specific template ID",
+        "parameters": {
+          "action": "compute.create_vm",
+          "params": {
+            "name": "test-vm",
+            "node": "yin",
+            "cores": 2,
+            "memory": 4096,
+            "diskSize": "20G",
+            "templateId": 104,
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Create a VM without specifying a name (palindrome will be auto-generated)",
+        "parameters": {
+          "action": "compute.create_vm",
+          "params": {
+            "node": "YANG",
+            "cores": 2,
+            "memory": 4096,
+            "diskSize": "20G",
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Create a VM in VLAN 50 using pre-configured bridge vmbr2",
+        "parameters": {
+          "action": "compute.create_vm",
+          "params": {
+            "node": "YANG",
+            "vmBridge": "vmbr2",
+            "vlanId": 50,
+            "cores": 2,
+            "memory": 4096,
+            "diskSize": "20G",
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Create a VM with automatic bootstrap (runs Ansible common.yml after creation)",
+        "parameters": {
+          "action": "compute.create_vm",
+          "params": {
+            "node": "YANG",
+            "cores": 2,
+            "memory": 4096,
+            "diskSize": "20G",
+            "bootstrap": true,
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Bootstrap a VM (run Ansible common.yml playbook)",
+        "parameters": {
+          "action": "services.bootstrap",
+          "params": {
+            "vmName": "dad",
+            "waitForVm": true,
+            "timeout": 300,
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Install Docker on a VM",
+        "parameters": {
+          "action": "services.install_docker",
+          "params": {
+            "vmName": "dad",
+            "waitForVm": true,
+            "timeout": 300,
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Install nginx on a VM",
+        "parameters": {
+          "action": "services.install_nginx",
+          "params": {
+            "vmName": "dad",
+            "waitForVm": true,
+            "timeout": 300,
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Configure firewall rules on a VM",
+        "parameters": {
+          "action": "services.configure_firewall",
+          "params": {
+            "vmName": "dad",
+            "rules": [
+              {
+                "port": 80,
+                "protocol": "tcp",
+                "action": "allow"
+              },
+              {
+                "port": 443,
+                "protocol": "tcp",
+                "action": "allow"
+              }
+            ],
+            "defaultPolicy": "deny",
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Set static IP address on a VM",
+        "parameters": {
+          "action": "services.set_static_ip",
+          "params": {
+            "vmName": "dad",
+            "ip": "192.168.1.100/24",
+            "gateway": "192.168.1.1",
+            "dns": [
+              "8.8.8.8",
+              "8.8.4.4"
+            ],
+            "interface": "eth0",
+            "dryRun": false
+          }
+        }
+      },
+      {
+        "description": "Create a new VM on a Proxmox node using Terraform",
+        "parameters": {
+          "action": "compute.create_vm",
+          "params": {}
+        }
+      },
+      {
+        "description": "Destroy a VM on a Proxmox node using Terraform",
+        "parameters": {
+          "action": "compute.destroy_vm",
+          "params": {}
+        }
+      }
+    ],
+    "notes": [
+      "Available actions: compute.create_vm, compute.destroy_vm, network.create_dns_record, network.sync_dhcp_to_dns, network.set_interface_vlan, services.bootstrap, services.install_docker, services.install_nginx, services.configure_firewall, services.set_static_ip",
+      "For VM creation, use action: 'compute.create_vm'",
+      "For VM destruction, use action: 'compute.destroy_vm'",
+      "Actions use Terraform/Ansible for safe, deterministic operations",
+      "Set dryRun: true to preview changes without applying them",
+      "For compute.create_vm: node/datastore/vmBridge/templateId are availability-aware. The action canonicalizes node names and auto-selects from discovered options on that node, with explicit fallback warnings.",
+      "For compute.destroy_vm: name (string, optional) - VM name to destroy. vmId (number, optional) - VM ID to destroy. Either name or vmId is required. node (string, optional) - Node name for validation. dryRun (boolean, optional) - Preview destruction without executing.",
+      "For network.create_dns_record: hostname (string, required) - Hostname (e.g., 'web-server'). ip (string, required) - IPv4 address (e.g., '172.16.50.100'). domain (string, optional, default: '.prox') - Domain suffix to append. dryRun (boolean, optional) - Preview DNS record creation without executing.",
+      "For network.sync_dhcp_to_dns: dryRun (boolean, optional) - Preview sync without creating/updating DNS records. domain (string, optional, default: '.prox') - Domain suffix for DNS records. updateExisting (boolean, optional, default: true) - Update DNS records if IP changed. This action queries OPNsense DHCP leases and creates/updates corresponding DNS records in Pi-hole, bridging the gap between OPNsense DHCP (Unbound) and Pi-hole (forwarder)."
+    ],
+    "categories": [
+      "action",
+      "automation",
+      "terraform",
+      "ansible"
     ]
   }
 ]

@@ -79,12 +79,19 @@ test("cancel clears pending change", async () => {
 });
 
 test("bare test input returns a liveness response without clarification", async () => {
-  const res = await runAgent("test");
+  const { response, finalEvent } = await runAgentWithFinalEvent("test");
 
-  expect(res.text).toBe("Agent is online.");
+  expect(response.text).toBe("Agent is online.");
+  expect(response.structuredResponse.answer.summary).toBe("Agent is online.");
+  expect((finalEvent as any)?.data?.structuredResponse?.answer?.summary).toBe("Agent is online.");
 }, { timeout: 15000 });
 
-test("confirmed id replays pending executable input", async () => {
+// This path replays a pending executable input through the general chat/
+// generation route (handleExecuteWithAcl -> getOpenAIClient), unlike the
+// other tests in this file which resolve through deterministic write/
+// destroy-request templates - it has no path that succeeds without a real
+// OpenAI key.
+test.skipIf(!process.env.OPENAI_API_KEY)("confirmed id replays pending executable input", async () => {
   const res = await runAgent("CONFIRM deadbeef", {
     conversationContext: {
       pendingAction: "make a vm called apple on yin",

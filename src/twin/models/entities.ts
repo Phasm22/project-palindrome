@@ -32,6 +32,7 @@ const BaseTwinEntitySchema = z.object({
 export const ComputeNodeEntitySchema = BaseTwinEntitySchema.extend({
   type: z.literal(TwinEntityType.COMPUTE_NODE),
   data: z.object({
+    provenance: FactProvenanceSchema.optional(),
     roles: z.array(z.string()).default([]),
     ipAddresses: z.array(z.string()).default([]),
     status: z.enum(["online", "degraded", "offline"]).optional(),
@@ -56,6 +57,7 @@ export const ComputeNodeEntitySchema = BaseTwinEntitySchema.extend({
 export const ComputeVmEntitySchema = BaseTwinEntitySchema.extend({
   type: z.literal(TwinEntityType.COMPUTE_VM),
   data: z.object({
+    provenance: FactProvenanceSchema.optional(),
     nodeId: z.string(),
     state: z.enum(["running", "stopped", "paused"]).optional(),
     ipAddresses: z.array(z.string()).default([]),
@@ -103,6 +105,8 @@ export const FirewallRuleEntitySchema = BaseTwinEntitySchema.extend({
     destination: z.string().nullable().optional(), // IP/CIDR or "any"
     sourcePort: z.string().nullable().optional(), // port or port range
     destinationPort: z.string().nullable().optional(), // port or port range
+    translationTarget: z.string().nullable().optional(), // NAT/rdr address after translation
+    translationPort: z.string().nullable().optional(), // rdr port after translation
     flags: z.string().nullable().optional(), // quick, keep state, etc.
     ruleType: z.enum(["filter", "nat", "rdr"]).default("filter"),
     chain: z.string().nullable().optional(), // interface-based grouping
@@ -189,4 +193,3 @@ export type FirewallAliasEntity = z.infer<typeof FirewallAliasEntitySchema>;
 export type StorageEntity = z.infer<typeof StorageEntitySchema>;
 export type SwitchEntity = z.infer<typeof SwitchEntitySchema>;
 export type SwitchPortEntity = z.infer<typeof SwitchPortEntitySchema>;
-

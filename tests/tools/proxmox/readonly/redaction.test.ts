@@ -8,42 +8,41 @@ describe("TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)", () => {
   const allRedactor = new Redactor(ALL_REDACTION_PATTERNS);
 
   describe("Pattern 1: User Realm Identifiers", () => {
-    it("should redact user@pam identifiers", () => {
+    it("should preserve user@pam identifiers", () => {
       const text = "User: root@pam logged in";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("user-[REDACTED]");
-      expect(result.redactedText).not.toContain("root@pam");
-      expect(result.redactions.some((r) => r.pattern === "proxmox_user_realm")).toBe(true);
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact root@pve identifiers", () => {
+    it("should preserve root@pve identifiers", () => {
       const text = "Node managed by root@pve";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("user-[REDACTED]");
-      expect(result.redactedText).not.toContain("root@pve");
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact automation@ldap identifiers", () => {
+    it("should preserve automation@ldap identifiers", () => {
       const text = "Service account: automation@ldap";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("user-[REDACTED]");
-      expect(result.redactedText).not.toContain("automation@ldap");
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact multiple user realm identifiers", () => {
+    it("should preserve multiple user realm identifiers", () => {
       const text = "Users: admin@pam, user@pve, service@ldap";
       const result = redactor.redact(text);
-      expect(result.redactedText).not.toMatch(/@(?:pam|pve|ldap)/);
-      expect(result.redactions.find((r) => r.pattern === "proxmox_user_realm")?.count).toBeGreaterThanOrEqual(3);
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should handle various realm types", () => {
+    it("should preserve various realm types", () => {
       const realms = ["pam", "pve", "ldap", "ad", "openid", "oidc", "saml"];
       for (const realm of realms) {
         const text = `user@${realm}`;
         const result = redactor.redact(text);
-        expect(result.redactedText).toContain("user-[REDACTED]");
-        expect(result.redactedText).not.toContain(`@${realm}`);
+        expect(result.redactedText).toBe(text);
+        expect(result.redactions).toHaveLength(0);
       }
     });
   });
@@ -81,71 +80,69 @@ describe("TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)", () => {
   });
 
   describe("Pattern 3: MAC Addresses", () => {
-    it("should redact MAC addresses with colons", () => {
+    it("should preserve MAC addresses with colons", () => {
       const text = "Interface MAC: AA:BB:CC:DD:EE:FF";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("MAC-[REDACTED]");
-      expect(result.redactedText).not.toContain("AA:BB:CC:DD:EE:FF");
-      expect(result.redactions.some((r) => r.pattern === "proxmox_mac_address")).toBe(true);
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact MAC addresses with hyphens", () => {
+    it("should preserve MAC addresses with hyphens", () => {
       const text = "MAC address: AA-BB-CC-DD-EE-FF";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("MAC-[REDACTED]");
-      expect(result.redactedText).not.toContain("AA-BB-CC-DD-EE-FF");
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact lowercase MAC addresses", () => {
+    it("should preserve lowercase MAC addresses", () => {
       const text = "MAC: aa:bb:cc:dd:ee:ff";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("MAC-[REDACTED]");
-      expect(result.redactedText).not.toContain("aa:bb:cc:dd:ee:ff");
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact multiple MAC addresses", () => {
+    it("should preserve multiple MAC addresses", () => {
       const text = "MACs: 00:11:22:33:44:55, AA:BB:CC:DD:EE:FF";
       const result = redactor.redact(text);
-      expect(result.redactedText).not.toMatch(/(?:[0-9A-Fa-f]{2}[:-]){5}(?:[0-9A-Fa-f]{2})/);
-      expect(result.redactions.find((r) => r.pattern === "proxmox_mac_address")?.count).toBeGreaterThanOrEqual(2);
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
   });
 
   describe("Pattern 4: Internal Node/Storage IPs", () => {
-    it("should redact 10.x.x.x IPs", () => {
+    it("should preserve 10.x.x.x IPs", () => {
       const text = "Storage IP: 10.0.0.1";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("IP-[REDACTED]");
-      expect(result.redactedText).not.toContain("10.0.0.1");
-      expect(result.redactions.some((r) => r.pattern === "proxmox_internal_ips")).toBe(true);
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact 192.168.x.x IPs", () => {
+    it("should preserve 192.168.x.x IPs", () => {
       const text = "Corosync network: 192.168.1.100";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("IP-[REDACTED]");
-      expect(result.redactedText).not.toContain("192.168.1.100");
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact 172.16-31.x.x IPs", () => {
+    it("should preserve 172.16-31.x.x IPs", () => {
       const text = "Ceph backend: 172.16.0.10";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("IP-[REDACTED]");
-      expect(result.redactedText).not.toContain("172.16.0.10");
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact 169.254.x.x link-local IPs", () => {
+    it("should preserve 169.254.x.x link-local IPs", () => {
       const text = "Link-local: 169.254.1.1";
       const result = redactor.redact(text);
-      expect(result.redactedText).toContain("IP-[REDACTED]");
-      expect(result.redactedText).not.toContain("169.254.1.1");
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
 
-    it("should redact multiple internal IPs", () => {
+    it("should preserve multiple internal IPs", () => {
       const text = "IPs: 10.0.0.1, 192.168.1.1, 172.16.0.1";
       const result = redactor.redact(text);
-      expect(result.redactedText).not.toMatch(/\b(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01])|169\.254)\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/);
-      expect(result.redactions.find((r) => r.pattern === "proxmox_internal_ips")?.count).toBeGreaterThanOrEqual(3);
+      expect(result.redactedText).toBe(text);
+      expect(result.redactions).toHaveLength(0);
     });
   });
 
@@ -188,7 +185,7 @@ describe("TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)", () => {
   });
 
   describe("Integration: All Patterns Together", () => {
-    it("should redact all Proxmox-specific patterns in a single response", () => {
+    it("should redact secrets and preserve infrastructure identifiers in a single response", () => {
       const text = `
         Node: pve1
         User: admin@pam
@@ -200,28 +197,21 @@ describe("TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)", () => {
 
       const result = allRedactor.redact(text);
 
-      // Verify all patterns are redacted
+      // Secrets are redacted.
       expect(result.redactedText).not.toContain("admin@pam!deploy-token");
-      expect(result.redactedText).not.toContain("AA:BB:CC:DD:EE:FF");
-      expect(result.redactedText).not.toContain("10.0.0.1");
       expect(result.redactedText).not.toContain("Secret123");
 
-      // Verify replacements are present
-      // Note: admin@pam might be redacted as user-[REDACTED] OR as part of token-[REDACTED]
-      // depending on pattern order, so we check for at least one
-      expect(
-        result.redactedText.includes("user-[REDACTED]") ||
-        result.redactedText.includes("token-[REDACTED]")
-      ).toBe(true);
-      expect(result.redactedText).toContain("token-[REDACTED]");
-      expect(result.redactedText).toContain("MAC-[REDACTED]");
-      expect(result.redactedText).toContain("IP-[REDACTED]");
+      // User realms, MAC addresses, and IP addresses are diagnostic identifiers.
+      expect(result.redactedText).toContain("admin@pam");
+      expect(result.redactedText).toContain("AA:BB:CC:DD:EE:FF");
+      expect(result.redactedText).toContain("10.0.0.1");
       expect(result.redactedText).toContain("[REDACTED_CONFIG_SECRET]");
+      expect(result.redactedText).toContain("[REDACTED_PASSWORD]");
     });
   });
 
   describe("End-to-End: sanitizeToolPayload Integration", () => {
-    it("should redact Proxmox data in tool payloads", () => {
+    it("should redact Proxmox secrets and preserve identifiers in tool payloads", () => {
       const payload = {
         node: "pve1",
         user: "admin@pam",
@@ -232,40 +222,33 @@ describe("TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)", () => {
           ip: "10.0.0.1",
         },
         config: {
-          password: "Secret123",
+          credential: "password: Secret123",
         },
       };
 
       const sanitized = sanitizeToolPayload(payload);
       const sanitizedStr = JSON.stringify(sanitized);
 
-      // Verify sensitive data is redacted
+      // Verify sensitive data is redacted.
       expect(sanitizedStr).not.toContain("admin@pam!deploy");
-      expect(sanitizedStr).not.toContain("AA:BB:CC:DD:EE:FF");
-      expect(sanitizedStr).not.toContain("10.0.0.1");
       expect(sanitizedStr).not.toContain("Secret123");
-      
-      // Verify redactions are present
-      expect(
-        sanitizedStr.includes("user-[REDACTED]") ||
-        sanitizedStr.includes("token-[REDACTED]")
-      ).toBe(true);
-      expect(sanitizedStr).toContain("MAC-[REDACTED]");
-      expect(sanitizedStr).toContain("IP-[REDACTED]");
-      expect(sanitizedStr).toContain("[REDACTED_CONFIG_SECRET]");
+
+      // Verify infrastructure identifiers are preserved.
+      expect(sanitizedStr).toContain("admin@pam");
+      expect(sanitizedStr).toContain("AA:BB:CC:DD:EE:FF");
+      expect(sanitizedStr).toContain("10.0.0.1");
+      expect(sanitizedStr).toContain("[REDACTED_PASSWORD]");
     });
 
-    it("should redact Proxmox data in string payloads", () => {
+    it("should redact tokens and preserve identifiers in string payloads", () => {
       const payload = "User admin@pam with token admin@pam!deploy on IP 10.0.0.1";
       const sanitized = sanitizeToolPayload(payload);
 
-      // Token should be redacted
+      // Token should be redacted; the user realm and IP should remain available.
       expect(sanitized).not.toContain("admin@pam!deploy");
-      // IP should be redacted
-      expect(sanitized).not.toContain("10.0.0.1");
-      // Verify redactions present
       expect(sanitized).toContain("token-[REDACTED]");
-      expect(sanitized).toContain("IP-[REDACTED]");
+      expect(sanitized).toContain("admin@pam");
+      expect(sanitized).toContain("10.0.0.1");
     });
 
     it("should preserve non-sensitive data", () => {
@@ -286,7 +269,7 @@ describe("TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)", () => {
   });
 
   describe("Real-World Proxmox API Response Examples", () => {
-    it("should redact sensitive data in node status response", () => {
+    it("should preserve diagnostic identifiers in node status response", () => {
       const response = {
         node: "pve1",
         status: "online",
@@ -301,39 +284,25 @@ describe("TL-2A.4: CRITICAL Redaction Test (Proxmox-Specific)", () => {
       };
 
       const sanitized = sanitizeToolPayload(response);
-      const sanitizedStr = JSON.stringify(sanitized);
-
-      expect(sanitizedStr).not.toContain("10.0.0.1");
-      expect(sanitizedStr).not.toContain("AA:BB:CC:DD:EE:FF");
-      expect(sanitizedStr).not.toContain("admin@pam");
-      expect(sanitizedStr).not.toContain("user@pve");
-      
-      // Verify redactions are present
-      expect(sanitizedStr).toContain("IP-[REDACTED]");
-      expect(sanitizedStr).toContain("MAC-[REDACTED]");
-      expect(sanitizedStr).toContain("user-[REDACTED]");
+      expect(sanitized).toEqual(response);
     });
 
-    it("should redact sensitive data in VM config response", () => {
+    it("should preserve MAC addresses and redact labeled secrets in VM config response", () => {
       const response = {
         vmid: 101,
         name: "test-vm",
         net0: "virtio=AA:BB:CC:DD:EE:FF,bridge=vmbr0",
         "cloud-init": {
-          password: "SecretPassword123",
+          credential: "password: SecretPassword123",
         },
       };
 
       const sanitized = sanitizeToolPayload(response);
       const sanitizedStr = JSON.stringify(sanitized);
 
-      expect(sanitizedStr).not.toContain("AA:BB:CC:DD:EE:FF");
+      expect(sanitizedStr).toContain("AA:BB:CC:DD:EE:FF");
       expect(sanitizedStr).not.toContain("SecretPassword123");
-      
-      // Verify redactions are present
-      expect(sanitizedStr).toContain("MAC-[REDACTED]");
-      expect(sanitizedStr).toContain("[REDACTED_CONFIG_SECRET]");
+      expect(sanitizedStr).toContain("[REDACTED_PASSWORD]");
     });
   });
 });
-

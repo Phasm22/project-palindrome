@@ -87,7 +87,7 @@ export abstract class OpnsenseReadOnlyBase extends BaseTool {
         data: sanitizedData,
       };
     } catch (error: any) {
-      logger.error("OPNsense API call failed", {
+      const sanitizedLogDetails = sanitizeToolPayload({
         tool: this.metadata.name,
         error: error.message,
         status: error.response?.status,
@@ -97,6 +97,7 @@ export abstract class OpnsenseReadOnlyBase extends BaseTool {
         responseData: error.response?.data,
         stack: error.stack,
       });
+      logger.error("OPNsense API call failed", sanitizedLogDetails);
 
       // Sanitize error messages too
       const errorMessage = error.response?.data?.message || error.message || "Unknown error";

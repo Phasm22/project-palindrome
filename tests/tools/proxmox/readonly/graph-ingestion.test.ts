@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { extractProxmoxGraphEntities } from "../../../../src/tools/proxmox/readonly/graph-entity-extractor";
 import { NodeType, RelationshipType } from "../../../../src/pce/kg/schema/ontology";
 
@@ -37,21 +37,39 @@ vi.mock("https", () => ({
   },
 }));
 
-// Mock the ProxmoxReadOnlyTool
-const mockToolInstance = {
-  execute: vi.fn(),
-};
-
-vi.mock("../../../../src/tools/proxmox/readonly/proxmox-readonly-tool", () => ({
-  ProxmoxReadOnlyTool: vi.fn().mockImplementation(() => mockToolInstance),
-}));
-
 // Import after mocking
 import { ProxmoxReadOnlyTool } from "../../../../src/tools/proxmox/readonly/proxmox-readonly-tool";
 
+// Intercept ProxmoxReadOnlyTool at the prototype level (vi.spyOn), not by
+// replacing its module (vi.mock) - under `bun test`, module mocks are
+// process-global with no per-file teardown and leak into every other file
+// that imports the real class (e.g.
+// tests/tools/actions/execution-result.test.ts's loadTools(), which builds
+// every registered tool and crashed reading .metadata off the plain
+// {execute} object this used to wholesale-replace it with).
+// vi.restoreAllMocks() properly undoes a prototype spy but not a module
+// replacement.
+const mockToolInstance = {
+  execute: vi.fn(),
+};
+let executeSpy: { mockRestore: () => void };
+
 describe("TL-2A.6.B: Graph Store Ingestion Validation", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // vi.clearAllMocks() clears call history for every mock in the whole
+    // process, not just this file's - under `bun test`, files run with real
+    // concurrency, so it can zero out another file's still-in-flight spy
+    // call count. Clear only this file's own mock.
+    mockToolInstance.execute.mockClear();
+    executeSpy = vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(mockToolInstance.execute as any);
+  });
+
+  afterEach(() => {
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the same
+    // shared prototype. Restore only the specific spy made here.
+    executeSpy.mockRestore();
   });
 
   describe("Node Entity Extraction", () => {

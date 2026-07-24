@@ -15,7 +15,7 @@ function formatDurationMs(ms) {
 }
 
 // Format tool results for readable display
-function formatToolResult(dataPreview, toolName) {
+export function formatToolResult(dataPreview, toolName) {
   if (!dataPreview) return '';
   
   try {
@@ -27,19 +27,19 @@ function formatToolResult(dataPreview, toolName) {
       return `
         <div style="font-size: 0.8rem;">
           <div style="color: #10b981; margin-bottom: 8px; font-weight: 600;">
-            📦 ${data.vms.length} VM${data.vms.length !== 1 ? 's' : ''} found
+            📦 ${escapeHtml(String(data.vms.length))} VM${data.vms.length !== 1 ? 's' : ''} found
           </div>
           <div style="display: grid; gap: 6px;">
             ${data.vms.slice(0, 10).map(vm => `
               <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #1e293b; border-radius: 4px;">
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${vm.status === 'running' ? '#10b981' : '#94a3b8'};"></span>
-                <span style="color: #f97316; font-weight: 500; min-width: 120px;">${vm.name || vm.vmid}</span>
-                <span style="color: #94a3b8; font-size: 0.75rem;">ID: ${vm.vmid}</span>
-                <span style="color: #94a3b8; font-size: 0.75rem;">${vm.node || ''}</span>
-                ${vm.mem_normalized ? `<span style="color: #8b5cf6; font-size: 0.75rem;">${vm.mem_normalized.value}${vm.mem_normalized.unit}</span>` : ''}
+                <span style="color: #f97316; font-weight: 500; min-width: 120px;">${escapeHtml(String(vm.name || vm.vmid))}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">ID: ${escapeHtml(String(vm.vmid))}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">${escapeHtml(String(vm.node || ''))}</span>
+                ${vm.mem_normalized ? `<span style="color: #8b5cf6; font-size: 0.75rem;">${escapeHtml(String(vm.mem_normalized.value))}${escapeHtml(String(vm.mem_normalized.unit))}</span>` : ''}
               </div>
             `).join('')}
-            ${data.vms.length > 10 ? `<div style="color: #94a3b8; font-size: 0.75rem;">... and ${data.vms.length - 10} more</div>` : ''}
+            ${data.vms.length > 10 ? `<div style="color: #94a3b8; font-size: 0.75rem;">... and ${escapeHtml(String(data.vms.length - 10))} more</div>` : ''}
           </div>
         </div>
       `;
@@ -50,14 +50,14 @@ function formatToolResult(dataPreview, toolName) {
       return `
         <div style="font-size: 0.8rem;">
           <div style="color: #10b981; margin-bottom: 8px; font-weight: 600;">
-            🐳 ${data.containers.length} container${data.containers.length !== 1 ? 's' : ''} found
+            🐳 ${escapeHtml(String(data.containers.length))} container${data.containers.length !== 1 ? 's' : ''} found
           </div>
           <div style="display: grid; gap: 6px;">
             ${data.containers.slice(0, 10).map(ct => `
               <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #1e293b; border-radius: 4px;">
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${ct.status === 'running' ? '#10b981' : '#94a3b8'};"></span>
-                <span style="color: #f97316; font-weight: 500;">${ct.name || ct.vmid}</span>
-                <span style="color: #94a3b8; font-size: 0.75rem;">ID: ${ct.vmid}</span>
+                <span style="color: #f97316; font-weight: 500;">${escapeHtml(String(ct.name || ct.vmid))}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">ID: ${escapeHtml(String(ct.vmid))}</span>
               </div>
             `).join('')}
           </div>
@@ -70,14 +70,14 @@ function formatToolResult(dataPreview, toolName) {
       return `
         <div style="font-size: 0.8rem;">
           <div style="color: #10b981; margin-bottom: 8px; font-weight: 600;">
-            🖥️ ${data.nodes.length} node${data.nodes.length !== 1 ? 's' : ''} found
+            🖥️ ${escapeHtml(String(data.nodes.length))} node${data.nodes.length !== 1 ? 's' : ''} found
           </div>
           <div style="display: grid; gap: 6px;">
             ${data.nodes.map(node => `
               <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: #1e293b; border-radius: 4px;">
                 <span style="width: 8px; height: 8px; border-radius: 50%; background: ${node.status === 'online' ? '#10b981' : '#ef4444'};"></span>
-                <span style="color: #f97316; font-weight: 500;">${node.node}</span>
-                <span style="color: #94a3b8; font-size: 0.75rem;">${node.status}</span>
+                <span style="color: #f97316; font-weight: 500;">${escapeHtml(String(node.node))}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem;">${escapeHtml(String(node.status))}</span>
               </div>
             `).join('')}
           </div>
@@ -90,16 +90,16 @@ function formatToolResult(dataPreview, toolName) {
       return `
         <div style="font-size: 0.8rem;">
           <div style="color: #8b5cf6; margin-bottom: 8px; font-weight: 600;">
-            🔗 ${data.entities.length} entit${data.entities.length !== 1 ? 'ies' : 'y'} found
+            🔗 ${escapeHtml(String(data.entities.length))} entit${data.entities.length !== 1 ? 'ies' : 'y'} found
           </div>
           <div style="display: grid; gap: 6px;">
             ${data.entities.slice(0, 8).map(e => `
               <div style="padding: 6px 8px; background: #1e293b; border-radius: 4px; display: flex; gap: 8px; align-items: center;">
-                <span style="background: #8b5cf6; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7rem;">${e.type || e.labels?.[0] || 'Entity'}</span>
-                <span style="color: #e2e8f0;">${e.name || e.properties?.name || e.id || 'Unknown'}</span>
+                <span style="background: #8b5cf6; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7rem;">${escapeHtml(String(e.type || e.labels?.[0] || 'Entity'))}</span>
+                <span style="color: #e2e8f0;">${escapeHtml(String(e.name || e.properties?.name || e.id || 'Unknown'))}</span>
               </div>
             `).join('')}
-            ${data.entities.length > 8 ? `<div style="color: #94a3b8; font-size: 0.75rem;">... and ${data.entities.length - 8} more</div>` : ''}
+            ${data.entities.length > 8 ? `<div style="color: #94a3b8; font-size: 0.75rem;">... and ${escapeHtml(String(data.entities.length - 8))} more</div>` : ''}
           </div>
         </div>
       `;
@@ -109,7 +109,7 @@ function formatToolResult(dataPreview, toolName) {
     if (data.success !== undefined) {
       return `
         <div style="display: flex; align-items: center; gap: 8px; color: ${data.success ? '#10b981' : '#ef4444'};">
-          ${data.success ? '✅' : '❌'} ${data.message || (data.success ? 'Operation successful' : 'Operation failed')}
+          ${data.success ? '✅' : '❌'} ${escapeHtml(String(data.message || (data.success ? 'Operation successful' : 'Operation failed')))}
         </div>
       `;
     }
@@ -120,7 +120,7 @@ function formatToolResult(dataPreview, toolName) {
     return `<div class="trace-tool-result">${renderAdaptiveValue(data)}</div>`;
   } catch (error) {
     // If parsing fails, return as-is
-    return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.7rem; overflow-x: auto; margin: 0;">${typeof dataPreview === 'string' ? dataPreview : JSON.stringify(dataPreview)}</pre>`;
+    return `<pre style="background: #0f172a; padding: 8px; border-radius: 4px; font-size: 0.7rem; overflow-x: auto; margin: 0;">${escapeHtml(typeof dataPreview === 'string' ? dataPreview : JSON.stringify(dataPreview))}</pre>`;
   }
 }
 
@@ -139,6 +139,7 @@ function formatFinalResponse(text) {
  */
 export async function copyTraceData(traceId, buttonElement) {
   const originalHtml = buttonElement.innerHTML;
+  const checkIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`;
   const setButtonLabel = (label, className = '') => {
     buttonElement.classList.remove('is-copying', 'is-copied', 'is-copy-failed');
     if (className) buttonElement.classList.add(className);
@@ -180,12 +181,12 @@ ${JSON.stringify(traceData, null, 2)}
     
     await writeClipboardText(formattedTrace);
     
-    setButtonLabel('Copied', 'is-copied');
+    setButtonLabel(`${checkIcon} Copied`, 'is-copied');
     setTimeout(() => {
       buttonElement.innerHTML = originalHtml;
       buttonElement.classList.remove('is-copying', 'is-copied', 'is-copy-failed');
       buttonElement.disabled = false;
-    }, 1000);
+    }, 1400);
   } catch (error) {
     console.error('Failed to copy trace data:', error);
     setButtonLabel('Copy failed', 'is-copy-failed');
@@ -199,8 +200,12 @@ ${JSON.stringify(traceData, null, 2)}
 
 async function writeClipboardText(text) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall through for non-secure contexts / denied permissions.
+    }
   }
 
   const textarea = document.createElement('textarea');

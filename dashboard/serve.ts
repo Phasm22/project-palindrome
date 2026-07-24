@@ -8,6 +8,8 @@ const HTTPS_PORT = Number(process.env.DASHBOARD_HTTPS_PORT || 8443);
 const DASHBOARD_DIR = import.meta.dir;
 const PROJECT_ROOT = `${DASHBOARD_DIR}/..`;
 const API_PROXY_BASE = process.env.PCE_API_URL || "http://127.0.0.1:4000";
+/** When set, inject into proxied API calls so first-party dashboard works with auth-gated PCE. */
+const API_TOKEN = process.env.PALINDROME_API_TOKEN?.trim() || "";
 
 // Check if certs exist
 const certPath = `${PROJECT_ROOT}/certs/cert.pem`;
@@ -165,6 +167,10 @@ async function handleRequest(req: Request, server: any) {
       const upstreamUrl = `${API_PROXY_BASE}${upstreamPath}${url.search}`;
       const headers = new Headers(req.headers);
       headers.set("host", new URL(API_PROXY_BASE).host);
+      // EventSource cannot set Authorization; inject for same-origin first-party traffic.
+      if (API_TOKEN && !headers.has("authorization") && !headers.has("x-api-token")) {
+        headers.set("X-API-Token", API_TOKEN);
+      }
 
       let upstreamResponse: Response;
       try {
@@ -192,7 +198,7 @@ async function handleRequest(req: Request, server: any) {
       const responseHeaders = new Headers(upstreamResponse.headers);
       responseHeaders.set("Access-Control-Allow-Origin", "*");
       responseHeaders.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
-      responseHeaders.set("Access-Control-Allow-Headers", "Content-Type");
+      responseHeaders.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Token");
 
       return respond(new Response(upstreamResponse.body, {
         status: upstreamResponse.status,

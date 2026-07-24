@@ -44,7 +44,6 @@ export class GraphIngestionPipeline {
   private rawStorage: RawDocumentStorage;
   private redactor: Redactor;
   private graphIndexer: GraphIndexer;
-  private graphStore: Neo4jGraphStore;
 
   constructor(
     snapshotLog: SnapshotLog,
@@ -56,7 +55,6 @@ export class GraphIngestionPipeline {
     this.snapshotLog = snapshotLog;
     this.rawStorage = rawStorage;
     this.redactor = redactor;
-    this.graphStore = graphStore;
     this.graphIndexer = new GraphIndexer(graphStore, edlPipeline);
   }
 
@@ -148,46 +146,4 @@ export class GraphIngestionPipeline {
     }
   }
 
-  /**
-   * Validate graph invariants
-   * - No cycles (self-loops)
-   * - No duplicate relationships
-   * - Correct node types
-   */
-  async validateGraphInvariants(): Promise<{
-    valid: boolean;
-    issues: string[];
-  }> {
-    const issues: string[] = [];
-
-    try {
-      // Check for self-loops (already prevented in writeRelationship, but verify)
-      const selfLoopQuery = `
-        MATCH (a:Entity)-[r]->(a)
-        RETURN count(r) as count
-      `;
-      // This would need to be executed via query interface
-      // For now, we trust the prevention logic in writeRelationship
-
-      // Check node type validity
-      const nodeTypeQuery = `
-        MATCH (n:Entity)
-        WHERE n.type IS NULL OR n.type = ''
-        RETURN count(n) as count
-      `;
-      // Similar - would need query interface
-
-      return {
-        valid: issues.length === 0,
-        issues,
-      };
-    } catch (error: any) {
-      issues.push(`Validation error: ${error.message}`);
-      return {
-        valid: false,
-        issues,
-      };
-    }
-  }
 }
-

@@ -5,6 +5,7 @@ import { TwinEntityType } from "../../twin/models/entities";
 import type { TwinRelationship } from "../../twin/models/relationships";
 import { TwinRelationshipType } from "../../twin/models/relationships";
 import { PfctlFirewallParser } from "../../parsers/security/pfctl-firewall-parser";
+import { cidrOverlaps } from "../../parsers/network/network-utils";
 import { OpnsenseReadOnlyTool } from "../../tools/opnsense/readonly/opnsense-readonly-tool";
 import type { ExecutionContext } from "../../types/execution";
 import type { ExposureSnapshotEntry } from "../api/ingestion-summary-store";
@@ -17,6 +18,11 @@ type FirewallAliasDefinition = {
   description: string | null;
   entries: string[];
   cidrs: string[];
+};
+
+type SubnetTarget = {
+  id: string;
+  cidr: string;
 };
 
 export interface FirewallIngestionOptions {
@@ -70,6 +76,7 @@ export class FirewallIngestionOrchestrator {
       const aliasMap = this.buildAliasMap(aliasDefinitions);
 
       const interfaceSubnetMap = await this.buildInterfaceSubnetMap(parseResult.entities);
+      const subnetTargets = await this.listSubnetTargets();
 
       // Log sample entity to verify CIDR preservation
       const sampleEntity = parseResult.entities.find(
@@ -93,13 +100,18 @@ export class FirewallIngestionOrchestrator {
       const ruleRelationships = await this.createRuleRelationships(
         parseResult.entities,
         aliasMap,
-        interfaceSubnetMap
+        interfaceSubnetMap,
+        subnetTargets
       );
       const relationships = [...ruleRelationships, ...aliasRelationships];
       const entities = [...parseResult.entities, ...aliasEntities];
 
       // Ensure subnet entities exist for any CIDRs referenced in relationships
-      await this.ensureSubnetEntities(entities, relationships);
+      await this.ensureSubnetEntities(
+        entities,
+        relationships,
+        new Set(subnetTargets.map((target) => target.id))
+      );
 
       // Upsert into twin
       await this.twinUpdater.initialize();
@@ -386,6 +398,15 @@ export class FirewallIngestionOrchestrator {
     return interfaceSubnetMap;
   }
 
+  private async listSubnetTargets(): Promise<SubnetTarget[]> {
+    const queryService = new TwinQueryService();
+    try {
+      return await queryService.listInterfaceSubnets();
+    } finally {
+      await queryService.close();
+    }
+  }
+
   private resolveCidrs(
     value: string,
     aliasMap: Map<string, string[]>,
@@ -521,19 +542,24 @@ export class FirewallIngestionOrchestrator {
   }
 
   /**
-   * Create ALLOWS/BLOCKS relationships between firewall rules and interfaces/subnets.
-   * Also link rules to interfaces based on the interface field.
+   * Create filter-policy and address-translation relationships.
+   *
+   * ALLOWS/BLOCKS point from a filter rule to each governed subnet.
+   * TRANSLATES_TO points from the address matched before NAT/rdr to the
+   * translated address. Translation metadata retains the owning rule because
+   * the endpoints are subnet entities rather than rule entities.
    */
   private async createRuleRelationships(
     entities: TwinEntity[],
     aliasMap: Map<string, string[]>,
-    interfaceSubnetMap: Map<string, string[]>
+    interfaceSubnetMap: Map<string, string[]>,
+    subnetTargets: SubnetTarget[]
   ): Promise<TwinRelationship[]> {
     const relationships: TwinRelationship[] = [];
+    const relationshipKeys = new Set<string>();
     let skippedCidrInvalid = 0;
     let skippedAliasUnresolved = 0;
     let skippedInterfaceMacroUnresolved = 0;
-    let createdCount = 0;
     const unresolvedAliasNames = new Set<string>();
     const unresolvedInterfaceNames = new Set<string>();
 
@@ -541,166 +567,137 @@ export class FirewallIngestionOrchestrator {
       if (entity.type !== TwinEntityType.FIREWALL_RULE) continue;
 
       const data = entity.data || {};
-      const ruleId = entity.id;
+      if (data.action === "nat" || data.action === "rdr") {
+        const matchedValue =
+          data.action === "rdr" ? data.destination : data.source;
+        const matchedIds = this.resolveTranslationEndpointIds(
+          matchedValue,
+          aliasMap,
+          interfaceSubnetMap,
+          subnetTargets
+        );
+        const translatedIds = this.resolveTranslationEndpointIds(
+          data.translationTarget,
+          aliasMap,
+          interfaceSubnetMap,
+          subnetTargets
+        );
 
-      // Link rule to interface if interface is specified
-      if (data.interface) {
-        const ifaceId = `network-if:opnsense:${data.interface.toLowerCase()}`;
-        // We'll create this relationship during ingestion when we have the full graph
-        // For now, we'll just log it
+        if (matchedIds.length === 0 || translatedIds.length === 0) {
+          pceLogger.debug(
+            `Skipping translation edge for ${entity.id}: concrete matched and translated endpoints are required`
+          );
+          continue;
+        }
+
+        for (const fromId of matchedIds) {
+          for (const toId of translatedIds) {
+            if (fromId === toId) continue;
+            const key = `${TwinRelationshipType.TRANSLATES_TO}|${fromId}|${toId}|${entity.id}`;
+            if (relationshipKeys.has(key)) continue;
+            relationshipKeys.add(key);
+            relationships.push({
+              type: TwinRelationshipType.TRANSLATES_TO,
+              fromId,
+              toId,
+              metadata: {
+                ruleId: entity.id,
+                ruleType: data.action,
+                interface: data.interface,
+                protocol: data.protocol,
+                sourceMatch: data.source,
+                originalDestination: data.destination,
+                originalPort: data.destinationPort,
+                translatedTarget: data.translationTarget,
+                translatedPort: data.translationPort,
+              },
+              collectedAt: entity.collectedAt,
+            });
+          }
+        }
+        continue;
       }
 
-      // Create ALLOWS relationship for pass rules
-      // Check both source and destination for CIDRs
-      if (data.action === "pass") {
-        // If destination is a CIDR, link to subnet
-        if (typeof data.destination === "string" && data.destination.toLowerCase() !== "any") {
-          const resolvedDest = this.resolveCidrs(data.destination, aliasMap, interfaceSubnetMap);
-          const destCidrs = resolvedDest.cidrs;
-          if (destCidrs.length > 0) {
-            for (const cidr of destCidrs) {
-              const subnetId = `network-subnet:${cidr.toLowerCase()}`;
-              relationships.push({
-                type: TwinRelationshipType.ALLOWS,
-                fromId: ruleId,
-                toId: subnetId,
-                metadata: {
-                  direction: data.direction,
-                  protocol: data.protocol,
-                  port: data.destinationPort,
-                },
-                collectedAt: entity.collectedAt,
-              });
-              createdCount++;
-            }
-          } else {
-            if (resolvedDest.unresolvedAliases.length > 0) {
-              skippedAliasUnresolved++;
-              resolvedDest.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
-            } else if (resolvedDest.unresolvedInterfaces.length > 0) {
-              skippedInterfaceMacroUnresolved++;
-              resolvedDest.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
-            } else {
-              skippedCidrInvalid++;
-            }
-            pceLogger.debug(
-              `Skipping rule ${ruleId}: destination "${data.destination}" contains no valid CIDR`
+      const relationshipType =
+        data.action === "pass"
+          ? TwinRelationshipType.ALLOWS
+          : data.action === "block" || data.action === "reject"
+            ? TwinRelationshipType.BLOCKS
+            : null;
+      if (!relationshipType) continue;
+
+      const destination =
+        typeof data.destination === "string" ? data.destination.trim() : "";
+      const source = typeof data.source === "string" ? data.source.trim() : "";
+      const destinationIsSpecific =
+        destination.length > 0 && destination.toLowerCase() !== "any";
+      const sourceIsSpecific = source.length > 0 && source.toLowerCase() !== "any";
+      const governedValue = destinationIsSpecific
+        ? destination
+        : sourceIsSpecific
+          ? source
+          : null;
+      const port = destinationIsSpecific ? data.destinationPort : data.sourcePort;
+
+      let targetIds: string[] = [];
+      if (!governedValue) {
+        // An unrestricted filter rule governs every subnet currently modeled
+        // by the twin. NAT/rdr rules are deliberately excluded above.
+        targetIds = subnetTargets.map((target) => target.id);
+      } else {
+        const resolved = this.resolveCidrs(
+          governedValue,
+          aliasMap,
+          interfaceSubnetMap
+        );
+        if (resolved.cidrs.length === 0) {
+          if (resolved.unresolvedAliases.length > 0) {
+            skippedAliasUnresolved++;
+            resolved.unresolvedAliases.forEach((name) =>
+              unresolvedAliasNames.add(name)
             );
+          } else if (resolved.unresolvedInterfaces.length > 0) {
+            skippedInterfaceMacroUnresolved++;
+            resolved.unresolvedInterfaces.forEach((name) =>
+              unresolvedInterfaceNames.add(name)
+            );
+          } else {
+            skippedCidrInvalid++;
           }
+          pceLogger.debug(
+            `Skipping rule ${entity.id}: "${governedValue}" contains no valid CIDR`
+          );
+          continue;
         }
-        // If source is a CIDR and destination is "any", also link to source subnet
-        if (!data.destination || (typeof data.destination === "string" && data.destination.toLowerCase() === "any")) {
-          if (typeof data.source === "string" && data.source.toLowerCase() !== "any") {
-            const resolvedSource = this.resolveCidrs(data.source, aliasMap, interfaceSubnetMap);
-            const sourceCidrs = resolvedSource.cidrs;
-            if (sourceCidrs.length > 0) {
-              for (const cidr of sourceCidrs) {
-                const subnetId = `network-subnet:${cidr.toLowerCase()}`;
-                relationships.push({
-                  type: TwinRelationshipType.ALLOWS,
-                  fromId: ruleId,
-                  toId: subnetId,
-                  metadata: {
-                    direction: data.direction,
-                    protocol: data.protocol,
-                    port: data.sourcePort,
-                  },
-                  collectedAt: entity.collectedAt,
-                });
-                createdCount++;
-              }
-            } else {
-              if (resolvedSource.unresolvedAliases.length > 0) {
-                skippedAliasUnresolved++;
-                resolvedSource.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
-              } else if (resolvedSource.unresolvedInterfaces.length > 0) {
-                skippedInterfaceMacroUnresolved++;
-                resolvedSource.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
-              } else {
-                skippedCidrInvalid++;
-              }
-              pceLogger.debug(
-                `Skipping rule ${ruleId}: source "${data.source}" contains no valid CIDR`
-              );
+
+        for (const cidr of resolved.cidrs) {
+          // Preserve the canonical firewall CIDR entity for direct lookups,
+          // and also target every host-address subnet entity whose range
+          // overlaps it. VM interfaces connect to those host-address entities.
+          targetIds.push(`network-subnet:${cidr.toLowerCase()}`);
+          for (const target of subnetTargets) {
+            if (cidrOverlaps(cidr, target.cidr)) {
+              targetIds.push(target.id);
             }
           }
         }
       }
 
-      // Create BLOCKS relationship for block/reject rules
-      // Check both source and destination for CIDRs
-      if (data.action === "block" || data.action === "reject") {
-        if (typeof data.destination === "string" && data.destination.toLowerCase() !== "any") {
-          const resolvedDest = this.resolveCidrs(data.destination, aliasMap, interfaceSubnetMap);
-          const destCidrs = resolvedDest.cidrs;
-          if (destCidrs.length > 0) {
-            for (const cidr of destCidrs) {
-              const subnetId = `network-subnet:${cidr.toLowerCase()}`;
-              relationships.push({
-                type: TwinRelationshipType.BLOCKS,
-                fromId: ruleId,
-                toId: subnetId,
-                metadata: {
-                  direction: data.direction,
-                  protocol: data.protocol,
-                  port: data.destinationPort,
-                },
-                collectedAt: entity.collectedAt,
-              });
-              createdCount++;
-            }
-          } else {
-            if (resolvedDest.unresolvedAliases.length > 0) {
-              skippedAliasUnresolved++;
-              resolvedDest.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
-            } else if (resolvedDest.unresolvedInterfaces.length > 0) {
-              skippedInterfaceMacroUnresolved++;
-              resolvedDest.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
-            } else {
-              skippedCidrInvalid++;
-            }
-            pceLogger.debug(
-              `Skipping rule ${ruleId}: destination "${data.destination}" contains no valid CIDR`
-            );
-          }
-        }
-        // If source is a CIDR and destination is "any", also link to source subnet
-        if (!data.destination || (typeof data.destination === "string" && data.destination.toLowerCase() === "any")) {
-          if (typeof data.source === "string" && data.source.toLowerCase() !== "any") {
-            const resolvedSource = this.resolveCidrs(data.source, aliasMap, interfaceSubnetMap);
-            const sourceCidrs = resolvedSource.cidrs;
-            if (sourceCidrs.length > 0) {
-              for (const cidr of sourceCidrs) {
-                const subnetId = `network-subnet:${cidr.toLowerCase()}`;
-                relationships.push({
-                  type: TwinRelationshipType.BLOCKS,
-                  fromId: ruleId,
-                  toId: subnetId,
-                  metadata: {
-                    direction: data.direction,
-                    protocol: data.protocol,
-                    port: data.sourcePort,
-                  },
-                  collectedAt: entity.collectedAt,
-                });
-                createdCount++;
-              }
-            } else {
-              if (resolvedSource.unresolvedAliases.length > 0) {
-                skippedAliasUnresolved++;
-                resolvedSource.unresolvedAliases.forEach((name) => unresolvedAliasNames.add(name));
-              } else if (resolvedSource.unresolvedInterfaces.length > 0) {
-                skippedInterfaceMacroUnresolved++;
-                resolvedSource.unresolvedInterfaces.forEach((name) => unresolvedInterfaceNames.add(name));
-              } else {
-                skippedCidrInvalid++;
-              }
-              pceLogger.debug(
-                `Skipping rule ${ruleId}: source "${data.source}" contains no valid CIDR`
-              );
-            }
-          }
-        }
+      for (const toId of new Set(targetIds)) {
+        const key = `${relationshipType}|${entity.id}|${toId}`;
+        if (relationshipKeys.has(key)) continue;
+        relationshipKeys.add(key);
+        relationships.push({
+          type: relationshipType,
+          fromId: entity.id,
+          toId,
+          metadata: {
+            direction: data.direction,
+            protocol: data.protocol,
+            port,
+          },
+          collectedAt: entity.collectedAt,
+        });
       }
     }
 
@@ -723,11 +720,46 @@ export class FirewallIngestionOrchestrator {
         `Skipped ${skippedInterfaceMacroUnresolved} relationships due to unresolved interface macros: ${Array.from(unresolvedInterfaceNames).sort().join(", ")}`
       );
     }
-    if (createdCount > 0) {
-      pceLogger.info(`Created ${createdCount} firewall rule relationships`);
+    if (relationships.length > 0) {
+      pceLogger.info(`Created ${relationships.length} firewall rule relationships`);
     }
 
     return relationships;
+  }
+
+  private resolveTranslationEndpointIds(
+    value: unknown,
+    aliasMap: Map<string, string[]>,
+    interfaceSubnetMap: Map<string, string[]>,
+    subnetTargets: SubnetTarget[]
+  ): string[] {
+    if (typeof value !== "string") return [];
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.toLowerCase() === "any") return [];
+
+    const resolved = this.resolveCidrs(trimmed, aliasMap, interfaceSubnetMap);
+    const cidrs = [...resolved.cidrs];
+
+    // Dynamic NAT targets such as "(em0)" refer to the current address of an
+    // interface rather than its network macro. The interface/subnet snapshot
+    // is the best concrete offline representation available during ingestion.
+    const dynamicInterface = trimmed.match(/^\(([^():]+)\)$/)?.[1];
+    if (dynamicInterface) {
+      cidrs.push(
+        ...(interfaceSubnetMap.get(dynamicInterface.toLowerCase()) ?? [])
+      );
+    }
+
+    const targetIds = new Set<string>();
+    for (const cidr of this.dedupeCidrs(cidrs)) {
+      targetIds.add(`network-subnet:${cidr.toLowerCase()}`);
+      for (const target of subnetTargets) {
+        if (cidrOverlaps(cidr, target.cidr)) {
+          targetIds.add(target.id);
+        }
+      }
+    }
+    return Array.from(targetIds);
   }
 
   /**
@@ -736,14 +768,23 @@ export class FirewallIngestionOrchestrator {
    */
   private async ensureSubnetEntities(
     entities: any[],
-    relationships: any[]
+    relationships: any[],
+    existingSubnetIds: Set<string> = new Set()
   ): Promise<void> {
     const subnetIds = new Set<string>();
     
-    // Extract all subnet IDs from relationships
+    // Extract all subnet IDs from relationships. Translation edges have a
+    // subnet at both ends, unlike rule-to-subnet policy edges.
     for (const rel of relationships) {
+      if (rel.fromId && rel.fromId.startsWith("network-subnet:")) {
+        if (!existingSubnetIds.has(rel.fromId)) {
+          subnetIds.add(rel.fromId);
+        }
+      }
       if (rel.toId && rel.toId.startsWith("network-subnet:")) {
-        subnetIds.add(rel.toId);
+        if (!existingSubnetIds.has(rel.toId)) {
+          subnetIds.add(rel.toId);
+        }
       }
     }
 
@@ -752,10 +793,22 @@ export class FirewallIngestionOrchestrator {
       if (entity.type !== "firewall_rule") continue;
       const data = entity.data || {};
       for (const cidr of this.extractCidrs(data.source)) {
-        subnetIds.add(`network-subnet:${cidr.toLowerCase()}`);
+        const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+        if (!existingSubnetIds.has(subnetId)) {
+          subnetIds.add(subnetId);
+        }
       }
       for (const cidr of this.extractCidrs(data.destination)) {
-        subnetIds.add(`network-subnet:${cidr.toLowerCase()}`);
+        const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+        if (!existingSubnetIds.has(subnetId)) {
+          subnetIds.add(subnetId);
+        }
+      }
+      for (const cidr of this.extractCidrs(data.translationTarget)) {
+        const subnetId = `network-subnet:${cidr.toLowerCase()}`;
+        if (!existingSubnetIds.has(subnetId)) {
+          subnetIds.add(subnetId);
+        }
       }
     }
 
@@ -880,4 +933,3 @@ export class FirewallIngestionOrchestrator {
     }
   }
 }
-

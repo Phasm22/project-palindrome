@@ -7,7 +7,6 @@
 
 import { z } from "zod";
 import { AgentResponseSchema } from "./schemas/agent-response";
-import { ActionPlanSchema } from "./schemas/action-step";
 import { ConnectionEndpointSchema } from "../types/connections";
 
 // ---------------------------------------------------------------------------
@@ -118,16 +117,6 @@ export const AgentFinalPayloadSchema = z
   .passthrough();
 
 // ---------------------------------------------------------------------------
-// Plan event (P3.3 — plan-before-execute)
-// ---------------------------------------------------------------------------
-
-export const AgentPlanPayloadSchema = z.object({
-  type: z.literal("agent:plan"),
-  plan: ActionPlanSchema,
-  pendingConfirmationId: z.string(),
-});
-
-// ---------------------------------------------------------------------------
 // Discriminated union
 // ---------------------------------------------------------------------------
 
@@ -140,7 +129,6 @@ export const AgentEventDataSchema = z.discriminatedUnion("type", [
   ConnectionUpdatePayloadSchema,
   AgentStepPayloadSchema,
   AgentFinalPayloadSchema,
-  AgentPlanPayloadSchema,
 ]);
 
 export type ToolStartPayload = z.infer<typeof ToolStartPayloadSchema>;
@@ -151,5 +139,4 @@ export type LlmThinkingPayload = z.infer<typeof LlmThinkingPayloadSchema>;
 export type ConnectionUpdatePayload = z.infer<typeof ConnectionUpdatePayloadSchema>;
 export type AgentStepPayload = z.infer<typeof AgentStepPayloadSchema>;
 export type AgentFinalPayload = z.infer<typeof AgentFinalPayloadSchema>;
-export type AgentPlanPayload = z.infer<typeof AgentPlanPayloadSchema>;
 export type AgentEventData = z.infer<typeof AgentEventDataSchema>;

@@ -6,6 +6,19 @@ import {
   renderResponsiveTable,
 } from './utils.js';
 import { createSkeletonStatsGrid } from './skeletons.js';
+import {
+  formatBytes,
+  formatErrorRateDetail,
+  formatNodeMemory,
+  formatUptime,
+} from './overview-format.js';
+
+export {
+  formatBytes,
+  formatErrorRateDetail,
+  formatNodeMemory,
+  formatUptime,
+} from './overview-format.js';
 
 let overviewRefreshPromise = null;
 let overviewLastUpdated = null;
@@ -214,10 +227,13 @@ function buildIssues(data) {
   }
 
   const recentErrors = stats.recentErrors || [];
-  if (recentErrors.length > 0) {
+  const failureCount = Number.isFinite(Number(stats.errorCount))
+    ? Number(stats.errorCount)
+    : recentErrors.length;
+  if (failureCount > 0) {
     issues.push({
       tone: 'warning',
-      title: `${recentErrors.length} recent tool failure${recentErrors.length === 1 ? '' : 's'}`,
+      title: `${failureCount} tool failure${failureCount === 1 ? '' : 's'}`,
       detail: stats.window === '7d' ? 'Reported in the last 7 days.' : 'Reported by execution telemetry.',
     });
   }
@@ -326,7 +342,7 @@ function renderOperatingMetrics(data) {
       </div>
       <div class="metric-grid">
         ${metric('Executions', formatNumber(stats.total || 0), statsWindow)}
-        ${metric('Error rate', `${(((stats.errorRate || 0) * 100)).toFixed(1)}%`, stats.recentErrors?.length ? `${stats.recentErrors.length} recent failures` : 'no recent failures')}
+        ${metric('Error rate', `${(((stats.errorRate || 0) * 100)).toFixed(1)}%`, formatErrorRateDetail(stats))}
         ${metric('Avg duration', formatDuration(stats.avgDurationMs || 0), 'tool execution')}
         ${metric('Nodes', formatNumber(cluster.nodes?.total || 0), `${cluster.nodes?.online || 0} online, ${cluster.nodes?.offline || 0} offline`)}
         ${metric('VMs', formatNumber(cluster.vms?.total || 0), `${cluster.vms?.running || 0} running, ${cluster.vms?.stopped || 0} stopped`)}
@@ -471,9 +487,9 @@ function renderInventory(data) {
             (node) => `
               <td class="whitespace-nowrap">${escapeHtml(node.name || 'Unknown')}</td>
               <td>${chip('', node.status || 'unknown', node.status === 'online' ? 'status-success' : 'status-error')}</td>
-              <td class="whitespace-nowrap">${node.cpu ? escapeHtml(`${(node.cpu * 100).toFixed(1)}%`) : 'N/A'}</td>
-              <td class="whitespace-nowrap">${node.memory ? escapeHtml(formatBytes(node.memory)) : 'N/A'}</td>
-              <td class="whitespace-nowrap">${node.uptime ? escapeHtml(formatUptime(node.uptime)) : 'N/A'}</td>
+              <td class="whitespace-nowrap">${node.cpu != null && Number.isFinite(Number(node.cpu)) ? escapeHtml(`${(Number(node.cpu) * 100).toFixed(1)}%`) : 'N/A'}</td>
+              <td class="whitespace-nowrap">${escapeHtml(formatNodeMemory(node))}</td>
+              <td class="whitespace-nowrap">${node.uptime != null && Number.isFinite(Number(node.uptime)) ? escapeHtml(formatUptime(Number(node.uptime))) : 'N/A'}</td>
             `
           )}
         </details>
@@ -580,28 +596,6 @@ export async function loadOverviewDashboard(force = false) {
   });
 
   return overviewRefreshPromise;
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return 'N/A';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = bytes;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex++;
-  }
-  return `${size.toFixed(2)} ${units[unitIndex]}`;
-}
-
-function formatUptime(seconds) {
-  if (!seconds) return 'N/A';
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
 }
 
 export function loadExecutionStats() {

@@ -91,6 +91,12 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
+    # TEMP WORKAROUND (2026-07-23): host NVIDIA driver/library version mismatch makes the
+    # GPU ollama container fail to create, which crash-loops start-all.ts (all-or-nothing
+    # compose up). Gate ollama behind a 'gpu' profile so the default `docker compose up`
+    # skips it (ollama is optional). Re-enable after fixing the host driver (reboot):
+    # remove this profiles line, or start with `docker compose --profile gpu up -d`.
+    profiles: ["gpu"]
     ports:
       # Port changed - 11434 may be in use on host
       - "11435:11434"  # Ollama API (mapped to 11435 to avoid conflict)

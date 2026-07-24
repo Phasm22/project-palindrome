@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach, spyOn } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { PiholeReadOnlyTool } from "../../../../src/tools/pihole/readonly";
 import * as piholeClientModule from "../../../../src/tools/pihole/client";
 import type { ExecutionContext } from "../../../../src/types/execution";
@@ -7,9 +7,24 @@ const testContext: ExecutionContext = { toolName: "pihole_readonly", startedAt: 
 
 describe("PiholeReadOnlyTool", () => {
   let tool: PiholeReadOnlyTool;
+  const originalPiholeWebPwd = process.env.PIHOLE_WEB_PWD;
 
   beforeEach(() => {
+    // getPiholeClient() (called by PiholeReadOnlyBase.getClient()) is a
+    // module-level singleton whose constructor throws unless
+    // PIHOLE_WEB_PWD or PIHOLE_API_KEY is set. Locally this test passes
+    // even without this line because a real .env file (never present in
+    // CI) supplies real Pi-hole credentials via Bun's automatic .env
+    // loading - that's environment-specific luck, not something the test
+    // should depend on. Set an explicit fake credential so construction
+    // succeeds the same way in CI as it happens to locally.
+    process.env.PIHOLE_WEB_PWD = "test-password";
     tool = new PiholeReadOnlyTool();
+  });
+
+  afterEach(() => {
+    if (originalPiholeWebPwd === undefined) delete process.env.PIHOLE_WEB_PWD;
+    else process.env.PIHOLE_WEB_PWD = originalPiholeWebPwd;
   });
 
   describe("schema shape", () => {

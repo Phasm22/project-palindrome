@@ -11,6 +11,7 @@
 import OpenAI from "openai";
 import { logger } from "../utils/logger";
 import { parseFilterRule } from "../reasoning/chains/firewall";
+import { MODE_INSTRUCTIONS } from "./system-prompt";
 
 interface EntityListEntry {
   label: string;
@@ -105,68 +106,7 @@ export interface FormatContext {
   mode?: ResponseMode;
 }
 
-export type ResponseMode = "TERSE_DATA" | "ASSISTIVE" | "EXPLAINER";
-
-const MODE_SYSTEM_PROMPTS: Record<ResponseMode, string> = {
-  TERSE_DATA: `You are a response formatter that transforms verbose agent responses into structured, data-oriented formats.
-
-Your goal is to make responses more "bot-like" - concise, structured, and focused on the data.
-
-Guidelines:
-1. Remove unnecessary pleasantries, explanations, and narrative text
-2. Structure data in consistent formats:
-   - Firewall rules: "ACTION | dir=direction | src=source | dst=destination | proto=protocol | if=interface"
-   - Definitions: "Definition | term=<term> | meaning=\"...\" | context=\"...\""
-   - VM/container lists and status/uptime: Use canonical entity-list format: section title, then one line per entity: "- name | Key1=value1 | Key2=value2"
-   - Network info: Tabular or pipe-separated formats
-   - Status queries: Direct answers with key metrics; for lists of VMs/nodes use entity-list format above
-3. Use pipe separators (|) for structured data lists; for entity lists use key=value pairs (e.g. VMID=100 | Uptime=32 days)
-4. Keep only essential information
-5. If the response is already well-formatted, return it as-is
-6. Preserve any structured data formats that are already present
-7. Do NOT add explanations or context - just the data
-
-Example transformations:
-- "The firewall has the following rules: BLOCK rule for incoming traffic from 192.168.71.5" 
-  → "Firewall Rules\nBLOCK | dir=in | src=192.168.71.5 | dst=any"
-  
-- "VM 101 is running and has 14.36 GB of memory used out of 16 GB total"
-  → "VM 101\nStatus: running\nMemory: 14.36 GB / 16 GB"
-
-- "Here are the nodes in the cluster: prox_big, yin, yang"
-  → "Cluster Nodes\n- prox_big\n- yin\n- yang"
-
-- "Uptime on proxBig: windowsVM 32 days, opnsense 32 days, ubuntu-cloudinit-8001 0 days"
-  → "VM Uptime on proxBig\n- windowsVM | VMID=100 | Uptime=32 days\n- opnsense | VMID=101 | Uptime=32 days\n- ubuntu-cloudinit-8001 | VMID=8001 | Uptime=0 days"
-
-- "List of VMs with status: vm1 running, vm2 stopped"
-  → "VMs\n- vm1 | VMID=100 | Status=running\n- vm2 | VMID=101 | Status=stopped"`,
-  ASSISTIVE: `You are a concise assistant formatter. Turn tool-heavy responses into a helpful, structured answer.
-
-Format:
-Answer: 1 sentence that restates the result.
-Evidence: 2-5 short bullets with the strongest signals or facts.
-Next steps: 1-3 short bullets (only if relevant).
-
-Guidelines:
-1. Keep it succinct and action-oriented
-2. Avoid long narratives or speculation
-3. If evidence is thin, say "Evidence: Not available"
-4. If no next steps are needed, omit the Next steps section
-5. If Intent is CHAT_SOCIAL, respond naturally in 1-2 sentences and omit sections`,
-  EXPLAINER: `You are a teach-back formatter. Explain the result and provide a short runbook-style guide.
-
-Format:
-Answer: 1-2 sentences.
-Why this matters: 1-2 sentences.
-Runbook: 3-6 short steps, imperative verbs.
-
-Guidelines:
-1. Be direct and educational
-2. Avoid jargon when possible, but keep technical accuracy
-3. Keep it short; do not ramble
-4. If a runbook is not applicable, provide 2-3 checks instead`,
-};
+export type ResponseMode = keyof typeof MODE_INSTRUCTIONS;
 
 interface AllowedPortEntry {
   port: number;
@@ -1348,7 +1288,7 @@ export async function formatResponseForBot(
       intentContext = `Intent: ${context.intentType}`;
     }
 
-    const systemPrompt = MODE_SYSTEM_PROMPTS[context.mode];
+    const systemPrompt = MODE_INSTRUCTIONS[context.mode];
 
     const preserveAliasDefs = context.intentType === "firewall_rules" && rawResponse.includes("Alias definitions:");
     const aliasSection = preserveAliasDefs
@@ -1371,7 +1311,7 @@ User query: "${context.userQuery}"
 Format this response in a structured, data-oriented style. Return only the formatted response, no explanations.${formatInstruction}${preserveAliasDefs ? " IMPORTANT: Keep the entire 'Alias definitions:' section at the end unchanged (do not truncate or summarize it)." : ""}`;
 
     const response = await client.chat.completions.create({
-      model: "gpt-4o-mini", // Use fast, cheap model for formatting
+      model: process.env.AGENT_CHAT_MODEL || "gpt-4o",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

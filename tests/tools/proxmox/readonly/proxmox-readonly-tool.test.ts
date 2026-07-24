@@ -1,35 +1,8 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ProxmoxReadOnlyTool } from "../../../../src/tools/proxmox/readonly/proxmox-readonly-tool";
+import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
+import * as ToolSanitizerModule from "../../../../src/agent/tool-sanitizer";
 import type { ExecutionContext } from "../../../../src/types/execution";
-
-// Create mocks - use object to store so they're accessible everywhere
-const mocks: any = {};
-
-vi.mock("axios", () => {
-  // Create mocks inside factory
-  mocks.instance = {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    delete: vi.fn(),
-    interceptors: {
-      request: { use: vi.fn() },
-      response: { use: vi.fn() },
-    },
-  };
-  
-  mocks.create = vi.fn(() => mocks.instance);
-  
-  return {
-    default: {
-      create: () => mocks.create(),
-    },
-  };
-});
-
-// Export for use in tests
-const mockAxiosInstance = mocks.instance;
-const mockAxiosCreate = mocks.create;
 
 vi.mock("https", () => ({
   default: {
@@ -37,28 +10,16 @@ vi.mock("https", () => ({
   },
 }));
 
-vi.mock("../../../../src/agent/tool-sanitizer", () => ({
-  sanitizeToolPayload: (data: any) => data, // Pass through for testing
-}));
-
-// Mock ProxmoxClient directly to ensure tool uses our mock
-let mockProxmoxClient: any;
-
-vi.mock("../../../../src/tools/proxmox/client", () => {
-  mockProxmoxClient = {
-    get: vi.fn(),
-    post: vi.fn(),
-    put: vi.fn(),
-    delete: vi.fn(),
-  };
-  
-  return {
-    ProxmoxClient: vi.fn().mockImplementation(() => mockProxmoxClient),
-  };
-});
-
-// Import after mocking
-import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
+// Intercept ProxmoxClient at the prototype level and sanitizeToolPayload at
+// the module-namespace level (vi.spyOn) rather than replacing whole modules
+// (vi.mock). Under `bun test`, module-level mock replacements are registered
+// in a single process-wide registry with no per-file teardown -
+// vi.restoreAllMocks() doesn't undo them - so whichever test file's
+// vi.mock("proxmox/client"/"tool-sanitizer", ...) happened to win leaked into
+// every *other* file that imports the real thing (e.g.
+// tests/tools/proxmox/readonly/client.test.ts and
+// tests/tools/proxmox/readonly/redaction.test.ts). Prototype/namespace spies,
+// unlike module mocks, are properly torn down by vi.restoreAllMocks().
 
 describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
   const mockContext: ExecutionContext = {
@@ -78,24 +39,55 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
   };
 
   let tool: ProxmoxReadOnlyTool;
-  let mockClient: any;
+  let mockClient: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn>; put: ReturnType<typeof vi.fn>; delete: ReturnType<typeof vi.fn> };
+  let activeSpies: Array<{ mockRestore: () => void }> = [];
+  const originalProxmoxEnv = {
+    PROXMOX_URL: process.env.PROXMOX_URL,
+    PROXMOX_TOKEN_ID: process.env.PROXMOX_TOKEN_ID,
+    PROXMOX_TOKEN_SECRET: process.env.PROXMOX_TOKEN_SECRET,
+  };
 
   beforeEach(() => {
     process.env.PROXMOX_URL = "https://proxmox.example.com";
     process.env.PROXMOX_TOKEN_ID = "testuser@pam!testtoken";
     process.env.PROXMOX_TOKEN_SECRET = "test-secret";
 
-    // Reset mock client - ProxmoxClient is mocked to return this
-    mockClient = mockProxmoxClient;
-    mockClient.get.mockClear();
-    mockClient.post.mockClear();
-    mockClient.put.mockClear();
-    mockClient.delete.mockClear();
+    // Every ProxmoxClient instance (any endpoint the tool constructs
+    // internally) shares this prototype, so spying here intercepts all of
+    // them regardless of which endpoint config the tool picked.
+    mockClient = {
+      get: vi.fn(),
+      post: vi.fn(),
+      put: vi.fn(),
+      delete: vi.fn(),
+    };
+    activeSpies = [
+      vi.spyOn(ProxmoxClient.prototype, "get").mockImplementation(mockClient.get as any),
+      vi.spyOn(ProxmoxClient.prototype, "post").mockImplementation(mockClient.post as any),
+      vi.spyOn(ProxmoxClient.prototype, "put").mockImplementation(mockClient.put as any),
+      vi.spyOn(ProxmoxClient.prototype, "delete").mockImplementation(mockClient.delete as any),
+      vi.spyOn(ToolSanitizerModule, "sanitizeToolPayload").mockImplementation((data: any) => data),
+    ];
 
     tool = new ProxmoxReadOnlyTool();
-    
-    // Clear any cached client so tool creates a new one (which will be our mock)
+
+    // Clear any cached client so tool creates a new one (which will use the spied prototype)
     (tool as any).apiClient = undefined;
+  });
+
+  afterEach(() => {
+    // vi.restoreAllMocks() restores every spy in the process, not just this
+    // file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the
+    // same shared prototype (this broke tests/tools/pihole/readonly/
+    // pihole-readonly.test.ts, which spies on PiholeClient.prototype
+    // independently). Restore only the specific spies this file created.
+    activeSpies.forEach((spy) => spy.mockRestore());
+    activeSpies = [];
+    for (const [key, value] of Object.entries(originalProxmoxEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   describe("Node-Level Actions", () => {
@@ -121,6 +113,77 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(mockClient.get).toHaveBeenCalled();
       const calls = (mockClient.get as any).mock.calls;
       expect(calls.some((call: any[]) => call[0] === "/nodes")).toBe(true);
+    });
+
+    it("should keep node memory when status nests memory.used/total", async () => {
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve({
+            data: {
+              data: [
+                { node: "pve1", status: "online", cpu: 0.1, maxcpu: 8, mem: 1, maxmem: 2, uptime: 100 },
+              ],
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/list" },
+          });
+        }
+        if (endpoint === "/nodes/pve1/status") {
+          return Promise.resolve({
+            data: {
+              data: {
+                cpu: 0.25,
+                maxcpu: 16,
+                uptime: 86400,
+                // Real Proxmox node status shape — nested, not top-level mem/maxmem
+                memory: { used: 8589934592, total: 17179869184, free: 8589934592 },
+              },
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/status" },
+          });
+        }
+        return Promise.reject(new Error(`Unexpected endpoint ${endpoint}`));
+      });
+
+      const result = await tool.execute({ action: "list_nodes" }, mockContext);
+      expect(result.data.nodes).toHaveLength(1);
+      const node = result.data.nodes[0];
+      expect(node.mem).toBe(8589934592);
+      expect(node.maxmem).toBe(17179869184);
+      expect(node.mem_normalized?.raw).toBe(8589934592);
+      expect(node.maxmem_normalized?.raw).toBe(17179869184);
+    });
+
+    it("should fall back to list-endpoint mem when status omits memory", async () => {
+      mockClient.get.mockImplementation((endpoint: string) => {
+        if (endpoint === "/nodes") {
+          return Promise.resolve({
+            data: {
+              data: [
+                { node: "pve1", status: "online", cpu: 0.1, mem: 4294967296, maxmem: 8589934592, uptime: 100 },
+              ],
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/list" },
+          });
+        }
+        if (endpoint === "/nodes/pve1/status") {
+          return Promise.resolve({
+            data: {
+              data: {
+                cpu: 0.2,
+                uptime: 200,
+                // No mem/maxmem and no nested memory — enrichment must keep list values
+              },
+            },
+            metadata: { status: 200, timestamp: Date.now(), durationMs: 10, provenanceId: "tool://proxmox/test/status" },
+          });
+        }
+        return Promise.reject(new Error(`Unexpected endpoint ${endpoint}`));
+      });
+
+      const result = await tool.execute({ action: "list_nodes" }, mockContext);
+      const node = result.data.nodes[0];
+      expect(node.mem).toBe(4294967296);
+      expect(node.maxmem).toBe(8589934592);
     });
 
     it("should implement node_status action", async () => {
@@ -521,6 +584,20 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
   });
 
   describe("Cluster-Level Actions", () => {
+    it("should advertise cluster_ceph_status in the tool contract", () => {
+      const schema = tool.getSchema();
+
+      expect(schema.parameters.properties.action.enum).toContain(
+        "cluster_ceph_status"
+      );
+      expect(schema.description).toContain("cluster_ceph_status");
+      expect(schema.examples).toContainEqual({
+        description:
+          "Get Ceph cluster health, quorum, OSD, placement-group, and capacity status",
+        parameters: { action: "cluster_ceph_status" },
+      });
+    });
+
     it("should implement cluster_resources action", async () => {
       const mockResponse = {
         data: {
@@ -572,12 +649,52 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(result.data.nodes).toBeDefined();
     });
 
-    it("should implement cluster_ceph_status action", async () => {
+    it("should summarize a representative cluster_ceph_status response", async () => {
       const mockResponse = {
         data: {
           data: {
-            health: { status: "HEALTH_OK" },
+            health: {
+              status: "HEALTH_WARN",
+              checks: {
+                OSD_DOWN: {
+                  severity: "HEALTH_WARN",
+                  summary: { message: "1 osd down", count: 1 },
+                },
+              },
+            },
             time: "2024-01-01T00:00:00Z",
+            quorum: [0, 1, 2],
+            quorum_names: ["pve1", "pve2", "pve3"],
+            monmap: {
+              num_mons: 3,
+              mons: [
+                { rank: 0, name: "pve1" },
+                { rank: 1, name: "pve2" },
+                { rank: 2, name: "pve3" },
+              ],
+            },
+            mgrmap: {
+              available: true,
+              active_name: "pve1",
+              num_standbys: 1,
+            },
+            osdmap: {
+              osdmap: {
+                num_osds: 6,
+                num_up_osds: 5,
+                num_in_osds: 6,
+              },
+            },
+            pgmap: {
+              num_pgs: 128,
+              bytes_total: 12 * 1024 * 1024 * 1024,
+              bytes_used: 3 * 1024 * 1024 * 1024,
+              bytes_avail: 9 * 1024 * 1024 * 1024,
+              pgs_by_state: [
+                { state_name: "active+clean", count: 120 },
+                { state_name: "active+degraded", count: 8 },
+              ],
+            },
           },
         },
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
@@ -587,10 +704,73 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
 
       const result = await tool.execute({ action: "cluster_ceph_status" }, mockContext);
 
-      expect(result.data).toBeDefined();
+      expect(mockClient.get).toHaveBeenCalledWith("/cluster/ceph/status");
+      expect(result.data).toMatchObject({
+        configured: true,
+        health: "HEALTH_WARN",
+        healthChecks: [
+          {
+            name: "OSD_DOWN",
+            severity: "HEALTH_WARN",
+            message: "1 osd down",
+            count: 1,
+          },
+        ],
+        monitors: {
+          total: 3,
+          quorum: [0, 1, 2],
+          quorumNames: ["pve1", "pve2", "pve3"],
+        },
+        manager: {
+          available: true,
+          activeName: "pve1",
+          standbys: 1,
+        },
+        osds: {
+          total: 6,
+          up: 5,
+          in: 6,
+        },
+        placementGroups: {
+          total: 128,
+          states: [
+            { state: "active+clean", count: 120 },
+            { state: "active+degraded", count: 8 },
+          ],
+        },
+        usage: {
+          total: { value: 12, unit: "GB", raw: 12 * 1024 * 1024 * 1024 },
+          used: { value: 3, unit: "GB", raw: 3 * 1024 * 1024 * 1024 },
+          available: { value: 9, unit: "GB", raw: 9 * 1024 * 1024 * 1024 },
+          usedPercent: 25,
+        },
+        reportedAt: "2024-01-01T00:00:00Z",
+      });
     });
 
-    it("should handle cluster_ceph_status when Ceph is not configured", async () => {
+    it("should handle an empty cluster_ceph_status response as not configured", async () => {
+      const mockResponse = {
+        data: { data: null },
+        metadata: {
+          status: 200,
+          timestamp: Date.now(),
+          durationMs: 25,
+          provenanceId: "tool://proxmox/test/no-ceph",
+        },
+      };
+
+      mockClient.get.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute({ action: "cluster_ceph_status" }, mockContext);
+
+      expect(result.data).toMatchObject({
+        configured: false,
+        message: "Ceph is not configured on this cluster / no Ceph status data is available",
+      });
+      expect(result.error).toBeUndefined();
+    });
+
+    it("should handle a missing Ceph API status as not configured", async () => {
       const mockError = {
         response: { status: 404 },
         message: "Not found",
@@ -602,6 +782,7 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
 
       expect(result.data).toBeDefined();
       expect(result.data.configured).toBe(false);
+      expect(result.error).toBeUndefined();
     });
 
     it("should implement ha_groups action", async () => {

@@ -589,8 +589,15 @@ export async function destroyVm(
         unexpectedDeletes,
       });
       const recovered = await destroyExactLiveVm(terraformVmName, finalNode);
-      await terraformRunner.removeVmFromState(terraformVmName);
+      await terraformRunner.removeVmFromState(
+        terraformVmName,
+        executionOptions.statePath
+      );
       await terraformRunner.removeVmFromTfvars(terraformVmName);
+      await terraformRunner.reconcileStateRemovalArtifacts({
+        tfvarsPath,
+        statePath: executionOptions.statePath,
+      });
       let dnsRecordDeleted = false;
       if (process.env.PIHOLE_WEB_PWD || process.env.PIHOLE_API_KEY) {
         const { getPiholeClient } = await import("../../tools/pihole/client");
@@ -688,7 +695,10 @@ export async function destroyVm(
 
     if (executionOptions.removeSharedConfig !== false) {
       try {
-        await terraformRunner.removeVmFromState(terraformVmName);
+        await terraformRunner.removeVmFromState(
+          terraformVmName,
+          executionOptions.statePath
+        );
       } catch (error: any) {
         logger.warn("Failed to remove destroyed VM from terraform state", {
           vmName: terraformVmName,

@@ -198,4 +198,21 @@ describe("adaptive response renderer", () => {
     expect(structured).toContain("Nodes");
     expect(raw).toContain("plain fallback");
   });
+
+  test("promotes repeated 'Entity | VM Name=...' TERSE_DATA rows into a real named table", () => {
+    const html = renderRawTextFallback(
+      "| Entity | VM Name=opnsense | Node=proxBig | Subnet=172.16.0.1/22 | Exposure Rules=42 |\n" +
+      "| Entity | VM Name=opsbox | Node=YANG | Subnet=172.16.0.184/22 | Exposure Rules=42 |\n" +
+      "| Total | Total VMs=13 |"
+    );
+
+    expect(html).toContain("response-table");
+    expect(html).not.toContain("response-ascii-table");
+    expect(html).toContain(">opnsense<");
+    expect(html).toContain(">opsbox<");
+    // First column should be the VM names, not the literal label "Entity"
+    expect(html).not.toMatch(/<td><span class="response-scalar">Entity<\/span><\/td>/);
+    expect(html).toContain("<th>Node</th>");
+    expect(html).toContain("<th>Subnet</th>");
+  });
 });

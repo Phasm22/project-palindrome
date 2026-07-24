@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import {
   generateVmInventoryDocument,
   generateNodeProfileDocument,
@@ -41,25 +41,34 @@ vi.mock("https", () => ({
   },
 }));
 
-// Mock the ProxmoxReadOnlyTool
-const mockToolInstance = {
-  execute: vi.fn(),
-};
-
-vi.mock("../../../../src/tools/proxmox/readonly/proxmox-readonly-tool", () => ({
-  ProxmoxReadOnlyTool: vi.fn().mockImplementation(() => mockToolInstance),
-}));
-
 // Import after mocking
 import { ProxmoxClient } from "../../../../src/tools/proxmox/client";
 import { ProxmoxReadOnlyTool } from "../../../../src/tools/proxmox/readonly/proxmox-readonly-tool";
+
+// Intercept ProxmoxReadOnlyTool at the prototype level (vi.spyOn), not by
+// replacing its module (vi.mock) - under `bun test`, module mocks are
+// process-global with no per-file teardown and leak into every other file
+// that imports the real class. vi.restoreAllMocks() properly undoes a
+// prototype spy but not a module replacement.
+const mockToolInstance = {
+  execute: vi.fn(),
+};
+const executeSpy = vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(mockToolInstance.execute as any);
 
 describe("TL-2A.6.A: Vector Store Ingestion Validation", () => {
   let mockClient: ProxmoxClient;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockToolInstance.execute.mockReset();
     mockClient = {} as ProxmoxClient;
+  });
+
+  afterAll(() => {
+    // vi.restoreAllMocks() restores every spy in the whole process, not just
+    // this file's - under `bun test`, files run with real concurrency, so a
+    // global restore can undo another file's still-in-flight spy on the same
+    // shared prototype. Restore only the specific spy made here.
+    executeSpy.mockRestore();
   });
 
   describe("VM Inventory Document Generation", () => {
@@ -116,43 +125,44 @@ describe("TL-2A.6.A: Vector Store Ingestion Validation", () => {
       expect(doc.metadata.documentType).toBe("vm_inventory");
     });
 
-    it("should throw error on API failure", async () => {
+    it("degrades to an empty VM list on API failure instead of throwing", async () => {
+      // generateVmInventoryDocument catches execute() failures per-call (qemu/lxc
+      // fetched independently via Promise.all) and falls back to an empty vms
+      // list for whichever call failed, rather than propagating an error - this
+      // keeps one broken VM type from blocking the whole document.
       mockToolInstance.execute.mockResolvedValue({
         error: "API error",
       });
 
-      await expect(generateVmInventoryDocument(mockClient, "pve1")).rejects.toThrow(
-        "Failed to generate VM inventory"
-      );
+      const doc = await generateVmInventoryDocument(mockClient, "pve1");
+
+      expect(doc.content).toContain("Total VMs: 0");
     });
   });
 
   describe("Node Profile Document Generation", () => {
     it("should generate node profile document with correct structure", async () => {
-      mockToolInstance.execute
-        .mockResolvedValueOnce({
-          data: {
-            node: "pve1",
-            status: "online",
-            status_normalized: "online",
-            uptime_iso8601: "2024-01-01T00:00:00.000Z",
-            kversion: "5.15.0",
-            pveversion: "8.0.0",
+      // generateNodeProfileDocument makes a single node_status execute() call
+      // and reads status/memory/cpu all off that one response (node_resources
+      // was folded into node_status and removed as a separate action).
+      mockToolInstance.execute.mockResolvedValueOnce({
+        data: {
+          node: "pve1",
+          status: "online",
+          status_normalized: "online",
+          uptime_iso8601: "2024-01-01T00:00:00.000Z",
+          kversion: "5.15.0",
+          pveversion: "8.0.0",
+          memory: {
+            used_normalized: { value: 8, unit: "GB", raw: 8589934592 },
+            total_normalized: { value: 16, unit: "GB", raw: 17179869184 },
           },
-        })
-        .mockResolvedValueOnce({
-          data: {
-            node: "pve1",
-            memory: {
-              used_normalized: { value: 8, unit: "GB", raw: 8589934592 },
-              total_normalized: { value: 16, unit: "GB", raw: 17179869184 },
-            },
-            cpu: {
-              usage: 0.5,
-              cores: 8,
-            },
+          cpu: {
+            usage: 0.5,
+            cores: 8,
           },
-        });
+        },
+      });
 
       const doc = await generateNodeProfileDocument(mockClient, "pve1");
 
@@ -249,6 +259,13 @@ describe("TL-2A.6.A: Vector Store Ingestion Validation", () => {
           },
         })
         .mockResolvedValueOnce({
+          data: { vms: [], count: 0 },
+        })
+        // generateVmInventoryDocument fetches qemu and lxc VMs as two separate
+        // execute() calls (Promise.all) - this persistent fallback covers
+        // whichever of the two isn't served by the queued value above, instead
+        // of falling through to an unconfigured vi.fn() returning undefined.
+        .mockResolvedValue({
           data: { vms: [], count: 0 },
         });
 
