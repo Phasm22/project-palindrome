@@ -131,6 +131,7 @@ emits-or-opts-out of structured output under a completeness check.
 No trust-crossing op defaults to global/unsafe: authenticate identity, escape output, redact egress,
 scope events.
 - **Tasks:** RM-05 (Decision B) authenticate identity, drop the admin-default, bind localhost/token;
+  first-party dashboard proxy injects `PALINDROME_API_TOKEN` as `X-API-Token` (**done 2026-07-23**);
   RM-24 sanitize answer text + error logs via the existing `Redactor`/`sanitizeResponse` (resolves
   D2-EXPR-b); RM-25(sessionId) scope `emitToolProgress`; RM-09 escaping (shared with E4).
 - **Deletes:** the admin-default fallthrough. No new redactor — reuse existing at the answer/log boundary.
