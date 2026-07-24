@@ -211,7 +211,12 @@ Service firewall is configured by config security-config.
   },
 ];
 
-describe("Phase I-B DOD Tests", () => {
+// This whole suite ingests 20 synthetic documents through the real LLM-based
+// entity/relationship extraction pipeline (DOD 7.5.1's own comment: "LLM calls
+// for 20 documents can take 5-10 minutes") - there's no meaningful degraded
+// path without a real OpenAI key, so skip the suite rather than one test at a
+// time the way tests/pce/phase-ic-dod.test.ts does for its OpenAI-optional cases.
+describe.skipIf(!process.env.OPENAI_API_KEY)("Phase I-B DOD Tests", () => {
   let graphStore: Neo4jGraphStore;
   let queryInterface: GraphQueryInterface;
   let graphRAG: GraphRAGRetrieval;
