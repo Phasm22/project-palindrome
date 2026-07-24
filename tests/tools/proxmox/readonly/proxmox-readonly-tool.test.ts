@@ -521,6 +521,20 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
   });
 
   describe("Cluster-Level Actions", () => {
+    it("should advertise cluster_ceph_status in the tool contract", () => {
+      const schema = tool.getSchema();
+
+      expect(schema.parameters.properties.action.enum).toContain(
+        "cluster_ceph_status"
+      );
+      expect(schema.description).toContain("cluster_ceph_status");
+      expect(schema.examples).toContainEqual({
+        description:
+          "Get Ceph cluster health, quorum, OSD, placement-group, and capacity status",
+        parameters: { action: "cluster_ceph_status" },
+      });
+    });
+
     it("should implement cluster_resources action", async () => {
       const mockResponse = {
         data: {
@@ -572,12 +586,52 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
       expect(result.data.nodes).toBeDefined();
     });
 
-    it("should implement cluster_ceph_status action", async () => {
+    it("should summarize a representative cluster_ceph_status response", async () => {
       const mockResponse = {
         data: {
           data: {
-            health: { status: "HEALTH_OK" },
+            health: {
+              status: "HEALTH_WARN",
+              checks: {
+                OSD_DOWN: {
+                  severity: "HEALTH_WARN",
+                  summary: { message: "1 osd down", count: 1 },
+                },
+              },
+            },
             time: "2024-01-01T00:00:00Z",
+            quorum: [0, 1, 2],
+            quorum_names: ["pve1", "pve2", "pve3"],
+            monmap: {
+              num_mons: 3,
+              mons: [
+                { rank: 0, name: "pve1" },
+                { rank: 1, name: "pve2" },
+                { rank: 2, name: "pve3" },
+              ],
+            },
+            mgrmap: {
+              available: true,
+              active_name: "pve1",
+              num_standbys: 1,
+            },
+            osdmap: {
+              osdmap: {
+                num_osds: 6,
+                num_up_osds: 5,
+                num_in_osds: 6,
+              },
+            },
+            pgmap: {
+              num_pgs: 128,
+              bytes_total: 12 * 1024 * 1024 * 1024,
+              bytes_used: 3 * 1024 * 1024 * 1024,
+              bytes_avail: 9 * 1024 * 1024 * 1024,
+              pgs_by_state: [
+                { state_name: "active+clean", count: 120 },
+                { state_name: "active+degraded", count: 8 },
+              ],
+            },
           },
         },
         metadata: { status: 200, timestamp: Date.now(), durationMs: 100, provenanceId: "tool://proxmox/test/123" },
@@ -587,10 +641,73 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
 
       const result = await tool.execute({ action: "cluster_ceph_status" }, mockContext);
 
-      expect(result.data).toBeDefined();
+      expect(mockClient.get).toHaveBeenCalledWith("/cluster/ceph/status");
+      expect(result.data).toMatchObject({
+        configured: true,
+        health: "HEALTH_WARN",
+        healthChecks: [
+          {
+            name: "OSD_DOWN",
+            severity: "HEALTH_WARN",
+            message: "1 osd down",
+            count: 1,
+          },
+        ],
+        monitors: {
+          total: 3,
+          quorum: [0, 1, 2],
+          quorumNames: ["pve1", "pve2", "pve3"],
+        },
+        manager: {
+          available: true,
+          activeName: "pve1",
+          standbys: 1,
+        },
+        osds: {
+          total: 6,
+          up: 5,
+          in: 6,
+        },
+        placementGroups: {
+          total: 128,
+          states: [
+            { state: "active+clean", count: 120 },
+            { state: "active+degraded", count: 8 },
+          ],
+        },
+        usage: {
+          total: { value: 12, unit: "GB", raw: 12 * 1024 * 1024 * 1024 },
+          used: { value: 3, unit: "GB", raw: 3 * 1024 * 1024 * 1024 },
+          available: { value: 9, unit: "GB", raw: 9 * 1024 * 1024 * 1024 },
+          usedPercent: 25,
+        },
+        reportedAt: "2024-01-01T00:00:00Z",
+      });
     });
 
-    it("should handle cluster_ceph_status when Ceph is not configured", async () => {
+    it("should handle an empty cluster_ceph_status response as not configured", async () => {
+      const mockResponse = {
+        data: { data: null },
+        metadata: {
+          status: 200,
+          timestamp: Date.now(),
+          durationMs: 25,
+          provenanceId: "tool://proxmox/test/no-ceph",
+        },
+      };
+
+      mockClient.get.mockResolvedValue(mockResponse);
+
+      const result = await tool.execute({ action: "cluster_ceph_status" }, mockContext);
+
+      expect(result.data).toMatchObject({
+        configured: false,
+        message: "Ceph is not configured on this cluster / no Ceph status data is available",
+      });
+      expect(result.error).toBeUndefined();
+    });
+
+    it("should handle a missing Ceph API status as not configured", async () => {
       const mockError = {
         response: { status: 404 },
         message: "Not found",
@@ -602,6 +719,7 @@ describe("TL-2A.2: Core Action Implementation (15 Actions)", () => {
 
       expect(result.data).toBeDefined();
       expect(result.data.configured).toBe(false);
+      expect(result.error).toBeUndefined();
     });
 
     it("should implement ha_groups action", async () => {
