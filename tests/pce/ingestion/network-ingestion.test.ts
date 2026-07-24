@@ -1,22 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TwinEntityType } from "../../../src/twin/models/entities";
 import { ProxmoxReadOnlyTool } from "../../../src/tools/proxmox/readonly/proxmox-readonly-tool";
+import { MCPOpnsenseTool } from "../../../src/tools/MCPOpnsenseTool";
 
-// Intercept ProxmoxReadOnlyTool at the prototype level (vi.spyOn), not by
-// replacing its module (vi.mock) - under `bun test`, module mocks are
-// process-global with no per-file teardown and leak into every other file
-// that imports the real class (e.g.
-// tests/tools/proxmox/readonly/proxmox-readonly-tool.test.ts).
-// vi.restoreAllMocks() properly undoes a prototype spy but not a module
-// replacement.
+// Intercept ProxmoxReadOnlyTool/MCPOpnsenseTool at the prototype level
+// (vi.spyOn), not by replacing their modules (vi.mock) - under `bun test`,
+// module mocks are process-global with no per-file teardown and leak into
+// every other file that imports the real class (e.g.
+// tests/tools/proxmox/readonly/proxmox-readonly-tool.test.ts, and
+// tests/tools/actions/execution-result.test.ts's loadTools(), which builds
+// every registered tool including a real MCPOpnsenseTool and crashed
+// reading .metadata off the plain {execute, close} object this used to
+// wholesale-replace it with). vi.restoreAllMocks() properly undoes a
+// prototype spy but not a module replacement.
 const proxmoxExecuteMock = vi.fn();
-
-vi.mock("../../../src/tools/MCPOpnsenseTool", () => ({
-  MCPOpnsenseTool: vi.fn().mockImplementation(() => ({
-    execute: vi.fn(async () => ({ data: { interfaces: [] } })),
-    close: vi.fn(),
-  })),
-}));
+const mcpOpnsenseExecuteMock = vi.fn(async () => ({ data: { interfaces: [] } }));
 
 const parseMock = vi.fn();
 vi.mock("../../../src/parsers/network/proxmox-interface-parser", () => ({
@@ -55,6 +53,8 @@ describe("NetworkIngestionOrchestrator — per-node failure isolation", () => {
   beforeEach(() => {
     proxmoxExecuteMock.mockReset();
     vi.spyOn(ProxmoxReadOnlyTool.prototype, "execute").mockImplementation(proxmoxExecuteMock as any);
+    mcpOpnsenseExecuteMock.mockClear();
+    vi.spyOn(MCPOpnsenseTool.prototype, "execute").mockImplementation(mcpOpnsenseExecuteMock as any);
     parseMock.mockReset();
     twinUpdaterMocks.initialize.mockClear();
     twinUpdaterMocks.upsert.mockClear();
