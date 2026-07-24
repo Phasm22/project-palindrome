@@ -101,7 +101,7 @@ Collapse ≥4 ACL sources and 3 Terraform lineages to one each; regenerate deriv
 contract declares only what it implements.
 - **Tasks:** RM-06 **(now P0)** finish the atomic-tool migration OR extend `ActionDefinition` with per-action
   ACL — then delete the losing path; RM-03 (Decision A) delete the CI Terraform workflow + update README;
-  RM-16 scope the Terraform token off `AdminPlus`; RM-23 regenerate/diff-gate `tools.json`, fix ACL vocab;
+  ~~RM-16 scope the Terraform token off `AdminPlus`~~ **done 2026-07-23** (`llm@pve!llm-agent` explicit token ACLs + `privsep 1` on proxBig + yin/yang; effective privs unchanged; rollback=`privsep 0`); RM-23 regenerate/diff-gate `tools.json`, fix ACL vocab;
   RM-14 fix `tool-schema.ts` `.describe()` loss so the LLM payload is faithful; RM-15 schema advertises
   only implemented diagnostics; RM-27 (Decision E — deferred), RM-28 (Ceph — deferred).
 - **Deletes:** EITHER the 10 dead atomic tool classes OR the generic `ActionTool` (one owns action ACL,
