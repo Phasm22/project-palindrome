@@ -179,6 +179,136 @@ describe("TwinQueryService.reachableFromInterfaceChain", () => {
   });
 });
 
+describe("TwinQueryService.reachableFromSubnet", () => {
+  test("scopes by rule source and returns VMs on destination subnets", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("allowRules") && query.includes("destinationSubnetCidr")) {
+        return [
+          {
+            vmId: "compute-vm:yang:101",
+            vmName: "lab-vm",
+            subnet: "192.168.1.10/24",
+            subnetId: "network-subnet:192.168.1.0/24",
+            destinationSubnetCidr: "192.168.1.0/24",
+            allowRules: [
+              {
+                id: "fw-rule:pass:10.0.0.0_24:192.168.1.0_24",
+                source: "10.0.0.0/24",
+                destination: "192.168.1.0/24",
+              },
+            ],
+            blockRules: [],
+          },
+        ];
+      }
+      return [];
+    });
+
+    const result = await service.reachableFromSubnet("10.0.0.0/24");
+    expect(result.map((r) => r.vmName)).toEqual(["lab-vm"]);
+    expect(result[0]?.allowedBy).toEqual(["fw-rule:pass:10.0.0.0_24:192.168.1.0_24"]);
+  });
+
+  test("does not scope from destination-only edges into the requested subnet", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("allowRules") && query.includes("destinationSubnetCidr")) {
+        return [
+          {
+            vmId: "compute-vm:yang:101",
+            vmName: "lab-vm",
+            subnet: "10.0.0.5/24",
+            subnetId: "network-subnet:10.0.0.0/24",
+            destinationSubnetCidr: "10.0.0.0/24",
+            allowRules: [
+              {
+                id: "fw-rule:pass:192.168.1.0_24:10.0.0.0_24",
+                source: "192.168.1.0/24",
+                destination: "10.0.0.0/24",
+              },
+            ],
+            blockRules: [],
+          },
+        ];
+      }
+      return [];
+    });
+
+    const result = await service.reachableFromSubnet("10.0.0.0/24");
+    expect(result).toEqual([]);
+  });
+
+  test("treats source any as applicable and drops same-subnet self-hits without explicit dest", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("allowRules") && query.includes("destinationSubnetCidr")) {
+        return [
+          {
+            vmId: "compute-vm:yang:200",
+            vmName: "cross-vm",
+            subnet: "192.168.1.10/24",
+            subnetId: "network-subnet:192.168.1.0/24",
+            destinationSubnetCidr: "192.168.1.0/24",
+            allowRules: [
+              {
+                id: "fw-rule:pass:any:192.168.1.0_24",
+                source: "any",
+                destination: "192.168.1.0/24",
+              },
+            ],
+            blockRules: [],
+          },
+          {
+            vmId: "compute-vm:proxbig:10",
+            vmName: "self-hit",
+            subnet: "10.0.0.8/24",
+            subnetId: "network-subnet:10.0.0.0/24",
+            destinationSubnetCidr: "10.0.0.0/24",
+            allowRules: [
+              {
+                id: "fw-rule:pass:10.0.0.0_24:any",
+                source: "10.0.0.0/24",
+                destination: "any",
+              },
+            ],
+            blockRules: [],
+          },
+        ];
+      }
+      return [];
+    });
+
+    const result = await service.reachableFromSubnet("10.0.0.0/24");
+    expect(result.map((r) => r.vmName)).toEqual(["cross-vm"]);
+  });
+
+  test("unresolved non-CIDR allow source does not grant permission", async () => {
+    const service = serviceWith((query) => {
+      if (query.includes("allowRules") && query.includes("destinationSubnetCidr")) {
+        return [
+          {
+            vmId: "compute-vm:yang:101",
+            vmName: "lab-vm",
+            subnet: "192.168.1.10/24",
+            subnetId: "network-subnet:192.168.1.0/24",
+            destinationSubnetCidr: "192.168.1.0/24",
+            allowRules: [
+              {
+                id: "fw-rule:pass:alias:192.168.1.0_24",
+                source: "sshlockout",
+                destination: "192.168.1.0/24",
+              },
+            ],
+            blockRules: [],
+          },
+        ];
+      }
+      return [];
+    });
+
+    const result = await service.reachableFromSubnet("10.0.0.0/24");
+    expect(result).toEqual([]);
+  });
+});
+
 describe("TwinQueryService.vmsExposedToSubnet", () => {
   test("does not match a same-mask (/22) subnet on a genuinely different physical network (A-TQ-22)", async () => {
     const service = serviceWith((_query, params) => {

@@ -1651,6 +1651,13 @@ export class TwinQueryService {
     }));
   }
 
+  /**
+   * Find VM/subnet pairs reachable *from* a source subnet CIDR.
+   *
+   * Ingestion materializes ALLOWS/BLOCKS as rule → governed (usually destination)
+   * subnet. Scope rules by `rule.source` via sourceMatchApplies, then follow those
+   * edges to destination subnets — not by requiring an edge into the requested subnet.
+   */
   async reachableFromSubnet(
     subnetCidr: string,
     vmId?: string
@@ -1662,30 +1669,41 @@ export class TwinQueryService {
     allowedBy: string[];
     blockedBy: string[];
   }>> {
-    const subnetId = `network-subnet:${subnetCidr.toLowerCase()}`;
     const vmFilter = vmId ? "AND vm.id = $vmId" : "";
     const result = await this.runQuery(
       `
-        MATCH (requestedSubnet:TwinEntity {type: $subnetType})
-        WHERE requestedSubnet.id = $subnetId OR requestedSubnet.displayName = $subnetCidr
-        MATCH (scopeRule:TwinEntity {type: $ruleType})-[:ALLOWS|:BLOCKS]->(requestedSubnet)
-        WITH collect(DISTINCT scopeRule.id) AS scopeRuleIds
-        MATCH (iface:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(subnet:TwinEntity {type: $subnetType})
+        MATCH (destSubnet:TwinEntity {type: $subnetType})
+        MATCH (iface:TwinEntity {type: $ifaceType})-[:CONNECTS_TO]->(destSubnet)
         MATCH (vm:TwinEntity {type: $vmType})
         WHERE iface.vmId = vm.id ${vmFilter}
-        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(subnet)
-        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(subnet)
-        WITH vm, subnet, scopeRuleIds,
-             collect(DISTINCT allowRule.id) AS allowedBy,
-             collect(DISTINCT blockRule.id) AS blockedBy
-        WHERE any(ruleId IN allowedBy WHERE ruleId IN scopeRuleIds)
-           OR any(ruleId IN blockedBy WHERE ruleId IN scopeRuleIds)
+        OPTIONAL MATCH (allowRule:TwinEntity {type: $ruleType})-[:ALLOWS]->(destSubnet)
+        OPTIONAL MATCH (blockRule:TwinEntity {type: $ruleType})-[:BLOCKS]->(destSubnet)
+        WITH destSubnet, vm,
+             collect(DISTINCT CASE
+               WHEN allowRule IS NULL THEN NULL
+               ELSE {
+                 id: allowRule.id,
+                 source: allowRule.source,
+                 destination: allowRule.destination
+               }
+             END) AS allowRules,
+             collect(DISTINCT CASE
+               WHEN blockRule IS NULL THEN NULL
+               ELSE {
+                 id: blockRule.id,
+                 source: blockRule.source,
+                 destination: blockRule.destination
+               }
+             END) AS blockRules
+        WHERE size([r IN allowRules WHERE r IS NOT NULL]) > 0
+           OR size([r IN blockRules WHERE r IS NOT NULL]) > 0
         RETURN vm.id AS vmId,
                coalesce(vm.displayName, vm.id) AS vmName,
-               subnet.displayName AS subnet,
-               subnet.id AS subnetId,
-               allowedBy,
-               blockedBy
+               destSubnet.displayName AS subnet,
+               destSubnet.id AS subnetId,
+               coalesce(destSubnet.cidr, destSubnet.displayName) AS destinationSubnetCidr,
+               allowRules,
+               blockRules
         ORDER BY vmName
       `,
       {
@@ -1693,20 +1711,78 @@ export class TwinQueryService {
         ifaceType: "network_interface",
         vmType: "compute_vm",
         ruleType: "firewall_rule",
-        subnetId,
-        subnetCidr,
         ...(vmId ? { vmId } : {}),
       }
     );
 
-    return result.records.map((record) => ({
-      vmId: record.get("vmId") as string,
-      vmName: record.get("vmName") as string,
-      subnet: record.get("subnet") as string,
-      subnetId: record.get("subnetId") as string,
-      allowedBy: (record.get("allowedBy")?.toArray?.() || record.get("allowedBy") || []).filter((x: any) => x),
-      blockedBy: (record.get("blockedBy")?.toArray?.() || record.get("blockedBy") || []).filter((x: any) => x),
-    }));
+    const rows: Array<{
+      vmId: string;
+      vmName: string;
+      subnet: string;
+      subnetId: string;
+      allowedBy: string[];
+      blockedBy: string[];
+    }> = [];
+
+    for (const record of result.records) {
+      const destinationSubnetCidr = record.get("destinationSubnetCidr");
+      const allowRules = this.toNativeArray(record.get("allowRules"))
+        .filter((rule): rule is Record<string, unknown> => this.isObject(rule))
+        .filter((rule) =>
+          this.sourceMatchApplies(rule.source, subnetCidr, false)
+        );
+      const blockRules = this.toNativeArray(record.get("blockRules"))
+        .filter((rule): rule is Record<string, unknown> => this.isObject(rule))
+        .filter((rule) =>
+          this.sourceMatchApplies(rule.source, subnetCidr, true)
+        );
+
+      if (allowRules.length === 0 && blockRules.length === 0) {
+        continue;
+      }
+
+      // Drop noisy self-hits from source-governed "to any" edges (ALLOWS into the
+      // source subnet itself) unless a rule explicitly destinations the same CIDR.
+      const sameAsRequested =
+        typeof destinationSubnetCidr === "string" &&
+        destinationSubnetCidr.trim().length > 0 &&
+        cidrOverlaps(destinationSubnetCidr, subnetCidr);
+      if (sameAsRequested) {
+        const applicable = [...allowRules, ...blockRules];
+        const hasExplicitDest = applicable.some((rule) =>
+          this.destinationExplicitlyMatches(rule.destination, subnetCidr)
+        );
+        if (!hasExplicitDest) {
+          continue;
+        }
+      }
+
+      rows.push({
+        vmId: record.get("vmId") as string,
+        vmName: record.get("vmName") as string,
+        subnet: record.get("subnet") as string,
+        subnetId: record.get("subnetId") as string,
+        allowedBy: allowRules
+          .map((rule) => rule.id)
+          .filter((id): id is string => typeof id === "string"),
+        blockedBy: blockRules
+          .map((rule) => rule.id)
+          .filter((id): id is string => typeof id === "string"),
+      });
+    }
+
+    return rows;
+  }
+
+  /** True when destination is a concrete CIDR/IP that overlaps the requested subnet (not any/empty). */
+  private destinationExplicitlyMatches(
+    destination: unknown,
+    requestedCidr: string
+  ): boolean {
+    if (typeof destination !== "string") return false;
+    const normalized = destination.trim().toLowerCase();
+    if (!normalized || normalized === "any") return false;
+    return this.sourceMatchApplies(destination, requestedCidr, false);
   }
 
   /**

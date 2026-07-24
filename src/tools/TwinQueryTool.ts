@@ -79,7 +79,8 @@ export class TwinQueryTool extends BaseTool {
         "Note: For IP addresses, check the 'primaryIp' field on network interfaces (even if 'ips' array is empty). " +
         "If twin data doesn't have IPs, use proxmox_readonly get_vm_ip for real-time IP resolution. " +
         "For switch/VLAN questions (e.g. 'what VLANs are on the switch', 'what's on VLAN 40'), use operation='switch_list_vlans' or 'switch_ports_by_vlan' — " +
-        "these read real switch/switch-port entities, distinct from the VM/node network interfaces network_list_interfaces returns.",
+        "these read real switch/switch-port entities, distinct from the VM/node network interfaces network_list_interfaces returns. " +
+        "firewall_reachability_from_subnet answers what VMs/subnets a source CIDR can reach (rules filtered by rule.source, not by edges into that CIDR).",
       categories: ["twin", "compute", "graph", "read"],
       allowedAcls: ["admin", "ops", "viewer"],
       risk: "low",
