@@ -28,9 +28,35 @@ const nodeTypeColors = {
   'network_subnet': '#c084fc',    // Light purple - Subnets
   'storage': '#f87171',           // Soft red - Storage
   'firewall_rule': '#fbbf24',     // Soft yellow - Firewall rules
+  'firewall_alias': '#fdba74',    // Peach - Firewall address/alias objects (firewall family, sibling to firewall_rule)
+  'switch': '#2dd4bf',            // Teal - Physical switches (L2 family)
+  'switch_port': '#5eead4',       // Light teal - Switch ports (L2 family, sibling to switch)
   'entity': '#fb923c',            // Soft orange - Generic entities
   'twinentity': '#f472b6',        // Soft pink - Twin entities
   'unknown': '#94a3b8',           // Gray - Unknown
+};
+
+// Edge type colors - kept at module scope so both the canvas renderer and the
+// sidebar legend read the same source of truth (the legend used to hardcode
+// a single color for every row regardless of the edge's real color).
+const edgeTypeColors = {
+  'RUNS_ON': '#60a5fa',           // Blue
+  'CONNECTS_TO': '#a78bfa',       // Purple
+  'ATTACHED_TO': '#34d399',       // Green
+  'CONFIGURED_BY': '#fbbf24',     // Yellow
+  'OWNS': '#f472b6',              // Pink
+  'HOSTS_ON': '#fb923c',          // Orange
+  'AFFECTS': '#f87171',           // Red
+  'ROUTES_TO': '#c084fc',         // Light purple
+  'EXPOSES': '#fcd34d',           // Light yellow
+  'REACHABLE': '#86efac',         // Light green
+  'ALLOWS': '#10b981',            // Success green - firewall allow
+  'BLOCKS': '#ef4444',            // Error red - firewall block/deny
+  'HAS_PORT': '#2dd4bf',          // Teal - switch -> switch_port (L2 family)
+  'ALIAS_RESOLVES_TO': '#fdba74', // Peach - firewall_alias family
+  'HOSTS': '#818cf8',             // Indigo
+  'BELONGS_TO': '#a3e635',        // Lime
+  'DEPENDS_ON': '#fb7185',        // Rose
 };
 
 let sigma = null;
@@ -40,6 +66,20 @@ let tooltipUpdateHandler = null;
 let hoveredNode = null;
 let originalNodeColor = null;
 let graphLoading = false;
+// Firewall rules are ~90% of all relationships in the twin (ALLOWS/BLOCKS
+// fan-out from every rule to its targets). Rendering them by default turns
+// the force-directed layout into an unreadable blob, so they start hidden
+// and are opted into via the "Show Firewall Rules" toggle.
+let firewallRulesVisible = false;
+
+function hexToRgba(hex, alpha) {
+  const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  if (!match) return hex;
+  const r = parseInt(match[1], 16);
+  const g = parseInt(match[2], 16);
+  const b = parseInt(match[3], 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 // Cleanup function to remove all tooltips
 function cleanupAllTooltips() {
@@ -80,12 +120,15 @@ async function renderEmptyGraphState(container) {
     ?.addEventListener('click', () => loadGraph());
 }
 
-export async function loadGraph() {
+export async function loadGraph(options = {}) {
   const container = document.getElementById('graph-container');
   if (!container || graphLoading) return;
 
   graphLoading = true;
-  const isRefresh = Boolean(sigma && container.querySelector('#sigma-container'));
+  // A firewall-visibility toggle changes which nodes exist, not just their
+  // data - that needs a fresh ForceAtlas2 layout, not the refresh path's
+  // in-place reconciliation (which only randomly places newly-added nodes).
+  const isRefresh = !options.forceFullRebuild && Boolean(sigma && container.querySelector('#sigma-container'));
   beginContentRefresh(container, isRefresh, 'Updating graph');
   
   // Check if libraries are loaded - try multiple possible global names
@@ -130,12 +173,12 @@ export async function loadGraph() {
   }
   
   try {
-    const response = await fetch(`${API_URL}/api/dashboard/twin-graph?limit=200`);
+    const response = await fetch(`${API_URL}/api/dashboard/twin-graph?limit=500`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     const data = await response.json();
-    
+
     if (!data.nodes || data.nodes.length === 0) {
       await renderEmptyGraphState(container);
       endContentRefresh(container);
@@ -145,16 +188,28 @@ export async function loadGraph() {
 
     // Keep the old graph fully visible until replacement data is ready.
     cleanupAllTooltips();
-    
-    // Calculate node degrees for sizing
+
+    const normalizeNodeType = (n) =>
+      String(n.entityType || n.type || n.labels?.[0] || 'unknown').toLowerCase();
+
+    const firewallRuleCount = data.nodes.filter(n => normalizeNodeType(n) === 'firewall_rule').length;
+    const visibleNodes = firewallRulesVisible
+      ? data.nodes
+      : data.nodes.filter(n => normalizeNodeType(n) !== 'firewall_rule');
+    const visibleNodeIds = new Set(visibleNodes.map(n => n.id || n.properties?.id));
+
+    // Degree only counts edges between nodes that will actually be rendered,
+    // so hidden firewall_rule fan-out doesn't inflate the size of whatever
+    // it happens to point at (e.g. a subnet that's a common ALLOWS target).
     const nodeDegrees = {};
     data.relationships.forEach(rel => {
+      if (!visibleNodeIds.has(rel.from) || !visibleNodeIds.has(rel.to)) return;
       nodeDegrees[rel.from] = (nodeDegrees[rel.from] || 0) + 1;
       nodeDegrees[rel.to] = (nodeDegrees[rel.to] || 0) + 1;
     });
-    
+
     const maxDegree = Math.max(...Object.values(nodeDegrees), 1);
-    
+
     const previousGraph = isRefresh ? graph : null;
     const previousPositions = new Map();
     previousGraph?.forEachNode((node, attrs) => {
@@ -164,22 +219,29 @@ export async function loadGraph() {
     // Build the replacement data separately so the live Sigma canvas never
     // observes a half-empty graph.
     const nextGraph = new Graph();
-    
+
     // Add nodes
-    data.nodes.forEach(n => {
+    visibleNodes.forEach(n => {
       const nodeId = n.id || n.properties?.id || Math.random().toString();
-      // Normalize type - prioritize entityType, then type, then labels
-      const rawType = n.entityType || n.type || n.labels?.[0] || 'unknown';
-      const nodeType = String(rawType).toLowerCase();
+      const nodeType = normalizeNodeType(n);
       const degree = nodeDegrees[nodeId] || 0;
-      const size = Math.max(8, Math.min(30, 8 + (degree / maxDegree) * 22)); // Size by degree: 8-30px
-      
-      const color = nodeTypeColors[nodeType] || nodeTypeColors['unknown'];
+      // Sqrt curve instead of linear: a couple of hub nodes (e.g. the
+      // physical host every VM/interface RUNS_ON) can carry order-of-
+      // magnitude more edges than everything else, and linear scaling
+      // squashes all lower-degree nodes to the same near-minimum size.
+      const size = Math.max(8, Math.min(30, 8 + Math.sqrt(degree / maxDegree) * 22));
+
+      const baseColor = nodeTypeColors[nodeType] || nodeTypeColors['unknown'];
+      // Terraform/topology "declared" entities (provenance: declared) are
+      // known-but-unconfirmed - ghost them so they read as distinct from
+      // entities actually observed live, rather than as ordinary nodes.
+      const isDeclared = (n.provenance || n.properties?.provenance) === 'declared';
+      const color = isDeclared ? hexToRgba(baseColor, 0.45) : baseColor;
       const previousPosition = previousPositions.get(nodeId);
-      
+
       // Use displayName or name for label
       const label = n.displayName || n.name || n.properties?.displayName || n.properties?.name || nodeId || 'Unknown';
-      
+
       nextGraph.addNode(nodeId, {
         label: label,
         size: size,
@@ -192,22 +254,16 @@ export async function loadGraph() {
         // Store all node data for tooltip
         ...n,
         ...n.properties,
+        // n.type is the raw Neo4j node label (e.g. "TwinEntity"), not the
+        // ontology type - Sigma reads a node's `type` attribute to pick a
+        // rendering program and throws ("could not find a suitable program
+        // for node type...") if it doesn't recognize the value. The refresh
+        // path feeds these attrs straight to Sigma without going through
+        // initSigma()'s one-time cleanup, so leaving this unset here was
+        // crashing (and freezing) the graph on the first 30s auto-refresh.
+        type: undefined,
       });
     });
-    
-    // Edge type colors for better distinction
-    const edgeTypeColors = {
-      'RUNS_ON': '#60a5fa',      // Blue
-      'CONNECTS_TO': '#a78bfa',  // Purple
-      'ATTACHED_TO': '#34d399',  // Green
-      'CONFIGURED_BY': '#fbbf24', // Yellow
-      'OWNS': '#f472b6',         // Pink
-      'HOSTS_ON': '#fb923c',     // Orange
-      'AFFECTS': '#f87171',      // Red
-      'ROUTES_TO': '#c084fc',    // Light purple
-      'EXPOSES': '#fcd34d',      // Light yellow
-      'REACHABLE': '#86efac',    // Light green
-    };
     
     // Add edges
     data.relationships.forEach(r => {
@@ -308,8 +364,18 @@ export async function loadGraph() {
                 <div class="text-slate-100 text-2xl font-bold">${uniqueEdgeTypes}</div>
               </div>
             </div>
+            ${firewallRuleCount > 0 ? `
+            <button id="toggle-firewall-rules" type="button" class="quiet-action w-full">
+              <span>${firewallRulesVisible ? 'Hide' : 'Show'} Firewall Rules (${firewallRuleCount})</span>
+            </button>
+            <p class="mt-2 mb-0 text-slate-500 text-xs leading-5">
+              ${firewallRulesVisible
+                ? 'Firewall ALLOWS/BLOCKS relationships are usually the large majority of all edges - hide them to see infrastructure topology clearly.'
+                : 'Hidden by default: firewall rules and their ALLOWS/BLOCKS edges dominate the graph and bury the topology.'}
+            </p>
+            ` : ''}
           </div>
-          
+
           <!-- Node Types Legend -->
           <details class="bg-slate-950/90 border-2 border-slate-500 rounded-xl p-4 shadow-sm" open>
             <summary class="cursor-pointer text-slate-200 font-semibold mb-3 text-base">Node Types</summary>
@@ -336,7 +402,7 @@ export async function loadGraph() {
             <div class="flex flex-col gap-2">
               ${Object.entries(edgeTypes).sort((a, b) => b[1] - a[1]).map(([type, count]) => `
                 <div class="flex items-center gap-3 p-2 bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer" data-filter-edge="${escapeHtml(type)}">
-                  <div class="w-5 h-0.5" style="background: ${colorPalette.primary};"></div>
+                  <div class="w-5 h-0.5" style="background: ${edgeTypeColors[type] || colorPalette.textMuted};"></div>
                   <div class="flex-1 text-slate-200 text-sm">${escapeHtml(type || 'unnamed')}</div>
                   <div class="text-slate-400 text-xs font-semibold">${escapeHtml(String(count))}</div>
                 </div>
@@ -535,27 +601,6 @@ function initSigma() {
     sigma.kill();
     sigma = null;
   }
-  
-  // Remove 'type' attribute from nodes for Sigma.js (it's used for renderer selection)
-  // We'll use 'nodeType' instead for our filtering, but keep 'type' in graph for compatibility
-  graph.forEachNode((node, attrs) => {
-    // Sigma.js v3 uses 'type' to select renderers, so we need to either:
-    // 1. Not set 'type' on nodes (use default renderer)
-    // 2. Register renderers for each type
-    // We'll go with option 1 - remove 'type' from node attributes that Sigma sees
-    // But keep it in the graph for our filtering logic
-    if (attrs.type) {
-      // Keep ontology type (compute_vm, network_interface, ...) for filtering.
-      // Do not replace it with generic Neo4j labels such as "TwinEntity".
-      const normalizedEntityType = (attrs.entityType || attrs.nodeType || attrs.type || 'unknown')
-        .toString()
-        .toLowerCase();
-      graph.setNodeAttribute(node, 'entityType', normalizedEntityType);
-      graph.setNodeAttribute(node, 'nodeType', normalizedEntityType);
-      // Remove 'type' so Sigma uses default renderer
-      graph.removeNodeAttribute(node, 'type');
-    }
-  });
   
   // Get device pixel ratio for high-DPI displays
   const dpr = window.devicePixelRatio || 1;
@@ -1011,7 +1056,15 @@ function setupSearch() {
   });
 }
 
+function setupFirewallToggle() {
+  document.getElementById('toggle-firewall-rules')?.addEventListener('click', () => {
+    firewallRulesVisible = !firewallRulesVisible;
+    loadGraph({ forceFullRebuild: true });
+  });
+}
+
 function setupFilters() {
+  setupFirewallToggle();
   if (!graph || !sigma) return;
   let activeNodeTypeFilter = null;
   let activeEdgeTypeFilter = null;

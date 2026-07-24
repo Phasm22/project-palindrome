@@ -125,6 +125,7 @@ export class GraphQueryInterface {
               if (value.properties.source) nodeData.source = value.properties.source;
               if (value.properties.destination) nodeData.destination = value.properties.destination;
               if (value.properties.collectedAt) nodeData.collectedAt = value.properties.collectedAt;
+              if (value.properties.provenance) nodeData.provenance = value.properties.provenance;
             }
 
             nodes.set(nodeId, nodeData);

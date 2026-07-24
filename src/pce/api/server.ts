@@ -1143,38 +1143,47 @@ export class PceApiServer {
   private async handleTwinGraph(req: Request): Promise<Response> {
     try {
       const url = new URL(req.url);
-      const limitParam = url.searchParams.get("limit") || "300";
+      const limitParam = url.searchParams.get("limit") || "500";
       // Ensure limit is an integer, not a float
-      const limitValue = Math.floor(parseInt(limitParam, 10)) || 300;
-      const defaultGraphTypes = [
-        "compute_vm",
-        "compute_node",
-        "network_interface",
-        "network_subnet",
-        "storage",
-        "firewall_rule",
-      ];
+      const limitValue = Math.floor(parseInt(limitParam, 10)) || 500;
       const requestedTypes = url.searchParams
         .get("types")
         ?.split(",")
         .map((value) => value.trim().toLowerCase())
         .filter(Boolean);
-      const graphTypes = requestedTypes?.length ? requestedTypes : defaultGraphTypes;
-      
+
       // Get graph store from dependencies (if available) or create new instance
       const graphStore = new Neo4jGraphStore();
       await graphStore.connect();
       const queryInterface = new GraphQueryInterface(graphStore);
-      
+
       // Use neo4j.int() to ensure integer type for LIMIT clause
       const { int } = await import("neo4j-driver");
-      
+
+      // Default to every entity type currently in the twin rather than a
+      // hardcoded allowlist. A fixed list silently drops any type ingested
+      // after it was written (e.g. switch/switch_port/firewall_alias were
+      // added by later ingestion work and were invisible in the ontology
+      // view until this discovery query existed).
+      let graphTypes = requestedTypes?.length ? requestedTypes : null;
+      if (!graphTypes) {
+        const typesSession = graphStore.getDriver().session();
+        try {
+          const typesResult = await typesSession.run(
+            `MATCH (n:TwinEntity) RETURN DISTINCT toLower(coalesce(n.type, "unknown")) AS type`
+          );
+          graphTypes = typesResult.records.map((record) => record.get("type"));
+        } finally {
+          await typesSession.close();
+        }
+      }
+
       // Fetch up to N ontology nodes first, then optionally include their outgoing
       // relationships. This preserves isolated nodes (e.g. interfaces without
       // subnet links yet) so the graph view reflects full store contents.
       const result = await queryInterface.executeQuery(`
         MATCH (n:TwinEntity)
-        WHERE toLower(coalesce(n.type, "")) IN $types
+        WHERE toLower(coalesce(n.type, "unknown")) IN $types
         WITH n
         ORDER BY coalesce(n.displayName, n.id)
         LIMIT $limit
