@@ -218,7 +218,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 8.3: Synchronous Retrieval Execution", () => {
-    it("should execute vector and graph retrieval in parallel", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should execute vector and graph retrieval in parallel", async () => {
       // Ingest test data
       const testData = generateHybridTestData();
       const firstDoc = testData[0];
@@ -261,7 +261,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 9.1: Context Score Normalization", () => {
-    it("should normalize vector scores to [0.0, 1.0]", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should normalize vector scores to [0.0, 1.0]", async () => {
       const fusionEngine = new FusionEngine();
       const testData = generateHybridTestData();
       const firstDoc = testData[0];
@@ -291,7 +291,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 9.1.1: Pre-Fusion Score Floor Enforcement", () => {
-    it("should filter out low-scoring vector results", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should filter out low-scoring vector results", async () => {
       const fusionEngine = new FusionEngine({
         minVectorScore: 0.5, // Higher threshold for testing
         minGraphScore: 0.4,
@@ -323,7 +323,7 @@ describe("Phase I-C: Hybrid Orchestration MVP", () => {
   });
 
   describe("Task 9.2: Weighted Fusion Engine", () => {
-    it("should calculate fusion scores with weights", async () => {
+    it.skipIf(!process.env.OPENAI_API_KEY)("should calculate fusion scores with weights", async () => {
       const fusionEngine = new FusionEngine();
       const testData = generateHybridTestData();
       const firstDoc = testData[0];
